@@ -1,0 +1,12 @@
+# Inspect Sentinel
+
+> Monitors and control protocols that watch agents and intervene in their execution.
+
+
+## Getting Started
+
+- [Getting Started](https://meridianlabs-ai.github.io/inspect_sentinel/index.html.md): Monitors and control protocols that watch agents and intervene in their execution.
+
+## Reference
+
+- [Reference](https://meridianlabs-ai.github.io/inspect_sentinel/reference/index.html.md): Python API reference for the inspect_sentinel package.

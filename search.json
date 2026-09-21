@@ -1,0 +1,32 @@
+[
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "Inspect Sentinel",
+    "section": "",
+    "text": "Inspect Sentinel is a package for defining, developing, and deploying sentinels: functions that watch agents and intervene in their execution.\n\nA monitor observes a step of an agent’s execution and reports a suspicion score. It never acts.\nA protocol decides what happens at a step (continue, modify, reject, escalate, terminate), optionally after consulting monitors. A protocol with no monitors is a rule.\n\nBoth target one of four steps in the agent loop: before or after a model generate, and before or after a tool call.\n\n\n\n\n\n\nNote\n\n\n\nInspect Sentinel is under active design. The design documents live in the repository’s design/ directory; start with sentinel-overview.md.",
+    "crumbs": [
+      "Getting Started"
+    ]
+  },
+  {
+    "objectID": "index.html#overview",
+    "href": "index.html#overview",
+    "title": "Inspect Sentinel",
+    "section": "",
+    "text": "Inspect Sentinel is a package for defining, developing, and deploying sentinels: functions that watch agents and intervene in their execution.\n\nA monitor observes a step of an agent’s execution and reports a suspicion score. It never acts.\nA protocol decides what happens at a step (continue, modify, reject, escalate, terminate), optionally after consulting monitors. A protocol with no monitors is a rule.\n\nBoth target one of four steps in the agent loop: before or after a model generate, and before or after a tool call.\n\n\n\n\n\n\nNote\n\n\n\nInspect Sentinel is under active design. The design documents live in the repository’s design/ directory; start with sentinel-overview.md.",
+    "crumbs": [
+      "Getting Started"
+    ]
+  },
+  {
+    "objectID": "index.html#installation",
+    "href": "index.html#installation",
+    "title": "Inspect Sentinel",
+    "section": "Installation",
+    "text": "Installation\n\n\nTerminal\n\npip install inspect_sentinel",
+    "crumbs": [
+      "Getting Started"
+    ]
+  }
+]
