@@ -1,0 +1,24 @@
+---
+title: "Inspect Sentinel"
+description: "Monitors and control protocols that watch agents and intervene in their execution."
+llms-description: "What Inspect Sentinel is: monitors that score agent steps, protocols that decide on them, and where each runs."
+---
+
+## Overview
+
+Inspect Sentinel is a package for defining, developing, and deploying sentinels: functions that watch agents and intervene in their execution.
+
+- A **monitor** observes a step of an agent's execution and reports a suspicion score. It never acts.
+- A **protocol** decides what happens at a step (`continue`, `modify`, `reject`, `escalate`, `terminate`), optionally after consulting monitors. A protocol with no monitors is a rule.
+
+Both target one of four steps in the agent loop: before or after a model generate, and before or after a tool call.
+
+::: {.callout-note}
+Inspect Sentinel is under active design. The design documents live in the repository's [`design/`](https://github.com/meridianlabs-ai/inspect_sentinel/tree/main/design) directory; start with `sentinel-overview.md`.
+:::
+
+## Installation
+
+```{.bash filename="Terminal"}
+pip install inspect_sentinel
+```

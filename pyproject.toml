@@ -1,0 +1,111 @@
+[project]
+name = "inspect_sentinel"
+dynamic = ["version"]
+description = "Monitors and control protocols that watch agents and intervene in their execution."
+authors = [{ name = "Meridian Labs" }]
+readme = "README.md"
+# Matches inspect-ai's floor rather than the 3.12 that sibling packages use:
+# the design has inspect-ai depending on this package (design/sentinel.md,
+# "Packages"), and a dependency cannot require a newer Python than the
+# package that depends on it.
+requires-python = ">=3.10"
+license = { text = "MIT License" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    # The wire types a monitor reads (ChatMessage, ToolCall, ModelOutput) live
+    # in inspect-ai today. design/inspect-core.md describes extracting them
+    # into a leaf package; when that lands this dependency narrows to it.
+    "inspect-ai>=0.3.266",
+    # Report types are pydantic models and are imported directly; a
+    # transitive dependency is not a promise.
+    "pydantic>=2.0",
+]
+
+[project.urls]
+"Source Code" = "https://github.com/meridianlabs-ai/inspect_sentinel"
+"Issue Tracker" = "https://github.com/meridianlabs-ai/inspect_sentinel/issues"
+Documentation = "https://meridianlabs-ai.github.io/inspect_sentinel/"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pyright",
+    "pytest-xdist",
+    "pytest-timeout>=2.4.0",
+    # monitors are async; anyio's pytest plugin runs `@pytest.mark.anyio`
+    # tests on the backend the `anyio_backend` fixture in conftest selects
+    "anyio",
+    {include-group = "doc"},
+]
+doc = [
+    "jupyter",
+    "panflute",
+    "markdown",
+    "griffe>=2",
+    "rich",
+    "pyyaml",
+    "types-PyYAML",
+    "quarto-cli>=1.9.36",
+]
+dist = ["twine", "build"]
+
+[tool.hatch.build]
+only-packages = true
+exclude = ["docs/", "tests/", "design/"]
+artifacts = ["src/**/py.typed"]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/inspect_sentinel/_version.py"
+
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version" # Important for PyPI compatibility
+
+[tool.uv]
+managed = true
+
+[tool.ruff]
+extend-exclude = ["docs"]
+src = [".", "src"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # flake8
+    "D",      # pydocstyle
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "SIM101", # duplicate isinstance
+]
+ignore = ["E203", "E501", "D10", "D212", "D415"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-n auto"
+timeout = 120
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "strict"
+pythonPlatform = "All"
+
+# tests may exercise private helpers directly
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+reportPrivateUsage = false

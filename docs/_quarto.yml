@@ -1,0 +1,18 @@
+project:
+  type: meridianlabs-ai/inspect-docs
+
+inspect-docs:
+  title: Inspect Sentinel
+  description: |
+    Monitors and control protocols that watch agents and intervene in their execution.
+  url: https://meridianlabs-ai.github.io/inspect_sentinel
+  module: inspect_sentinel
+  repo: meridianlabs-ai/inspect_sentinel
+  org: Meridian Labs
+  navigation:
+    - text: Getting Started
+      href: index.qmd
+  sidebar: unified
+  external_refs:
+    inspect_ai: https://inspect.aisi.org.uk
+    inspect_scout: https://meridianlabs-ai.github.io/inspect_scout
