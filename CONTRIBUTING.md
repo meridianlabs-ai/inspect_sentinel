@@ -21,6 +21,8 @@ uv sync --group dev
 
 This installs the package in editable mode along with the dev tools (ruff, pyright, pytest).
 
+Development tracks `inspect_ai` from `main`: the dependency in `pyproject.toml` is a git reference, so `uv sync` clones and builds inspect_ai's current `main` rather than installing a PyPI release. That is deliberate, because sentinel and inspect_ai co-develop and most sentinel changes need hooks that have not shipped yet. To pick up new inspect_ai commits, run `uv lock --upgrade-package inspect-ai && uv sync --group dev`.
+
 ## Checks and tests
 
 Before opening a PR, make sure these pass:
@@ -83,7 +85,32 @@ The `mv` is a bootstrap workaround, not superstition: `quarto add`/`update` pars
 - Branch from `main`; we squash-merge.
 - Keep PRs focused on one change.
 - Add or update tests for behavior changes.
-- Update `CHANGELOG.md` under the `## Unreleased` heading if the change is user-visible.
+
+## Commit messages and releases
+
+We use [Conventional Commits](https://www.conventionalcommits.org/). Because we squash-merge, **the PR title becomes the commit message**, so the title is what matters. Format it as `<type>: <description>`; `pr-title-lint` enforces it.
+
+Releases are automated with [Release Please](https://github.com/googleapis/release-please): **don't edit `CHANGELOG.md` or bump the version by hand.** Release Please reads the merged commit types, opens a release PR that updates the changelog and version, and merging that PR tags the release; the publish then runs once a maintainer approves the deployment.
+
+Choose the type deliberately. `feat:` and `fix:` drive the version bump and headline the release notes:
+
+| Type | Effect |
+| --- | --- |
+| `feat:` | a user-facing feature; bumps the minor version |
+| `fix:` | a user-facing bug fix; bumps the patch version |
+| `perf:`, `revert:` | appear in the release notes (no bump on their own) |
+| `docs:`, `refactor:`, `chore:`, `build:`, `ci:`, `test:`, `style:` | hidden from the release notes |
+
+Anything that isn't a user-facing feature or fix should avoid `feat:`/`fix:` so it stays out of the headline sections.
+
+### The inspect_ai pin at release time
+
+A published package cannot depend on a git reference (PyPI rejects it, and a moving ref is not reproducible), so two workflows handle the pin on the Release Please release PR:
+
+- `release-dep-guard.yml` fails the release PR while any runtime dependency still points at a git ref.
+- `release-pin-deps.yml` rewrites the `inspect-ai` git reference to `>=<latest PyPI version>`, re-locks, and pushes to the release PR. It runs on release-PR events and every two hours, because an inspect_ai release produces no event in this repository.
+
+If the pinned release PR then fails its build or tests, sentinel needs an inspect_ai change that has not shipped: cut an inspect_ai release first, and the scheduled run re-pins once it is on PyPI.
 
 ## Reporting issues
 

@@ -19,7 +19,13 @@ dependencies = [
     # The wire types a monitor reads (ChatMessage, ToolCall, ModelOutput) live
     # in inspect-ai today. design/inspect-core.md describes extracting them
     # into a leaf package; when that lands this dependency narrows to it.
-    "inspect-ai>=0.3.266",
+    #
+    # Development tracks inspect_ai's `main`, because sentinel and inspect_ai
+    # co-develop and most sentinel changes need hooks that have not shipped.
+    # The git ref never reaches PyPI: release-pin-deps.yml rewrites it to a
+    # `>=<latest>` floor on the Release Please release PR, and
+    # release-dep-guard.yml blocks the release if it is still a git ref.
+    "inspect-ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@main",
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.
     "pydantic>=2.0",
@@ -71,6 +77,11 @@ version-file = "src/inspect_sentinel/_version.py"
 
 [tool.hatch.version.raw-options]
 local_scheme = "no-local-version" # Important for PyPI compatibility
+
+# hatchling rejects PEP 508 direct references (the inspect-ai git ref above)
+# without this
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.uv]
 managed = true

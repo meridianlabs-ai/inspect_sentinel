@@ -1,0 +1,19 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  release-please:
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: meridianlabs-ai/actions/.github/workflows/release-please-python.yml@v1
+    with:
+      # Publish runs in publish.yaml on the `release` event, behind its own
+      # environment gate, and posts the approval ping from there so the ping
+      # deep-links to the paused run.
+      approval-ping: false
+    secrets: inherit
