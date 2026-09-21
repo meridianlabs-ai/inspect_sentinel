@@ -24,5 +24,7 @@ Both target one of four steps in the agent loop: before or after a model generat
     Terminal
 
 ``` bash
-pip install inspect_sentinel
+pip install git+https://github.com/meridianlabs-ai/inspect_sentinel
 ```
+
+This also installs the development version of `inspect_ai` from its `main` branch, which Sentinel tracks.

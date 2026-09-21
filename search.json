@@ -24,7 +24,7 @@
     "href": "index.html#installation",
     "title": "Inspect Sentinel",
     "section": "Installation",
-    "text": "Installation\n\n\nTerminal\n\npip install inspect_sentinel",
+    "text": "Installation\n\n\nTerminal\n\npip install git+https://github.com/meridianlabs-ai/inspect_sentinel\n\nThis also installs the development version of inspect_ai from its main branch, which Sentinel tracks.",
     "crumbs": [
       "Getting Started"
     ]
