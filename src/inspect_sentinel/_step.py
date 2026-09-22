@@ -1,4 +1,7 @@
-"""The step payloads: what exists at each point in the agent loop a sentinel can watch. Tool stages only for now; the generate payloads arrive with the generate-side dispatcher."""
+"""The step payloads: what exists at each point in the agent loop a sentinel can watch.
+
+Tool stages only for now; the generate payloads arrive with the generate-side dispatcher.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ class BeforeToolCall:
     """The call as it will execute."""
 
     view: ToolCallView
-    """Rendering of the call for approvers and prompts, when a viewer is registered."""
+    """Rendering of the tool call and its context: custom when the tool registers a viewer, a default Python-call rendering otherwise."""
 
     input: list[ChatMessage]
     """Exactly what the model was sent for the generate that produced the call."""
@@ -60,7 +63,7 @@ class AfterToolCall:
     """The tool's untruncated return value."""
 
     view: ToolCallView
-    """Rendering of the call for approvers and prompts, when a viewer is registered."""
+    """Rendering of the tool call and its context: custom when the tool registers a viewer, a default Python-call rendering otherwise."""
 
     input: list[ChatMessage]
     """Exactly what the model was sent for the generate that produced the call."""

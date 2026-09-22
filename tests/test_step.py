@@ -1,4 +1,3 @@
-from functools import cache
 from typing import get_args
 
 from inspect_ai.model import (
@@ -19,7 +18,6 @@ def _call() -> ToolCall:
     return ToolCall(id="c1", function="bash", arguments={"cmd": "curl x"})
 
 
-@cache
 def _input() -> list[ChatMessage]:
     return [
         ChatMessageSystem(content="be careful"),
@@ -28,7 +26,6 @@ def _input() -> list[ChatMessage]:
     ]
 
 
-@cache
 def _history() -> list[ChatMessage]:
     messages: list[ChatMessage] = [
         ChatMessageUser(content="do it"),
@@ -38,18 +35,18 @@ def _history() -> list[ChatMessage]:
 
 
 def test_before_tool_call_defaults_to_no_escalations() -> None:
+    input, history = _input(), _history()
     step = BeforeToolCall(
         conversation="conv",
         message="ok",
         call=_call(),
         view=ToolCallView(),
-        input=_input(),
-        history=_history(),
+        input=input,
+        history=history,
     )
     assert step.escalations == ()
-    assert step.input == _input()
-    assert step.history == _history()
-    assert step.input != step.history
+    assert step.input is input
+    assert step.history is history
 
 
 def test_before_tool_call_carries_escalations() -> None:
