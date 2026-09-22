@@ -87,7 +87,7 @@ allow-direct-references = true
 managed = true
 
 [tool.ruff]
-extend-exclude = ["docs"]
+extend-exclude = ["docs", "design"]
 src = [".", "src"]
 
 [tool.ruff.lint]
