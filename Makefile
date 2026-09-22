@@ -13,4 +13,4 @@ test:
 
 .PHONY: docs
 docs:
-	cd docs && ../.venv/bin/quarto render
+	cd docs && PATH="$(CURDIR)/.venv/bin:$$PATH" ../.venv/bin/quarto render
