@@ -52,7 +52,7 @@ class Recorder(Protocol):
         ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Context:
     """What a monitor or protocol is given. Constant for a sample; nothing in it came from the agent."""
 

@@ -42,7 +42,7 @@ class Decision(BaseModel):
     """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it."""
 
     action: Action
-    """Required."""
+    """What should happen at this step. Required."""
 
     audit: bool = Field(default=False)
     """Request that oversight budget be spent on this step."""
@@ -97,3 +97,4 @@ class Reported(Generic[R_co]):
     """Instance path, e.g. `attempt/internet_attempt`."""
 
     report: R_co
+    """The observation or decision this instance produced."""

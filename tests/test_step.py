@@ -27,25 +27,24 @@ def _input() -> list[ChatMessage]:
 
 
 def _history() -> list[ChatMessage]:
-    messages: list[ChatMessage] = [
+    return [
         ChatMessageUser(content="do it"),
         ChatMessageAssistant(content="ok"),
     ]
-    return messages
 
 
 def test_before_tool_call_defaults_to_no_escalations() -> None:
-    input, history = _input(), _history()
+    model_input, history = _input(), _history()
     step = BeforeToolCall(
         conversation="conv",
         message="ok",
         call=_call(),
         view=ToolCallView(),
-        input=input,
+        input=model_input,
         history=history,
     )
     assert step.escalations == ()
-    assert step.input is input
+    assert step.input is model_input
     assert step.history is history
 
 

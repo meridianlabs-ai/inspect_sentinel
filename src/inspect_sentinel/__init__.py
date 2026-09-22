@@ -4,7 +4,7 @@ A *monitor* observes a step of an agent's execution and reports a suspicion scor
 """
 
 from ._context import Context, Host
-from ._report import Action, Decision, Observation, Suspicion
+from ._report import Action, Decision, Observation, Report, Reported, Suspicion
 from ._step import AfterToolCall, BeforeToolCall, Stage, Step
 
 try:
@@ -21,6 +21,8 @@ __all__ = [
     "Decision",
     "Host",
     "Observation",
+    "Report",
+    "Reported",
     "Stage",
     "Step",
     "Suspicion",

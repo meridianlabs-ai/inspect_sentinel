@@ -1,10 +1,14 @@
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
 from inspect_ai.tool import ToolCall, ToolCallContent
 from pydantic import ValidationError
 
-from inspect_sentinel._report import Decision, Observation, Reported
+from inspect_sentinel._report import Decision, Observation, Report, Reported
+
+if TYPE_CHECKING:
+    _widens: Reported[Report] = Reported("n", "p", Observation.score(0.0))
 
 
 def test_observation_score_carries_scalar_and_dict_suspicion() -> None:
