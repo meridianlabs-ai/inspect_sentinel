@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeAlias, TypeVar
 
 from inspect_ai.tool import ToolCall
 from pydantic import BaseModel, Field
 
-Suspicion = float | dict[str, float]
+Suspicion: TypeAlias = float | dict[str, float]
 """How suspicious a step is. A dict scores several dimensions independently."""
 
-Action = Literal["continue", "modify", "reject", "terminate", "escalate"]
+Action: TypeAlias = Literal["continue", "modify", "reject", "terminate", "escalate"]
 """What a protocol can decide about the step it examined."""
 
 
@@ -25,17 +25,12 @@ class Observation(BaseModel):
     """Why, for a reader of the transcript."""
 
     metadata: dict[str, Any] | None = Field(default=None)
+    """Author-supplied structured context, recorded verbatim."""
 
     @classmethod
-    def score(
-        cls,
-        suspicion: Suspicion,
-        explanation: str | None = None,
-        *,
-        metadata: dict[str, Any] | None = None,
-    ) -> Observation:
+    def score(cls, suspicion: Suspicion, explanation: str | None = None) -> Observation:
         """An observation with the given suspicion."""
-        return cls(suspicion=suspicion, explanation=explanation, metadata=metadata)
+        return cls(suspicion=suspicion, explanation=explanation)
 
     @classmethod
     def flag(cls, explanation: str | None = None) -> Observation:
@@ -47,6 +42,7 @@ class Decision(BaseModel):
     """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it."""
 
     action: Action
+    """Required."""
 
     audit: bool = Field(default=False)
     """Request that oversight budget be spent on this step."""
@@ -61,6 +57,7 @@ class Decision(BaseModel):
     """Why. Operator-facing by default."""
 
     metadata: dict[str, Any] | None = Field(default=None)
+    """Author-supplied structured context, recorded verbatim."""
 
     @classmethod
     def clear(cls, explanation: str | None = None) -> Decision:
@@ -83,14 +80,14 @@ class Decision(BaseModel):
         return cls(action="escalate", explanation=explanation)
 
 
-Report = Observation | Decision
+Report: TypeAlias = Observation | Decision
 """What the transcript records."""
 
-R = TypeVar("R", bound=Report)
+R_co = TypeVar("R_co", bound=Report, covariant=True)
 
 
 @dataclass(frozen=True)
-class Reported(Generic[R]):
+class Reported(Generic[R_co]):
     """A report with the identity of the configured instance that produced it."""
 
     name: str
@@ -99,4 +96,4 @@ class Reported(Generic[R]):
     path: str
     """Instance path, e.g. `attempt/internet_attempt`."""
 
-    report: R
+    report: R_co

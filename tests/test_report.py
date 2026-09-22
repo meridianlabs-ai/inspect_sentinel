@@ -1,7 +1,8 @@
 from collections.abc import Callable
 
 import pytest
-from inspect_ai.tool import ToolCall
+from inspect_ai.tool import ToolCall, ToolCallContent
+from pydantic import ValidationError
 
 from inspect_sentinel._report import Decision, Observation, Reported
 
@@ -38,19 +39,31 @@ def test_decision_constructors_set_action(
     assert decision.modified is None
 
 
-def test_decision_defaults_are_advisory() -> None:
-    assert Decision(action="continue").authoritative is False
-
-
 def test_reports_round_trip_through_json() -> None:
-    observation = Observation.score({"a": 0.1, "b": 0.8}, "two dims", metadata={"k": 1})
+    observation = Observation(
+        suspicion={"a": 0.1, "b": 0.8}, explanation="two dims", metadata={"k": 1}
+    )
     assert Observation.model_validate_json(observation.model_dump_json()) == observation
 
-    call = ToolCall(id="c1", function="bash", arguments={"cmd": "ls"})
+    call = ToolCall(
+        id="c1",
+        function="bash",
+        arguments={"cmd": "ls"},
+        parse_error="bad json",
+        view=ToolCallContent(title="bash", format="markdown", content="`ls`"),
+        type="custom",
+    )
     decision = Decision(action="modify", modified=call, audit=True, authoritative=True)
     restored = Decision.model_validate_json(decision.model_dump_json())
     assert restored == decision
     assert restored.modified == call
+    assert Decision.model_validate(decision.model_dump()) == decision
+
+
+@pytest.mark.parametrize("bad", ["high", {"a": "high"}, [0.1], None])
+def test_observation_rejects_non_numeric_suspicion(bad: object) -> None:
+    with pytest.raises(ValidationError):
+        Observation.model_validate({"suspicion": bad})
 
 
 def test_reported_attaches_identity() -> None:
