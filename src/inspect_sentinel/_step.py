@@ -1,4 +1,4 @@
-"""The step payloads: what exists at each point in the agent loop a sentinel can watch."""
+"""The step payloads: what exists at each point in the agent loop a sentinel can watch. Tool stages only for now; the generate payloads arrive with the generate-side dispatcher."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from inspect_ai.tool import ToolCall, ToolCallView, ToolResult
 from ._report import Decision, Reported
 
 Stage: TypeAlias = Literal["tool_call", "tool_result"]
-"""Which point in the loop a step belongs to. Grows with the generate stages."""
+"""Which point in the loop a step belongs to: `tool_call` for `BeforeToolCall`, `tool_result` for `AfterToolCall`. Grows with the generate stages."""
 
 
 @dataclass(frozen=True)
@@ -28,12 +28,13 @@ class BeforeToolCall:
     """The call as it will execute."""
 
     view: ToolCallView
+    """Rendering of the call for approvers and prompts, when a viewer is registered."""
 
     input: list[ChatMessage]
     """Exactly what the model was sent for the generate that produced the call."""
 
     history: list[ChatMessage]
-    """The scaffold's full conversation, pre-compaction turns included."""
+    """The scaffold's full conversation, pre-compaction turns included. In-process this is the scaffold's own list; monitors must not mutate it."""
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside an ordered chain."""
@@ -44,7 +45,10 @@ class AfterToolCall:
     """A tool call that has executed, before the model sees its result."""
 
     conversation: str
+    """Id linking this agent's steps across compactions."""
+
     message: str
+    """Assistant text alongside the call."""
 
     call: ToolCall
     """The call as executed, after any `modify`."""
@@ -56,9 +60,16 @@ class AfterToolCall:
     """The tool's untruncated return value."""
 
     view: ToolCallView
+    """Rendering of the call for approvers and prompts, when a viewer is registered."""
+
     input: list[ChatMessage]
+    """Exactly what the model was sent for the generate that produced the call."""
+
     history: list[ChatMessage]
+    """The scaffold's full conversation, pre-compaction turns included. In-process this is the scaffold's own list; monitors must not mutate it."""
+
     escalations: tuple[Reported[Decision], ...] = ()
+    """Earlier links' escalations, when this step is inside an ordered chain."""
 
 
 Step: TypeAlias = BeforeToolCall | AfterToolCall
