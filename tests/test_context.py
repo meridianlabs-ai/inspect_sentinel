@@ -1,11 +1,12 @@
 from dataclasses import replace
+from typing import NamedTuple
 
 import pytest
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
 from inspect_ai.tool import ToolInfo
 from inspect_ai.util import Store, StoreModel
 
-from inspect_sentinel._context import Context, Host, Recorder, RunnerContext
+from inspect_sentinel._context import Context, RunnerContext
 from inspect_sentinel._report import Report, Reported
 from inspect_sentinel._step import Step
 
@@ -22,12 +23,18 @@ class FakeHost:
         return ModelOutput.from_content(model="fake", content="ok")
 
 
+class Recorded(NamedTuple):
+    context: Context
+    step: Step
+    reported: Reported[Report]
+
+
 class ListRecorder:
     def __init__(self) -> None:
-        self.records: list[Reported[Report]] = []
+        self.records: list[Recorded] = []
 
     def record(self, context: Context, step: Step, reported: Reported[Report]) -> None:
-        self.records.append(reported)
+        self.records.append(Recorded(context, step, reported))
 
 
 class Trajectory(StoreModel):
@@ -50,24 +57,18 @@ def _context(path: str = "") -> RunnerContext:
     )
 
 
-def test_fakes_satisfy_the_protocols() -> None:
-    host: Host = FakeHost()
-    recorder: Recorder = ListRecorder()
-    assert host is not None and recorder is not None
-
-
 def test_store_as_namespaces_by_path() -> None:
     context = _context("attempt/judge")
     context.store_as(Trajectory).calls = 3
     assert context.store_as(Trajectory).calls == 3
     assert replace(context, path="escape").store_as(Trajectory).calls == 0
-    assert any("attempt/judge" in key for key in context.store.keys())
+    assert Trajectory(store=context.store, instance="attempt/judge").calls == 3
 
 
-def test_store_as_at_top_level_uses_no_instance() -> None:
-    context = _context("")
-    context.store_as(Trajectory).calls = 1
-    assert Trajectory(store=context.store).calls == 1
+def test_root_store_does_not_share_the_ambient_namespace() -> None:
+    root = _context("")
+    root.store_as(Trajectory).calls = 5
+    assert Trajectory(store=root.store).calls == 0
 
 
 @pytest.mark.parametrize(
