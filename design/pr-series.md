@@ -22,10 +22,10 @@ The minimal surface that lets `inspect_ai` connect: the types a dispatcher const
 src/inspect_sentinel/
   __init__.py       author-facing exports
   _step.py          BeforeToolCall, AfterToolCall, Step, Stage
-  _report.py        Suspicion, Action, Observation, Decision, Report
+  _report.py        Suspicion, Action, Observation, Decision, Report, Reported
   _context.py       Host, Recorder, Context, RunnerContext
   _monitor.py       Monitor, ControlProtocol, Monitors, Protocols, Children, @monitor, @protocol
-  _runner.py        Reported, Observations, Decisions, run_monitor, run_protocol,
+  _runner.py        Observations, Decisions, run_monitor, run_protocol,
                     run_monitors, run_protocols, run_children
   _check.py         validate_decision
   _protocols.py     observe, concurrent, threshold
@@ -66,7 +66,7 @@ class AfterToolCall:
 Step = BeforeToolCall | AfterToolCall
 ```
 
-`escalations` references `Reported`, which PR 3 defines. PR 1 declares it as a forward reference under `TYPE_CHECKING` with a `Reported` placeholder module, or defines `Reported` in `_report.py` now; the latter is simpler and is what PR 1 does.
+`escalations` references `Reported`, so PR 1 defines it in `_report.py` rather than leaving it to the runner PR.
 
 ```python
 Suspicion = float | dict[str, float]
