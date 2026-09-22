@@ -115,6 +115,7 @@ timeout = 120
 include = ["src", "tests"]
 typeCheckingMode = "strict"
 pythonPlatform = "All"
+pythonVersion = "3.10"
 
 # tests may exercise private helpers directly
 [[tool.pyright.executionEnvironments]]
