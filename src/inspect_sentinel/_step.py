@@ -1,0 +1,65 @@
+"""The step payloads: what exists at each point in the agent loop a sentinel can watch."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal, TypeAlias
+
+from inspect_ai.model import ChatMessage, ChatMessageTool
+from inspect_ai.tool import ToolCall, ToolCallView, ToolResult
+
+from ._report import Decision, Reported
+
+Stage: TypeAlias = Literal["tool_call", "tool_result"]
+"""Which point in the loop a step belongs to. Grows with the generate stages."""
+
+
+@dataclass(frozen=True)
+class BeforeToolCall:
+    """A tool call about to execute."""
+
+    conversation: str
+    """Id linking this agent's steps across compactions."""
+
+    message: str
+    """Assistant text alongside the call."""
+
+    call: ToolCall
+    """The call as it will execute."""
+
+    view: ToolCallView
+
+    input: list[ChatMessage]
+    """Exactly what the model was sent for the generate that produced the call."""
+
+    history: list[ChatMessage]
+    """The scaffold's full conversation, pre-compaction turns included."""
+
+    escalations: tuple[Reported[Decision], ...] = ()
+    """Earlier links' escalations, when this step is inside an ordered chain."""
+
+
+@dataclass(frozen=True)
+class AfterToolCall:
+    """A tool call that has executed, before the model sees its result."""
+
+    conversation: str
+    message: str
+
+    call: ToolCall
+    """The call as executed, after any `modify`."""
+
+    result: ChatMessageTool
+    """What the model will see, after truncation."""
+
+    output: ToolResult
+    """The tool's untruncated return value."""
+
+    view: ToolCallView
+    input: list[ChatMessage]
+    history: list[ChatMessage]
+    escalations: tuple[Reported[Decision], ...] = ()
+
+
+Step: TypeAlias = BeforeToolCall | AfterToolCall
+"""The union, for code that handles any stage: a protocol, or a dispatcher."""
