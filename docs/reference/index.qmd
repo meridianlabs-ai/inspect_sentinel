@@ -3,3 +3,24 @@ title: Reference
 description: Python API reference for the inspect_sentinel package.
 reference: inspect_sentinel
 ---
+
+## Steps
+
+### BeforeToolCall
+### AfterToolCall
+### Step
+### Stage
+
+## Reports
+
+### Observation
+### Decision
+### Suspicion
+### Action
+### Report
+### Reported
+
+## Context
+
+### Context
+### Host
