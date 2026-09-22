@@ -125,7 +125,7 @@ class Context:
     target: Target | None = None
     def store_as(self, model_cls: type[SMT]) -> SMT      # instance=self.path
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class RunnerContext(Context):
     recorder: Recorder
     def child(self, name: str) -> RunnerContext          # path joined with "/"

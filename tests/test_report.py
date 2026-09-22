@@ -8,7 +8,8 @@ from pydantic import ValidationError
 from inspect_sentinel._report import Decision, Observation, Report, Reported
 
 if TYPE_CHECKING:
-    _widens: Reported[Report] = Reported("n", "p", Observation.score(0.0))
+    _observed: Reported[Observation] = Reported("n", "p", Observation.score(0.0))
+    _widens: Reported[Report] = _observed
 
 
 def test_observation_score_carries_scalar_and_dict_suspicion() -> None:
