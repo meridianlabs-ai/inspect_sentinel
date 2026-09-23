@@ -1,8 +1,11 @@
 name: Release
 
+# Paused until the first release: with no tag yet, every push to main would
+# regenerate the 0.1.0 release PR, and release-pin-deps would then pin it to a
+# PyPI inspect_ai that lacks the registry types sentinel needs. Restore the
+# `push` trigger (or dispatch by hand) when ready to cut 0.1.0; Release Please
+# will fold everything since the beginning into that one release.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
