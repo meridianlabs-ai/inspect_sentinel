@@ -17,7 +17,7 @@ from inspect_ai._util.registry import (
 
 from ._context import Context
 from ._report import Decision, Observation, Report
-from ._step import STAGE_OF_TYPE, AfterToolCall, BeforeToolCall, Stage, Step
+from ._step import AfterToolCall, BeforeToolCall, Step
 
 Monitor: TypeAlias = (
     Callable[[Context, Step], Awaitable[Observation | None]]
@@ -47,28 +47,13 @@ Children: TypeAlias = (
 P = ParamSpec("P")
 SentinelT = TypeVar("SentinelT")
 
-STAGES_ATTR = "__sentinel_stages__"
-
-
-# Runner-facing; exported from the integration module, not the package root.
-def stages(sentinel: Monitor | ControlProtocol) -> frozenset[Stage]:
-    """The stages a configured monitor or protocol watches.
-
-    Args:
-        sentinel: An instance returned by a `@monitor` or `@protocol` factory.
-    """
-    found = getattr(sentinel, STAGES_ATTR, None)
-    if found is None:
-        raise TypeError(
-            "Object has no stage information. Was its factory decorated with @monitor or @protocol?"
-        )
-    return frozenset(found)
+_STEP_TYPES = frozenset(get_args(Step))
 
 
 def monitor(factory: Callable[P, Monitor]) -> Callable[P, Monitor]:
     """Register a monitor factory.
 
-    The factory's return annotation must be `Monitor` and the function it returns must be `async`, take `(context, step)`, annotate `step` with a stage payload or `Step`, and be annotated to return `Observation | None`. The stage is read from the `step` annotation when the factory is called. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store.
+    The factory's return annotation must be `Monitor` and the function it returns must be `async`, take `(context, step)`, annotate `step` with a stage payload or `Step`, and be annotated to return `Observation | None`. These are checked when the factory is called. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store.
 
     Args:
         factory: A function returning a monitor.
@@ -99,8 +84,7 @@ def _register(
     @wraps(factory)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> SentinelT:
         instance = factory(*args, **kwargs)
-        found = _validate(cast(Callable[..., Any], instance), kind, report_type)
-        setattr(instance, STAGES_ATTR, found)
+        _validate(cast(Callable[..., Any], instance), kind, report_type)
         registry_tag(factory, instance, info.model_copy(deep=True), *args, **kwargs)
         return instance
 
@@ -112,7 +96,7 @@ def _validate(
     instance: Callable[..., Any],
     kind: RegistryType,
     report_type: type[Report],
-) -> frozenset[Stage]:
+) -> None:
     name = getattr(instance, "__name__", repr(instance))
     if not inspect.iscoroutinefunction(instance):
         raise TypeError(f"A {kind} must be an async function; {name} is not.")
@@ -144,8 +128,7 @@ def _validate(
         raise TypeError(
             f"The step parameter of {kind} {name} must be annotated with a stage payload or Step."
         )
-    found = _stages_from_hint(step_hint)
-    if not found:
+    if not _is_step_hint(step_hint):
         raise TypeError(
             f"The step parameter of {kind} {name} is annotated {step_hint!r}, which is not a stage payload or Step."
         )
@@ -159,15 +142,8 @@ def _validate(
         raise TypeError(
             f"A {kind} must be annotated to return {report_type.__name__} | None; {name} returns {returned!r}."
         )
-    return found
 
 
-def _stages_from_hint(hint: Any) -> frozenset[Stage]:
-    members = get_args(hint) or (hint,)
-    found: set[Stage] = set()
-    for member in members:
-        stage = STAGE_OF_TYPE.get(member)
-        if stage is None:
-            return frozenset()
-        found.add(stage)
-    return frozenset(found)
+def _is_step_hint(hint: Any) -> bool:
+    members = set(get_args(hint) or (hint,))
+    return bool(members) and members <= _STEP_TYPES

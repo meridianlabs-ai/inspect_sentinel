@@ -18,7 +18,6 @@ from inspect_sentinel._monitor import (
     Monitor,
     monitor,
     protocol,
-    stages,
 )
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
@@ -59,18 +58,12 @@ def no_curl() -> ControlProtocol:
 
 
 @pytest.mark.parametrize(
-    ("factory", "expected"),
-    [
-        (before_monitor, frozenset({"tool_call"})),
-        (after_monitor, frozenset({"tool_result"})),
-        (any_stage_monitor, frozenset({"tool_call", "tool_result"})),
-        (no_curl, frozenset({"tool_call"})),
-    ],
+    "factory", [before_monitor, after_monitor, any_stage_monitor, no_curl]
 )
-def test_stage_is_inferred_from_the_second_parameter(
-    factory: Callable[[], Monitor | ControlProtocol], expected: frozenset[str]
+def test_stage_annotated_functions_are_accepted(
+    factory: Callable[[], Monitor | ControlProtocol],
 ) -> None:
-    assert stages(factory()) == expected
+    assert inspect.iscoroutinefunction(factory())
 
 
 def test_monitor_may_annotate_a_bare_observation_return() -> None:
@@ -81,7 +74,7 @@ def test_monitor_may_annotate_a_bare_observation_return() -> None:
 
         return check
 
-    assert stages(always_flags()) == frozenset({"tool_call"})
+    assert inspect.iscoroutinefunction(always_flags())
 
 
 def test_monitor_registers_under_the_monitor_type() -> None:
@@ -216,7 +209,7 @@ def test_positional_only_step_is_accepted() -> None:
 
         return check
 
-    assert stages(positional_only()) == frozenset({"tool_call"})
+    assert inspect.iscoroutinefunction(positional_only())
 
 
 def test_keyword_only_step_is_rejected_at_configuration() -> None:

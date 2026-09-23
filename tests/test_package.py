@@ -44,4 +44,3 @@ def test_author_facing_names_are_exported() -> None:
 def test_integration_names_are_not_exported() -> None:
     assert "RunnerContext" not in inspect_sentinel.__all__
     assert "Recorder" not in inspect_sentinel.__all__
-    assert "stages" not in inspect_sentinel.__all__
