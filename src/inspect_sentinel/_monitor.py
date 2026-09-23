@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from functools import wraps
 from typing import Any, ParamSpec, TypeAlias, TypeVar, cast, get_args, get_type_hints
 
 from inspect_ai._util.registry import (
@@ -15,7 +16,7 @@ from inspect_ai._util.registry import (
 )
 
 from ._context import Context
-from ._report import Decision, Observation
+from ._report import Decision, Observation, Report
 from ._step import AfterToolCall, BeforeToolCall, Stage, Step
 
 Monitor: TypeAlias = (
@@ -71,7 +72,7 @@ def stages(sentinel: Monitor | ControlProtocol) -> frozenset[Stage]:
 def monitor(factory: Callable[P, Monitor]) -> Callable[P, Monitor]:
     """Register a monitor factory.
 
-    The factory's return annotation must be `Monitor` and the function it returns must be `async`, take `(context, step)`, annotate `step` with a stage payload or `Step`, and be annotated to return `Observation | None`. The stage is read from the `step` annotation when the factory is called.
+    The factory's return annotation must be `Monitor` and the function it returns must be `async`, take `(context, step)`, annotate `step` with a stage payload or `Step`, and be annotated to return `Observation | None`. The stage is read from the `step` annotation when the factory is called. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store.
 
     Args:
         factory: A function returning a monitor.
@@ -82,7 +83,7 @@ def monitor(factory: Callable[P, Monitor]) -> Callable[P, Monitor]:
 def protocol(factory: Callable[P, ControlProtocol]) -> Callable[P, ControlProtocol]:
     """Register a protocol factory.
 
-    Same contract as `@monitor`, with the returned function annotated to return `Decision | None`.
+    Same contract as `@monitor`, with the returned function annotated to return `Decision | None`. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store.
 
     Args:
         factory: A function returning a protocol.
@@ -93,17 +94,18 @@ def protocol(factory: Callable[P, ControlProtocol]) -> Callable[P, ControlProtoc
 def _register(
     kind: RegistryType,
     factory: Callable[P, SentinelT],
-    report_type: type[Observation] | type[Decision],
+    report_type: type[Report],
 ) -> Callable[P, SentinelT]:
     name = registry_name(factory, factory.__name__)
     params = list(inspect.signature(factory).parameters.keys())
     info = RegistryInfo(type=kind, name=name, metadata=dict(params=params))
 
+    @wraps(factory)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> SentinelT:
         instance = factory(*args, **kwargs)
         found = _validate(cast(Callable[..., Any], instance), kind, report_type)
         setattr(instance, STAGES_ATTR, found)
-        registry_tag(factory, instance, info, *args, **kwargs)
+        registry_tag(factory, instance, info.model_copy(), *args, **kwargs)
         return instance
 
     registry_add(wrapper, info)
@@ -112,18 +114,34 @@ def _register(
 
 def _validate(
     instance: Callable[..., Any],
-    kind: str,
-    report_type: type[Observation] | type[Decision],
+    kind: RegistryType,
+    report_type: type[Report],
 ) -> frozenset[Stage]:
     name = getattr(instance, "__name__", repr(instance))
     if not inspect.iscoroutinefunction(instance):
         raise TypeError(f"A {kind} must be an async function; {name} is not.")
-    parameters = list(inspect.signature(instance).parameters)
+    signature = inspect.signature(instance)
+    parameters = list(signature.parameters)
     if len(parameters) != 2:
         raise TypeError(
             f"A {kind} takes exactly (context, step); {name} takes {parameters}."
         )
-    hints = get_type_hints(instance)
+    if any(
+        p.kind is not p.POSITIONAL_OR_KEYWORD for p in signature.parameters.values()
+    ):
+        raise TypeError(
+            f"A {kind} takes (context, step) as positional parameters; {name} does not."
+        )
+    try:
+        hints = get_type_hints(instance)
+    except NameError as ex:
+        raise TypeError(
+            f"{name}: could not resolve the annotation `{ex.name}`. Import it at module level and at runtime, not under TYPE_CHECKING or inside the factory."
+        ) from ex
+    except TypeError as ex:
+        raise TypeError(
+            f"A {kind} must be a plain async function; {name} could not be introspected."
+        ) from ex
     step_hint = hints.get(parameters[1])
     if step_hint is None:
         raise TypeError(
@@ -135,10 +153,12 @@ def _validate(
             f"The step parameter of {kind} {name} is annotated {step_hint!r}, which is not a stage payload or Step."
         )
     returned = hints.get("return")
-    if returned is None or set(get_args(returned) or (returned,)) != {
-        report_type,
-        type(None),
-    }:
+    if returned is None:
+        raise TypeError(
+            f"A {kind} must annotate its return as {report_type.__name__} | None; {name} has no return annotation."
+        )
+    members = set(get_args(returned) or (returned,))
+    if report_type not in members or not members <= {report_type, type(None)}:
         raise TypeError(
             f"A {kind} must be annotated to return {report_type.__name__} | None; {name} returns {returned!r}."
         )

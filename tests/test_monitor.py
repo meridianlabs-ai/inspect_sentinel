@@ -1,3 +1,4 @@
+import inspect
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -72,6 +73,17 @@ def test_stage_is_inferred_from_the_second_parameter(
     assert stages(factory()) == expected
 
 
+def test_monitor_may_annotate_a_bare_observation_return() -> None:
+    @monitor
+    def always_flags() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation:
+            return Observation.score(0.1)
+
+        return check
+
+    assert stages(always_flags()) == frozenset({"tool_call"})
+
+
 def test_monitor_registers_under_the_monitor_type() -> None:
     assert registry_lookup("monitor", "before_monitor") is before_monitor
     assert registry_info(before_monitor).type == "monitor"
@@ -92,7 +104,8 @@ def test_registry_object_is_created_by_name_with_params() -> None:
     assert registry_params(instance) == {"threshold_hint": 0.9}
 
 
-def test_registry_create_returns_the_factory_for_alias_return_types() -> None:
+def test_registry_create_is_not_a_construction_path_for_sentinels() -> None:
+    """registry_create instantiates only factories whose return annotation's class name equals the registry type; Monitor and ControlProtocol are union aliases with no name, so it hands back the factory. Construction from config goes through create_registry_object, which always instantiates."""
     kind: RegistryType = "monitor"
     create = cast(Callable[..., Any], registry_create)
     assert create(kind, "before_monitor") is before_monitor
@@ -104,38 +117,82 @@ def test_instance_is_tagged_with_registry_info() -> None:
     assert registry_params(instance) == {}
 
 
+def test_instances_have_independent_registry_info() -> None:
+    a = before_monitor(threshold_hint=0.1)
+    b = before_monitor(threshold_hint=0.2)
+    assert registry_params(a) == {"threshold_hint": 0.1}
+    assert registry_params(b) == {"threshold_hint": 0.2}
+    assert registry_info(a) is not registry_info(b)
+
+
+def test_factory_keeps_its_name_and_signature() -> None:
+    assert before_monitor.__name__ == "before_monitor"
+    assert list(inspect.signature(before_monitor).parameters) == ["threshold_hint"]
+
+
 def test_monitor_returning_decisions_is_rejected_at_configuration() -> None:
-    async def check(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decides_not_observes(
+        context: Context, step: BeforeToolCall
+    ) -> Decision | None:
         return None
 
-    wrong = monitor(cast(Any, lambda: check))
+    def factory_returning() -> Any:
+        return decides_not_observes
+
+    wrong = monitor(cast(Any, factory_returning))
     with pytest.raises(TypeError, match="Observation"):
         wrong()
 
 
 def test_protocol_returning_observations_is_rejected_at_configuration() -> None:
-    async def decide(context: Context, step: BeforeToolCall) -> Observation | None:
+    async def observes_not_decides(
+        context: Context, step: BeforeToolCall
+    ) -> Observation | None:
         return None
 
-    wrong = protocol(cast(Any, lambda: decide))
+    def factory_returning() -> Any:
+        return observes_not_decides
+
+    wrong = protocol(cast(Any, factory_returning))
     with pytest.raises(TypeError, match="Decision"):
         wrong()
 
 
 def test_unannotated_step_parameter_is_rejected_at_configuration() -> None:
-    async def check(context: Context, step: Any) -> Observation | None:
+    async def unannotated_step(context: Context, step: Any) -> Observation | None:
         return None
 
-    check.__annotations__.pop("step")
-    wrong = monitor(cast(Any, lambda: check))
+    unannotated_step.__annotations__.pop("step")
+
+    def factory_returning() -> Any:
+        return unannotated_step
+
+    wrong = monitor(cast(Any, factory_returning))
     with pytest.raises(TypeError, match="annotat"):
         wrong()
 
 
-def test_non_async_function_is_rejected_at_configuration() -> None:
-    def check(context: Context, step: BeforeToolCall) -> Observation | None:
+def test_unresolvable_annotation_names_the_fix() -> None:
+    async def unresolvable_step(context: Context, step: Any) -> Observation | None:
         return None
 
-    wrong = monitor(cast(Any, lambda: check))
+    unresolvable_step.__annotations__["step"] = "Missing"
+
+    def factory_returning() -> Any:
+        return unresolvable_step
+
+    wrong = monitor(cast(Any, factory_returning))
+    with pytest.raises(TypeError, match="Missing"):
+        wrong()
+
+
+def test_non_async_function_is_rejected_at_configuration() -> None:
+    def not_async(context: Context, step: BeforeToolCall) -> Observation | None:
+        return None
+
+    def factory_returning() -> Any:
+        return not_async
+
+    wrong = monitor(cast(Any, factory_returning))
     with pytest.raises(TypeError, match="async"):
         wrong()
