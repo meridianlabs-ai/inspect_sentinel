@@ -363,3 +363,15 @@ async def test_run_children_keeps_configuration_order_per_family() -> None:
     )
     assert [o.name for o in reports.observations] == ["m1", "m2"]
     assert [d.name for d in reports.decisions] == ["p1", "p2"]
+
+
+@pytest.mark.anyio
+async def test_run_protocols_rejects_a_monitor() -> None:
+    with pytest.raises(TypeError, match="protocol"):
+        await run_protocols(cast(Any, [scores()]), runner_context(), _before())
+
+
+@pytest.mark.anyio
+async def test_run_monitors_names_an_uncalled_factory_error() -> None:
+    with pytest.raises(TypeError, match="call it"):
+        await run_monitors([cast(Any, scores)], runner_context(), _before())

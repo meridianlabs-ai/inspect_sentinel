@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TypeVar, cast, overload
+from typing import Literal, TypeVar, cast, overload
 
 import anyio
 from inspect_ai._util.registry import registry_info, registry_unqualified_name
@@ -174,6 +174,10 @@ async def run_protocols(
         context: This layer's context.
         step: The step being examined.
     """
+    for _, child in _named(protocols):
+        info = registry_info(child)
+        if info.type != "protocol":
+            raise TypeError(f"Expected a protocol, got the {info.type} {info.name!r}.")
     return (await run_children(protocols, context, step)).decisions
 
 
@@ -223,7 +227,7 @@ async def run_children(children: Children, context: Context, step: Step) -> Repo
 
 async def _run_child(
     child: Monitor | ControlProtocol,
-    kind: str,
+    kind: Literal["monitor", "protocol"],
     report_type: type[R],
     context: Context,
     step: Step,

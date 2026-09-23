@@ -8,7 +8,9 @@ from typing import Any, ParamSpec, TypeAlias, TypeVar, cast, get_args, get_type_
 from inspect_ai._util.registry import (
     RegistryInfo,
     RegistryType,
+    is_registry_object,
     registry_add,
+    registry_info,
     registry_name,
     registry_tag,
 )
@@ -78,6 +80,10 @@ def step_types(sentinel: Monitor | ControlProtocol) -> frozenset[type[Any]]:
     """
     found = getattr(sentinel, STEP_TYPES_ATTR, None)
     if found is None:
+        if is_registry_object(sentinel):
+            raise TypeError(
+                f"{registry_info(sentinel).name!r} is the factory, not a configured instance; call it to configure one."
+            )
         raise TypeError(
             f"{getattr(sentinel, '__name__', sentinel)!r} has no step types recorded. Was its factory decorated with @monitor or @protocol?"
         )

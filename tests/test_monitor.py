@@ -253,3 +253,8 @@ def test_step_types_requires_a_decorated_instance() -> None:
 
     with pytest.raises(TypeError, match="@monitor or @protocol"):
         step_types(undecorated)
+
+
+def test_step_types_names_an_uncalled_factory() -> None:
+    with pytest.raises(TypeError, match="call it"):
+        step_types(cast(Any, before_monitor))
