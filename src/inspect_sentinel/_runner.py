@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Literal, TypeVar, cast, overload
+from typing import Generic, Literal, TypeVar, cast, overload
 
 import anyio
+from anyio.abc import TaskGroup
 from inspect_ai._util.registry import registry_info, registry_unqualified_name
 
 from ._context import Context, RunnerContext
@@ -17,7 +27,7 @@ from ._monitor import (
     Protocols,
     step_types,
 )
-from ._report import Action, Decision, Observation, Report, Reported
+from ._report import Action, Decision, Observation, R_co, Report, Reported
 from ._step import Step
 
 if sys.version_info < (3, 11):
@@ -31,26 +41,38 @@ _PRECEDENCE: dict[Action, int] = {
 }
 
 
-class Observations(Sequence[Reported[Observation]]):
-    """What a layer's monitors reported, in configuration order."""
+class _ReportSequence(Sequence[Reported[R_co]], Generic[R_co]):
+    """A layer's reports of one family, in configuration order."""
 
-    def __init__(self, items: Iterable[Reported[Observation]] = ()) -> None:
+    def __init__(self, items: Iterable[Reported[R_co]] = ()) -> None:
         self._items = tuple(items)
 
     @overload
-    def __getitem__(self, index: int) -> Reported[Observation]: ...
+    def __getitem__(self, index: int) -> Reported[R_co]: ...
     @overload
-    def __getitem__(self, index: slice) -> Sequence[Reported[Observation]]: ...
+    def __getitem__(self, index: slice) -> Sequence[Reported[R_co]]: ...
     def __getitem__(
         self, index: int | slice
-    ) -> Reported[Observation] | Sequence[Reported[Observation]]:
+    ) -> Reported[R_co] | Sequence[Reported[R_co]]:
         return self._items[index]
 
     def __len__(self) -> int:
         return len(self._items)
 
-    def __iter__(self) -> Iterator[Reported[Observation]]:
+    def __iter__(self) -> Iterator[Reported[R_co]]:
         return iter(self._items)
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return NotImplemented
+        return self._items == cast("_ReportSequence[R_co]", other)._items
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({list(self._items)!r})"
+
+
+class Observations(_ReportSequence[Observation]):
+    """What a layer's monitors reported, in configuration order."""
 
     def max_suspicion(self) -> float | None:
         """The highest suspicion reported, taking the highest dimension of a structured score; `None` if nobody observed."""
@@ -63,26 +85,8 @@ class Observations(Sequence[Reported[Observation]]):
         return max(scores) if scores else None
 
 
-class Decisions(Sequence[Reported[Decision]]):
+class Decisions(_ReportSequence[Decision]):
     """What a layer's protocols decided, in configuration order."""
-
-    def __init__(self, items: Iterable[Reported[Decision]] = ()) -> None:
-        self._items = tuple(items)
-
-    @overload
-    def __getitem__(self, index: int) -> Reported[Decision]: ...
-    @overload
-    def __getitem__(self, index: slice) -> Sequence[Reported[Decision]]: ...
-    def __getitem__(
-        self, index: int | slice
-    ) -> Reported[Decision] | Sequence[Reported[Decision]]:
-        return self._items[index]
-
-    def __len__(self) -> int:
-        return len(self._items)
-
-    def __iter__(self) -> Iterator[Reported[Decision]]:
-        return iter(self._items)
 
     def strongest(self) -> Reported[Decision] | None:
         """The strongest decision by `terminate > reject > modify > continue`; `escalate` does not count; `None` if nobody decided."""
@@ -104,6 +108,17 @@ class Reports:
 
 
 R = TypeVar("R", bound=Report)
+C = TypeVar("C")
+
+
+@asynccontextmanager
+async def _task_group() -> AsyncGenerator[TaskGroup]:
+    """A task group that unwraps a raised `ExceptionGroup` to its first member."""
+    try:
+        async with anyio.create_task_group() as tg:
+            yield tg
+    except ExceptionGroup as ex:
+        raise ex.exceptions[0] from None
 
 
 async def run_monitor(
@@ -154,12 +169,9 @@ async def run_monitors(
         if result is not None:
             observed.append((index, result))
 
-    try:
-        async with anyio.create_task_group() as tg:
-            for index, (name, child) in enumerate(named):
-                tg.start_soon(run_one, index, name, cast(Monitor, child))
-    except ExceptionGroup as ex:
-        raise ex.exceptions[0] from None
+    async with _task_group() as tg:
+        for index, (name, child) in enumerate(named):
+            tg.start_soon(run_one, index, name, child)
 
     return Observations(o for _, o in sorted(observed, key=lambda t: t[0]))
 
@@ -212,12 +224,9 @@ async def run_children(children: Children, context: Context, step: Step) -> Repo
                 if decided.report.action == "terminate":
                     cancel()
 
-    try:
-        async with anyio.create_task_group() as tg:
-            for index, (name, child) in enumerate(named):
-                tg.start_soon(run_one, index, name, child, tg.cancel_scope.cancel)
-    except ExceptionGroup as ex:
-        raise ex.exceptions[0] from None
+    async with _task_group() as tg:
+        for index, (name, child) in enumerate(named):
+            tg.start_soon(run_one, index, name, child, tg.cancel_scope.cancel)
 
     return Reports(
         Observations(o for _, o in sorted(observations, key=lambda t: t[0])),
@@ -257,7 +266,7 @@ async def _run_child(
     return reported
 
 
-def _named(children: Children) -> list[tuple[str, Monitor | ControlProtocol]]:
+def _named(children: Mapping[str, C] | Sequence[C]) -> list[tuple[str, C]]:
     if isinstance(children, Mapping):
         named = list(children.items())
     else:

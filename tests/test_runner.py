@@ -77,6 +77,17 @@ def test_reports_holds_both_families() -> None:
     assert reports.decisions.strongest() is not None
 
 
+def test_report_sequences_compare_by_class_and_items() -> None:
+    assert Observations([]) == Observations([])
+    assert Observations([]) != Decisions([])
+
+
+def test_report_sequence_repr_shows_class_and_items() -> None:
+    text = repr(Observations([_obs("a", 0.1)]))
+    assert "Observations(" in text
+    assert "a" in text
+
+
 def _before() -> BeforeToolCall:
     return BeforeToolCall(
         conversation="c",
