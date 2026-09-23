@@ -840,6 +840,8 @@ Most of what `@protocol` and `@monitor` verify at decoration time, mypy and pyri
 
 What stays runtime-only is exactly what no type system would express: per-stage action legality (a generic `Decision[A]` was [rejected](#rejected-a-generic-parameterised-on-the-action-set) for schema reasons), the authority rule, whether a body went through the runner, and YAML configuration. Those live in [the boundary check](#the-boundary-check) and the log.
 
+One more rule is runtime-only for a different reason: that a monitor annotates exactly one payload type. A function accepting `Step` is, by parameter contravariance, a valid `Callable[[Context, BeforeToolCall], ...]`, so pyright accepts it as a `Monitor`; the rule is a statement about how monitors should be written, not a type-safety property, and `@monitor` enforces it when the factory is called. Making it static would mean parameterising `Monitor` by payload, which is not worth a type parameter on every factory to catch a mistake that already fails at configuration time.
+
 ### The runner {#the-runner}
 
 **The protocol invokes its children; the framework does not.** This is forced by [Prior art](#prior-art): paraphrasing and minification are transforms between agent output and monitor input, and honeypots are synthetic inputs injected into the monitor's stream. Neither is expressible if the framework has already called the monitors and handed over finished reports.

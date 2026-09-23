@@ -738,7 +738,7 @@ mypy and pyright check the structural claims before the runtime pass does. `@sco
 | `threshold` takes monitors; `chain` takes children | the parameter types; `threshold(human())` is a type error because a rule has no score |
 | The declared kind matches the body | `return Decision(...)` in a function annotated `-> Observation \| None` is a type error at that line |
 
-Runtime only: per-stage action legality, the authority rule, whether a body went through the runner, and YAML configuration.
+Runtime only: per-stage action legality, the authority rule, whether a body went through the runner, YAML configuration, and that a monitor annotates exactly one payload type (a `Step`-accepting function is a valid `Monitor` by contravariance; `@monitor` rejects it when the factory is called).
 
 ### Combining reports
 
