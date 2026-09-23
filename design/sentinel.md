@@ -1074,7 +1074,7 @@ Deduction runs when the factory is called — that is, at configuration time, wh
 
 > `suspicion_monitor`: could not resolve the annotation `BeforeToolCall` on parameter `step`. Import it at runtime rather than under `TYPE_CHECKING`.
 
-A union annotation registers at every member stage; `step: BeforeToolCall | AfterToolCall` is the same as `step: Step`.
+A monitor annotates exactly one payload type. A protocol may annotate one payload type or `Step`, which registers it at every stage; a union of payload types on a protocol is the same as `Step`.
 
 ### The kind is the decorator, and the return annotation is checked against it {#the-kind-comes-from-the-return-annotation}
 

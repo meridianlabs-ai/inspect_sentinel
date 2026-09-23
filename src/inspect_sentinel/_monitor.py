@@ -18,18 +18,17 @@ from ._report import Decision, Observation, Report
 from ._step import AfterToolCall, BeforeToolCall, Step
 
 Monitor: TypeAlias = (
-    Callable[[Context, Step], Awaitable[Observation | None]]
-    | Callable[[Context, BeforeToolCall], Awaitable[Observation | None]]
+    Callable[[Context, BeforeToolCall], Awaitable[Observation | None]]
     | Callable[[Context, AfterToolCall], Awaitable[Observation | None]]
 )
-"""A monitor: observes one step and reports a suspicion score, or abstains."""
+"""A monitor: observes one kind of step and reports a suspicion score, or abstains."""
 
 ControlProtocol: TypeAlias = (
     Callable[[Context, Step], Awaitable[Decision | None]]
     | Callable[[Context, BeforeToolCall], Awaitable[Decision | None]]
     | Callable[[Context, AfterToolCall], Awaitable[Decision | None]]
 )
-"""A protocol: decides what happens at one step, or abstains."""
+"""A protocol: decides what happens at a step, or abstains. Annotating `Step` runs it at every stage."""
 
 Monitors: TypeAlias = Mapping[str, Monitor] | Sequence[Monitor]
 """Monitors handed to a protocol, named by mapping key or by registry name."""
@@ -51,7 +50,7 @@ _STEP_TYPES = frozenset(get_args(Step))
 def monitor(factory: Callable[P, Monitor]) -> Callable[P, Monitor]:
     """Register a monitor factory.
 
-    The factory's return annotation must be `Monitor` and the function it returns must be `async`, take `(context, step)`, annotate `step` with a stage payload or `Step`, and be annotated to return `Observation | None`. These are checked when the factory is called. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store.
+    The factory's return annotation must be `Monitor` and the function it returns must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated to return `Observation | None`. These are checked when the factory is called. A monitor watches one stage; a concern spanning two stages is two monitors. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store.
 
     Args:
         factory: A function returning a monitor.
@@ -62,7 +61,7 @@ def monitor(factory: Callable[P, Monitor]) -> Callable[P, Monitor]:
 def protocol(factory: Callable[P, ControlProtocol]) -> Callable[P, ControlProtocol]:
     """Register a protocol factory.
 
-    Same contract as `@monitor`, with the returned function annotated to return `Decision | None`. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store.
+    Same contract as `@monitor`, with the returned function annotated to return `Decision | None`, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store.
 
     Args:
         factory: A function returning a protocol.
@@ -124,11 +123,16 @@ def _validate(
     step_hint = hints.get(parameters[1])
     if step_hint is None:
         raise TypeError(
-            f"The step parameter of {kind} {name} must be annotated with a stage payload or Step."
+            f"The step parameter of {kind} {name} must be annotated with a stage payload."
         )
-    if not _is_step_hint(step_hint):
+    members = set(get_args(step_hint) or (step_hint,))
+    if not members or not members <= _STEP_TYPES:
         raise TypeError(
-            f"The step parameter of {kind} {name} is annotated {step_hint!r}, which is not a stage payload or Step."
+            f"The step parameter of {kind} {name} is annotated {step_hint!r}, which is not a stage payload."
+        )
+    if kind == "monitor" and len(members) != 1:
+        raise TypeError(
+            f"A monitor watches one stage; {name} annotates step as {step_hint!r}. Write one monitor per stage."
         )
     returned = hints.get("return")
     if returned is None:
@@ -140,8 +144,3 @@ def _validate(
         raise TypeError(
             f"A {kind} must be annotated to return {report_type.__name__} | None; {name} returns {returned!r}."
         )
-
-
-def _is_step_hint(hint: Any) -> bool:
-    members = set(get_args(hint) or (hint,))
-    return bool(members) and members <= _STEP_TYPES

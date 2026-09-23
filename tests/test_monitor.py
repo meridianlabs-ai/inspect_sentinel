@@ -39,12 +39,12 @@ def after_monitor() -> Monitor:
     return check
 
 
-@monitor
-def any_stage_monitor() -> Monitor:
-    async def check(context: Context, step: Step) -> Observation | None:
+@protocol
+def any_stage_protocol() -> ControlProtocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
         return None
 
-    return check
+    return decide
 
 
 @protocol
@@ -58,7 +58,7 @@ def no_curl() -> ControlProtocol:
 
 
 @pytest.mark.parametrize(
-    "factory", [before_monitor, after_monitor, any_stage_monitor, no_curl]
+    "factory", [before_monitor, after_monitor, any_stage_protocol, no_curl]
 )
 def test_stage_annotated_functions_are_accepted(
     factory: Callable[[], Monitor | ControlProtocol],
@@ -223,4 +223,16 @@ def test_keyword_only_step_is_rejected_at_configuration() -> None:
 
     wrong = monitor(cast(Any, factory))
     with pytest.raises(TypeError, match="positional"):
+        wrong()
+
+
+def test_monitor_annotating_step_is_rejected_at_configuration() -> None:
+    async def every_stage(context: Context, step: Step) -> Observation | None:
+        return None
+
+    def factory() -> Any:
+        return every_stage
+
+    wrong = monitor(cast(Any, factory))
+    with pytest.raises(TypeError, match="one stage"):
         wrong()
