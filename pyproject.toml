@@ -124,3 +124,6 @@ pythonVersion = "3.10"
 [[tool.pyright.executionEnvironments]]
 root = "tests"
 reportPrivateUsage = false
+# shared fakes are imported as `tests._fakes`, which pytest resolves from the
+# repo root; give pyright the same root
+extraPaths = ["."]
