@@ -101,7 +101,7 @@ def _register(
         instance = factory(*args, **kwargs)
         found = _validate(cast(Callable[..., Any], instance), kind, report_type)
         setattr(instance, STAGES_ATTR, found)
-        registry_tag(factory, instance, info.model_copy(), *args, **kwargs)
+        registry_tag(factory, instance, info.model_copy(deep=True), *args, **kwargs)
         return instance
 
     registry_add(wrapper, info)
@@ -123,7 +123,8 @@ def _validate(
             f"A {kind} takes exactly (context, step); {name} takes {parameters}."
         )
     if any(
-        p.kind is not p.POSITIONAL_OR_KEYWORD for p in signature.parameters.values()
+        p.kind not in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        for p in signature.parameters.values()
     ):
         raise TypeError(
             f"A {kind} takes (context, step) as positional parameters; {name} does not."

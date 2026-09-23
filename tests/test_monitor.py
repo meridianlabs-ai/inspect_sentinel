@@ -117,6 +117,14 @@ def test_instance_is_tagged_with_registry_info() -> None:
     assert registry_params(instance) == {}
 
 
+def test_instances_have_independent_registry_metadata() -> None:
+    a = before_monitor(threshold_hint=0.1)
+    b = before_monitor(threshold_hint=0.2)
+    registry_info(a).metadata["extra"] = True
+    assert "extra" not in registry_info(b).metadata
+    assert "extra" not in registry_info(before_monitor).metadata
+
+
 def test_instances_have_independent_registry_info() -> None:
     a = before_monitor(threshold_hint=0.1)
     b = before_monitor(threshold_hint=0.2)
@@ -195,4 +203,31 @@ def test_non_async_function_is_rejected_at_configuration() -> None:
 
     wrong = monitor(cast(Any, factory_returning))
     with pytest.raises(TypeError, match="async"):
+        wrong()
+
+
+def test_positional_only_step_is_accepted() -> None:
+    @monitor
+    def positional_only() -> Monitor:
+        async def check(
+            context: Context, step: BeforeToolCall, /
+        ) -> Observation | None:
+            return None
+
+        return check
+
+    assert stages(positional_only()) == frozenset({"tool_call"})
+
+
+def test_keyword_only_step_is_rejected_at_configuration() -> None:
+    async def keyword_only(
+        context: Context, *, step: BeforeToolCall
+    ) -> Observation | None:
+        return None
+
+    def factory() -> Any:
+        return keyword_only
+
+    wrong = monitor(cast(Any, factory))
+    with pytest.raises(TypeError, match="positional"):
         wrong()
