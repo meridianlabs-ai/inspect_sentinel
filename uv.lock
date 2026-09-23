@@ -1272,8 +1272,8 @@ wheels = [
 
 [[package]]
 name = "inspect-ai"
-version = "0.3.267.dev12+gf6d37a0e7"
-source = { git = "https://github.com/UKGovernmentBEIS/inspect_ai?rev=main#f6d37a0e7c0d545188f90bfc5c5c850e7f2ff698" }
+version = "0.3.267.dev26+g51b85101e"
+source = { git = "https://github.com/UKGovernmentBEIS/inspect_ai?rev=feature%2Fsentinel#51b85101eae7f616b8933650280283b9bbe670a9" }
 dependencies = [
     { name = "agent-client-protocol" },
     { name = "aiobotocore" },
@@ -1362,7 +1362,7 @@ doc = [
 
 [package.metadata]
 requires-dist = [
-    { name = "inspect-ai", git = "https://github.com/UKGovernmentBEIS/inspect_ai?rev=main" },
+    { name = "inspect-ai", git = "https://github.com/UKGovernmentBEIS/inspect_ai?rev=feature%2Fsentinel" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
 
