@@ -1325,6 +1325,7 @@ name = "inspect-sentinel"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
     { name = "inspect-ai" },
     { name = "pydantic" },
 ]
@@ -1344,6 +1345,7 @@ dev = [
     { name = "quarto-cli" },
     { name = "rich" },
     { name = "ruff" },
+    { name = "trio" },
     { name = "types-pyyaml" },
 ]
 dist = [
@@ -1364,6 +1366,7 @@ doc = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11'", specifier = ">=1.0" },
     { name = "inspect-ai", git = "https://github.com/UKGovernmentBEIS/inspect_ai?rev=feature%2Fsentinel" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
@@ -1383,6 +1386,7 @@ dev = [
     { name = "quarto-cli", specifier = ">=1.9.36" },
     { name = "rich" },
     { name = "ruff" },
+    { name = "trio" },
     { name = "types-pyyaml" },
 ]
 dist = [
@@ -2808,6 +2812,18 @@ wheels = [
 ]
 
 [[package]]
+name = "outcome"
+version = "1.3.0.post0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "attrs" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/98/df/77698abfac98571e65ffeb0c1fba8ffd692ab8458d617a0eed7d9a8d38f2/outcome-1.3.0.post0.tar.gz", hash = "sha256:9dcf02e65f2971b80047b377468e72a268e15c0af3cf1238e6ff14f7f91143b8", size = 21060, upload-time = "2023-10-26T04:26:04.361Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/55/8b/5ab7257531a5d830fc8000c476e63c935488d74609b50f9384a643ec0a62/outcome-1.3.0.post0-py2.py3-none-any.whl", hash = "sha256:e771c5ce06d1415e356078d3bdd68523f284b4ce5419828922b6871e65eda82b", size = 10692, upload-time = "2023-10-26T04:26:02.532Z" },
+]
+
+[[package]]
 name = "overrides"
 version = "7.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4148,6 +4164,15 @@ wheels = [
 ]
 
 [[package]]
+name = "sortedcontainers"
+version = "2.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/c4/ba2f8066cceb6f23394729afe52f3bf7adec04bf9ed2c820b39e19299111/sortedcontainers-2.4.0.tar.gz", hash = "sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88", size = 30594, upload-time = "2021-05-16T22:03:42.897Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl", hash = "sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0", size = 29575, upload-time = "2021-05-16T22:03:41.177Z" },
+]
+
+[[package]]
 name = "soupsieve"
 version = "2.9.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4381,6 +4406,24 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/2c/2e/a7fbfe268c8a3b32546930c0297c101d65a4a14c304ad5790a9f478f0e4e/traitlets-5.16.1.tar.gz", hash = "sha256:ed900c2b631aa3a112811139fa97b8d2c3bad5e989656bba4b7e52c7852c18c1", size = 166137, upload-time = "2026-08-03T08:32:36.848Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ad/66/0d785f0bc5e4315a96c989bb476d0fc07ea4f85132550c7b156ca2035d52/traitlets-5.16.1-py3-none-any.whl", hash = "sha256:f775618166caa0396c8e337099240f2bd3e5e917d203b2e6fbe21a58d3cb1f6b", size = 86211, upload-time = "2026-08-03T08:32:34.48Z" },
+]
+
+[[package]]
+name = "trio"
+version = "0.34.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "attrs" },
+    { name = "cffi", marker = "implementation_name != 'pypy' and os_name == 'nt'" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
+    { name = "idna" },
+    { name = "outcome" },
+    { name = "sniffio" },
+    { name = "sortedcontainers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/92/dc/a2d25ed73ad49cfd79bf18d262577c3731c98e382284e28d522f49a0df35/trio-0.34.0.tar.gz", hash = "sha256:63b9485408bdfdde544fced107045a8c0086cdc4bd0ef2f797b9e0dd111b964b", size = 607457, upload-time = "2026-08-11T00:33:42.198Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/1f/555f1364bed52a92a864181962b77f1b15adadeacf23b86105324363e461/trio-0.34.0-py3-none-any.whl", hash = "sha256:6c7c9f49917694dcdcd5f67abd168df5599eca480d61f29854d17a61a75c2f05", size = 511840, upload-time = "2026-08-11T00:33:40.552Z" },
 ]
 
 [[package]]
