@@ -1,8 +1,3 @@
-"""The step payloads: what exists at each point in the agent loop a sentinel can watch.
-
-Tool stages only for now; the generate payloads arrive with the generate-side dispatcher.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

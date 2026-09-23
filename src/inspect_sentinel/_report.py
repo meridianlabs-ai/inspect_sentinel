@@ -1,5 +1,3 @@
-"""What monitors and protocols return, and the record the runner attaches identity to."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

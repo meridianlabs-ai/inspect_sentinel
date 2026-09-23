@@ -62,7 +62,7 @@ Supports Python 3.10+ (the same floor as `inspect-ai`, which is intended to depe
 - **Imports**: Use isort order (enforced by ruff)
 - **Types**: All functions must have type annotations, including in tests.
 - **Naming**: Use snake_case for variables, functions, methods; PascalCase for classes
-- **Docstrings**: Google-style docstrings required for public APIs. Use single backtick (`) around symbols. Do not use hard line breaks within paragraphs or list items — each paragraph should be a single unwrapped line, separated by blank lines.
+- **Docstrings**: Google-style docstrings required for public APIs; none on private functions, private module-level names, or the `_`-prefixed modules themselves (the inspect_ai and inspect_scout pattern). Use single backtick (`) around symbols. Do not use hard line breaks within paragraphs or list items — each paragraph should be a single unwrapped line, separated by blank lines.
 - **Error Handling**: Use appropriate exception types; include context in error messages
 - **Testing**: Write tests with pytest; maintain high coverage
 

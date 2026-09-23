@@ -1,5 +1,3 @@
-"""The `@monitor` and `@protocol` decorators, the callable aliases they type, and stage inference."""
-
 from __future__ import annotations
 
 import inspect
