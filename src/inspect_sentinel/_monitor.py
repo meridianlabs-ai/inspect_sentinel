@@ -17,7 +17,7 @@ from inspect_ai._util.registry import (
 
 from ._context import Context
 from ._report import Decision, Observation, Report
-from ._step import AfterToolCall, BeforeToolCall, Stage, Step
+from ._step import STAGE_OF_TYPE, AfterToolCall, BeforeToolCall, Stage, Step
 
 Monitor: TypeAlias = (
     Callable[[Context, Step], Awaitable[Observation | None]]
@@ -48,11 +48,6 @@ P = ParamSpec("P")
 SentinelT = TypeVar("SentinelT")
 
 STAGES_ATTR = "__sentinel_stages__"
-
-_STAGE_OF_TYPE: dict[type[Any], Stage] = {
-    BeforeToolCall: "tool_call",
-    AfterToolCall: "tool_result",
-}
 
 
 def stages(sentinel: Monitor | ControlProtocol) -> frozenset[Stage]:
@@ -169,7 +164,7 @@ def _stages_from_hint(hint: Any) -> frozenset[Stage]:
     members = get_args(hint) or (hint,)
     found: set[Stage] = set()
     for member in members:
-        stage = _STAGE_OF_TYPE.get(member)
+        stage = STAGE_OF_TYPE.get(member)
         if stage is None:
             return frozenset()
         found.add(stage)

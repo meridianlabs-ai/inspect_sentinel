@@ -6,7 +6,7 @@ Tool stages only for now; the generate payloads arrive with the generate-side di
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 from inspect_ai.model import ChatMessage, ChatMessageTool
 from inspect_ai.tool import ToolCall, ToolCallView, ToolResult
@@ -79,12 +79,17 @@ Step: TypeAlias = BeforeToolCall | AfterToolCall
 """The union, for code that handles any stage: a protocol, or a dispatcher."""
 
 
+STAGE_OF_TYPE: dict[type[Any], Stage] = {
+    BeforeToolCall: "tool_call",
+    AfterToolCall: "tool_result",
+}
+"""Payload type to stage. Add here when a stage is added; `stage_of` and the decorators both read it."""
+
+
 def stage_of(step: Step) -> Stage:
     """The stage a step payload belongs to.
 
     Args:
         step: The payload.
     """
-    if isinstance(step, BeforeToolCall):
-        return "tool_call"
-    return "tool_result"
+    return STAGE_OF_TYPE[type(step)]
