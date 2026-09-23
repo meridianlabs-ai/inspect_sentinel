@@ -42,8 +42,6 @@ _PRECEDENCE: dict[Action, int] = {
 
 
 class _ReportSequence(Sequence[Reported[R_co]], Generic[R_co]):
-    """A layer's reports of one family, in configuration order."""
-
     def __init__(self, items: Iterable[Reported[R_co]] = ()) -> None:
         self._items = tuple(items)
 
@@ -113,7 +111,6 @@ C = TypeVar("C")
 
 @asynccontextmanager
 async def _task_group() -> AsyncGenerator[TaskGroup]:
-    """A task group that unwraps a raised `ExceptionGroup` to its first member."""
     try:
         async with anyio.create_task_group() as tg:
             yield tg

@@ -433,15 +433,20 @@ async def test_external_cancellation_propagates_through_the_runner() -> None:
 
         return check
 
+    completed = False
+
     async with anyio.create_task_group() as tg:
 
         async def run() -> None:
+            nonlocal completed
             await run_monitors([hangs()], runner_context(), _before())
+            completed = True
 
         tg.start_soon(run)
         await entered.wait()
         tg.cancel_scope.cancel()
     assert tg.cancel_scope.cancel_called
+    assert not completed
 
 
 @pytest.mark.anyio
