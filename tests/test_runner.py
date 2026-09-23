@@ -1,7 +1,25 @@
-import pytest
+from typing import Any, cast
 
+import anyio
+import pytest
+from inspect_ai.model import ChatMessageUser
+from inspect_ai.tool import ToolCall, ToolCallView
+
+from inspect_sentinel._context import Context
+from inspect_sentinel._monitor import ControlProtocol, Monitor, monitor, protocol
 from inspect_sentinel._report import Action, Decision, Observation, Reported
-from inspect_sentinel._runner import Decisions, Observations, Reports
+from inspect_sentinel._runner import (
+    Decisions,
+    Observations,
+    Reports,
+    run_children,
+    run_monitor,
+    run_monitors,
+    run_protocol,
+    run_protocols,
+)
+from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
+from tests._fakes import ListRecorder, runner_context
 
 
 def _obs(name: str, suspicion: float | dict[str, float]) -> Reported[Observation]:
@@ -57,3 +75,252 @@ def test_reports_holds_both_families() -> None:
     )
     assert reports.observations.max_suspicion() == 0.1
     assert reports.decisions.strongest() is not None
+
+
+def _before() -> BeforeToolCall:
+    return BeforeToolCall(
+        conversation="c",
+        message="",
+        call=ToolCall(id="c1", function="bash", arguments={"cmd": "ls"}),
+        view=ToolCallView(),
+        input=[ChatMessageUser(content="go")],
+        history=[ChatMessageUser(content="go")],
+    )
+
+
+@monitor
+def scores(value: float = 0.5) -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(value)
+
+    return check
+
+
+@monitor
+def abstains() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        return None
+
+    return check
+
+
+@monitor
+def after_only() -> Monitor:
+    async def check(context: Context, step: AfterToolCall) -> Observation | None:
+        return Observation.score(0.9)
+
+    return check
+
+
+@monitor
+def raises() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        raise RuntimeError("monitor exploded")
+
+    return check
+
+
+@protocol
+def decides(action: Action = "continue") -> ControlProtocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        return Decision(action=action)
+
+    return decide
+
+
+@protocol
+def records_path() -> ControlProtocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        return Decision(action="continue", explanation=context.path)
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_run_monitor_records_and_returns_the_report() -> None:
+    recorder = ListRecorder()
+    context = runner_context(recorder=recorder)
+    reported = await run_monitor(scores(0.4), context, _before())
+    assert reported is not None
+    assert reported.report.suspicion == 0.4
+    assert reported.name == "scores" and reported.path == "scores"
+    assert [r.reported for r in recorder.records] == [reported]
+    assert recorder.records[0].context.path == "scores"
+
+
+@pytest.mark.anyio
+async def test_run_monitor_skips_a_child_for_another_stage() -> None:
+    recorder = ListRecorder()
+    assert (
+        await run_monitor(after_only(), runner_context(recorder=recorder), _before())
+        is None
+    )
+    assert recorder.records == []
+
+
+@pytest.mark.anyio
+async def test_abstention_records_nothing() -> None:
+    recorder = ListRecorder()
+    assert (
+        await run_monitor(abstains(), runner_context(recorder=recorder), _before())
+        is None
+    )
+    assert recorder.records == []
+
+
+@pytest.mark.anyio
+async def test_run_monitor_uses_the_given_name_and_extends_the_path() -> None:
+    reported = await run_monitor(
+        scores(), runner_context(path="attempt"), _before(), name="judge"
+    )
+    assert reported is not None
+    assert (reported.name, reported.path) == ("judge", "attempt/judge")
+
+
+@pytest.mark.anyio
+async def test_child_context_is_derived_under_the_layer() -> None:
+    reported = await run_protocol(
+        records_path(), runner_context(path="attempt"), _before(), name="rule"
+    )
+    assert reported is not None
+    assert reported.report.explanation == "attempt/rule"
+
+
+@pytest.mark.anyio
+async def test_run_monitor_rejects_a_protocol() -> None:
+    with pytest.raises(TypeError, match="monitor"):
+        await run_monitor(cast(Any, decides()), runner_context(), _before())
+
+
+@pytest.mark.anyio
+async def test_runner_requires_a_runner_context() -> None:
+    parent = runner_context()
+    bare = Context(
+        task=None,
+        task_description=None,
+        sample_id=None,
+        epoch=None,
+        sample_description=None,
+        input="p",
+        metadata={},
+        path="",
+        store=parent.store,
+        host=parent.host,
+    )
+    with pytest.raises(TypeError, match="RunnerContext"):
+        await run_monitor(scores(), bare, _before())
+
+
+@pytest.mark.anyio
+async def test_exceptions_propagate() -> None:
+    with pytest.raises(RuntimeError, match="exploded"):
+        await run_monitors([raises()], runner_context(), _before())
+
+
+@pytest.mark.anyio
+async def test_run_monitors_names_from_a_mapping_and_keeps_order() -> None:
+    recorder = ListRecorder()
+    observations = await run_monitors(
+        {"low": scores(0.1), "high": scores(0.8)},
+        runner_context(recorder=recorder),
+        _before(),
+    )
+    assert [o.name for o in observations] == ["low", "high"]
+    assert observations.max_suspicion() == 0.8
+    assert sorted(r.reported.name for r in recorder.records) == ["high", "low"]
+
+
+@pytest.mark.anyio
+async def test_run_monitors_records_reports_the_caller_ignores() -> None:
+    recorder = ListRecorder()
+    await run_monitors(
+        {"a": scores(0.1), "b": abstains(), "c": scores(0.2)},
+        runner_context(recorder=recorder),
+        _before(),
+    )
+    assert len(recorder.records) == 2
+
+
+@pytest.mark.anyio
+async def test_duplicate_names_in_a_layer_are_an_error() -> None:
+    with pytest.raises(ValueError, match="scores"):
+        await run_monitors([scores(0.1), scores(0.2)], runner_context(), _before())
+
+
+@pytest.mark.anyio
+async def test_run_monitors_is_concurrent() -> None:
+    first_started = anyio.Event()
+    second_started = anyio.Event()
+
+    @monitor
+    def waits_for_second() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            first_started.set()
+            await second_started.wait()
+            return Observation.score(0.1)
+
+        return check
+
+    @monitor
+    def waits_for_first() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            second_started.set()
+            await first_started.wait()
+            return Observation.score(0.2)
+
+        return check
+
+    with anyio.fail_after(5):
+        observations = await run_monitors(
+            {"a": waits_for_second(), "b": waits_for_first()},
+            runner_context(),
+            _before(),
+        )
+    assert observations.max_suspicion() == 0.2
+
+
+@pytest.mark.anyio
+async def test_terminate_cancels_siblings() -> None:
+    started = anyio.Event()
+    finished = anyio.Event()
+
+    @protocol
+    def slow() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            started.set()
+            await anyio.sleep_forever()
+            finished.set()
+            return Decision(action="continue")
+
+        return decide
+
+    @protocol
+    def terminates() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await started.wait()
+            return Decision(action="terminate")
+
+        return decide
+
+    with anyio.fail_after(5):
+        decisions = await run_protocols(
+            {"slow": slow(), "stop": terminates()}, runner_context(), _before()
+        )
+    strongest = decisions.strongest()
+    assert strongest is not None and strongest.report.action == "terminate"
+    assert [d.name for d in decisions] == ["stop"]
+    assert not finished.is_set()
+
+
+@pytest.mark.anyio
+async def test_run_children_splits_by_kind() -> None:
+    recorder = ListRecorder()
+    reports = await run_children(
+        {"m": scores(0.3), "p": decides("reject"), "skip": after_only()},
+        runner_context(recorder=recorder),
+        _before(),
+    )
+    assert reports.observations.max_suspicion() == 0.3
+    strongest = reports.decisions.strongest()
+    assert strongest is not None and strongest.report.action == "reject"
+    assert len(recorder.records) == 2
