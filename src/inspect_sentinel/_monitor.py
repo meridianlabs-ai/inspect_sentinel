@@ -50,6 +50,7 @@ SentinelT = TypeVar("SentinelT")
 STAGES_ATTR = "__sentinel_stages__"
 
 
+# Runner-facing; exported from the integration module, not the package root.
 def stages(sentinel: Monitor | ControlProtocol) -> frozenset[Stage]:
     """The stages a configured monitor or protocol watches.
 

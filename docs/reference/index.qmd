@@ -20,6 +20,16 @@ reference: inspect_sentinel
 ### Report
 ### Reported
 
+## Monitors and protocols
+
+### monitor
+### protocol
+### Monitor
+### ControlProtocol
+### Monitors
+### Protocols
+### Children
+
 ## Context
 
 ### Context
