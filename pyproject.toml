@@ -31,6 +31,10 @@ dependencies = [
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.
     "pydantic>=2.0",
+    # The runner fans children out on anyio task groups. inspect-ai depends on
+    # anyio too, but this is a direct import and a transitive dependency is not
+    # a promise.
+    "anyio>=4.0",
 ]
 
 [project.urls]
@@ -49,9 +53,6 @@ dev = [
     "pyright",
     "pytest-xdist",
     "pytest-timeout>=2.4.0",
-    # monitors are async; anyio's pytest plugin runs `@pytest.mark.anyio`
-    # tests on the backend the `anyio_backend` fixture in conftest selects
-    "anyio",
     {include-group = "doc"},
 ]
 doc = [

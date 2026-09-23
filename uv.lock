@@ -1324,13 +1324,13 @@ dependencies = [
 name = "inspect-sentinel"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "inspect-ai" },
     { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "anyio" },
     { name = "griffe" },
     { name = "jupyter" },
     { name = "markdown" },
@@ -1362,13 +1362,13 @@ doc = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.0" },
     { name = "inspect-ai", git = "https://github.com/UKGovernmentBEIS/inspect_ai?rev=feature%2Fsentinel" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "anyio" },
     { name = "griffe", specifier = ">=2" },
     { name = "jupyter" },
     { name = "markdown" },
