@@ -11,7 +11,7 @@ from inspect_ai.model import (
 from inspect_ai.tool import ToolCall, ToolCallView, ToolResult
 
 from inspect_sentinel._report import Decision, Reported
-from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
+from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step, stage_of
 
 
 def _call() -> ToolCall:
@@ -96,3 +96,26 @@ def test_after_tool_call_output_may_be_structured_content() -> None:
 
 def test_step_union_covers_tool_stages() -> None:
     assert set(get_args(Step)) == {BeforeToolCall, AfterToolCall}
+
+
+def test_stage_of_maps_payloads_to_stages() -> None:
+    before = BeforeToolCall(
+        conversation="conv",
+        message="ok",
+        call=_call(),
+        view=ToolCallView(),
+        input=_input(),
+        history=_history(),
+    )
+    after = AfterToolCall(
+        conversation="conv",
+        message="ok",
+        call=_call(),
+        result=ChatMessageTool(content="short", tool_call_id="c1"),
+        output="out",
+        view=ToolCallView(),
+        input=_input(),
+        history=_history(),
+    )
+    assert stage_of(before) == "tool_call"
+    assert stage_of(after) == "tool_result"

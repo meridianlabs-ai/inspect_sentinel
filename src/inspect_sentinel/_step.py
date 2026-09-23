@@ -77,3 +77,14 @@ class AfterToolCall:
 
 Step: TypeAlias = BeforeToolCall | AfterToolCall
 """The union, for code that handles any stage: a protocol, or a dispatcher."""
+
+
+def stage_of(step: Step) -> Stage:
+    """The stage a step payload belongs to.
+
+    Args:
+        step: The payload.
+    """
+    if isinstance(step, BeforeToolCall):
+        return "tool_call"
+    return "tool_result"
