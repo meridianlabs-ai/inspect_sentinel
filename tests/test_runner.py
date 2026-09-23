@@ -324,3 +324,42 @@ async def test_run_children_splits_by_kind() -> None:
     strongest = reports.decisions.strongest()
     assert strongest is not None and strongest.report.action == "reject"
     assert len(recorder.records) == 2
+
+
+@pytest.mark.anyio
+async def test_wrong_report_type_at_runtime_is_an_error() -> None:
+    async def lies(context: Context, step: BeforeToolCall) -> Observation | None:
+        return cast(Any, Decision(action="continue"))
+
+    def factory() -> Any:
+        return lies
+
+    wrong = monitor(cast(Any, factory))()
+    with pytest.raises(TypeError, match="must return Observation"):
+        await run_monitor(wrong, runner_context(), _before())
+
+
+@pytest.mark.anyio
+async def test_sequence_children_are_named_by_registry_name() -> None:
+    recorder = ListRecorder()
+    observations = await run_monitors(
+        [scores(0.1), abstains()], runner_context(recorder=recorder), _before()
+    )
+    assert [o.name for o in observations] == ["scores"]
+    assert [r.reported.path for r in recorder.records] == ["scores"]
+
+
+@pytest.mark.anyio
+async def test_run_children_keeps_configuration_order_per_family() -> None:
+    reports = await run_children(
+        {
+            "p1": decides("continue"),
+            "m1": scores(0.1),
+            "p2": decides("modify"),
+            "m2": scores(0.2),
+        },
+        runner_context(),
+        _before(),
+    )
+    assert [o.name for o in reports.observations] == ["m1", "m2"]
+    assert [d.name for d in reports.decisions] == ["p1", "p2"]
