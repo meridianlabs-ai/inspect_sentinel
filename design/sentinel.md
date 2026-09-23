@@ -1046,7 +1046,7 @@ Monitor: TypeAlias = (
 
 A protocol's alias, `ControlProtocol`, has the same four shapes returning `Decision | None` plus a fifth over `Step` — the widest union, and therefore a registration at all four points, which is what a composition like `chain` annotates. See [The `@protocol` decorator](#the-protocol-marker).
 
-Registry params come from the factory signature, so `registry_create("monitor", "suspicion_monitor", model="openai/gpt-4o-mini")` and `registry_create("protocol", "threshold", reject_at=0.8)` and the params recorded in the log work as they do for every other registry type. Note what is *not* a parameter on a monitor: a threshold. A monitor factory taking `threshold=0.8` has nothing to do with it, since the monitor cannot act — the constant belongs on a protocol, which is the anti-pattern [Monitor or protocol?](#monitor-or-protocol) describes, wearing configuration as a disguise. The new `RegistryType` values are `"monitor"` and `"protocol"`.
+Registry params come from the factory signature, so `create_registry_object("monitor", "suspicion_monitor", {"model": "openai/gpt-4o-mini"})` and `create_registry_object("protocol", "threshold", {"reject_at": 0.8})` and the params recorded in the log work as they do for every other registry type. `registry_create` is not a construction path here: it instantiates only factories whose return annotation names a class matching the registry type, and `Monitor` and `ControlProtocol` are union aliases, so it would hand back the factory; there is deliberately no `registry_create` overload for the two types, so the call is a type error rather than a silent no-op. Note what is *not* a parameter on a monitor: a threshold. A monitor factory taking `threshold=0.8` has nothing to do with it, since the monitor cannot act — the constant belongs on a protocol, which is the anti-pattern [Monitor or protocol?](#monitor-or-protocol) describes, wearing configuration as a disguise. The new `RegistryType` values are `"monitor"` and `"protocol"`.
 
 #### Instance names
 
@@ -1074,7 +1074,7 @@ Deduction runs when the factory is called — that is, at configuration time, wh
 
 > `suspicion_monitor`: could not resolve the annotation `BeforeToolCall` on parameter `step`. Import it at runtime rather than under `TYPE_CHECKING`.
 
-Open: whether a union annotation (`BeforeToolCall | AfterToolCall`) registers the function at both points, or is an error.
+A union annotation registers at every member stage; `step: BeforeToolCall | AfterToolCall` is the same as `step: Step`.
 
 ### The kind is the decorator, and the return annotation is checked against it {#the-kind-comes-from-the-return-annotation}
 
