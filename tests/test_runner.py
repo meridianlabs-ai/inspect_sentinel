@@ -22,6 +22,11 @@ from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from tests._fakes import ListRecorder, runner_context
 
 
+@pytest.fixture(params=["asyncio", "trio"])
+def anyio_backend(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
+
 def _obs(name: str, suspicion: float | dict[str, float]) -> Reported[Observation]:
     return Reported(name=name, path=name, report=Observation.score(suspicion))
 
@@ -386,3 +391,91 @@ async def test_run_protocols_rejects_a_monitor() -> None:
 async def test_run_monitors_names_an_uncalled_factory_error() -> None:
     with pytest.raises(TypeError, match="call it"):
         await run_monitors([cast(Any, scores)], runner_context(), _before())
+
+
+@pytest.mark.anyio
+async def test_a_raising_child_surfaces_while_a_sibling_is_mid_await() -> None:
+    started = anyio.Event()
+
+    @protocol
+    def waits() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            started.set()
+            await anyio.sleep_forever()
+            return None
+
+        return decide
+
+    @monitor
+    def explodes_after_start() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            await started.wait()
+            raise RuntimeError("boom")
+
+        return check
+
+    with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):
+        await run_children(
+            {"w": waits(), "e": explodes_after_start()}, runner_context(), _before()
+        )
+
+
+@pytest.mark.anyio
+async def test_external_cancellation_propagates_through_the_runner() -> None:
+    entered = anyio.Event()
+
+    @monitor
+    def hangs() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            entered.set()
+            await anyio.sleep_forever()
+            return None
+
+        return check
+
+    async with anyio.create_task_group() as tg:
+
+        async def run() -> None:
+            await run_monitors([hangs()], runner_context(), _before())
+
+        tg.start_soon(run)
+        await entered.wait()
+        tg.cancel_scope.cancel()
+    assert tg.cancel_scope.cancel_called
+
+
+@pytest.mark.anyio
+async def test_terminate_keeps_results_collected_before_it() -> None:
+    started = anyio.Event()
+
+    @protocol
+    def quick() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            return Decision(action="continue")
+
+        return decide
+
+    @protocol
+    def slow() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            started.set()
+            await anyio.sleep_forever()
+            return None
+
+        return decide
+
+    @protocol
+    def terminates() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await started.wait()
+            return Decision(action="terminate")
+
+        return decide
+
+    with anyio.fail_after(5):
+        reports = await run_children(
+            {"quick": quick(), "slow": slow(), "stop": terminates()},
+            runner_context(),
+            _before(),
+        )
+    assert [d.name for d in reports.decisions] == ["quick", "stop"]
