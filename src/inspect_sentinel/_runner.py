@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypeVar, cast, overload
@@ -18,6 +19,9 @@ from ._monitor import (
 )
 from ._report import Action, Decision, Observation, Report, Reported
 from ._step import Step
+
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
 
 _PRECEDENCE: dict[Action, int] = {
     "terminate": 4,
@@ -154,8 +158,8 @@ async def run_monitors(
         async with anyio.create_task_group() as tg:
             for index, (name, child) in enumerate(named):
                 tg.start_soon(run_one, index, name, cast(Monitor, child))
-    except BaseException as ex:
-        raise _unwrap(ex) from None
+    except ExceptionGroup as ex:
+        raise ex.exceptions[0] from None
 
     return Observations(o for _, o in sorted(observed, key=lambda t: t[0]))
 
@@ -208,8 +212,8 @@ async def run_children(children: Children, context: Context, step: Step) -> Repo
         async with anyio.create_task_group() as tg:
             for index, (name, child) in enumerate(named):
                 tg.start_soon(run_one, index, name, child, tg.cancel_scope.cancel)
-    except BaseException as ex:
-        raise _unwrap(ex) from None
+    except ExceptionGroup as ex:
+        raise ex.exceptions[0] from None
 
     return Reports(
         Observations(o for _, o in sorted(observations, key=lambda t: t[0])),
@@ -262,10 +266,3 @@ def _named(children: Children) -> list[tuple[str, Monitor | ControlProtocol]]:
             )
         seen.add(name)
     return named
-
-
-def _unwrap(ex: BaseException) -> BaseException:
-    exceptions = getattr(ex, "exceptions", None)
-    if isinstance(exceptions, Sequence) and exceptions:
-        return cast(BaseException, exceptions[0])
-    return ex

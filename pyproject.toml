@@ -53,6 +53,8 @@ dev = [
     "pyright",
     "pytest-xdist",
     "pytest-timeout>=2.4.0",
+    # so pyright, which checks against the 3.10 floor, can resolve the guarded import in _runner.py
+    "exceptiongroup>=1.0",
     {include-group = "doc"},
 ]
 doc = [
