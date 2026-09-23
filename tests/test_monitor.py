@@ -18,6 +18,7 @@ from inspect_sentinel._monitor import (
     Monitor,
     monitor,
     protocol,
+    step_types,
 )
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
@@ -236,3 +237,19 @@ def test_monitor_annotating_step_is_rejected_at_configuration() -> None:
     wrong = monitor(cast(Any, factory))
     with pytest.raises(TypeError, match="one stage"):
         wrong()
+
+
+def test_step_types_are_recorded_on_the_instance() -> None:
+    assert step_types(before_monitor()) == frozenset({BeforeToolCall})
+    assert step_types(after_monitor()) == frozenset({AfterToolCall})
+    assert step_types(any_stage_protocol()) == frozenset(
+        {BeforeToolCall, AfterToolCall}
+    )
+
+
+def test_step_types_requires_a_decorated_instance() -> None:
+    async def undecorated(context: Context, step: BeforeToolCall) -> Observation | None:
+        return None
+
+    with pytest.raises(TypeError, match="@monitor or @protocol"):
+        step_types(undecorated)
