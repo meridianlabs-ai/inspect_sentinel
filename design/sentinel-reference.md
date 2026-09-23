@@ -131,7 +131,7 @@ The stage is checked by mypy and pyright against this alias, and read from the a
 
 ### Instance names
 
-Every configured monitor or protocol has an instance name: the key when it was configured in a mapping, the registry name otherwise. Two children of one layer with the same name is a configuration error. Nesting joins names into a path, `attempt/internet_attempt`. The path is what `SentinelEvent` records and what `context.store_as()` namespaces by.
+Every configured monitor or protocol has an instance name: the key when it was configured in a mapping, the registry name without its package prefix otherwise. Two children of one layer with the same name is a configuration error. Nesting joins names into a path, `attempt/internet_attempt`. The path is what `SentinelEvent` records and what `context.store_as()` namespaces by.
 
 ### Stages
 
