@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeAlias, TypeVar
 
 from inspect_ai.tool import ToolCall
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Suspicion: TypeAlias = float | dict[str, float]
 """How suspicious a step is. A dict scores several dimensions independently."""
@@ -24,6 +24,13 @@ class Observation(BaseModel):
 
     metadata: dict[str, Any] | None = Field(default=None)
     """Author-supplied structured context, recorded verbatim."""
+
+    @field_validator("suspicion")
+    @classmethod
+    def _suspicion_dimensions_not_empty(cls, value: Suspicion) -> Suspicion:
+        if isinstance(value, dict) and not value:
+            raise ValueError("suspicion dimensions must not be empty")
+        return value
 
     @classmethod
     def score(cls, suspicion: Suspicion, explanation: str | None = None) -> Observation:

@@ -78,3 +78,8 @@ def test_reported_attaches_identity() -> None:
     assert reported.name == "judge"
     assert reported.path == "attempt/judge"
     assert reported.report.suspicion == 0.2
+
+
+def test_observation_rejects_empty_suspicion_dimensions() -> None:
+    with pytest.raises(ValidationError, match="dimensions"):
+        Observation(suspicion={})
