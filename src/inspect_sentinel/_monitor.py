@@ -12,7 +12,6 @@ from inspect_ai._util.registry import (
     registry_add,
     registry_name,
     registry_tag,
-    set_return_annotation,
 )
 
 from ._context import Context
@@ -53,18 +52,6 @@ _STAGE_OF_TYPE: dict[type[Any], Stage] = {
     BeforeToolCall: "tool_call",
     AfterToolCall: "tool_result",
 }
-
-_RETURN_TYPE_MARKERS: dict[RegistryType, type[Any]] = {
-    "monitor": type("Monitor", (), {}),
-    "protocol": type("Protocol", (), {}),
-}
-"""Runtime stand-ins for the wrapper's return annotation.
-
-`registry_create()` instantiates a registered factory only when its return
-annotation's name matches the registry type; `Monitor` and `ControlProtocol`
-are union aliases with no `__name__` of their own, so each factory's wrapper
-is annotated with one of these markers instead, named to match.
-"""
 
 
 def stages(sentinel: Monitor | ControlProtocol) -> frozenset[Stage]:
@@ -119,7 +106,6 @@ def _register(
         registry_tag(factory, instance, info, *args, **kwargs)
         return instance
 
-    set_return_annotation(wrapper, _RETURN_TYPE_MARKERS[kind])
     registry_add(wrapper, info)
     return wrapper
 

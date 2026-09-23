@@ -4,6 +4,7 @@ from typing import Any, cast
 import pytest
 from inspect_ai._util.registry import (
     RegistryType,
+    create_registry_object,
     registry_create,
     registry_info,
     registry_lookup,
@@ -82,13 +83,19 @@ def test_protocol_registers_under_the_protocol_type() -> None:
     assert registry_info(no_curl).type == "protocol"
 
 
-def test_registry_create_resolves_by_name_and_records_params() -> None:
-    kind: RegistryType = "monitor"
-    create = cast(Callable[..., Any], registry_create)
-    instance = create(kind, "before_monitor", threshold_hint=0.9)
+def test_registry_object_is_created_by_name_with_params() -> None:
+    instance = create_registry_object(
+        "monitor", "before_monitor", {"threshold_hint": 0.9}
+    )
     assert registry_info(instance).type == "monitor"
     assert registry_info(instance).name == "before_monitor"
     assert registry_params(instance) == {"threshold_hint": 0.9}
+
+
+def test_registry_create_returns_the_factory_for_alias_return_types() -> None:
+    kind: RegistryType = "monitor"
+    create = cast(Callable[..., Any], registry_create)
+    assert create(kind, "before_monitor") is before_monitor
 
 
 def test_instance_is_tagged_with_registry_info() -> None:
