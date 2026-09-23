@@ -25,7 +25,7 @@ dependencies = [
     # The git ref never reaches PyPI: release-pin-deps.yml rewrites it to a
     # `>=<latest>` floor on the Release Please release PR, and
     # release-dep-guard.yml blocks the release if it is still a git ref.
-    "inspect-ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@main",
+    "inspect-ai>=0.3.268",
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.
     "pydantic>=2.0",
