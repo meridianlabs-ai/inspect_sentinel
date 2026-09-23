@@ -840,6 +840,8 @@ Most of what `@protocol` and `@monitor` verify at decoration time, mypy and pyri
 
 What stays runtime-only is exactly what no type system would express: per-stage action legality (a generic `Decision[A]` was [rejected](#rejected-a-generic-parameterised-on-the-action-set) for schema reasons), the authority rule, whether a body went through the runner, and YAML configuration. Those live in [the boundary check](#the-boundary-check) and the log.
 
+One more rule is runtime-only for a different reason: that a monitor annotates exactly one payload type. A function accepting `Step` is, by parameter contravariance, a valid `Callable[[Context, BeforeToolCall], ...]`, so pyright accepts it as a `Monitor`; the rule is a statement about how monitors should be written, not a type-safety property, and `@monitor` enforces it when the factory is called. Making it static would mean parameterising `Monitor` by payload, which is not worth a type parameter on every factory to catch a mistake that already fails at configuration time.
+
 ### The runner {#the-runner}
 
 **The protocol invokes its children; the framework does not.** This is forced by [Prior art](#prior-art): paraphrasing and minification are transforms between agent output and monitor input, and honeypots are synthetic inputs injected into the monitor's stream. Neither is expressible if the framework has already called the monitors and handed over finished reports.
@@ -1046,7 +1048,7 @@ Monitor: TypeAlias = (
 
 A protocol's alias, `ControlProtocol`, has the same four shapes returning `Decision | None` plus a fifth over `Step` — the widest union, and therefore a registration at all four points, which is what a composition like `chain` annotates. See [The `@protocol` decorator](#the-protocol-marker).
 
-Registry params come from the factory signature, so `registry_create("monitor", "suspicion_monitor", model="openai/gpt-4o-mini")` and `registry_create("protocol", "threshold", reject_at=0.8)` and the params recorded in the log work as they do for every other registry type. Note what is *not* a parameter on a monitor: a threshold. A monitor factory taking `threshold=0.8` has nothing to do with it, since the monitor cannot act — the constant belongs on a protocol, which is the anti-pattern [Monitor or protocol?](#monitor-or-protocol) describes, wearing configuration as a disguise. The new `RegistryType` values are `"monitor"` and `"protocol"`.
+Registry params come from the factory signature, so `create_registry_object("monitor", "suspicion_monitor", {"model": "openai/gpt-4o-mini"})` and `create_registry_object("protocol", "threshold", {"reject_at": 0.8})` and the params recorded in the log work as they do for every other registry type. `registry_create` is not a construction path here: it instantiates only factories whose return annotation names a class matching the registry type, and `Monitor` and `ControlProtocol` are union aliases, so it would hand back the factory; there is deliberately no `registry_create` overload for the two types, so the call is a type error rather than a silent no-op. Note what is *not* a parameter on a monitor: a threshold. A monitor factory taking `threshold=0.8` has nothing to do with it, since the monitor cannot act — the constant belongs on a protocol, which is the anti-pattern [Monitor or protocol?](#monitor-or-protocol) describes, wearing configuration as a disguise. The new `RegistryType` values are `"monitor"` and `"protocol"`.
 
 #### Instance names
 
@@ -1074,7 +1076,7 @@ Deduction runs when the factory is called — that is, at configuration time, wh
 
 > `suspicion_monitor`: could not resolve the annotation `BeforeToolCall` on parameter `step`. Import it at runtime rather than under `TYPE_CHECKING`.
 
-Open: whether a union annotation (`BeforeToolCall | AfterToolCall`) registers the function at both points, or is an error.
+A monitor annotates exactly one payload type. A protocol may annotate one payload type or `Step`, which registers it at every stage; a union of payload types on a protocol is the same as `Step`.
 
 ### The kind is the decorator, and the return annotation is checked against it {#the-kind-comes-from-the-return-annotation}
 

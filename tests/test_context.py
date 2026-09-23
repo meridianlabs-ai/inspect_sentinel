@@ -1,10 +1,11 @@
 from dataclasses import replace
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import pytest
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
 from inspect_ai.tool import ToolInfo
 from inspect_ai.util import Store, StoreModel
+from pydantic import ValidationError
 
 from inspect_sentinel._context import Context, RunnerContext
 from inspect_sentinel._report import Report, Reported
@@ -91,3 +92,10 @@ def test_child_shares_store_host_and_recorder() -> None:
 
 def test_target_is_absent_by_default() -> None:
     assert _context().target is None
+
+
+def test_root_store_validates_writes() -> None:
+    bad: Any = "two"
+    root = _context("")
+    with pytest.raises(ValidationError):
+        root.store_as(Trajectory).calls = bad

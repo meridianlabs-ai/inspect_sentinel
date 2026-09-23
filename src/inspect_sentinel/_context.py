@@ -1,5 +1,3 @@
-"""What a monitor or protocol is given besides the step, and the interfaces its effects go through."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, replace

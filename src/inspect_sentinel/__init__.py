@@ -4,6 +4,15 @@ A *monitor* observes a step of an agent's execution and reports a suspicion scor
 """
 
 from ._context import Context, Host
+from ._monitor import (
+    Children,
+    ControlProtocol,
+    Monitor,
+    Monitors,
+    Protocols,
+    monitor,
+    protocol,
+)
 from ._report import Action, Decision, Observation, Report, Reported, Suspicion
 from ._step import AfterToolCall, BeforeToolCall, Stage, Step
 
@@ -17,14 +26,21 @@ __all__ = [
     "Action",
     "AfterToolCall",
     "BeforeToolCall",
+    "Children",
     "Context",
+    "ControlProtocol",
     "Decision",
     "Host",
+    "Monitor",
+    "Monitors",
     "Observation",
+    "Protocols",
     "Report",
     "Reported",
     "Stage",
     "Step",
     "Suspicion",
+    "monitor",
+    "protocol",
     "__version__",
 ]

@@ -28,6 +28,13 @@ def test_author_facing_names_are_exported() -> None:
         "Host",
         "Report",
         "Reported",
+        "Children",
+        "ControlProtocol",
+        "Monitor",
+        "Monitors",
+        "Protocols",
+        "monitor",
+        "protocol",
     }
     assert expected <= set(inspect_sentinel.__all__)
     for name in expected:
