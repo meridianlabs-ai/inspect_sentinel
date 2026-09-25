@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, TypeAlias, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeAlias, TypeVar
 
 from inspect_ai.tool import ToolCall
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
-Suspicion: TypeAlias = float | dict[str, float]
-"""How suspicious a step is. A dict scores several dimensions independently."""
+Score: TypeAlias = Annotated[float, Field(allow_inf_nan=False)]
+"""A finite suspicion score."""
+
+Suspicion: TypeAlias = Score | Annotated[dict[str, Score], Field(min_length=1)]
+"""How suspicious a step is: one score, or a non-empty dict scoring several dimensions independently."""
 
 Action: TypeAlias = Literal["continue", "modify", "reject", "terminate", "escalate"]
 """What a protocol can decide about the step it examined."""
@@ -24,13 +27,6 @@ class Observation(BaseModel):
 
     metadata: dict[str, Any] | None = Field(default=None)
     """Author-supplied structured context, recorded verbatim."""
-
-    @field_validator("suspicion")
-    @classmethod
-    def _suspicion_dimensions_not_empty(cls, value: Suspicion) -> Suspicion:
-        if isinstance(value, dict) and not value:
-            raise ValueError("suspicion dimensions must not be empty")
-        return value
 
     @classmethod
     def score(cls, suspicion: Suspicion, explanation: str | None = None) -> Observation:

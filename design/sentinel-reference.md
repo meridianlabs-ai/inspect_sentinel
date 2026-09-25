@@ -278,7 +278,7 @@ class Observation(BaseModel):
     """What a monitor returns: evidence, for a protocol to calibrate and threshold."""
 
     suspicion: Suspicion
-    """Required. float or dict[str, float]."""
+    """Required. float or dict[str, float]; scores are finite and a dict is non-empty."""
 
     explanation: str | None = Field(default=None)
     metadata: dict[str, Any] | None = Field(default=None)
@@ -308,7 +308,7 @@ class Decision(BaseModel):
 
 
 Report: TypeAlias = Observation | Decision
-Suspicion: TypeAlias = float | dict[str, float]
+Suspicion: TypeAlias = float | dict[str, float]  # finite; a dict has at least one key
 ```
 
 Return states:
