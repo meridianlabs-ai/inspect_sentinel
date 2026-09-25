@@ -134,7 +134,7 @@ async def run_monitor(
         monitor: The monitor instance.
         context: This layer's context, as the dispatcher provided it.
         step: The step being examined.
-        name: The child's instance name; the registry name when omitted.
+        name: The child's instance name; the registry name without its package prefix when omitted.
     """
     return await _run_child(monitor, "monitor", Observation, context, step, name)
 
@@ -148,7 +148,7 @@ async def run_protocol(
         protocol: The protocol instance.
         context: This layer's context, as the dispatcher provided it.
         step: The step being examined.
-        name: The child's instance name; the registry name when omitted.
+        name: The child's instance name; the registry name without its package prefix when omitted.
     """
     return await _run_child(protocol, "protocol", Decision, context, step, name)
 

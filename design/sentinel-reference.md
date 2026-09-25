@@ -660,7 +660,7 @@ What the runner does for every child:
 - Records one `SentinelEvent` per participating child, including reports the parent ignores. Ignored observations are the benign distribution a protocol later calibrates against.
 - Applies the failure policy.
 
-What the plural forms add: fan-out with `tg_collect()`, so children cannot see each other's conclusions, and cancellation of the remaining children when one returns `terminate`.
+What the plural forms add: fan-out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`, so children cannot see each other's conclusions; `run_children` holds the group so a `terminate` decision can cancel the still-running siblings.
 
 Results are split by family because the two aggregate differently. `Decisions.strongest()` applies the precedence in [Combining reports](#combining-reports); `Observations.max_suspicion()` takes the per-dimension max. Identity is attached so a protocol can weight or require agreement across specific children.
 

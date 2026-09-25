@@ -890,7 +890,7 @@ The singular forms carry the per-child obligations:
 - **record the report** — one `SentinelEvent` per participating child, including the ones the protocol goes on to ignore, which is load-bearing because the ignored ones are the benign distribution calibration needs
 - **apply the [failure policy](#failure-semantics)** uniformly
 
-The plural forms add the concurrent obligations: they **fan out with `tg_collect()`**, per AGENTS.md, which [Concurrency is a safety property](#concurrency-is-a-safety-property-not-just-a-latency-one) shows is a safety requirement rather than a latency one; and `run_protocols` **cancels remaining siblings when one returns `terminate`**, since nothing outranks it and the sample is ending — prompting a human about a sample that no longer exists is the concrete thing this avoids.
+The plural forms add the concurrent obligations: they **fan out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`** (per AGENTS.md, which [Concurrency is a safety property](#concurrency-is-a-safety-property-not-just-a-latency-one) shows is a safety requirement rather than a latency one); and `run_children` **holds the group so a `terminate` decision can cancel the still-running siblings**, since nothing outranks it and the sample is ending — prompting a human about a sample that no longer exists is the concrete thing this avoids.
 
 They return:
 

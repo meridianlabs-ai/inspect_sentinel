@@ -33,7 +33,7 @@ ControlProtocol: TypeAlias = (
 """A protocol: decides what happens at a step, or abstains. Annotating `Step` runs it at every stage."""
 
 Monitors: TypeAlias = Mapping[str, Monitor] | Sequence[Monitor]
-"""Monitors handed to a protocol, named by mapping key or by registry name."""
+"""Monitors handed to a protocol, named by mapping key or by registry name without its package prefix."""
 
 Protocols: TypeAlias = Mapping[str, ControlProtocol] | Sequence[ControlProtocol]
 """Protocols handed to a protocol, named the same way."""

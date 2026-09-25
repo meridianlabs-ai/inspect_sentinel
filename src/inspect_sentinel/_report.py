@@ -92,7 +92,7 @@ class Reported(Generic[R_co]):
     """A report with the identity of the configured instance that produced it."""
 
     name: str
-    """Instance name: the mapping key, or the registry name."""
+    """Instance name: the mapping key, or the registry name without its package prefix."""
 
     path: str
     """Instance path, e.g. `attempt/internet_attempt`."""
