@@ -22,11 +22,6 @@ from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from tests._fakes import ListRecorder, runner_context
 
 
-@pytest.fixture(params=["asyncio", "trio"])
-def anyio_backend(request: pytest.FixtureRequest) -> str:
-    return str(request.param)
-
-
 def _obs(name: str, suspicion: float | dict[str, float]) -> Reported[Observation]:
     return Reported(name=name, path=name, report=Observation.score(suspicion))
 

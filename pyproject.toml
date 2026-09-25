@@ -58,7 +58,7 @@ dev = [
     "pytest-timeout>=2.4.0",
     # unmarked so pyright, checking against the 3.10 floor, can resolve the guarded import on a newer venv
     "exceptiongroup>=1.0",
-    # the runner's cancellation paths run on both anyio backends in tests/test_runner.py
+    # async tests run on both anyio backends (tests/conftest.py)
     "trio",
     {include-group = "doc"},
 ]
