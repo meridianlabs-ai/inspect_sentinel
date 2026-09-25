@@ -107,6 +107,10 @@ class RunnerContext(Context):
         """The context for a child of this layer.
 
         Args:
-            name: The child's instance name, appended to this layer's `path`.
+            name: The child's instance name, appended to this layer's `path`. Must be non-empty and must not contain `/`.
         """
+        if name == "" or "/" in name:
+            raise ValueError(
+                f"Instance name {name!r} must be non-empty and must not contain '/'."
+            )
         return replace(self, path=f"{self.path}/{name}" if self.path else name)

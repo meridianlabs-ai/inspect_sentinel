@@ -394,6 +394,51 @@ async def test_run_monitors_names_an_uncalled_factory_error() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("name", ["", "a/b"])
+async def test_invalid_instance_names_are_rejected(name: str) -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        await run_monitors({name: scores()}, runner_context(), _before())
+
+
+@pytest.mark.anyio
+async def test_child_rejects_invalid_names() -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        runner_context().child("")
+
+
+@pytest.mark.anyio
+async def test_wrong_kind_is_rejected_before_any_child_runs() -> None:
+    recorder = ListRecorder()
+    with pytest.raises(TypeError, match="monitor"):
+        await run_monitors(
+            [scores(0.1), cast(Any, decides())],
+            runner_context(recorder=recorder),
+            _before(),
+        )
+    assert recorder.records == []
+
+
+@pytest.mark.anyio
+async def test_uncalled_factory_is_rejected_before_any_child_runs() -> None:
+    recorder = ListRecorder()
+    with pytest.raises(TypeError, match="call it"):
+        await run_protocols(
+            {"a": decides(), "b": cast(Any, decides)},
+            runner_context(recorder=recorder),
+            _before(),
+        )
+    assert recorder.records == []
+
+
+@pytest.mark.anyio
+async def test_iterators_are_rejected_rather_than_exhausted() -> None:
+    with pytest.raises(TypeError, match="Mapping or a Sequence"):
+        await run_protocols(
+            cast(Any, (p for p in [decides("reject")])), runner_context(), _before()
+        )
+
+
+@pytest.mark.anyio
 async def test_a_raising_child_surfaces_while_a_sibling_is_mid_await() -> None:
     started = anyio.Event()
 

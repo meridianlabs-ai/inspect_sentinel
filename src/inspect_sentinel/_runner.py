@@ -16,10 +16,15 @@ from typing import Generic, Literal, TypeVar, cast, overload
 
 import anyio
 from anyio.abc import TaskGroup
-from inspect_ai._util.registry import registry_info, registry_unqualified_name
+from inspect_ai._util.registry import (
+    is_registry_object,
+    registry_info,
+    registry_unqualified_name,
+)
 
 from ._context import Context, RunnerContext
 from ._monitor import (
+    STEP_TYPES_ATTR,
     Children,
     ControlProtocol,
     Monitor,
@@ -158,7 +163,7 @@ async def run_monitors(
         context: This layer's context.
         step: The step being examined.
     """
-    named = _named(monitors)
+    named = _named(monitors, "monitor")
     observed: list[tuple[int, Reported[Observation]]] = []
 
     async def run_one(index: int, name: str, child: Monitor) -> None:
@@ -183,11 +188,8 @@ async def run_protocols(
         context: This layer's context.
         step: The step being examined.
     """
-    for _, child in _named(protocols):
-        info = registry_info(child)
-        if info.type != "protocol":
-            raise TypeError(f"Expected a protocol, got the {info.type} {info.name!r}.")
-    return (await run_children(protocols, context, step)).decisions
+    named = _named(protocols, "protocol")
+    return (await _run_named(named, context, step)).decisions
 
 
 async def run_children(children: Children, context: Context, step: Step) -> Reports:
@@ -198,7 +200,13 @@ async def run_children(children: Children, context: Context, step: Step) -> Repo
         context: This layer's context.
         step: The step being examined.
     """
-    named = _named(children)
+    named = _named(children, None)
+    return await _run_named(named, context, step)
+
+
+async def _run_named(
+    named: Sequence[tuple[str, Monitor | ControlProtocol]], context: Context, step: Step
+) -> Reports:
     observations: list[tuple[int, Reported[Observation]]] = []
     decisions: list[tuple[int, Reported[Decision]]] = []
 
@@ -263,13 +271,32 @@ async def _run_child(
     return reported
 
 
-def _named(children: Mapping[str, C] | Sequence[C]) -> list[tuple[str, C]]:
+def _named(
+    children: Mapping[str, C] | Sequence[C],
+    expected: Literal["monitor", "protocol"] | None,
+) -> list[tuple[str, C]]:
     if isinstance(children, Mapping):
         named = list(children.items())
+    elif isinstance(children, Iterator):
+        raise TypeError("children must be a Mapping or a Sequence, not an iterator")
     else:
         named = [(registry_unqualified_name(registry_info(c)), c) for c in children]
     seen: set[str] = set()
-    for name, _ in named:
+    for name, child in named:
+        if name == "" or "/" in name:
+            raise ValueError(
+                f"Instance name {name!r} must be non-empty and must not contain '/'."
+            )
+        if not hasattr(child, STEP_TYPES_ATTR):
+            if is_registry_object(child):
+                raise TypeError(
+                    f"{registry_info(child).name!r} is the factory, not a configured instance; call it to configure one."
+                )
+            raise TypeError(f"{child!r} is not a configured monitor or protocol.")
+        if expected is not None and registry_info(child).type != expected:
+            raise TypeError(
+                f"Expected a {expected}, got the {registry_info(child).type} {registry_info(child).name!r}."
+            )
         if name in seen:
             raise ValueError(
                 f"Duplicate instance name {name!r} in one layer. Give the children distinct names with a mapping."
