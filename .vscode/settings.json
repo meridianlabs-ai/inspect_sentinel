@@ -25,7 +25,15 @@
   "search.exclude": {
     "logs/**": true
   },
-  "python.testing.pytestArgs": ["tests"],
+  "python.testing.pytestArgs": [
+    "tests"
+  ],
   "python.testing.unittestEnabled": false,
-  "python.testing.pytestEnabled": true
+  "python.testing.pytestEnabled": true,
+  "python.analysis.typeCheckingMode": "strict",
+  "python.languageServer": "Pylance",
+  "mypy-type-checker.ignorePatterns": [
+    "**"
+  ],
+  "mypy-type-checker.importStrategy": "fromEnvironment"
 }
