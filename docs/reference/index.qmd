@@ -30,7 +30,7 @@ reference: inspect_sentinel
 ### Protocols
 ### Children
 
-## Protocols
+## Shipped protocols
 
 ### observe
 ### concurrent
