@@ -119,6 +119,8 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
     try:
         async with anyio.create_task_group() as tg:
             yield tg
+    # Only the first failure surfaces, as in inspect_ai's tg_collect; a second
+    # concurrent failure and any nested group are not flattened or chained.
     except ExceptionGroup as ex:
         raise ex.exceptions[0] from None
 
@@ -259,7 +261,11 @@ async def _run_child(
     child_name = name if name is not None else registry_unqualified_name(info)
     child_context = context.child(child_name)
     invoke = cast(Callable[[Context, Step], Awaitable[Report | None]], child)
-    report = await invoke(child_context, step)
+    try:
+        report = await invoke(child_context, step)
+    except anyio.get_cancelled_exc_class():
+        child_context.recorder.cancelled(child_context, step, child_name)
+        raise
     if report is None:
         return None
     if not isinstance(report, report_type):

@@ -313,14 +313,19 @@ async def test_terminate_cancels_siblings() -> None:
 
         return decide
 
+    recorder = ListRecorder()
     with anyio.fail_after(5):
         decisions = await run_protocols(
-            {"slow": slow(), "stop": terminates()}, runner_context(), _before()
+            {"slow": slow(), "stop": terminates()},
+            runner_context(recorder=recorder),
+            _before(),
         )
     strongest = decisions.strongest()
     assert strongest is not None and strongest.report.action == "terminate"
     assert [d.name for d in decisions] == ["stop"]
     assert not finished.is_set()
+    assert recorder.cancellations == [("slow", "slow")]
+    assert [r.reported.name for r in recorder.records] == ["stop"]
 
 
 @pytest.mark.anyio
@@ -474,12 +479,13 @@ async def test_external_cancellation_propagates_through_the_runner() -> None:
         return check
 
     completed = False
+    recorder = ListRecorder()
 
     async with anyio.create_task_group() as tg:
 
         async def run() -> None:
             nonlocal completed
-            await run_monitors([hangs()], runner_context(), _before())
+            await run_monitors([hangs()], runner_context(recorder=recorder), _before())
             completed = True
 
         tg.start_soon(run)
@@ -487,6 +493,8 @@ async def test_external_cancellation_propagates_through_the_runner() -> None:
         tg.cancel_scope.cancel()
     assert tg.cancel_scope.cancel_called
     assert not completed
+    assert recorder.cancellations == [("hangs", "hangs")]
+    assert recorder.records == []
 
 
 @pytest.mark.anyio

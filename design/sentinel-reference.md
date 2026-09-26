@@ -660,7 +660,7 @@ What the runner does for every child:
 - Records one `SentinelEvent` per participating child, including reports the parent ignores. Ignored observations are the benign distribution a protocol later calibrates against.
 - Applies the failure policy.
 
-What the plural forms add: fan-out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`, so children cannot see each other's conclusions; `run_children` holds the group so a `terminate` decision can cancel the still-running siblings.
+What the plural forms add: fan-out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`, so children cannot see each other's conclusions; `run_children` holds the group so a `terminate` decision can cancel the still-running siblings, and records any child it cancels.
 
 Results are split by family because the two aggregate differently. `Decisions.strongest()` applies the precedence in [Combining reports](#combining-reports); `Observations.max_suspicion()` takes the per-dimension max. Identity is attached so a protocol can weight or require agreement across specific children.
 
@@ -750,7 +750,7 @@ These rules describe the concurrent composition, which `concurrent()` implements
 - **Every report is recorded,** including the ones that lost.
 - **Aggregate suspicion by max.** Per-dimension max when scores are structured. Weighted combinations and requiring agreement are protocol policy.
 - **Aggregate decisions by strength:** `terminate` > `reject` > `modify` > `continue`. `escalate` does not count. If every child escalates, the result is `continue`. One ordering covers all four stages; it is `Decisions.strongest()`.
-- **`terminate` cancels siblings.** Nothing outranks it and the sample is ending. `run_protocols` and `run_children` do this.
+- **`terminate` cancels siblings.** Nothing outranks it and the sample is ending. `run_protocols` and `run_children` do this, and a cancelled child is recorded as cancelled rather than left indistinguishable from one that abstained.
 - **Child decisions are advisory to the parent.** A parent protocol may honour or override them, and the log records both; see [Transcript](#transcript).
 - **Authoritative decisions are a floor.** A protocol's return may not be weaker than an authoritative child decision. The dispatcher enforces this at every layer.
 - **Run children concurrently.** Sequential dispatch triples latency with three LLM monitors, and it lets a colluding monitor see the others' conclusions. TraceGuard's result (95% safety versus 0%) depends on independence. Use `tg_collect()`, not `asyncio.gather`. The runner does this for you.
@@ -933,7 +933,7 @@ class SentinelEvent(BaseEvent):
         str  # the agent conversation; shared with its ModelEvents and CompactionEvents
     )
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
-    kind: Literal["observation", "decision"]
+    kind: Literal["observation", "decision", "cancelled"]
     suspicion: Suspicion | None
     decision: Action | None
     audit: bool

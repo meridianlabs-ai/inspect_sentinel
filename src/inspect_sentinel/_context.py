@@ -49,6 +49,16 @@ class Recorder(Protocol):
         """
         ...
 
+    def cancelled(self, context: Context, step: Step, name: str) -> None:
+        """Record that a child was cancelled before it reported, because a sibling decided `terminate`.
+
+        Args:
+            context: The child's context; its `path` identifies the instance.
+            step: The step the child was examining.
+            name: The child's instance name.
+        """
+        ...
+
 
 @dataclass(frozen=True, kw_only=True)
 class Context:
@@ -98,7 +108,7 @@ class Context:
 
 @dataclass(frozen=True, kw_only=True)
 class RunnerContext(Context):
-    """A `Context` plus what the runner needs. Built by the dispatcher, never by authors."""
+    """A `Context` plus what the runner needs."""
 
     recorder: Recorder
     """Where the runner records reports."""
