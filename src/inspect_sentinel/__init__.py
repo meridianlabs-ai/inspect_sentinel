@@ -13,6 +13,7 @@ from ._monitor import (
     monitor,
     protocol,
 )
+from ._protocols import concurrent, observe, threshold
 from ._report import Action, Decision, Observation, Report, Reported, Suspicion
 from ._runner import (
     Decisions,
@@ -53,12 +54,15 @@ __all__ = [
     "Stage",
     "Step",
     "Suspicion",
+    "concurrent",
     "monitor",
+    "observe",
     "protocol",
     "run_children",
     "run_monitor",
     "run_monitors",
     "run_protocol",
     "run_protocols",
+    "threshold",
     "__version__",
 ]

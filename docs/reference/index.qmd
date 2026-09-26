@@ -30,6 +30,12 @@ reference: inspect_sentinel
 ### Protocols
 ### Children
 
+## Protocols
+
+### observe
+### concurrent
+### threshold
+
 ## Runner
 
 ### run_monitor
