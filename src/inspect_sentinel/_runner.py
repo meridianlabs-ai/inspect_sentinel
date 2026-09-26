@@ -174,7 +174,7 @@ async def run_monitors(
         context: This layer's context.
         step: The step being examined.
     """
-    named = _named(monitors, "monitor")
+    named = named_children(monitors, "monitor")
     return (await _run_named(named, context, step)).observations
 
 
@@ -188,7 +188,7 @@ async def run_protocols(
         context: This layer's context.
         step: The step being examined.
     """
-    named = _named(protocols, "protocol")
+    named = named_children(protocols, "protocol")
     return (await _run_named(named, context, step)).decisions
 
 
@@ -202,7 +202,7 @@ async def run_children(children: Children, context: Context, step: Step) -> Repo
         context: This layer's context.
         step: The step being examined.
     """
-    named = _named(children, None)
+    named = named_children(children, None)
     return await _run_named(named, context, step)
 
 
@@ -292,7 +292,7 @@ def _check_child(
     return info, accepted
 
 
-def _named(
+def named_children(
     children: Mapping[str, Monitor | ControlProtocol]
     | Iterable[Monitor | ControlProtocol],
     expected: Literal["monitor", "protocol"] | None,
