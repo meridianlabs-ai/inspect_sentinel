@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
 from inspect_ai.scorer import Target
@@ -36,6 +36,7 @@ class Host(Protocol):
         ...
 
 
+@runtime_checkable
 class Recorder(Protocol):
     """Where the runner records every report. Runner-facing; authors never call it."""
 
@@ -50,7 +51,9 @@ class Recorder(Protocol):
         ...
 
     def cancelled(self, context: Context, step: Step, name: str) -> None:
-        """Record that a child was cancelled before it reported: a sibling decided `terminate`, or the layer was cancelled from above.
+        """Record that a child was cancelled before it reported: a sibling decided `terminate`, a sibling raised, or the layer was cancelled from above.
+
+        The cause is not recorded here; a `terminate` or an exception in the same layer says which it was.
 
         Args:
             context: The child's context; its `path` identifies the instance.
@@ -114,14 +117,10 @@ class RunnerContext(Context):
     """Where the runner records reports and cancellations."""
 
     def __post_init__(self) -> None:
-        missing = [
-            m
-            for m in ("record", "cancelled")
-            if not callable(getattr(self.recorder, m, None))
-        ]
-        if missing:
+        # a runtime check for hosts that are not type-checked against Recorder
+        if not isinstance(cast(object, self.recorder), Recorder):
             raise TypeError(
-                f"Recorder {type(self.recorder).__name__} is missing {', '.join(missing)}(); both are required."
+                f"Recorder {type(self.recorder).__name__} must implement record() and cancelled()."
             )
 
     def child(self, name: str) -> RunnerContext:
@@ -134,14 +133,14 @@ class RunnerContext(Context):
         return replace(self, path=f"{self.path}/{name}" if self.path else name)
 
 
-def check_instance_name(name: str) -> str:
-    """Return `name` if it can be a path segment, else raise `ValueError`.
+def check_instance_name(name: object) -> str:
+    """Return `name` if it is a string that can be a path segment, else raise `ValueError`.
 
     Args:
-        name: A candidate instance name.
+        name: A candidate instance name; configuration may hand over a non-string key.
     """
-    if name == "" or "/" in name:
+    if not isinstance(name, str) or name == "" or "/" in name:
         raise ValueError(
-            f"Instance name {name!r} must be non-empty and must not contain '/'."
+            f"Instance name {name!r} must be a non-empty string without '/'."
         )
     return name

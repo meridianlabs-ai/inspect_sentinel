@@ -53,7 +53,7 @@ STEP_TYPES_ATTR = "__sentinel_step_types__"
 def monitor(factory: Callable[P, Monitor]) -> Callable[P, Monitor]:
     """Register a monitor factory.
 
-    The factory's return annotation must be `Monitor` and the function it returns must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated to return `Observation | None`. These are checked when the factory is called. A monitor watches one stage; a concern spanning two stages is two monitors. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store.
+    The factory's return annotation must be `Monitor` and the function it returns must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated to return `Observation | None`. These are checked when the factory is called. A monitor watches one stage; a concern spanning two stages is two monitors. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store. The function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     Args:
         factory: A function returning a monitor.
@@ -64,7 +64,7 @@ def monitor(factory: Callable[P, Monitor]) -> Callable[P, Monitor]:
 def protocol(factory: Callable[P, ControlProtocol]) -> Callable[P, ControlProtocol]:
     """Register a protocol factory.
 
-    Same contract as `@monitor`, with the returned function annotated to return `Decision | None`, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store.
+    Same contract as `@monitor`, with the returned function annotated to return `Decision | None`, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store. The function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     Args:
         factory: A function returning a protocol.

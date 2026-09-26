@@ -35,7 +35,7 @@ from ._report import Action, Decision, Observation, R_co, Report, Reported
 from ._step import Step
 
 if sys.version_info < (3, 11):
-    from exceptiongroup import ExceptionGroup
+    from exceptiongroup import BaseExceptionGroup
 
 _PRECEDENCE: dict[Action, int] = {
     "terminate": 4,
@@ -117,13 +117,19 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
     # Only the first failure surfaces, as in inspect_ai's tg_collect; a second
     # concurrent failure and any nested group are not flattened or chained. It is
     # re-raised outside the handler so its own __cause__ and __context__ survive
-    # and the group does not appear in the traceback.
+    # and the group does not appear in the traceback. On trio a child error can
+    # arrive alongside the cancellation in one BaseExceptionGroup; the error is
+    # surfaced, as anyio's asyncio backend already does, and a group holding
+    # only cancellations propagates untouched.
     first: BaseException | None = None
     try:
         async with anyio.create_task_group() as tg:
             yield tg
-    except ExceptionGroup as ex:
-        first = ex.exceptions[0]
+    except BaseExceptionGroup as ex:
+        _, errors = ex.split(anyio.get_cancelled_exc_class())
+        if errors is None:
+            raise
+        first = errors.exceptions[0]
     if first is not None:
         raise first
 

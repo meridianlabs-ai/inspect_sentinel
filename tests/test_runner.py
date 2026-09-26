@@ -2,6 +2,7 @@ from typing import Any, cast
 
 import anyio
 import pytest
+from inspect_ai._util.registry import registry_info
 from inspect_ai.model import ChatMessageUser
 from inspect_ai.tool import ToolCall, ToolCallView
 
@@ -447,10 +448,15 @@ async def test_a_raising_child_surfaces_while_a_sibling_is_mid_await() -> None:
 
         return check
 
+    recorder = ListRecorder()
     with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):
         await run_children(
-            {"w": waits(), "e": explodes_after_start()}, runner_context(), _before()
+            {"w": waits(), "e": explodes_after_start()},
+            runner_context(recorder=recorder),
+            _before(),
         )
+    assert recorder.cancellations == [("w", "w")]
+    assert recorder.records == []
 
 
 @pytest.mark.anyio
@@ -636,3 +642,81 @@ async def test_invalid_name_is_rejected_even_when_the_stage_does_not_match() -> 
 async def test_a_string_is_not_a_sequence_of_children() -> None:
     with pytest.raises(TypeError, match="Mapping or a Sequence"):
         await run_monitors(cast(Any, "scores"), runner_context(), _before())
+
+
+@pytest.mark.anyio
+async def test_a_child_error_alongside_a_cancellation_surfaces_on_both_backends() -> (
+    None
+):
+    entered = anyio.Event()
+
+    @monitor
+    def converts_cancellation() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            entered.set()
+            try:
+                await anyio.sleep_forever()
+            except anyio.get_cancelled_exc_class():
+                raise ValueError("boom") from None
+            return None
+
+        return check
+
+    @monitor
+    def hangs() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            await anyio.sleep_forever()
+            return None
+
+        return check
+
+    seen: list[BaseException] = []
+    async with anyio.create_task_group() as tg:
+
+        async def run() -> None:
+            try:
+                await run_monitors(
+                    {"c": converts_cancellation(), "h": hangs()},
+                    runner_context(),
+                    _before(),
+                )
+            except ValueError as ex:
+                seen.append(ex)
+
+        tg.start_soon(run)
+        await entered.wait()
+        tg.cancel_scope.cancel()
+    assert [str(ex) for ex in seen] == ["boom"]
+
+
+@pytest.mark.anyio
+async def test_non_string_mapping_keys_are_a_configuration_error() -> None:
+    with pytest.raises(ValueError, match="non-empty string"):
+        await run_monitors(cast(Any, {1: scores()}), runner_context(), _before())
+
+
+@pytest.mark.anyio
+async def test_packaged_children_are_named_without_the_package_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import inspect_ai._util.registry as registry
+
+    def packaged(o: object) -> str:
+        return "acme"
+
+    monkeypatch.setattr(registry, "get_installed_package_name", packaged)
+
+    @monitor
+    def leaf() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            return Observation.score(0.2)
+
+        return check
+
+    assert registry_info(leaf).name == "acme/leaf"
+    recorder = ListRecorder()
+    observations = await run_monitors(
+        [leaf()], runner_context(recorder=recorder), _before()
+    )
+    assert [o.name for o in observations] == ["leaf"]
+    assert recorder.records[0].context.path == "leaf"

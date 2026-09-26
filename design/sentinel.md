@@ -855,7 +855,7 @@ async def run_monitor(
     """Invoke one monitor if it is annotated for this stage.
 
     Derives the child's Context under this layer's path, records a
-    SentinelEvent, applies the failure policy. Returns None if the child
+    SentinelEvent, applies the failure policy (deferred). Returns None if the child
     abstained or does not watch this stage.
     """
 
@@ -885,12 +885,12 @@ async def run_children(children: Children, context: Context, step: Step) -> Repo
 The singular forms carry the per-child obligations:
 
 - **filter by point** — a child not annotated for this step is skipped, and the skip is indistinguishable from abstention
-- **name the child** — from the mapping key if the protocol was given a `Mapping`, else the registry name; a duplicate name within one layer is an error rather than a `#2` suffix
+- **name the child** — from the mapping key if the protocol was given a `Mapping`, else the registry name without its package prefix; the plural forms treat a duplicate name within one layer as an error rather than inventing a `#2` suffix, and a composition that runs children one at a time validates its names the same way first
 - **derive the child's `Context`** — the dispatcher hands the top layer a `RunnerContext`, a `Context` that also carries the recorder and a `child(name)` method; the runner requires it (a bare `Context` is a `TypeError`) and builds each child's context under this layer's path. Naming and duplicate detection live in a private `named()` helper in the runner, which `chain()` will reuse
 - **record the report** — one `SentinelEvent` per participating child, including the ones the protocol goes on to ignore, which is load-bearing because the ignored ones are the benign distribution calibration needs
-- **apply the [failure policy](#failure-semantics)** uniformly
+- **apply the [failure policy](#failure-semantics)** uniformly (deferred: the first runner propagates every exception; see `pr-series.md`)
 
-The plural forms add the concurrent obligations: they **fan out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`** (per AGENTS.md, which [Concurrency is a safety property](#concurrency-is-a-safety-property-not-just-a-latency-one) shows is a safety requirement rather than a latency one); and `run_children` **holds the group so a `terminate` decision can cancel the still-running siblings**, since nothing outranks it and the sample is ending — prompting a human about a sample that no longer exists is the concrete thing this avoids. A cancelled child is recorded as cancelled, with no report, so the log distinguishes it from one that abstained; its observation, if wanted, is recovered by replay. Monitors are cancelled too: once a protocol has decided `terminate` no sibling's report can change the outcome, and spending their inference live would only save a replay later. Cancellation lands at a child's next await, so a child that finishes without awaiting is recorded normally. A cancellation from above the layer is recorded the same way.
+The plural forms add the concurrent obligations: they **fan out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`** (per AGENTS.md, which [Concurrency is a safety property](#concurrency-is-a-safety-property-not-just-a-latency-one) shows is a safety requirement rather than a latency one); and `run_children` **holds the group so a `terminate` decision can cancel the still-running siblings**, since nothing outranks it and the sample is ending — prompting a human about a sample that no longer exists is the concrete thing this avoids. A cancelled child is recorded as cancelled, with no report, so the log distinguishes it from one that abstained; its observation, if wanted, is recovered by replay. Monitors are cancelled too: once a protocol has decided `terminate` no sibling's report can change the outcome, and spending their inference live would only save a replay later. Cancellation lands at a child's next await, so a child that finishes without awaiting is recorded normally. A cancellation from above the layer, or one caused by a sibling raising, is recorded the same way; the `terminate` or the exception in the same layer says which.
 
 They return:
 

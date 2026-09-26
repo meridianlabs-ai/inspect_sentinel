@@ -84,7 +84,7 @@ The pieces:
 | `Observation` | A monitor's report: a suspicion score and an explanation. Recorded; acted on only by a protocol. |
 | `Decision` | A protocol's report: an action (`continue`, `modify`, `reject`, `terminate`, `escalate`). Applied at the top level; advisory to a parent protocol. |
 | Rule | A protocol with no children. `no_curl`, `strip_force`, and `human` are rules. |
-| `run_monitors`, `run_protocols`, `run_children` | The runner. The only way a protocol invokes a child. Names, records, and applies the failure policy. |
+| `run_monitors`, `run_protocols`, `run_children` | The runner. The only way a protocol invokes a child. Names, records, and (once implemented) applies the failure policy. |
 | `concurrent`, `chain` | The two shipped compositions: concurrent (every child runs, strongest decision wins) and ordered (first non-`escalate` decides). |
 | `threshold`, `observe`, `defer_to_trusted`, `resample` | The shipped protocols that turn monitors' scores into decisions. |
 | `human` | A rule that asks a person through the human approval surfaces. Its decisions are authoritative. |
@@ -604,7 +604,7 @@ async def run_monitor(
     """Invoke one monitor if it is annotated for this stage.
 
     Derives the child's Context under this layer's path, records a
-    SentinelEvent, applies the failure policy. Returns None if the child
+    SentinelEvent, applies the failure policy (deferred). Returns None if the child
     abstained or does not watch this stage.
     """
 
@@ -655,10 +655,10 @@ class Reports:
 What the runner does for every child:
 
 - Skips children not annotated for this stage. The skip looks like abstention.
-- Names the child from the mapping key, or the registry name. Raises on a duplicate name within a layer.
+- Names the child from the mapping key, or the registry name without its package prefix. The plural forms raise on a duplicate name within a layer; a composition calling the singular forms validates names itself first.
 - Derives the child's `Context` under this layer's path.
 - Records one `SentinelEvent` per participating child, including reports the parent ignores. Ignored observations are the benign distribution a protocol later calibrates against.
-- Applies the failure policy.
+- Applies the failure policy (deferred; the runner currently propagates every exception).
 
 What the plural forms add: fan-out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`, so children cannot see each other's conclusions; `run_children` holds the group so a `terminate` decision can cancel the still-running siblings, and records any child it cancels.
 
