@@ -8,6 +8,7 @@
 - Strict typing required
   - Python: modern syntax (`X | None`, `dict[str, Any]`)
 - Error handling: do not use Exceptions gratuitously, unless an error is expected in a context and needs to be computed on it should be allowed to propagate.
+- Never swallow an exception from a monitor, a protocol, or the recorder, and never log-and-continue in their place. A raising child fails the layer. The design's failure policy is the one sanctioned place to tolerate a failure, and it is declared per function, not applied by default.
 - Respect existing patterns
 - Before committing, run the appropriate checks for code you touched (lint, typecheck, test)
 

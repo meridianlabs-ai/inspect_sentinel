@@ -4,13 +4,12 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Generic, Literal, TypeAlias, TypeVar
 
 from inspect_ai.tool import ToolCall
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 
-Score: TypeAlias = Annotated[float, Field(allow_inf_nan=False)]
-"""A finite suspicion score."""
-
-Suspicion: TypeAlias = Score | Annotated[dict[str, Score], Field(min_length=1)]
-"""How suspicious a step is: one score, or a non-empty dict scoring several dimensions independently."""
+Suspicion: TypeAlias = (
+    FiniteFloat | Annotated[dict[str, FiniteFloat], Field(min_length=1)]
+)
+"""How suspicious a step is: one finite score, or a non-empty dict scoring several dimensions independently."""
 
 Action: TypeAlias = Literal["continue", "modify", "reject", "terminate", "escalate"]
 """What a protocol can decide about the step it examined."""

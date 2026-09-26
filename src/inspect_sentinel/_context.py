@@ -111,7 +111,18 @@ class RunnerContext(Context):
     """A `Context` plus what the runner needs."""
 
     recorder: Recorder
-    """Where the runner records reports."""
+    """Where the runner records reports and cancellations."""
+
+    def __post_init__(self) -> None:
+        missing = [
+            m
+            for m in ("record", "cancelled")
+            if not callable(getattr(self.recorder, m, None))
+        ]
+        if missing:
+            raise TypeError(
+                f"Recorder {type(self.recorder).__name__} is missing {', '.join(missing)}(); both are required."
+            )
 
     def child(self, name: str) -> RunnerContext:
         """The context for a child of this layer.

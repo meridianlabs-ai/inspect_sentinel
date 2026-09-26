@@ -1,5 +1,5 @@
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from inspect_ai.util import StoreModel
@@ -60,3 +60,24 @@ def test_root_store_validates_writes() -> None:
 def test_child_rejects_invalid_names(name: str) -> None:
     with pytest.raises(ValueError, match="non-empty"):
         runner_context().child(name)
+
+
+def test_runner_context_requires_a_complete_recorder() -> None:
+    class RecordOnly:
+        def record(self, context: object, step: object, reported: object) -> None: ...
+
+    parent = runner_context()
+    with pytest.raises(TypeError, match="cancelled"):
+        RunnerContext(
+            task=None,
+            task_description=None,
+            sample_id=None,
+            epoch=None,
+            sample_description=None,
+            input="p",
+            metadata={},
+            path="",
+            store=parent.store,
+            host=parent.host,
+            recorder=cast(Any, RecordOnly()),
+        )

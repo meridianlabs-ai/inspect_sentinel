@@ -258,3 +258,18 @@ def test_step_types_requires_a_decorated_instance() -> None:
 def test_step_types_names_an_uncalled_factory() -> None:
     with pytest.raises(TypeError, match="call it"):
         step_types(cast(Any, before_monitor))
+
+
+def test_bound_method_is_rejected_at_configuration() -> None:
+    class Detector:
+        async def observe(
+            self, context: Context, step: BeforeToolCall
+        ) -> Observation | None:
+            return None
+
+    def factory() -> Any:
+        return Detector().observe
+
+    wrong = monitor(cast(Any, factory))
+    with pytest.raises(TypeError, match="plain async function"):
+        wrong()

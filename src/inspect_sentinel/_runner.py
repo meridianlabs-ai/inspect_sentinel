@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import sys
 from collections.abc import (
     AsyncGenerator,
@@ -13,11 +12,15 @@ from collections.abc import (
 )
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Generic, Literal, TypeVar, cast, overload
+from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 import anyio
 from anyio.abc import TaskGroup
-from inspect_ai._util.registry import registry_info, registry_unqualified_name
+from inspect_ai._util.registry import (
+    RegistryInfo,
+    registry_info,
+    registry_unqualified_name,
+)
 
 from ._context import Context, RunnerContext, check_instance_name
 from ._monitor import (
@@ -108,21 +111,21 @@ class Reports:
 
 R = TypeVar("R", bound=Report)
 
-logger = logging.getLogger(__name__)
-
 
 @asynccontextmanager
 async def _task_group() -> AsyncGenerator[TaskGroup]:
+    # Only the first failure surfaces, as in inspect_ai's tg_collect; a second
+    # concurrent failure and any nested group are not flattened or chained. It is
+    # re-raised outside the handler so its own __cause__ and __context__ survive
+    # and the group does not appear in the traceback.
+    first: BaseException | None = None
     try:
         async with anyio.create_task_group() as tg:
             yield tg
-    # Only the first failure surfaces, as in inspect_ai's tg_collect; a second
-    # concurrent failure and any nested group are not flattened or chained. The
-    # group is suppressed from the traceback without touching the child's own
-    # __cause__.
     except ExceptionGroup as ex:
         first = ex.exceptions[0]
-        raise first from first.__cause__
+    if first is not None:
+        raise first
 
 
 async def run_monitor(
@@ -244,26 +247,21 @@ async def _run_child(
         raise TypeError(
             "The runner needs the RunnerContext the dispatcher provided; a Context constructed elsewhere cannot record reports."
         )
-    accepted = step_types(child)
-    info = registry_info(child)
-    if info.type != kind:
-        raise TypeError(f"Expected a {kind}, got the {info.type} {info.name!r}.")
+    info, accepted = _check_child(child, kind)
+    child_name = check_instance_name(
+        name if name is not None else registry_unqualified_name(info)
+    )
     if not isinstance(step, tuple(accepted)):
         return None
-    child_name = name if name is not None else registry_unqualified_name(info)
     child_context = context.child(child_name)
     invoke = cast(Callable[[Context, Step], Awaitable[Report | None]], child)
     try:
         report = await invoke(child_context, step)
     except anyio.get_cancelled_exc_class():
-        # bookkeeping must not replace the cancellation, or a terminate is lost
-        try:
-            child_context.recorder.cancelled(child_context, step, child_name)
-        except Exception:
-            logger.exception(
-                "Recorder failed while recording the cancellation of %r",
-                child_context.path,
-            )
+        # a recorder that raises here fails the layer, like one that raises
+        # from record(); a cancellation record that cannot be written is not
+        # something to paper over
+        child_context.recorder.cancelled(child_context, step, child_name)
         raise
     if report is None:
         return None
@@ -276,6 +274,18 @@ async def _run_child(
     return reported
 
 
+def _check_child(
+    child: object, expected: Literal["monitor", "protocol"] | None
+) -> tuple[RegistryInfo, frozenset[type[Any]]]:
+    accepted = step_types(
+        cast(Any, child)
+    )  # rejects factories and undecorated functions
+    info = registry_info(child)
+    if expected is not None and info.type != expected:
+        raise TypeError(f"Expected a {expected}, got the {info.type} {info.name!r}.")
+    return info, accepted
+
+
 def _named(
     children: Mapping[str, Monitor | ControlProtocol]
     | Iterable[Monitor | ControlProtocol],
@@ -285,7 +295,7 @@ def _named(
     if isinstance(children, Mapping):
         mapping = cast(Mapping[str, Monitor | ControlProtocol], children)
         pairs = [(key, child) for key, child in mapping.items()]
-    elif isinstance(children, Sequence):
+    elif isinstance(children, Sequence) and not isinstance(children, str):
         pairs = [(None, child) for child in children]
     else:
         raise TypeError(
@@ -294,12 +304,7 @@ def _named(
     named: list[tuple[str, Monitor | ControlProtocol]] = []
     seen: set[str] = set()
     for given, child in pairs:
-        step_types(child)  # rejects an uncalled factory or an undecorated function
-        info = registry_info(child)
-        if expected is not None and info.type != expected:
-            raise TypeError(
-                f"Expected a {expected}, got the {info.type} {info.name!r}."
-            )
+        info, _ = _check_child(child, expected)
         name = check_instance_name(
             given if given is not None else registry_unqualified_name(info)
         )

@@ -482,7 +482,7 @@ The second example is a monitor under `threshold()`, which introduces the score 
 #### Suspicion is structured
 
 ``` python
-Suspicion: TypeAlias = float | dict[str, float]
+Suspicion: TypeAlias = float | dict[str, float]  # finite scores; a dict has at least one key
 ```
 
 A scalar is accepted, but the multi-dimensional form is the one to encourage: TraceGuard reports 95% versus 0% safety for structured versus single-score monitoring against a colluding monitor (see [Prior art](#prior-art)). A protocol can threshold per dimension, and dimensions can be scored by independent monitors so no single model sees the whole assessment.
@@ -869,13 +869,13 @@ async def run_protocol(
 async def run_monitors(
     monitors: Monitors, context: Context, step: Step
 ) -> Observations:
-    """tg_collect over run_monitor."""
+    """Concurrent fan-out over run_monitor, results in configuration order."""
 
 
 async def run_protocols(
     protocols: Protocols, context: Context, step: Step
 ) -> Decisions:
-    """tg_collect over run_protocol. Cancels siblings when one returns terminate."""
+    """Concurrent fan-out over run_protocol. Cancels siblings when one returns terminate."""
 
 
 async def run_children(children: Children, context: Context, step: Step) -> Reports:
@@ -974,7 +974,7 @@ def concurrent(children: Children) -> ControlProtocol:
         if not reports.decisions:
             return None                       # monitors only
         if strongest is None:
-            return Decision.clear()           # every protocol escalated  # monitors only: recorded, nothing acts
+            return Decision.clear()           # every protocol escalated
         if strongest.report.action == "modify" and len(reports.decisions) > 1:
             return Decision.reject(
                 f"{strongest.name} modified the call but other protocols approved the original"
@@ -1308,7 +1308,7 @@ Then the protocol reconciles the two halves with its thresholds and budget, subj
 
 ### Concurrency is a safety property, not just a latency one
 
-Three LLM monitors in sequence triple the added latency at every step, which argues for `tg_collect()` (not `asyncio.gather`, per AGENTS.md). TraceGuard gives a stronger reason: **independence is the point**. Its 95%-versus-0% result against a colluding monitor comes from fragmenting evaluation so no single model sees the whole assessment, which requires monitors that cannot observe each other's conclusions.
+Three LLM monitors in sequence triple the added latency at every step, which argues for an anyio task group with `tg_collect()`'s semantics (not `asyncio.gather`, per AGENTS.md). TraceGuard gives a stronger reason: **independence is the point**. Its 95%-versus-0% result against a colluding monitor comes from fragmenting evaluation so no single model sees the whole assessment, which requires monitors that cannot observe each other's conclusions.
 
 So concurrent dispatch is the default, and the cost is that `modify` becomes incoherent — a concurrent child cannot see another's rewrite. Settled in `concurrent()`: a `modify` is honoured only when it was the only decision; when more than one child decided, it becomes a `reject` naming the modifier. Last-wins in configuration order and "two is an error" were the alternatives; the rejection is chosen because the other children approved the *original* arguments and nothing has approved the modified ones. A chain has no such problem, since only one link decides.
 

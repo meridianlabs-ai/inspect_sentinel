@@ -81,8 +81,13 @@ def step_types(sentinel: Monitor | ControlProtocol) -> frozenset[type[Any]]:
     found = getattr(sentinel, STEP_TYPES_ATTR, None)
     if found is None:
         if is_registry_object(sentinel):
+            info = registry_info(sentinel)
+            if info.type in ("monitor", "protocol"):
+                raise TypeError(
+                    f"{info.name!r} is the factory, not a configured instance; call it to configure one."
+                )
             raise TypeError(
-                f"{registry_info(sentinel).name!r} is the factory, not a configured instance; call it to configure one."
+                f"{info.name!r} is a {info.type}, not a monitor or protocol."
             )
         raise TypeError(
             f"{getattr(sentinel, '__name__', sentinel)!r} has no step types recorded. Was its factory decorated with @monitor or @protocol?"
@@ -117,8 +122,10 @@ def _validate(
     report_type: type[Report],
 ) -> frozenset[type[Any]]:
     name = getattr(instance, "__name__", repr(instance))
-    if not inspect.iscoroutinefunction(instance):
-        raise TypeError(f"A {kind} must be an async function; {name} is not.")
+    if not inspect.isfunction(instance) or not inspect.iscoroutinefunction(instance):
+        raise TypeError(
+            f"A {kind} must be a plain async function, not a method, partial or class; {name} is not."
+        )
     signature = inspect.signature(instance)
     parameters = list(signature.parameters)
     if len(parameters) != 2:

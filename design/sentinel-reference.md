@@ -618,13 +618,13 @@ async def run_protocol(
 async def run_monitors(
     monitors: Monitors, context: Context, step: Step
 ) -> Observations:
-    """tg_collect over run_monitor."""
+    """Concurrent fan-out over run_monitor, results in configuration order."""
 
 
 async def run_protocols(
     protocols: Protocols, context: Context, step: Step
 ) -> Decisions:
-    """tg_collect over run_protocol. Cancels siblings when one returns terminate."""
+    """Concurrent fan-out over run_protocol. Cancels siblings when one returns terminate."""
 
 
 async def run_children(children: Children, context: Context, step: Step) -> Reports:
@@ -753,7 +753,7 @@ These rules describe the concurrent composition, which `concurrent()` implements
 - **`terminate` cancels siblings.** Nothing outranks it and the sample is ending. `run_protocols` and `run_children` do this, and a cancelled child is recorded as cancelled rather than left indistinguishable from one that abstained.
 - **Child decisions are advisory to the parent.** A parent protocol may honour or override them, and the log records both; see [Transcript](#transcript).
 - **Authoritative decisions are a floor.** A protocol's return may not be weaker than an authoritative child decision. The dispatcher enforces this at every layer.
-- **Run children concurrently.** Sequential dispatch triples latency with three LLM monitors, and it lets a colluding monitor see the others' conclusions. TraceGuard's result (95% safety versus 0%) depends on independence. Use `tg_collect()`, not `asyncio.gather`. The runner does this for you.
+- **Run children concurrently.** Sequential dispatch triples latency with three LLM monitors, and it lets a colluding monitor see the others' conclusions. TraceGuard's result (95% safety versus 0%) depends on independence. The runner fans out on an anyio task group with `tg_collect()`'s semantics; never `asyncio.gather`.
 - **A `modify` with more than one participant is a rejection.** Concurrent children cannot see each other's rewrites, and the others approved the original arguments. `concurrent()` returns `reject` with an explanation naming the modifier. A `modify` that was the only decision is honoured.
 - **Decide on the protocol whether monitors block the agent or run alongside it.** Blocking costs latency. Running alongside means the agent may spend tokens or take a step before a violation is caught. This is a deployment judgement, so the knob belongs on the protocol, not the monitor.
 
