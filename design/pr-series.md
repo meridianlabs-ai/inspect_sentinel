@@ -11,7 +11,7 @@ The minimal surface that lets `inspect_ai` connect: the types a dispatcher const
 - **Surface only.** Sentinel ships types and functions; `inspect_ai` wiring comes after. Verified by unit tests with fake `Host` and `Recorder`.
 - **Real registration.** `@monitor` and `@protocol` register under `"monitor"` and `"protocol"`, added to `inspect_ai`'s `RegistryType` by PR 0 ([inspect_ai#5514](https://github.com/UKGovernmentBEIS/inspect_ai/pull/5514), branch `feature/sentinel`). Sentinel's `inspect-ai` git ref points at that branch until it merges.
 - **Tool stages only.** `BeforeToolCall` and `AfterToolCall` with the design's full fields; `Step` is their union. The generate stages arrive with the generate-side dispatcher. The schema may change freely until there are users.
-- **Recording is the runner's, through a separate interface.** `Host` is the author-facing ABI (`generate` only for now). `Recorder` has one method, `record`, called by the runner for every participating child. This departs from `sentinel-deployment.md`, whose `Host` ABI carries `record`; that doc is to be updated.
+- **Recording is the runner's, through a separate interface.** `Host` is the author-facing ABI (`generate` only for now). `Recorder` has two methods: `record`, called by the runner for every participating child, and `cancelled`, called for a child cancelled before it reported. This departs from `sentinel-deployment.md`, whose `Host` ABI carries `record`; that doc is to be updated.
 - **Two context types.** `Context` is what authors see. `RunnerContext(Context)` adds `recorder` and `child()`; the dispatcher builds it, `dataclasses.replace` preserves it down the layers, and the runner raises `TypeError` if handed a bare `Context`.
 - **Author surface vs integration surface.** `__init__` exports only what an author writes against, including `Reported` and `Report`, since `step.escalations` and the runner's results are typed with them. `inspect_sentinel/_integration.py` re-exports what the dispatcher needs (`RunnerContext`, `Recorder`, `validate_decision`, `compile_sentinel`); `inspect_ai` imports from that module only, so refactors have one file to keep stable.
 - **Shipped protocols:** `observe`, `concurrent`, `threshold`. `chain` and `human` are follow-ups.
@@ -109,6 +109,7 @@ class Host(Protocol):
 
 class Recorder(Protocol):
     def record(self, context: Context, step: Step, reported: Reported[Report]) -> None: ...
+    def cancelled(self, context: Context, step: Step, name: str) -> None: ...
 
 @dataclass(frozen=True, kw_only=True)
 class Context:
@@ -147,6 +148,8 @@ Implemented: stages are read at factory-call time from the returned function's s
 
 Tests use a list-backed `Recorder` and a stub `Host`. Cover: filtering, naming and the duplicate error, path derivation, every participating report recorded including ones the caller ignores, `max_suspicion()` over scalar and dict suspicion, `strongest()` precedence, sibling cancellation on `terminate`, a raising child fails the call, `TypeError` on a bare `Context`.
 
+Implemented: the decorators store the accepted payload classes on each instance and `step_types(instance)` (runner-facing, not exported) reads them; the runner filters with `isinstance`, so there is no stage-name vocabulary in the filter. Children are named by mapping key or by `registry_unqualified_name`, since a package-qualified registry name (`acme/suspicion`) would put the path separator inside a segment; two packages' monitors sharing a leaf name in one layer therefore collide, and the duplicate-name error tells the author to name them with a mapping. `run_monitor` and `run_protocol` check the child's registry type; `run_monitors`, `run_protocols` and `run_children` all validate their children once in `_named` and then fan out through one private `_run_named`, which owns the `terminate` cancellation. The task-group unwrap catches `ExceptionGroup` only, never `BaseExceptionGroup`, so a cancellation travelling with an error propagates intact, as in inspect_ai's `tg_collect`. `Observation` now rejects an empty structured suspicion, since `max_suspicion()` has no answer for it. Exceptions propagate unconditionally: the failure policy (warn and continue for a monitor nothing consumes, `fail="open"`) is not implemented here and is not PR 4's either; it needs a per-child hook in `_run_child`, because by the time an exception leaves the task group the siblings' results are gone, and it will be added with that hook in a later PR. A child cancelled before it reported, whether by a sibling's `terminate` or by cancellation from above, is recorded through `Recorder.cancelled()`; cancellation lands at a child's next await, so one that finishes without awaiting is recorded normally. When several children fail concurrently only the first exception surfaces, and a child raising its own `ExceptionGroup` passes through as a group; both match inspect_ai's `tg_collect` and the deferred failure-policy hook will want the sibling errors.
+
 ## PR 4: protocols, boundary check, compile, integration
 
 `_protocols.py`, `_check.py`, `_compile.py`, `_integration.py`, `_registry.py`, and the `inspect_ai` entry point in `pyproject.toml`.
@@ -163,8 +166,10 @@ Tests: each protocol's rules above; every row of the compile table; each of the 
 
 ## Design edits owed (on inspect_ai `design/monitor`)
 
-Move `record` off `Host` into `Recorder` in `sentinel-deployment.md`; name `RunnerContext` in the runner section of `sentinel.md`; add `path` and `RunnerContext` to `sentinel-reference.md`'s `Context`; define `Stage`; mention `named()` as a private helper until `chain` lands.
+Move `record` off `Host` into `Recorder` in `sentinel-deployment.md`; add `path` and `RunnerContext` to `sentinel-reference.md`'s `Context`; define `Stage`. (Done in the repo copy: `RunnerContext` named in the runner section; `named()` noted as the runner's private helper; unqualified instance names.)
 
 ## Out of scope
+
+The failure policy (`design/sentinel.md`, "Failure semantics"): the runner propagates every exception until a later PR adds the per-child hook described under PR 3.
 
 Generate stages, `chain`, `human`, `defer_to_trusted`, `resample`, views and rendering helpers, `store_as(scope=)`, `fetch`/`terminate` on `Host`, the `inspect_ai` dispatcher and `SentinelEvent`.

@@ -31,6 +31,13 @@ dependencies = [
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.
     "pydantic>=2.0",
+    # The runner fans children out on anyio task groups. inspect-ai depends on
+    # anyio too, but this is a direct import and a transitive dependency is not
+    # a promise.
+    "anyio>=4.0",
+    # _runner.py imports the ExceptionGroup backport on 3.10; anyio depends on
+    # it too, but a transitive dependency is not a promise.
+    "exceptiongroup>=1.0; python_version < '3.11'",
 ]
 
 [project.urls]
@@ -49,9 +56,10 @@ dev = [
     "pyright",
     "pytest-xdist",
     "pytest-timeout>=2.4.0",
-    # monitors are async; anyio's pytest plugin runs `@pytest.mark.anyio`
-    # tests on the backend the `anyio_backend` fixture in conftest selects
-    "anyio",
+    # unmarked so pyright, checking against the 3.10 floor, can resolve the guarded import on a newer venv
+    "exceptiongroup>=1.0",
+    # async tests run on both anyio backends (tests/conftest.py)
+    "trio",
     {include-group = "doc"},
 ]
 doc = [
@@ -123,3 +131,6 @@ pythonVersion = "3.10"
 [[tool.pyright.executionEnvironments]]
 root = "tests"
 reportPrivateUsage = false
+# shared fakes are imported as `tests._fakes`, which pytest resolves from the
+# repo root; give pyright the same root
+extraPaths = ["."]

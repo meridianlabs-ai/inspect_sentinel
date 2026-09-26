@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, TypeAlias, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeAlias, TypeVar
 
 from inspect_ai.tool import ToolCall
 from pydantic import BaseModel, Field
 
-Suspicion: TypeAlias = float | dict[str, float]
-"""How suspicious a step is. A dict scores several dimensions independently."""
+Score: TypeAlias = Annotated[float, Field(allow_inf_nan=False)]
+"""A finite suspicion score."""
+
+Suspicion: TypeAlias = Score | Annotated[dict[str, Score], Field(min_length=1)]
+"""How suspicious a step is: one score, or a non-empty dict scoring several dimensions independently."""
 
 Action: TypeAlias = Literal["continue", "modify", "reject", "terminate", "escalate"]
 """What a protocol can decide about the step it examined."""
@@ -89,7 +92,7 @@ class Reported(Generic[R_co]):
     """A report with the identity of the configured instance that produced it."""
 
     name: str
-    """Instance name: the mapping key, or the registry name."""
+    """Instance name: the mapping key, or the registry name without its package prefix."""
 
     path: str
     """Instance path, e.g. `attempt/internet_attempt`."""

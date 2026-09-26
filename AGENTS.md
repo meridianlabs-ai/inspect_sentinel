@@ -20,7 +20,7 @@
 - Tests must be isolated; no shared mutable state or order dependencies
 - Tests must be deterministic; control randomness with seeds
 - Prefer real objects over mocks when possible
-- Async tests: write `async def test_...` and mark it `@pytest.mark.anyio`. Use `anyio.sleep()` and `anyio.Event()`, never the `asyncio` equivalents. The `anyio_backend` fixture in `tests/conftest.py` pins the backend to asyncio.
+- Async tests: write `async def test_...` and mark it `@pytest.mark.anyio`. Use `anyio.sleep()` and `anyio.Event()`, never the `asyncio` equivalents. The `anyio_backend` fixture in `tests/conftest.py` runs every async test on asyncio and trio.
 
 ### Common Pitfalls
 - Stay within scope—don't make unrequested changes

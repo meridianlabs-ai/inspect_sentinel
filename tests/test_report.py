@@ -78,3 +78,14 @@ def test_reported_attaches_identity() -> None:
     assert reported.name == "judge"
     assert reported.path == "attempt/judge"
     assert reported.report.suspicion == 0.2
+
+
+def test_observation_rejects_empty_suspicion_dimensions() -> None:
+    with pytest.raises(ValidationError, match="at least 1"):
+        Observation(suspicion={})
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), {"a": float("nan")}])
+def test_observation_rejects_non_finite_suspicion(bad: object) -> None:
+    with pytest.raises(ValidationError):
+        Observation.model_validate({"suspicion": bad})

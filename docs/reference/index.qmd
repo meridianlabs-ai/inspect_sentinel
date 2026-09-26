@@ -11,7 +11,7 @@ reference: inspect_sentinel
 ### Step
 ### Stage
 
-## Reports
+## Report types
 
 ### Observation
 ### Decision
@@ -30,7 +30,18 @@ reference: inspect_sentinel
 ### Protocols
 ### Children
 
-## Context
+## Runner
+
+### run_monitor
+### run_protocol
+### run_monitors
+### run_protocols
+### run_children
+### Observations
+### Decisions
+### Reports
+
+## Context and host
 
 ### Context
 ### Host
