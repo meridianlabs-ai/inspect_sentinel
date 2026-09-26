@@ -122,8 +122,7 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
     # __cause__.
     except ExceptionGroup as ex:
         first = ex.exceptions[0]
-        first.__suppress_context__ = True
-        raise first
+        raise first from first.__cause__
 
 
 async def run_monitor(
@@ -298,7 +297,9 @@ def _named(
         step_types(child)  # rejects an uncalled factory or an undecorated function
         info = registry_info(child)
         if expected is not None and info.type != expected:
-            raise TypeError(f"Expected a {expected}, got the {info.type} {info.name!r}.")
+            raise TypeError(
+                f"Expected a {expected}, got the {info.type} {info.name!r}."
+            )
         name = check_instance_name(
             given if given is not None else registry_unqualified_name(info)
         )
