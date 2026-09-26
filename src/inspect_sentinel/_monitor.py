@@ -8,7 +8,9 @@ from typing import Any, ParamSpec, TypeAlias, TypeVar, cast, get_args, get_type_
 from inspect_ai._util.registry import (
     RegistryInfo,
     RegistryType,
+    is_registry_object,
     registry_add,
+    registry_info,
     registry_name,
     registry_tag,
 )
@@ -31,7 +33,7 @@ ControlProtocol: TypeAlias = (
 """A protocol: decides what happens at a step, or abstains. Annotating `Step` runs it at every stage."""
 
 Monitors: TypeAlias = Mapping[str, Monitor] | Sequence[Monitor]
-"""Monitors handed to a protocol, named by mapping key or by registry name."""
+"""Monitors handed to a protocol, named by mapping key or by registry name without its package prefix."""
 
 Protocols: TypeAlias = Mapping[str, ControlProtocol] | Sequence[ControlProtocol]
 """Protocols handed to a protocol, named the same way."""
@@ -45,12 +47,13 @@ P = ParamSpec("P")
 SentinelT = TypeVar("SentinelT")
 
 _STEP_TYPES = frozenset(get_args(Step))
+STEP_TYPES_ATTR = "__sentinel_step_types__"
 
 
 def monitor(factory: Callable[P, Monitor]) -> Callable[P, Monitor]:
     """Register a monitor factory.
 
-    The factory's return annotation must be `Monitor` and the function it returns must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated to return `Observation | None`. These are checked when the factory is called. A monitor watches one stage; a concern spanning two stages is two monitors. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store.
+    The factory's return annotation must be `Monitor` and the function it returns must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated to return `Observation | None`. These are checked when the factory is called. A monitor watches one stage; a concern spanning two stages is two monitors. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store. The function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     Args:
         factory: A function returning a monitor.
@@ -61,12 +64,35 @@ def monitor(factory: Callable[P, Monitor]) -> Callable[P, Monitor]:
 def protocol(factory: Callable[P, ControlProtocol]) -> Callable[P, ControlProtocol]:
     """Register a protocol factory.
 
-    Same contract as `@monitor`, with the returned function annotated to return `Decision | None`, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store.
+    Same contract as `@monitor`, with the returned function annotated to return `Decision | None`, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store. The function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     Args:
         factory: A function returning a protocol.
     """
     return _register("protocol", factory, Decision)
+
+
+def step_types(sentinel: Monitor | ControlProtocol) -> frozenset[type[Any]]:
+    """The step payload types a configured monitor or protocol accepts.
+
+    Args:
+        sentinel: An instance returned by a `@monitor` or `@protocol` factory.
+    """
+    found = getattr(sentinel, STEP_TYPES_ATTR, None)
+    if found is None:
+        if is_registry_object(sentinel):
+            info = registry_info(sentinel)
+            if info.type in ("monitor", "protocol"):
+                raise TypeError(
+                    f"{info.name!r} is the factory, not a configured instance; call it to configure one."
+                )
+            raise TypeError(
+                f"{info.name!r} is a {info.type}, not a monitor or protocol."
+            )
+        raise TypeError(
+            f"{getattr(sentinel, '__name__', sentinel)!r} has no step types recorded. Was its factory decorated with @monitor or @protocol?"
+        )
+    return frozenset(found)
 
 
 def _register(
@@ -81,7 +107,8 @@ def _register(
     @wraps(factory)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> SentinelT:
         instance = factory(*args, **kwargs)
-        _validate(cast(Callable[..., Any], instance), kind, report_type)
+        accepted = _validate(cast(Callable[..., Any], instance), kind, report_type)
+        setattr(instance, STEP_TYPES_ATTR, accepted)
         registry_tag(factory, instance, info.model_copy(deep=True), *args, **kwargs)
         return instance
 
@@ -93,10 +120,12 @@ def _validate(
     instance: Callable[..., Any],
     kind: RegistryType,
     report_type: type[Report],
-) -> None:
+) -> frozenset[type[Any]]:
     name = getattr(instance, "__name__", repr(instance))
-    if not inspect.iscoroutinefunction(instance):
-        raise TypeError(f"A {kind} must be an async function; {name} is not.")
+    if not inspect.isfunction(instance) or not inspect.iscoroutinefunction(instance):
+        raise TypeError(
+            f"A {kind} must be a plain async function, not a method, partial or class; {name} is not."
+        )
     signature = inspect.signature(instance)
     parameters = list(signature.parameters)
     if len(parameters) != 2:
@@ -139,8 +168,12 @@ def _validate(
         raise TypeError(
             f"A {kind} must annotate its return as {report_type.__name__} | None; {name} has no return annotation."
         )
-    members = set(get_args(returned) or (returned,))
-    if report_type not in members or not members <= {report_type, type(None)}:
+    return_members = set(get_args(returned) or (returned,))
+    if report_type not in return_members or not return_members <= {
+        report_type,
+        type(None),
+    }:
         raise TypeError(
             f"A {kind} must be annotated to return {report_type.__name__} | None; {name} returns {returned!r}."
         )
+    return frozenset(members)

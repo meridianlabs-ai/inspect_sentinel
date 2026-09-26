@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
 from inspect_ai.scorer import Target
@@ -36,6 +36,7 @@ class Host(Protocol):
         ...
 
 
+@runtime_checkable
 class Recorder(Protocol):
     """Where the runner records every report. Runner-facing; authors never call it."""
 
@@ -46,6 +47,18 @@ class Recorder(Protocol):
             context: The child's context; its `path` identifies the instance.
             step: The step the child examined.
             reported: The child's report with its instance identity.
+        """
+        ...
+
+    def cancelled(self, context: Context, step: Step, name: str) -> None:
+        """Record that a child was cancelled before it reported: a sibling decided `terminate`, a sibling raised, or the layer was cancelled from above.
+
+        The cause is not recorded here; a `terminate` or an exception in the same layer says which it was.
+
+        Args:
+            context: The child's context; its `path` identifies the instance.
+            step: The step the child was examining.
+            name: The child's instance name.
         """
         ...
 
@@ -98,15 +111,36 @@ class Context:
 
 @dataclass(frozen=True, kw_only=True)
 class RunnerContext(Context):
-    """A `Context` plus what the runner needs. Built by the dispatcher, never by authors."""
+    """A `Context` plus what the runner needs."""
 
     recorder: Recorder
-    """Where the runner records reports."""
+    """Where the runner records reports and cancellations."""
+
+    def __post_init__(self) -> None:
+        # a runtime check for hosts that are not type-checked against Recorder
+        if not isinstance(cast(object, self.recorder), Recorder):
+            raise TypeError(
+                f"Recorder {type(self.recorder).__name__} must implement record() and cancelled()."
+            )
 
     def child(self, name: str) -> RunnerContext:
         """The context for a child of this layer.
 
         Args:
-            name: The child's instance name, appended to this layer's `path`.
+            name: The child's instance name, appended to this layer's `path`. Must be non-empty and must not contain `/`.
         """
+        check_instance_name(name)
         return replace(self, path=f"{self.path}/{name}" if self.path else name)
+
+
+def check_instance_name(name: object) -> str:
+    """Return `name` if it is a string that can be a path segment, else raise `ValueError`.
+
+    Args:
+        name: A candidate instance name; configuration may hand over a non-string key.
+    """
+    if not isinstance(name, str) or name == "" or "/" in name:
+        raise ValueError(
+            f"Instance name {name!r} must be a non-empty string without '/'."
+        )
+    return name

@@ -35,6 +35,14 @@ def test_author_facing_names_are_exported() -> None:
         "Protocols",
         "monitor",
         "protocol",
+        "Decisions",
+        "Observations",
+        "Reports",
+        "run_children",
+        "run_monitor",
+        "run_monitors",
+        "run_protocol",
+        "run_protocols",
     }
     assert expected <= set(inspect_sentinel.__all__)
     for name in expected:
@@ -44,3 +52,4 @@ def test_author_facing_names_are_exported() -> None:
 def test_integration_names_are_not_exported() -> None:
     assert "RunnerContext" not in inspect_sentinel.__all__
     assert "Recorder" not in inspect_sentinel.__all__
+    assert "step_types" not in inspect_sentinel.__all__

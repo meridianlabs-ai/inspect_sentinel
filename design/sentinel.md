@@ -482,7 +482,7 @@ The second example is a monitor under `threshold()`, which introduces the score 
 #### Suspicion is structured
 
 ``` python
-Suspicion: TypeAlias = float | dict[str, float]
+Suspicion: TypeAlias = float | dict[str, float]  # finite scores; a dict has at least one key
 ```
 
 A scalar is accepted, but the multi-dimensional form is the one to encourage: TraceGuard reports 95% versus 0% safety for structured versus single-score monitoring against a colluding monitor (see [Prior art](#prior-art)). A protocol can threshold per dimension, and dimensions can be scored by independent monitors so no single model sees the whole assessment.
@@ -855,7 +855,7 @@ async def run_monitor(
     """Invoke one monitor if it is annotated for this stage.
 
     Derives the child's Context under this layer's path, records a
-    SentinelEvent, applies the failure policy. Returns None if the child
+    SentinelEvent, applies the failure policy (deferred). Returns None if the child
     abstained or does not watch this stage.
     """
 
@@ -869,13 +869,13 @@ async def run_protocol(
 async def run_monitors(
     monitors: Monitors, context: Context, step: Step
 ) -> Observations:
-    """tg_collect over run_monitor."""
+    """Concurrent fan-out over run_monitor, results in configuration order."""
 
 
 async def run_protocols(
     protocols: Protocols, context: Context, step: Step
 ) -> Decisions:
-    """tg_collect over run_protocol. Cancels siblings when one returns terminate."""
+    """Concurrent fan-out over run_protocol. Cancels siblings when one returns terminate."""
 
 
 async def run_children(children: Children, context: Context, step: Step) -> Reports:
@@ -885,12 +885,12 @@ async def run_children(children: Children, context: Context, step: Step) -> Repo
 The singular forms carry the per-child obligations:
 
 - **filter by point** — a child not annotated for this step is skipped, and the skip is indistinguishable from abstention
-- **name the child** — from the mapping key if the protocol was given a `Mapping`, else the registry name; a duplicate name within one layer is an error rather than a `#2` suffix
-- **derive the child's `Context`** — `Context` is already per-instance (its store is namespaced), so it carries the instance path, and the child's is built under it
+- **name the child** — from the mapping key if the protocol was given a `Mapping`, else the registry name without its package prefix; the plural forms treat a duplicate name within one layer as an error rather than inventing a `#2` suffix, and a composition that runs children one at a time validates its names the same way first
+- **derive the child's `Context`** — the dispatcher hands the top layer a `RunnerContext`, a `Context` that also carries the recorder and a `child(name)` method; the runner requires it (a bare `Context` is a `TypeError`) and builds each child's context under this layer's path. Naming and duplicate detection live in a private `named()` helper in the runner, which `chain()` will reuse
 - **record the report** — one `SentinelEvent` per participating child, including the ones the protocol goes on to ignore, which is load-bearing because the ignored ones are the benign distribution calibration needs
-- **apply the [failure policy](#failure-semantics)** uniformly
+- **apply the [failure policy](#failure-semantics)** uniformly (deferred: the first runner propagates every exception; see `pr-series.md`)
 
-The plural forms add the concurrent obligations: they **fan out with `tg_collect()`**, per AGENTS.md, which [Concurrency is a safety property](#concurrency-is-a-safety-property-not-just-a-latency-one) shows is a safety requirement rather than a latency one; and `run_protocols` **cancels remaining siblings when one returns `terminate`**, since nothing outranks it and the sample is ending — prompting a human about a sample that no longer exists is the concrete thing this avoids.
+The plural forms add the concurrent obligations: they **fan out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`** (per AGENTS.md, which [Concurrency is a safety property](#concurrency-is-a-safety-property-not-just-a-latency-one) shows is a safety requirement rather than a latency one); and `run_children` **holds the group so a `terminate` decision can cancel the still-running siblings**, since nothing outranks it and the sample is ending — prompting a human about a sample that no longer exists is the concrete thing this avoids. A cancelled child is recorded as cancelled, with no report, so the log distinguishes it from one that abstained; its observation, if wanted, is recovered by replay. Monitors are cancelled too: once a protocol has decided `terminate` no sibling's report can change the outcome, and spending their inference live would only save a replay later. Cancellation lands at a child's next await, so a child that finishes without awaiting is recorded normally. A cancellation from above the layer, or one caused by a sibling raising, is recorded the same way; the `terminate` or the exception in the same layer says which.
 
 They return:
 
@@ -971,8 +971,10 @@ def concurrent(children: Children) -> ControlProtocol:
     async def run(context: Context, step: Step) -> Decision | None:
         reports = await run_children(children, context, step)
         strongest = reports.decisions.strongest()
+        if not reports.decisions:
+            return None                       # monitors only
         if strongest is None:
-            return None  # monitors only: recorded, nothing acts
+            return Decision.clear()           # every protocol escalated
         if strongest.report.action == "modify" and len(reports.decisions) > 1:
             return Decision.reject(
                 f"{strongest.name} modified the call but other protocols approved the original"
@@ -1052,7 +1054,7 @@ Registry params come from the factory signature, so `create_registry_object("mon
 
 #### Instance names
 
-A registry name identifies a factory, not a configured instance, and two instances of one factory in a configuration — two `chain`s, two `suspicion_monitor`s with different models — need telling apart in the log and in the store. So every configured monitor or protocol has an **instance name**: the key, when it was given in a `Mapping`; the registry name otherwise. Names are unique within a layer, and a duplicate is a configuration error rather than an invented suffix. Nesting composes them into a **path**, `attempt/internet_attempt`, which is what `SentinelEvent` records and what `context.store_as()` namespaces by. This is #5423's dict-of-named-chains, generalised to every layer rather than only the top.
+A registry name identifies a factory, not a configured instance, and two instances of one factory in a configuration — two `chain`s, two `suspicion_monitor`s with different models — need telling apart in the log and in the store. So every configured monitor or protocol has an **instance name**: the key, when it was given in a `Mapping`; the registry name without its package prefix otherwise (the prefix contains `/`, the path separator, so two packages' monitors sharing a leaf name in one layer must be told apart with a mapping). Names are unique within a layer, and a duplicate is a configuration error rather than an invented suffix. Nesting composes them into a **path**, `attempt/internet_attempt`, which is what `SentinelEvent` records and what `context.store_as()` namespaces by. This is #5423's dict-of-named-chains, generalised to every layer rather than only the top.
 
 #### Bare names inside the package, prefixed names outside it
 
@@ -1306,7 +1308,7 @@ Then the protocol reconciles the two halves with its thresholds and budget, subj
 
 ### Concurrency is a safety property, not just a latency one
 
-Three LLM monitors in sequence triple the added latency at every step, which argues for `tg_collect()` (not `asyncio.gather`, per AGENTS.md). TraceGuard gives a stronger reason: **independence is the point**. Its 95%-versus-0% result against a colluding monitor comes from fragmenting evaluation so no single model sees the whole assessment, which requires monitors that cannot observe each other's conclusions.
+Three LLM monitors in sequence triple the added latency at every step, which argues for an anyio task group with `tg_collect()`'s semantics (not `asyncio.gather`, per AGENTS.md). TraceGuard gives a stronger reason: **independence is the point**. Its 95%-versus-0% result against a colluding monitor comes from fragmenting evaluation so no single model sees the whole assessment, which requires monitors that cannot observe each other's conclusions.
 
 So concurrent dispatch is the default, and the cost is that `modify` becomes incoherent — a concurrent child cannot see another's rewrite. Settled in `concurrent()`: a `modify` is honoured only when it was the only decision; when more than one child decided, it becomes a `reject` naming the modifier. Last-wins in configuration order and "two is an error" were the alternatives; the rejection is chosen because the other children approved the *original* arguments and nothing has approved the modified ones. A chain has no such problem, since only one link decides.
 
@@ -1333,8 +1335,8 @@ class SentinelEvent(BaseEvent):
     """The agent conversation this step belongs to; the same id the loop's
     `ModelEvent`s and `CompactionEvent`s carry. See "Two histories"."""
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
-    kind: Literal["observation", "decision"]
-    """Agrees with the registry type of `monitor` by construction."""
+    kind: Literal["observation", "decision", "cancelled"]
+    """`observation` or `decision` agrees with the registry type of `name` by construction; `cancelled` records no report."""
     suspicion: Suspicion | None
     decision: Action | None
     audit: bool
@@ -1343,6 +1345,8 @@ class SentinelEvent(BaseEvent):
     explanation: str | None
     metadata: dict[str, Any] | None
 ```
+
+A `cancelled` event carries no suspicion, decision or outcome; it says the child was in flight when the layer was torn down, by a sibling's `terminate` or by cancellation from above.
 
 `decision` versus `outcome` is the layering made legible in the log: what this layer decided, and what the layer above did with it. Without both, a reader cannot tell an overruled decision from one that was never made — which is exactly what a reader of a nested configuration needs to see.
 

@@ -8,6 +8,7 @@
 - Strict typing required
   - Python: modern syntax (`X | None`, `dict[str, Any]`)
 - Error handling: do not use Exceptions gratuitously, unless an error is expected in a context and needs to be computed on it should be allowed to propagate.
+- Never swallow an exception from a monitor, a protocol, or the recorder, and never log-and-continue in their place. A raising child fails the layer. The design's failure policy is the one sanctioned place to tolerate a failure, and it is declared per function, not applied by default.
 - Respect existing patterns
 - Before committing, run the appropriate checks for code you touched (lint, typecheck, test)
 
@@ -20,7 +21,7 @@
 - Tests must be isolated; no shared mutable state or order dependencies
 - Tests must be deterministic; control randomness with seeds
 - Prefer real objects over mocks when possible
-- Async tests: write `async def test_...` and mark it `@pytest.mark.anyio`. Use `anyio.sleep()` and `anyio.Event()`, never the `asyncio` equivalents. The `anyio_backend` fixture in `tests/conftest.py` pins the backend to asyncio.
+- Async tests: write `async def test_...` and mark it `@pytest.mark.anyio`. Use `anyio.sleep()` and `anyio.Event()`, never the `asyncio` equivalents. The `anyio_backend` fixture in `tests/conftest.py` runs every async test on asyncio and trio.
 
 ### Common Pitfalls
 - Stay within scope—don't make unrequested changes

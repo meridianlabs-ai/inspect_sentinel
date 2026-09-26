@@ -14,6 +14,16 @@ from ._monitor import (
     protocol,
 )
 from ._report import Action, Decision, Observation, Report, Reported, Suspicion
+from ._runner import (
+    Decisions,
+    Observations,
+    Reports,
+    run_children,
+    run_monitor,
+    run_monitors,
+    run_protocol,
+    run_protocols,
+)
 from ._step import AfterToolCall, BeforeToolCall, Stage, Step
 
 try:
@@ -30,17 +40,25 @@ __all__ = [
     "Context",
     "ControlProtocol",
     "Decision",
+    "Decisions",
     "Host",
     "Monitor",
     "Monitors",
     "Observation",
+    "Observations",
     "Protocols",
     "Report",
     "Reported",
+    "Reports",
     "Stage",
     "Step",
     "Suspicion",
     "monitor",
     "protocol",
+    "run_children",
+    "run_monitor",
+    "run_monitors",
+    "run_protocol",
+    "run_protocols",
     "__version__",
 ]

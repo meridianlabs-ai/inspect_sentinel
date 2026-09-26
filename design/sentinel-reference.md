@@ -84,7 +84,7 @@ The pieces:
 | `Observation` | A monitor's report: a suspicion score and an explanation. Recorded; acted on only by a protocol. |
 | `Decision` | A protocol's report: an action (`continue`, `modify`, `reject`, `terminate`, `escalate`). Applied at the top level; advisory to a parent protocol. |
 | Rule | A protocol with no children. `no_curl`, `strip_force`, and `human` are rules. |
-| `run_monitors`, `run_protocols`, `run_children` | The runner. The only way a protocol invokes a child. Names, records, and applies the failure policy. |
+| `run_monitors`, `run_protocols`, `run_children` | The runner. The only way a protocol invokes a child. Names, records, and (once implemented) applies the failure policy. |
 | `concurrent`, `chain` | The two shipped compositions: concurrent (every child runs, strongest decision wins) and ordered (first non-`escalate` decides). |
 | `threshold`, `observe`, `defer_to_trusted`, `resample` | The shipped protocols that turn monitors' scores into decisions. |
 | `human` | A rule that asks a person through the human approval surfaces. Its decisions are authoritative. |
@@ -131,7 +131,7 @@ The stage is checked by mypy and pyright against this alias, and read from the a
 
 ### Instance names
 
-Every configured monitor or protocol has an instance name: the key when it was configured in a mapping, the registry name otherwise. Two children of one layer with the same name is a configuration error. Nesting joins names into a path, `attempt/internet_attempt`. The path is what `SentinelEvent` records and what `context.store_as()` namespaces by.
+Every configured monitor or protocol has an instance name: the key when it was configured in a mapping, the registry name without its package prefix otherwise. Two children of one layer with the same name is a configuration error. Nesting joins names into a path, `attempt/internet_attempt`. The path is what `SentinelEvent` records and what `context.store_as()` namespaces by.
 
 ### Stages
 
@@ -278,7 +278,7 @@ class Observation(BaseModel):
     """What a monitor returns: evidence, for a protocol to calibrate and threshold."""
 
     suspicion: Suspicion
-    """Required. float or dict[str, float]."""
+    """Required. float or dict[str, float]; scores are finite and a dict is non-empty."""
 
     explanation: str | None = Field(default=None)
     metadata: dict[str, Any] | None = Field(default=None)
@@ -308,7 +308,7 @@ class Decision(BaseModel):
 
 
 Report: TypeAlias = Observation | Decision
-Suspicion: TypeAlias = float | dict[str, float]
+Suspicion: TypeAlias = float | dict[str, float]  # finite; a dict has at least one key
 ```
 
 Return states:
@@ -604,7 +604,7 @@ async def run_monitor(
     """Invoke one monitor if it is annotated for this stage.
 
     Derives the child's Context under this layer's path, records a
-    SentinelEvent, applies the failure policy. Returns None if the child
+    SentinelEvent, applies the failure policy (deferred). Returns None if the child
     abstained or does not watch this stage.
     """
 
@@ -618,13 +618,13 @@ async def run_protocol(
 async def run_monitors(
     monitors: Monitors, context: Context, step: Step
 ) -> Observations:
-    """tg_collect over run_monitor."""
+    """Concurrent fan-out over run_monitor, results in configuration order."""
 
 
 async def run_protocols(
     protocols: Protocols, context: Context, step: Step
 ) -> Decisions:
-    """tg_collect over run_protocol. Cancels siblings when one returns terminate."""
+    """Concurrent fan-out over run_protocol. Cancels siblings when one returns terminate."""
 
 
 async def run_children(children: Children, context: Context, step: Step) -> Reports:
@@ -655,12 +655,12 @@ class Reports:
 What the runner does for every child:
 
 - Skips children not annotated for this stage. The skip looks like abstention.
-- Names the child from the mapping key, or the registry name. Raises on a duplicate name within a layer.
+- Names the child from the mapping key, or the registry name without its package prefix. The plural forms raise on a duplicate name within a layer; a composition calling the singular forms validates names itself first.
 - Derives the child's `Context` under this layer's path.
 - Records one `SentinelEvent` per participating child, including reports the parent ignores. Ignored observations are the benign distribution a protocol later calibrates against.
-- Applies the failure policy.
+- Applies the failure policy (deferred; the runner currently propagates every exception).
 
-What the plural forms add: fan-out with `tg_collect()`, so children cannot see each other's conclusions, and cancellation of the remaining children when one returns `terminate`.
+What the plural forms add: fan-out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`, so children cannot see each other's conclusions; `run_children` holds the group so a `terminate` decision can cancel the still-running siblings, and records any child it cancels.
 
 Results are split by family because the two aggregate differently. `Decisions.strongest()` applies the precedence in [Combining reports](#combining-reports); `Observations.max_suspicion()` takes the per-dimension max. Identity is attached so a protocol can weight or require agreement across specific children.
 
@@ -749,11 +749,11 @@ These rules describe the concurrent composition, which `concurrent()` implements
 - **Every child configured for a stage runs.** No child is skipped because another already formed a view. `chain()` is the explicit exception.
 - **Every report is recorded,** including the ones that lost.
 - **Aggregate suspicion by max.** Per-dimension max when scores are structured. Weighted combinations and requiring agreement are protocol policy.
-- **Aggregate decisions by strength:** `terminate` > `reject` > `modify` > `continue`. `escalate` does not count. If every child escalates, the result is `continue`. One ordering covers all four stages; it is `Decisions.strongest()`.
-- **`terminate` cancels siblings.** Nothing outranks it and the sample is ending. `run_protocols` and `run_children` do this.
+- **Aggregate decisions by strength:** `terminate` > `reject` > `modify` > `continue`. `escalate` does not count, so `Decisions.strongest()` returns `None` both when no protocol decided and when every one escalated; the protocol tells them apart by whether `decisions` is empty, and maps all-escalate to `continue`. One ordering covers all four stages.
+- **`terminate` cancels siblings.** Nothing outranks it and the sample is ending. `run_protocols` and `run_children` do this, and a cancelled child is recorded as cancelled rather than left indistinguishable from one that abstained.
 - **Child decisions are advisory to the parent.** A parent protocol may honour or override them, and the log records both; see [Transcript](#transcript).
 - **Authoritative decisions are a floor.** A protocol's return may not be weaker than an authoritative child decision. The dispatcher enforces this at every layer.
-- **Run children concurrently.** Sequential dispatch triples latency with three LLM monitors, and it lets a colluding monitor see the others' conclusions. TraceGuard's result (95% safety versus 0%) depends on independence. Use `tg_collect()`, not `asyncio.gather`. The runner does this for you.
+- **Run children concurrently.** Sequential dispatch triples latency with three LLM monitors, and it lets a colluding monitor see the others' conclusions. TraceGuard's result (95% safety versus 0%) depends on independence. The runner fans out on an anyio task group with `tg_collect()`'s semantics; never `asyncio.gather`.
 - **A `modify` with more than one participant is a rejection.** Concurrent children cannot see each other's rewrites, and the others approved the original arguments. `concurrent()` returns `reject` with an explanation naming the modifier. A `modify` that was the only decision is honoured.
 - **Decide on the protocol whether monitors block the agent or run alongside it.** Blocking costs latency. Running alongside means the agent may spend tokens or take a step before a violation is caught. This is a deployment judgement, so the knob belongs on the protocol, not the monitor.
 
@@ -933,7 +933,7 @@ class SentinelEvent(BaseEvent):
         str  # the agent conversation; shared with its ModelEvents and CompactionEvents
     )
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
-    kind: Literal["observation", "decision"]
+    kind: Literal["observation", "decision", "cancelled"]
     suspicion: Suspicion | None
     decision: Action | None
     audit: bool
