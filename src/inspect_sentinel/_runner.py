@@ -37,7 +37,7 @@ from ._step import Step
 if sys.version_info < (3, 11):
     from exceptiongroup import BaseExceptionGroup
 
-_PRECEDENCE: dict[Action, int] = {
+PRECEDENCE: dict[Action, int] = {
     "terminate": 4,
     "reject": 3,
     "modify": 2,
@@ -92,10 +92,10 @@ class Decisions(_ReportSequence[Decision]):
 
     def strongest(self) -> Reported[Decision] | None:
         """The strongest decision by `terminate > reject > modify > continue`; `escalate` does not count; `None` if nobody decided."""
-        ranked = [d for d in self._items if d.report.action in _PRECEDENCE]
+        ranked = [d for d in self._items if d.report.action in PRECEDENCE]
         if not ranked:
             return None
-        return max(ranked, key=lambda d: _PRECEDENCE[d.report.action])
+        return max(ranked, key=lambda d: PRECEDENCE[d.report.action])
 
 
 @dataclass(frozen=True)
