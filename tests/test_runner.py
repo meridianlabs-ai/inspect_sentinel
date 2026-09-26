@@ -401,12 +401,6 @@ async def test_invalid_instance_names_are_rejected(name: str) -> None:
 
 
 @pytest.mark.anyio
-async def test_child_rejects_invalid_names() -> None:
-    with pytest.raises(ValueError, match="non-empty"):
-        runner_context().child("")
-
-
-@pytest.mark.anyio
 async def test_wrong_kind_is_rejected_before_any_child_runs() -> None:
     recorder = ListRecorder()
     with pytest.raises(TypeError, match="monitor"):
@@ -532,3 +526,70 @@ async def test_terminate_keeps_results_collected_before_it() -> None:
             _before(),
         )
     assert [d.name for d in reports.decisions] == ["quick", "stop"]
+
+
+@pytest.mark.anyio
+async def test_sets_are_rejected_because_they_have_no_order() -> None:
+    with pytest.raises(TypeError, match="Mapping or a Sequence"):
+        await run_monitors(cast(Any, {scores()}), runner_context(), _before())
+
+
+@pytest.mark.anyio
+async def test_undecorated_function_in_a_sequence_gets_the_friendly_error() -> None:
+    async def plain(context: Context, step: BeforeToolCall) -> Observation | None:
+        return None
+
+    with pytest.raises(TypeError, match="@monitor or @protocol"):
+        await run_monitors([cast(Any, plain)], runner_context(), _before())
+    with pytest.raises(TypeError, match="@monitor or @protocol"):
+        await run_monitor(cast(Any, plain), runner_context(), _before())
+
+
+@pytest.mark.anyio
+async def test_a_child_exception_keeps_its_own_cause() -> None:
+    @monitor
+    def chained() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            raise RuntimeError("wrapped") from KeyError("inner")
+
+        return check
+
+    with pytest.raises(RuntimeError, match="wrapped") as info:
+        await run_monitors([chained()], runner_context(), _before())
+    assert isinstance(info.value.__cause__, KeyError)
+
+
+class FailingRecorder(ListRecorder):
+    def cancelled(self, context: Context, step: Step, name: str) -> None:
+        raise OSError("transcript unavailable")
+
+
+@pytest.mark.anyio
+async def test_a_recorder_failure_does_not_replace_the_cancellation() -> None:
+    started = anyio.Event()
+
+    @protocol
+    def slow() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            started.set()
+            await anyio.sleep_forever()
+            return None
+
+        return decide
+
+    @protocol
+    def terminates() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await started.wait()
+            return Decision(action="terminate")
+
+        return decide
+
+    with anyio.fail_after(5):
+        decisions = await run_protocols(
+            {"slow": slow(), "stop": terminates()},
+            runner_context(recorder=FailingRecorder()),
+            _before(),
+        )
+    strongest = decisions.strongest()
+    assert strongest is not None and strongest.report.action == "terminate"

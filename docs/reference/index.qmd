@@ -11,7 +11,7 @@ reference: inspect_sentinel
 ### Step
 ### Stage
 
-## Reports
+## Report types
 
 ### Observation
 ### Decision
@@ -41,7 +41,7 @@ reference: inspect_sentinel
 ### Decisions
 ### Reports
 
-## Context
+## Context and host
 
 ### Context
 ### Host

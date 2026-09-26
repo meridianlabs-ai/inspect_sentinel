@@ -50,7 +50,7 @@ class Recorder(Protocol):
         ...
 
     def cancelled(self, context: Context, step: Step, name: str) -> None:
-        """Record that a child was cancelled before it reported, because a sibling decided `terminate`.
+        """Record that a child was cancelled before it reported: a sibling decided `terminate`, or the layer was cancelled from above.
 
         Args:
             context: The child's context; its `path` identifies the instance.
@@ -119,8 +119,18 @@ class RunnerContext(Context):
         Args:
             name: The child's instance name, appended to this layer's `path`. Must be non-empty and must not contain `/`.
         """
-        if name == "" or "/" in name:
-            raise ValueError(
-                f"Instance name {name!r} must be non-empty and must not contain '/'."
-            )
+        check_instance_name(name)
         return replace(self, path=f"{self.path}/{name}" if self.path else name)
+
+
+def check_instance_name(name: str) -> str:
+    """Return `name` if it can be a path segment, else raise `ValueError`.
+
+    Args:
+        name: A candidate instance name.
+    """
+    if name == "" or "/" in name:
+        raise ValueError(
+            f"Instance name {name!r} must be non-empty and must not contain '/'."
+        )
+    return name

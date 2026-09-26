@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from collections.abc import (
     AsyncGenerator,
@@ -16,15 +17,10 @@ from typing import Generic, Literal, TypeVar, cast, overload
 
 import anyio
 from anyio.abc import TaskGroup
-from inspect_ai._util.registry import (
-    is_registry_object,
-    registry_info,
-    registry_unqualified_name,
-)
+from inspect_ai._util.registry import registry_info, registry_unqualified_name
 
-from ._context import Context, RunnerContext
+from ._context import Context, RunnerContext, check_instance_name
 from ._monitor import (
-    STEP_TYPES_ATTR,
     Children,
     ControlProtocol,
     Monitor,
@@ -111,7 +107,8 @@ class Reports:
 
 
 R = TypeVar("R", bound=Report)
-C = TypeVar("C")
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -120,9 +117,13 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
         async with anyio.create_task_group() as tg:
             yield tg
     # Only the first failure surfaces, as in inspect_ai's tg_collect; a second
-    # concurrent failure and any nested group are not flattened or chained.
+    # concurrent failure and any nested group are not flattened or chained. The
+    # group is suppressed from the traceback without touching the child's own
+    # __cause__.
     except ExceptionGroup as ex:
-        raise ex.exceptions[0] from None
+        first = ex.exceptions[0]
+        first.__suppress_context__ = True
+        raise first
 
 
 async def run_monitor(
@@ -166,24 +167,13 @@ async def run_monitors(
         step: The step being examined.
     """
     named = _named(monitors, "monitor")
-    observed: list[tuple[int, Reported[Observation]]] = []
-
-    async def run_one(index: int, name: str, child: Monitor) -> None:
-        result = await run_monitor(child, context, step, name=name)
-        if result is not None:
-            observed.append((index, result))
-
-    async with _task_group() as tg:
-        for index, (name, child) in enumerate(named):
-            tg.start_soon(run_one, index, name, child)
-
-    return Observations(o for _, o in sorted(observed, key=lambda t: t[0]))
+    return (await _run_named(named, context, step)).observations
 
 
 async def run_protocols(
     protocols: Protocols, context: Context, step: Step
 ) -> Decisions:
-    """Run protocols concurrently and collect their decisions in configuration order, cancelling the rest when one returns `terminate`.
+    """Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns `terminate`.
 
     Args:
         protocols: A sequence of protocols, or a mapping of instance names to protocols.
@@ -195,7 +185,9 @@ async def run_protocols(
 
 
 async def run_children(children: Children, context: Context, step: Step) -> Reports:
-    """Run monitors and protocols together in one task group, cancelling the rest when a protocol returns `terminate`.
+    """Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns `terminate`.
+
+    A child cancelled this way is recorded through `Recorder.cancelled`; one that finishes without awaiting is recorded normally.
 
     Args:
         children: A sequence of monitors and protocols, or a mapping of instance names to them.
@@ -253,10 +245,11 @@ async def _run_child(
         raise TypeError(
             "The runner needs the RunnerContext the dispatcher provided; a Context constructed elsewhere cannot record reports."
         )
+    accepted = step_types(child)
     info = registry_info(child)
     if info.type != kind:
         raise TypeError(f"Expected a {kind}, got the {info.type} {info.name!r}.")
-    if not isinstance(step, tuple(step_types(child))):
+    if not isinstance(step, tuple(accepted)):
         return None
     child_name = name if name is not None else registry_unqualified_name(info)
     child_context = context.child(child_name)
@@ -264,7 +257,14 @@ async def _run_child(
     try:
         report = await invoke(child_context, step)
     except anyio.get_cancelled_exc_class():
-        child_context.recorder.cancelled(child_context, step, child_name)
+        # bookkeeping must not replace the cancellation, or a terminate is lost
+        try:
+            child_context.recorder.cancelled(child_context, step, child_name)
+        except Exception:
+            logger.exception(
+                "Recorder failed while recording the cancellation of %r",
+                child_context.path,
+            )
         raise
     if report is None:
         return None
@@ -278,34 +278,34 @@ async def _run_child(
 
 
 def _named(
-    children: Mapping[str, C] | Sequence[C],
+    children: Mapping[str, Monitor | ControlProtocol]
+    | Iterable[Monitor | ControlProtocol],
     expected: Literal["monitor", "protocol"] | None,
-) -> list[tuple[str, C]]:
+) -> list[tuple[str, Monitor | ControlProtocol]]:
+    pairs: list[tuple[str | None, Monitor | ControlProtocol]]
     if isinstance(children, Mapping):
-        named = list(children.items())
-    elif isinstance(children, Iterator):
-        raise TypeError("children must be a Mapping or a Sequence, not an iterator")
+        mapping = cast(Mapping[str, Monitor | ControlProtocol], children)
+        pairs = [(key, child) for key, child in mapping.items()]
+    elif isinstance(children, Sequence):
+        pairs = [(None, child) for child in children]
     else:
-        named = [(registry_unqualified_name(registry_info(c)), c) for c in children]
+        raise TypeError(
+            "children must be a Mapping or a Sequence; a set or an iterator has no configuration order"
+        )
+    named: list[tuple[str, Monitor | ControlProtocol]] = []
     seen: set[str] = set()
-    for name, child in named:
-        if name == "" or "/" in name:
-            raise ValueError(
-                f"Instance name {name!r} must be non-empty and must not contain '/'."
-            )
-        if not hasattr(child, STEP_TYPES_ATTR):
-            if is_registry_object(child):
-                raise TypeError(
-                    f"{registry_info(child).name!r} is the factory, not a configured instance; call it to configure one."
-                )
-            raise TypeError(f"{child!r} is not a configured monitor or protocol.")
-        if expected is not None and registry_info(child).type != expected:
-            raise TypeError(
-                f"Expected a {expected}, got the {registry_info(child).type} {registry_info(child).name!r}."
-            )
+    for given, child in pairs:
+        step_types(child)  # rejects an uncalled factory or an undecorated function
+        info = registry_info(child)
+        if expected is not None and info.type != expected:
+            raise TypeError(f"Expected a {expected}, got the {info.type} {info.name!r}.")
+        name = check_instance_name(
+            given if given is not None else registry_unqualified_name(info)
+        )
         if name in seen:
             raise ValueError(
                 f"Duplicate instance name {name!r} in one layer. Give the children distinct names with a mapping."
             )
         seen.add(name)
+        named.append((name, child))
     return named

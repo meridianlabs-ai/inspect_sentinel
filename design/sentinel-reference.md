@@ -749,7 +749,7 @@ These rules describe the concurrent composition, which `concurrent()` implements
 - **Every child configured for a stage runs.** No child is skipped because another already formed a view. `chain()` is the explicit exception.
 - **Every report is recorded,** including the ones that lost.
 - **Aggregate suspicion by max.** Per-dimension max when scores are structured. Weighted combinations and requiring agreement are protocol policy.
-- **Aggregate decisions by strength:** `terminate` > `reject` > `modify` > `continue`. `escalate` does not count. If every child escalates, the result is `continue`. One ordering covers all four stages; it is `Decisions.strongest()`.
+- **Aggregate decisions by strength:** `terminate` > `reject` > `modify` > `continue`. `escalate` does not count, so `Decisions.strongest()` returns `None` both when no protocol decided and when every one escalated; the protocol tells them apart by whether `decisions` is empty, and maps all-escalate to `continue`. One ordering covers all four stages.
 - **`terminate` cancels siblings.** Nothing outranks it and the sample is ending. `run_protocols` and `run_children` do this, and a cancelled child is recorded as cancelled rather than left indistinguishable from one that abstained.
 - **Child decisions are advisory to the parent.** A parent protocol may honour or override them, and the log records both; see [Transcript](#transcript).
 - **Authoritative decisions are a floor.** A protocol's return may not be weaker than an authoritative child decision. The dispatcher enforces this at every layer.

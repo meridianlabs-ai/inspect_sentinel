@@ -54,3 +54,9 @@ def test_root_store_validates_writes() -> None:
     root = runner_context("")
     with pytest.raises(ValidationError):
         root.store_as(Trajectory).calls = bad
+
+
+@pytest.mark.parametrize("name", ["", "a/b"])
+def test_child_rejects_invalid_names(name: str) -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        runner_context().child(name)
