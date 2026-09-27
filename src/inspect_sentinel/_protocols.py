@@ -4,7 +4,7 @@ import math
 
 from ._context import Context
 from ._monitor import Children, ControlProtocol, Monitors, protocol, step_types
-from ._report import PRECEDENCE, Decision
+from ._report import Decision, deciding
 from ._runner import named_children, run_children, run_monitors
 from ._step import BeforeToolCall, Step
 
@@ -47,14 +47,14 @@ def concurrent(children: Children) -> ControlProtocol:
         strongest = reports.decisions.strongest()
         if strongest is None:
             return Decision.clear()
-        deciding = [d for d in reports.decisions if d.report.action in PRECEDENCE]
-        if strongest.report.action == "modify" and len(deciding) > 1:
+        voters = deciding(reports.decisions)
+        if strongest.report.action == "modify" and len(voters) > 1:
             return Decision(
                 action="reject",
                 authoritative=strongest.report.authoritative,
                 audit=strongest.report.audit,
                 metadata=strongest.report.metadata,
-                explanation=f"{strongest.name} modified the call but {len(deciding) - 1} other protocol(s) also decided",
+                explanation=f"{strongest.name} modified the call but {len(voters) - 1} other protocol(s) also decided",
             )
         return strongest.report
 

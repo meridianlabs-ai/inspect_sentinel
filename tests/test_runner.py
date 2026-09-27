@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import anyio
@@ -6,7 +7,13 @@ from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import ToolCall
 
 from inspect_sentinel._context import Context
-from inspect_sentinel._monitor import ControlProtocol, Monitor, monitor, protocol
+from inspect_sentinel._monitor import (
+    ControlProtocol,
+    Monitor,
+    Protocols,
+    monitor,
+    protocol,
+)
 from inspect_sentinel._report import Action, Decision, Observation, Reported
 from inspect_sentinel._runner import (
     Decisions,
@@ -158,6 +165,42 @@ def overrides(action: Action | None = None) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         await run_protocol(insists(), context, step)
         return Decision(action=action) if action is not None else None
+
+    return decide
+
+
+@protocol
+def insists_when(ready: Callable[[], Awaitable[None]]) -> ControlProtocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        await ready()
+        return Decision(action="reject", authoritative=True)
+
+    return decide
+
+
+@protocol
+def launders(child: ControlProtocol) -> ControlProtocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        reported = await run_protocol(child, context, step)
+        return None if reported is None else Decision(action=reported.report.action)
+
+    return decide
+
+
+@protocol
+def weakens(child: ControlProtocol) -> ControlProtocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        await run_protocol(child, context, step)
+        return Decision.clear()
+
+    return decide
+
+
+@protocol
+def gathers(children: Protocols) -> ControlProtocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        await run_protocols(children, context, step)
+        return Decision.clear()
 
     return decide
 
@@ -780,8 +823,44 @@ async def test_a_layer_at_the_authoritative_floor_stands() -> None:
 
 
 @pytest.mark.anyio
-async def test_one_layers_children_do_not_constrain_the_next() -> None:
-    context = runner_context()
-    await run_protocol(overrides("reject"), context, before_step(), name="first")
-    reported = await run_protocol(decides("continue"), context, before_step())
+async def test_the_root_collects_nothing_so_one_call_does_not_constrain_the_next() -> (
+    None
+):
+    root = runner_context()
+    await run_protocol(overrides("reject"), root, before_step(), name="first")
+    assert root.decisions == []
+    reported = await run_protocol(decides("continue"), root, before_step())
     assert reported is not None and reported.report.action == "continue"
+    assert root.decisions == []
+
+
+@pytest.mark.anyio
+async def test_authority_survives_a_layer_that_drops_the_flag() -> None:
+    with pytest.raises(ValueError, match="authoritative") as info:
+        await run_protocol(
+            weakens(launders(insists())), runner_context(), before_step()
+        )
+    assert "launders" in str(info.value)
+
+
+@pytest.mark.parametrize("waits", ["alice", "bob"])
+@pytest.mark.anyio
+async def test_the_named_culprit_does_not_depend_on_who_finished_first(
+    waits: str,
+) -> None:
+    gate = anyio.Event()
+
+    async def first() -> None:
+        gate.set()
+
+    async def second() -> None:
+        await gate.wait()
+
+    ready = {name: second if name == waits else first for name in ("alice", "bob")}
+    with pytest.raises(ValueError, match="authoritative") as info:
+        await run_protocol(
+            gathers({name: insists_when(fn) for name, fn in ready.items()}),
+            runner_context(),
+            before_step(),
+        )
+    assert "'alice'" in str(info.value)

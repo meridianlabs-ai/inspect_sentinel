@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Annotated, Any, Generic, Literal, TypeAlias, TypeVar
 
@@ -20,6 +21,10 @@ PRECEDENCE: dict[Action, int] = {
     "modify": 2,
     "continue": 1,
 }
+
+
+def deciding(items: Iterable[Reported[Decision]]) -> list[Reported[Decision]]:
+    return [item for item in items if item.report.action in PRECEDENCE]
 
 
 class Observation(BaseModel):

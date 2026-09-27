@@ -151,6 +151,19 @@ async def test_concurrent_prefers_an_authoritative_decision_in_a_tie() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_stronger_decision_over_an_authoritative_child_is_authoritative() -> (
+    None
+):
+    decision = await _run(
+        concurrent({"h": says("reject", True), "t": says("terminate")}),
+        before_step(),
+        ListRecorder(),
+    )
+    assert decision is not None and decision.action == "terminate"
+    assert decision.authoritative is True
+
+
+@pytest.mark.anyio
 async def test_concurrent_keeps_the_modifiers_authority_when_it_rejects_instead() -> (
     None
 ):

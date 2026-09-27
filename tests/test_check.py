@@ -101,6 +101,28 @@ def test_an_advisory_child_imposes_no_floor() -> None:
     )
 
 
+def test_a_modify_must_carry_the_authoritative_childs_replacement() -> None:
+    other = Decision(
+        action="modify",
+        modified=ToolCall(id="c1", function="bash", arguments={"cmd": "rm -rf /"}),
+    )
+    with pytest.raises(ValueError, match="replacement") as info:
+        validate_decision(other, before_step(), [_child("modify", authoritative=True)])
+    assert "human" in str(info.value)
+
+
+def test_passing_the_authoritative_replacement_on_stands() -> None:
+    child = _child("modify", authoritative=True)
+    validate_decision(child.report.model_copy(), before_step(), [child])
+
+
+@pytest.mark.parametrize("action", ["reject", "terminate"])
+def test_a_stronger_action_over_an_authoritative_modify_stands(action: Action) -> None:
+    validate_decision(
+        _decision(action), before_step(), [_child("modify", authoritative=True)]
+    )
+
+
 def test_the_floor_is_the_strongest_authoritative_child() -> None:
     children = [
         _child("continue", authoritative=True, name="a"),

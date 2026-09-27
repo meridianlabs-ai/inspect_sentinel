@@ -670,9 +670,11 @@ When any protocol returns, the dispatcher validates the decision and raises on a
 
 - The action is legal for the stage.
 - `modified` is set if and only if `action == "modify"`, with the right type for the stage.
-- The decision is not weaker than any authoritative decision from a child of this layer.
+- The decision is not weaker than any authoritative decision from a child of this layer, and a `modify` standing on an authoritative `modify` carries that child's replacement.
 
 The check runs at every layer of a nested configuration: the runner performs it when a protocol returns, using the child decisions it recorded under that layer, and the dispatcher's call on the top-level decision is a second line of defence.
+
+A layer whose children include an authoritative decision returns an authoritative decision itself; the runner sets the flag, so the floor survives every layer above.
 
 ### Two compositions
 

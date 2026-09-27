@@ -994,9 +994,11 @@ When any layer returns, the dispatcher validates the decision before anything ac
 
 - **The action is legal for the stage** — no `reject` at `AfterToolCall`, per [One vocabulary across stages](#one-vocabulary-across-stages).
 - **`modified` is set iff `action == "modify"`**, and carries the right type for the stage.
-- **The decision is not weaker than any [authoritative](#authoritative-reports) decision from a child of this layer.** A protocol that turned a human's `reject` into `continue` has a bug. The check reads the layer's own child decisions, which the runner recorded, so it needs no cooperation from the protocol.
+- **The decision is not weaker than any [authoritative](#authoritative-reports) decision from a child of this layer.** A protocol that turned a human's `reject` into `continue` has a bug. The check reads the layer's own child decisions, which the runner recorded, so it needs no cooperation from the protocol. A layer that stands on an authoritative `modify` and modifies too must pass that child's replacement on; a stronger action may of course replace it.
 
 The check runs per layer, so a nested configuration is validated at every level rather than only at the top. The runner performs this check when a protocol returns, using the child decisions it recorded under that layer, so the dispatcher's own call on the top-level decision is a second line of defence rather than the only one.
+
+A layer whose children include an authoritative decision returns an authoritative decision itself; the runner sets the flag, so the floor survives every layer above.
 
 ### Humans in the loop
 

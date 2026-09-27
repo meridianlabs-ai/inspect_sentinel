@@ -32,7 +32,15 @@ from ._monitor import (
     Protocols,
     step_types,
 )
-from ._report import PRECEDENCE, Decision, Observation, R_co, Report, Reported
+from ._report import (
+    PRECEDENCE,
+    Decision,
+    Observation,
+    R_co,
+    Report,
+    Reported,
+    deciding,
+)
 from ._step import Step
 
 if sys.version_info < (3, 11):
@@ -86,7 +94,7 @@ class Decisions(_ReportSequence[Decision]):
 
     def strongest(self) -> Reported[Decision] | None:
         """The strongest decision by `terminate > reject > modify > continue`; an authoritative decision wins a tie; `escalate` does not count; `None` if nobody decided."""
-        ranked = [d for d in self._items if d.report.action in PRECEDENCE]
+        ranked = deciding(self._items)
         if not ranked:
             return None
         return max(
@@ -278,9 +286,18 @@ async def _run_child(
             raise ValueError(f"{kind} {child_name!r}: {ex}") from ex
     if report is None:
         return None
+    if (
+        isinstance(report, Decision)
+        and not report.authoritative
+        and any(
+            child.report.authoritative for child in deciding(child_context.decisions)
+        )
+    ):
+        report = cast("R", report.model_copy(update={"authoritative": True}))
     reported = Reported(name=child_name, path=child_context.path, report=report)
     child_context.recorder.record(child_context, step, reported)
-    if isinstance(report, Decision):
+    # the top layer has no parent to validate it, so nothing collects there
+    if isinstance(report, Decision) and context.path:
         context.decisions.append(cast("Reported[Decision]", reported))
     return reported
 

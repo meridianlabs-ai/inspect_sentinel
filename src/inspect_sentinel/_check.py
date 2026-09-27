@@ -5,10 +5,8 @@ from typing import cast
 
 from inspect_ai.tool import ToolCall
 
-from ._report import PRECEDENCE, Action, Decision, Reported
+from ._report import PRECEDENCE, Decision, Reported, deciding
 from ._step import AfterToolCall, BeforeToolCall, Step
-
-_RANK: dict[Action, int] = {**PRECEDENCE, "escalate": 0}
 
 
 def validate_decision(
@@ -16,7 +14,9 @@ def validate_decision(
 ) -> None:
     """Check a layer's decision before anything acts on it, raising `ValueError` on a protocol bug.
 
-    Three rules no type can express: the action is legal for the stage (`reject` and `modify` are not legal after a tool call); `modified` is set exactly when the action is `modify`, and carries the right type for the stage; and the decision is not weaker than any authoritative decision among the layer's own children. A layer that abstained is subject to the third rule alone: abstaining after an authoritative child decided drops that decision.
+    Three rules no type can express: the action is legal for the stage (`reject` and `modify` are not legal after a tool call); `modified` is set exactly when the action is `modify`, and carries the right type for the stage; and the decision is not weaker than any authoritative decision among the layer's own children, where a `modify` that stands on an authoritative `modify` must carry that child's replacement. A layer that abstained is subject to the third rule alone: abstaining after an authoritative child decided drops that decision.
+
+    A layer whose children include an authoritative decision returns an authoritative decision itself; the runner sets the flag, so the floor survives every layer above.
 
     Args:
         decision: The decision the layer returned, or `None` if it abstained.
@@ -25,26 +25,31 @@ def validate_decision(
     """
     if decision is not None:
         _check_shape(decision, step)
-    floor = max(
-        (
-            _RANK[child.report.action]
-            for child in children
-            if child.report.authoritative and child.report.action != "escalate"
-        ),
-        default=None,
+    authoritative = [
+        child for child in deciding(children) if child.report.authoritative
+    ]
+    if not authoritative:
+        return
+    floor = max(PRECEDENCE[child.report.action] for child in authoritative)
+    # the alphabetically first child at the floor, so concurrent children
+    # finishing in either order name the same culprit
+    binding = min(
+        (child for child in authoritative if PRECEDENCE[child.report.action] == floor),
+        key=lambda child: child.name,
     )
-    if (
-        floor is not None
-        and (0 if decision is None else _RANK[decision.action]) < floor
-    ):
-        binding = next(
-            child
-            for child in children
-            if child.report.authoritative and _RANK[child.report.action] == floor
-        )
+    if (0 if decision is None else PRECEDENCE.get(decision.action, 0)) < floor:
         returned = "Abstaining" if decision is None else f"Decision {decision.action!r}"
         raise ValueError(
             f"{returned} is weaker than the authoritative {binding.report.action!r} from {binding.name!r}."
+        )
+    if (
+        binding.report.action == "modify"
+        and decision is not None
+        and decision.action == "modify"
+        and decision.modified != binding.report.modified
+    ):
+        raise ValueError(
+            f"A modify standing on the authoritative modify from {binding.name!r} must carry that replacement."
         )
 
 
