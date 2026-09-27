@@ -170,10 +170,12 @@ def overrides(action: Action | None = None) -> ControlProtocol:
 
 
 @protocol
-def insists_when(ready: Callable[[], Awaitable[None]]) -> ControlProtocol:
+def insists_when(
+    ready: Callable[[], Awaitable[None]], explanation: str
+) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         await ready()
-        return Decision(action="reject", binding=True)
+        return Decision(action="reject", binding=True, explanation=explanation)
 
     return decide
 
@@ -808,46 +810,61 @@ async def test_an_illegal_decision_fails_the_layer_that_returned_it() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("action", [None, "continue"])
-async def test_a_layer_may_not_weaken_its_binding_child(
+async def test_a_layer_below_its_binding_child_is_raised_to_it_and_recorded(
     action: Action | None,
 ) -> None:
-    with pytest.raises(ValueError, match="binding") as info:
-        await run_protocol(overrides(action), runner_context(), before_step())
-    assert "insists" in str(info.value)
+    recorder = ListRecorder()
+    reported = await run_protocol(
+        overrides(action), runner_context(recorder=recorder), before_step()
+    )
+    assert reported is not None
+    assert reported.report.action == "reject" and reported.report.binding is True
+    assert reported.overrode == (Decision(action=action) if action else None)
+    assert recorder.records[-1].reported == reported
 
 
 @pytest.mark.anyio
 async def test_a_layer_at_the_binding_floor_stands() -> None:
     reported = await run_protocol(overrides("reject"), runner_context(), before_step())
     assert reported is not None and reported.report.action == "reject"
+    assert reported.report.binding is False and reported.overrode is None
 
 
 @pytest.mark.anyio
-async def test_the_root_collects_nothing_so_one_call_does_not_constrain_the_next() -> (
+async def test_the_root_collects_within_a_call_and_a_fresh_context_starts_empty() -> (
     None
 ):
     root = runner_context()
     await run_protocol(overrides("reject"), root, before_step(), name="first")
-    assert root.decisions == []
     reported = await run_protocol(decides("continue"), root, before_step())
     assert reported is not None and reported.report.action == "continue"
-    assert root.decisions == []
+    assert [d.name for d in root.decisions] == ["first", "decides"]
+    assert runner_context().decisions == []
 
 
 @pytest.mark.anyio
-async def test_authority_survives_a_layer_that_drops_the_flag() -> None:
-    with pytest.raises(ValueError, match="binding") as info:
-        await run_protocol(
-            weakens(launders(insists())), runner_context(), before_step()
-        )
-    assert "launders" in str(info.value)
+async def test_a_layer_that_weakens_a_binding_child_is_recorded_as_overridden() -> None:
+    recorder = ListRecorder()
+    reported = await run_protocol(
+        weakens(insists()), runner_context(recorder=recorder), before_step()
+    )
+    assert reported is not None and reported.report.action == "reject"
+    assert reported.overrode is not None and reported.overrode.action == "continue"
+    assert recorder.records[-1].reported.overrode == reported.overrode
+
+
+@pytest.mark.anyio
+async def test_a_layer_that_drops_the_flag_frees_the_layer_above() -> None:
+    reported = await run_protocol(
+        weakens(launders(insists())), runner_context(), before_step()
+    )
+    assert reported is not None and reported.report.action == "continue"
+    assert reported.overrode is None
 
 
 @pytest.mark.parametrize("waits", ["alice", "bob"])
 @pytest.mark.anyio
-async def test_the_named_culprit_does_not_depend_on_who_finished_first(
-    waits: str,
-) -> None:
+async def test_the_floor_does_not_depend_on_who_finished_first(waits: str) -> None:
     gate = anyio.Event()
 
     async def first() -> None:
@@ -857,10 +874,10 @@ async def test_the_named_culprit_does_not_depend_on_who_finished_first(
         await gate.wait()
 
     ready = {name: second if name == waits else first for name in ("alice", "bob")}
-    with pytest.raises(ValueError, match="binding") as info:
-        await run_protocol(
-            gathers({name: insists_when(fn) for name, fn in ready.items()}),
-            runner_context(),
-            before_step(),
-        )
-    assert "'alice'" in str(info.value)
+    reported = await run_protocol(
+        gathers({name: insists_when(fn, name) for name, fn in ready.items()}),
+        runner_context(),
+        before_step(),
+    )
+    assert reported is not None
+    assert reported.report.explanation == "alice (overrides continue)"

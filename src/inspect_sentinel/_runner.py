@@ -22,7 +22,7 @@ from inspect_ai._util.registry import (
     registry_unqualified_name,
 )
 
-from ._check import validate_decision
+from ._check import apply_binding_floor, check_decision_shape
 from ._context import Context, RunnerContext, check_instance_name
 from ._monitor import (
     Children,
@@ -223,12 +223,20 @@ async def _run_named(
         cancel: Callable[[], None],
     ) -> None:
         if registry_info(child).type == "monitor":
-            observed = await run_monitor(cast(Monitor, child), context, step, name=name)
+            observed = await _run_child(
+                cast(Monitor, child), "monitor", Observation, context, step, name
+            )
             if observed is not None:
                 observations.append((index, observed))
         else:
-            decided = await run_protocol(
-                cast(ControlProtocol, child), context, step, name=name
+            decided = await _run_child(
+                cast(ControlProtocol, child),
+                "protocol",
+                Decision,
+                context,
+                step,
+                name,
+                collect=False,
             )
             if decided is not None:
                 decisions.append((index, decided))
@@ -239,9 +247,14 @@ async def _run_named(
         for index, (name, child) in enumerate(named):
             tg.start_soon(run_one, index, name, child, tg.cancel_scope.cancel)
 
+    ordered = Decisions(d for _, d in sorted(decisions, key=lambda t: t[0]))
+    # collected in configuration order, so the binding floor's tie-break does
+    # not depend on which child finished first
+    if isinstance(context, RunnerContext):
+        context.decisions.extend(ordered)
     return Reports(
         Observations(o for _, o in sorted(observations, key=lambda t: t[0])),
-        Decisions(d for _, d in sorted(decisions, key=lambda t: t[0])),
+        ordered,
     )
 
 
@@ -252,6 +265,8 @@ async def _run_child(
     context: Context,
     step: Step,
     name: str | None,
+    *,
+    collect: bool = True,
 ) -> Reported[R] | None:
     if not isinstance(context, RunnerContext):
         raise TypeError(
@@ -277,25 +292,23 @@ async def _run_child(
         raise TypeError(
             f"{kind} {child_name!r} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
         )
+    overrode: Decision | None = None
     if kind == "protocol":
-        try:
-            validate_decision(
-                cast("Decision | None", report), step, child_context.decisions
-            )
-        except ValueError as ex:
-            raise ValueError(f"{kind} {child_name!r}: {ex}") from ex
+        decision = cast("Decision | None", report)
+        if decision is not None:
+            try:
+                check_decision_shape(decision, step)
+            except ValueError as ex:
+                raise ValueError(f"{kind} {child_name!r}: {ex}") from ex
+        decision, overrode = apply_binding_floor(decision, child_context.decisions)
+        report = cast("R | None", decision)
     if report is None:
         return None
-    if (
-        isinstance(report, Decision)
-        and not report.binding
-        and any(child.report.binding for child in deciding(child_context.decisions))
-    ):
-        report = cast("R", report.model_copy(update={"binding": True}))
-    reported = Reported(name=child_name, path=child_context.path, report=report)
+    reported = Reported(
+        name=child_name, path=child_context.path, report=report, overrode=overrode
+    )
     child_context.recorder.record(child_context, step, reported)
-    # the top layer has no parent to validate it, so nothing collects there
-    if isinstance(report, Decision) and context.path:
+    if collect and isinstance(report, Decision):
         context.decisions.append(cast("Reported[Decision]", reported))
     return reported
 

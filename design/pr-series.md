@@ -27,7 +27,7 @@ src/inspect_sentinel/
   _monitor.py       Monitor, ControlProtocol, Monitors, Protocols, Children, @monitor, @protocol
   _runner.py        Observations, Decisions, run_monitor, run_protocol,
                     run_monitors, run_protocols, run_children
-  _check.py         validate_decision
+  _check.py         check_decision_shape, apply_binding_floor
   _protocols.py     observe, concurrent, threshold
   _compile.py       compile_sentinel
   _integration.py   dispatcher-facing re-exports
@@ -99,6 +99,7 @@ class Reported(Generic[R_co]):
     name: str
     path: str
     report: R_co
+    overrode: Decision | None = None
 ```
 
 ```python
@@ -157,12 +158,12 @@ Implemented: the decorators store the accepted payload classes on each instance 
 - `observe`: records, returns `None`.
 - `concurrent`: `run_children`; `strongest()`; a `modify` with more than one deciding child becomes `reject` naming the modifier.
 - `threshold(monitors, reject_at, terminate_at=None)`: as written in `sentinel.md`.
-- `validate_decision(decision, stage, children)`: action legal for stage (`reject` and `modify` are `BeforeToolCall` only); `modified` set iff `action == "modify"`; not weaker than any binding child. Raises.
+- `check_decision_shape(decision, step)` raises on the deterministic protocol bugs: an action illegal for the stage (`reject` and `modify` are `BeforeToolCall` only), or `modified` not set exactly when `action == "modify"`. `apply_binding_floor(decision, children)` never raises: a decision below the strongest binding child's (or an abstention, or a `modify` with a different replacement) is replaced by that child's decision and recorded on `Reported.overrode`, and disagreeing binding `modify`s resolve to a binding `reject`.
 - `compile_sentinel(spec)`: monitor or monitors-only collection to `observe`; anything else containing a protocol to `concurrent`; a lone protocol returned as it is, which is what `concurrent` of one means.
 
-Tests: each protocol's rules above; every row of the compile table; each of the three boundary-check conditions raising.
+Tests: each protocol's rules above; every row of the compile table; each shape rule raising; each binding-floor case resolving and recording.
 
-Implemented: `validate_decision(decision, step, children)` takes the `Step` rather than a stage string, so the payload type stays the stage identity, and raises `ValueError` on each of the three rules; the runner calls it as each protocol returns, against the child decisions it recorded under that layer, so every level of a nested configuration is validated and the error names the leaf, leaving the dispatcher's call on the top-level decision as a second line of defence; a protocol that abstains is checked against the authority rule too, since abstaining after a binding child decided drops that decision; a layer whose children include a binding decision returns a binding decision itself, the runner setting the flag so the floor survives every layer above, and a layer that stands on a binding `modify` with a `modify` of its own must carry that child's replacement; the root context collects no decisions, since nothing inside the runner validates the top layer; `compile_sentinel` reuses the runner's `named_children` so duplicate names and uncalled factories fail at configuration time, classifies a single instance with `is_registry_object` so a set, an iterator or a string gets `named_children`'s message rather than being wrapped in a list, and warns through `logging` for a monitors-only configuration, naming each instance as it is configured, so an explicit `observe()` is how to say recording is intended; the three shipped protocols register as `inspect_sentinel/<name>` through the `inspect_ai` entry point in `pyproject.toml`; inspect_ai imports `RunnerContext`, `Recorder`, `check_instance_name`, `step_types`, `validate_decision`, `compile_sentinel` and `SentinelSpec` from `inspect_sentinel._integration` only. `threshold` is `BeforeToolCall`-only, as designed, because `reject` is not legal after a tool call.
+Implemented: both checks take the `Step` rather than a stage string, so the payload type stays the stage identity; the runner applies them as each protocol returns, against the child decisions it recorded under that layer, so every level of a nested configuration is resolved and a shape error names the leaf; a layer's children are collected in configuration order for a concurrent group, so the floor's tie-break does not depend on which child finished first; nothing is inherited, so a protocol that builds a new decision from a binding child's decides for itself whether it is binding; the root context collects too, and the dispatcher builds a fresh one per step; `compile_sentinel` reuses the runner's `named_children` so duplicate names and uncalled factories fail at configuration time, classifies a single instance with `is_registry_object` so a set, an iterator or a string gets `named_children`'s message rather than being wrapped in a list, and warns through `logging` for a monitors-only configuration, naming each instance as it is configured, so an explicit `observe()` is how to say recording is intended; the three shipped protocols register as `inspect_sentinel/<name>` through the `inspect_ai` entry point in `pyproject.toml`; inspect_ai imports `RunnerContext`, `Recorder`, `check_instance_name`, `step_types`, `check_decision_shape`, `apply_binding_floor`, `compile_sentinel` and `SentinelSpec` from `inspect_sentinel._integration` only. `threshold` is `BeforeToolCall`-only, as designed, because `reject` is not legal after a tool call.
 
 ## PR 5: multi-function factories
 

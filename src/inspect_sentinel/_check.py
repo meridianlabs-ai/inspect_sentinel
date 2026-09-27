@@ -9,49 +9,15 @@ from ._report import PRECEDENCE, Decision, Reported, deciding
 from ._step import AfterToolCall, BeforeToolCall, Step
 
 
-def validate_decision(
-    decision: Decision | None, step: Step, children: Sequence[Reported[Decision]] = ()
-) -> None:
-    """Check a layer's decision before anything acts on it, raising `ValueError` on a protocol bug.
+def check_decision_shape(decision: Decision, step: Step) -> None:
+    """Check a decision for the deterministic protocol bugs no type can express, raising `ValueError` on one.
 
-    Three rules no type can express: the action is legal for the stage (`reject` and `modify` are not legal after a tool call); `modified` is set exactly when the action is `modify`, and carries the right type for the stage; and the decision is not weaker than any binding decision among the layer's own children, where a `modify` that stands on a binding `modify` must carry that child's replacement. A layer that abstained is subject to the third rule alone: abstaining after a binding child decided drops that decision.
-
-    A layer whose children include a binding decision returns a binding decision itself; the runner sets the flag, so the floor survives every layer above.
+    The action must be legal for the stage (`reject` and `modify` are not legal after a tool call), and `modified` must be set exactly when the action is `modify`, carrying a `ToolCall` before a tool call.
 
     Args:
-        decision: The decision the layer returned, or `None` if it abstained.
+        decision: The decision a layer returned.
         step: The step it decided about.
-        children: The layer's recorded child decisions, as the dispatcher collected them.
     """
-    if decision is not None:
-        _check_shape(decision, step)
-    binding = [child for child in deciding(children) if child.report.binding]
-    if not binding:
-        return
-    floor = max(PRECEDENCE[child.report.action] for child in binding)
-    # the alphabetically first child at the floor, so concurrent children
-    # finishing in either order name the same culprit
-    culprit = min(
-        (child for child in binding if PRECEDENCE[child.report.action] == floor),
-        key=lambda child: child.name,
-    )
-    if (0 if decision is None else PRECEDENCE.get(decision.action, 0)) < floor:
-        returned = "Abstaining" if decision is None else f"Decision {decision.action!r}"
-        raise ValueError(
-            f"{returned} is weaker than the binding {culprit.report.action!r} from {culprit.name!r}."
-        )
-    if (
-        culprit.report.action == "modify"
-        and decision is not None
-        and decision.action == "modify"
-        and decision.modified != culprit.report.modified
-    ):
-        raise ValueError(
-            f"A modify standing on the binding modify from {culprit.name!r} must carry that replacement."
-        )
-
-
-def _check_shape(decision: Decision, step: Step) -> None:
     if isinstance(step, AfterToolCall) and decision.action in ("reject", "modify"):
         raise ValueError(
             f"A decision after a tool call cannot {decision.action}; the call has already run."
@@ -67,3 +33,49 @@ def _check_shape(decision: Decision, step: Step) -> None:
             raise ValueError(
                 f"A modify before a tool call must carry a ToolCall, not {type(decision.modified).__name__}."
             )
+
+
+def apply_binding_floor(
+    decision: Decision | None, children: Sequence[Reported[Decision]]
+) -> tuple[Decision | None, Decision | None]:
+    """Resolve a layer's decision against the strongest binding decision among its children, returning `(resolved, overrode)`.
+
+    A decision that abstains, ranks below that floor, or modifies differently from a binding `modify` at it is replaced by the floor child's decision, and returned as `overrode`; binding `modify` decisions at the floor that disagree make the floor a binding `reject`. Never raises.
+
+    Args:
+        decision: The decision the layer returned, or `None` if it abstained.
+        children: The layer's recorded child decisions, in the order they were collected.
+    """
+    binding = [child for child in deciding(children) if child.report.binding]
+    if not binding:
+        return decision, None
+    rank = max(PRECEDENCE[child.report.action] for child in binding)
+    at_floor = [child for child in binding if PRECEDENCE[child.report.action] == rank]
+    floor = at_floor[0].report
+    if floor.action == "modify" and any(
+        child.report.modified != floor.modified for child in at_floor
+    ):
+        floor = Decision(
+            action="reject",
+            binding=True,
+            explanation="binding replacements disagree: "
+            + ", ".join(child.name for child in at_floor),
+        )
+    below = (
+        decision is None
+        or PRECEDENCE.get(decision.action, 0) < PRECEDENCE[floor.action]
+        or (
+            decision.action == "modify"
+            and floor.action == "modify"
+            and decision.modified != floor.modified
+        )
+    )
+    if not below:
+        return decision, None
+    overridden = decision.action if decision is not None else "abstention"
+    resolved = floor.model_copy(
+        update={
+            "explanation": f"{floor.explanation or floor.action} (overrides {overridden})"
+        }
+    )
+    return resolved, decision

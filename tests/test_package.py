@@ -58,7 +58,8 @@ def test_integration_names_are_not_exported() -> None:
         "RunnerContext",
         "Recorder",
         "step_types",
-        "validate_decision",
+        "apply_binding_floor",
+        "check_decision_shape",
         "compile_sentinel",
         "SentinelSpec",
         "check_instance_name",
@@ -76,5 +77,6 @@ def test_integration_module_exports_the_dispatcher_surface() -> None:
         "check_instance_name",
         "compile_sentinel",
         "step_types",
-        "validate_decision",
+        "apply_binding_floor",
+        "check_decision_shape",
     }

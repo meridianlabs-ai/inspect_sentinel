@@ -60,7 +60,7 @@ class Decision(BaseModel):
     """Request that oversight budget be spent on this step."""
 
     binding: bool = Field(default=False)
-    """A decision no protocol may weaken. Set by a human decider."""
+    """A decision no layer above may weaken. The runner clamps a weaker decision up to it and records the override. Set by human() by default; a protocol may set it on its own decision."""
 
     modified: ToolCall | None = Field(default=None)
     """Replacement for the step's subject, for a `modify` decision."""
@@ -110,3 +110,6 @@ class Reported(Generic[R_co]):
 
     report: R_co
     """The observation or decision this instance produced."""
+
+    overrode: Decision | None = None
+    """The protocol's own decision when the binding floor replaced it; None otherwise."""

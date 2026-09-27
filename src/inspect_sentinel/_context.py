@@ -119,7 +119,7 @@ class RunnerContext(Context):
     decisions: list[Reported[Decision]] = field(
         default_factory=list[Reported[Decision]]
     )
-    """Decisions recorded by this layer's children, for the boundary check. Runner-owned; empty at the root, since nothing validates the top layer from inside the runner."""
+    """Decisions recorded by this layer's children, for the binding floor. Runner-owned; the dispatcher builds a fresh RunnerContext per step, so nothing accumulates across steps."""
 
     def __post_init__(self) -> None:
         # a runtime check for hosts that are not type-checked against Recorder

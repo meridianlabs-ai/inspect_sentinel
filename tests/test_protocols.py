@@ -9,13 +9,14 @@ from inspect_sentinel._context import Context
 from inspect_sentinel._monitor import (
     ControlProtocol,
     Monitor,
+    Protocols,
     monitor,
     protocol,
     step_types,
 )
 from inspect_sentinel._protocols import concurrent, observe, threshold
 from inspect_sentinel._report import Action, Decision, Observation, Suspicion
-from inspect_sentinel._runner import run_protocol
+from inspect_sentinel._runner import run_protocol, run_protocols
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
@@ -151,14 +152,41 @@ async def test_concurrent_prefers_a_binding_decision_in_a_tie() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_stronger_decision_over_a_binding_child_is_binding() -> None:
+async def test_concurrent_does_not_pass_a_childs_binding_flag_to_a_stronger_decision() -> (
+    None
+):
     decision = await _run(
-        concurrent({"h": says("reject", True), "t": says("terminate")}),
+        concurrent({"h": says("continue", True), "s": says("reject")}),
         before_step(),
         ListRecorder(),
     )
-    assert decision is not None and decision.action == "terminate"
-    assert decision.binding is True
+    assert decision is not None and decision.action == "reject"
+    assert decision.binding is False
+
+
+@protocol
+def majority(children: Protocols) -> ControlProtocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        decisions = await run_protocols(children, context, step)
+        actions: list[Action] = [d.report.action for d in decisions]
+        return Decision(action=max(set(actions), key=actions.count))
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_protocol_outvoting_a_binding_child_is_overridden_and_recorded() -> (
+    None
+):
+    recorder = ListRecorder()
+    reported = await run_protocol(
+        majority({"h": says("reject", True), "a": says(), "b": says()}),
+        runner_context(recorder=recorder),
+        before_step(),
+    )
+    assert reported is not None and reported.report.action == "reject"
+    assert reported.overrode == Decision.clear()
+    assert recorder.records[-1].reported == reported
 
 
 @pytest.mark.anyio

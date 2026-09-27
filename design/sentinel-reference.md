@@ -294,7 +294,7 @@ class Decision(BaseModel):
     """Request that human review be spent on this."""
 
     binding: bool = Field(default=False)
-    """A decision no parent protocol may weaken. Set by human()."""
+    """A decision no layer above may weaken. The runner clamps a weaker decision up to it and records the override. Set by human() by default; a protocol may set it on its own decision."""
 
     modified: ToolCall | ChatMessageAssistant | BeforeGenerate | None = Field(
         default=None
@@ -329,7 +329,7 @@ Rules:
 - **A detector reports `1.0`.** `Observation.flag(explanation)` is a monitor's way of saying "this is definitely it" without holding a threshold; `threshold(detector(), reject_at=1.0)` acts on it.
 - **Set `audit=True` to request human review.** It is independent of the action: you can continue-and-audit or reject-and-audit. A parent protocol owning a budget may decline.
 - **Write `explanation` for the operator.** The model does not see it. If the agent learns why it was flagged, it can learn to avoid being flagged. A separate field, not yet named, carries text the model is meant to read. That field also lets a protocol continue while giving the model information.
-- **Set `binding=True` only for a decision a person made.** A parent protocol may not return anything weaker than a binding child decision; the dispatcher raises if it does. `human()` sets it. The framework cannot verify a human was involved, so the claim is visible in the log and in code review, as `portable=False` is.
+- **Set `binding=True` only for a decision a person made.** A parent protocol's return weaker than a binding child decision is replaced by the child's, and the override is recorded. `human()` sets it. The framework cannot verify a human was involved, so the claim is visible in the log and in code review, as `portable=False` is.
 
 Named constructors for the common cases:
 
@@ -545,6 +545,17 @@ def threshold(
     reject_at: float,
     terminate_at: float | None = None,
 ) -> ControlProtocol:
+    named = named_children(monitors, "monitor")
+    if not math.isfinite(reject_at) or (
+        terminate_at is not None and not math.isfinite(terminate_at)
+    ):
+        raise ValueError("threshold's constants must be finite")
+    if terminate_at is not None and terminate_at < reject_at:
+        raise ValueError("threshold's terminate_at is below its reject_at")
+    for name, child in named:
+        if BeforeToolCall not in step_types(child):
+            raise TypeError(f"threshold acts before tool calls; {name!r} never watches that stage")
+
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         score = observations.max_suspicion()
@@ -559,7 +570,7 @@ def threshold(
     return decide
 ```
 
-It holds the constants a monitor must not, reads its children's scores through the runner, and returns a decision.
+It holds the constants a monitor must not, validates them and its children when it is configured, reads its children's scores through the runner, and returns a decision.
 
 ```python
 ControlProtocol: TypeAlias = (
@@ -589,7 +600,7 @@ Rules:
 - **Return `Decision | None`.** A protocol's job is to produce a decision.
 - **Invoke children only through the runner.** `run_monitors()` and `run_protocols()` for concurrent fan-out over one family, `run_children()` for a mixed group, `run_monitor()` and `run_protocol()` for one child at a time. See [The runner](#the-runner). A child called any other way produces no event, and a protocol that decided with no child reports in the transcript is visible in the log.
 - **Transform `step` before the call, not after.** Paraphrasing, minification, and honeypot injection are transforms on the input to the runner.
-- **Never return something weaker than a binding child decision.** The dispatcher raises if you do. See [The boundary check](#the-boundary-check).
+- **Do not expect to weaken a binding child decision.** A weaker return, or an abstention, is replaced by the child's decision, and yours is recorded as `overrode`. See [The boundary check](#the-boundary-check).
 - **Protocols can nest.** A budget-owning protocol can wrap a paraphrasing protocol that wraps monitors. The rule for two nested budget owners is open; outermost wins is the likely answer.
 - **Everything else is ordinary Python** over the runner's results plus `context.store_as`. Thresholds, budget arithmetic, deferral to a trusted model via `context.host.generate()`, and aggregation need no framework support.
 
@@ -636,6 +647,7 @@ class Reported(Generic[R]):
     name: str  # instance name: mapping key, or registry name
     path: str  # "attempt/internet_attempt"
     report: R
+    overrode: Decision | None = None  # the protocol's own decision when the binding floor replaced it
 
 
 class Observations(Sequence[Reported[Observation]]):
@@ -666,15 +678,16 @@ Results are split by family because the two aggregate differently. `Decisions.st
 
 ### The boundary check
 
-When any protocol returns, the dispatcher validates the decision and raises on a violation. Each is a bug in a protocol, not agent input.
+When any protocol returns, the runner applies two mechanisms before anything acts on the decision.
+
+Shape checks raise. Each is a deterministic bug in a protocol, not agent input.
 
 - The action is legal for the stage.
 - `modified` is set if and only if `action == "modify"`, with the right type for the stage.
-- The decision is not weaker than any binding decision from a child of this layer, and a `modify` standing on a binding `modify` carries that child's replacement.
 
-The check runs at every layer of a nested configuration: the runner performs it when a protocol returns, using the child decisions it recorded under that layer, and the dispatcher's call on the top-level decision is a second line of defence.
+The binding floor is applied and recorded. A decision weaker than a binding decision from a child of this layer, or an abstention, is replaced by that child's decision, and the protocol's own decision is kept on the record as `overrode`. A `modify` carrying a different replacement from a binding `modify` counts as weaker, and two binding `modify` decisions that disagree resolve to a binding `reject`. It is a resolution rather than an error because protocols are often models, so whether a decision falls below the floor depends on what a model said on this call.
 
-A layer whose children include a binding decision returns a binding decision itself; the runner sets the flag, so the floor survives every layer above.
+Both run at every layer of a nested configuration, using the child decisions the runner recorded under that layer. Nothing is inherited: `concurrent` and `chain` forward the winning child's flag, a protocol that combines a binding child into a new decision decides for itself whether to mark it binding, and `human(binding=False)` makes a person one vote among several.
 
 ### Two compositions
 
@@ -740,7 +753,7 @@ mypy and pyright check the structural claims before the runtime pass does. `@sco
 | `threshold` takes monitors; `chain` takes children | the parameter types; `threshold(human())` is a type error because a rule has no score |
 | The declared kind matches the body | `return Decision(...)` in a function annotated `-> Observation \| None` is a type error at that line |
 
-Runtime only: per-stage action legality, the authority rule, whether a body went through the runner, YAML configuration, and that a monitor annotates exactly one payload type (a `Step`-accepting function is a valid `Monitor` by contravariance; `@monitor` rejects it when the factory is called).
+Runtime only: per-stage action legality, the binding floor, whether a body went through the runner, YAML configuration, and that a monitor annotates exactly one payload type (a `Step`-accepting function is a valid `Monitor` by contravariance; `@monitor` rejects it when the factory is called).
 
 ### Combining reports
 
@@ -754,7 +767,7 @@ These rules describe the concurrent composition, which `concurrent()` implements
 - **Aggregate decisions by strength:** `terminate` > `reject` > `modify` > `continue`. `escalate` does not count, so `Decisions.strongest()` returns `None` both when no protocol decided and when every one escalated; the protocol tells them apart by whether `decisions` is empty, and maps all-escalate to `continue`. One ordering covers all four stages.
 - **`terminate` cancels siblings.** Nothing outranks it and the sample is ending. `run_protocols` and `run_children` do this, and a cancelled child is recorded as cancelled rather than left indistinguishable from one that abstained.
 - **Child decisions are advisory to the parent.** A parent protocol may honour or override them, and the log records both; see [Transcript](#transcript).
-- **Binding decisions are a floor.** A protocol's return may not be weaker than a binding child decision. The dispatcher enforces this at every layer.
+- **Binding decisions are a floor.** A protocol's return weaker than a binding child decision is replaced by the child's, at every layer, and the protocol's own decision is recorded as `overrode`.
 - **Run children concurrently.** Sequential dispatch triples latency with three LLM monitors, and it lets a colluding monitor see the others' conclusions. TraceGuard's result (95% safety versus 0%) depends on independence. The runner fans out on an anyio task group with `tg_collect()`'s semantics; never `asyncio.gather`.
 - **A `modify` with more than one participant is a rejection.** Concurrent children cannot see each other's rewrites, and the others approved the original arguments. `concurrent()` returns `reject` with an explanation naming the modifier. A `modify` that was the only decision is honoured.
 - **Decide on the protocol whether monitors block the agent or run alongside it.** Blocking costs latency. Running alongside means the agent may spend tokens or take a step before a violation is caught. This is a deployment judgement, so the knob belongs on the protocol, not the monitor.
@@ -940,6 +953,7 @@ class SentinelEvent(BaseEvent):
     decision: Action | None
     audit: bool
     binding: bool
+    overrode: Action | None  # the protocol's own action when the binding floor replaced it
     outcome: Action | None
     explanation: str | None
     metadata: dict[str, Any] | None
@@ -1143,11 +1157,11 @@ A chain hands earlier escalations to the next link so a human sees who is asking
 
 ### Why `binding` is a field
 
-"A protocol may never override a human" was a prose rule. As a field on the report, the dispatcher can enforce it at every layer boundary by reading the child reports the runner recorded, with no cooperation from the protocol. It is on the report rather than the monitor because the combiner reads reports, and because the log should show which decisions were a person's.
+"A protocol may never override a human" was a prose rule. As a field on the report, the runner can apply it at every layer boundary by reading the child reports it recorded, with no cooperation from the protocol, and record where it overrode a protocol. It is on the report rather than the monitor because the combiner reads reports, and because the log should show which decisions were a person's.
 
 ### Why the top level always compiles to a protocol
 
-Without it, a bare list combined decisions by severity but no layer owned the outcome, so nothing recorded it. Compiling to `concurrent()` gives the summary event #5423 asked for and gives the `modify` rule and the authority check one place to live. Compiling bare monitors to `observe()` makes recording-only an explicit configuration rather than a silent one.
+Without it, a bare list combined decisions by severity but no layer owned the outcome, so nothing recorded it. Compiling to `concurrent()` gives the summary event #5423 asked for and gives the `modify` rule and the binding floor one place to live. Compiling bare monitors to `observe()` makes recording-only an explicit configuration rather than a silent one.
 
 ### Why the protocol calls the monitors
 
