@@ -19,7 +19,8 @@ def observe(monitors: Monitors) -> ControlProtocol:
         monitors: The monitors to run at every step they watch.
     """
     # so a misconfiguration fails here rather than at the first step
-    named_children(monitors, "monitor")
+    if not named_children(monitors, "monitor"):
+        raise ValueError("observe needs at least one child.")
 
     async def run(context: Context, step: Step) -> Decision | None:
         await run_monitors(monitors, context, step)
@@ -38,7 +39,8 @@ def concurrent(children: Children) -> ControlProtocol:
         children: Monitors and protocols to run together.
     """
     # so a misconfiguration fails here rather than at the first step
-    named_children(children, None)
+    if not named_children(children, None):
+        raise ValueError("concurrent needs at least one child.")
 
     async def run(context: Context, step: Step) -> Decision | None:
         reports = await run_children(children, context, step)
@@ -75,6 +77,8 @@ def threshold(
         terminate_at: Suspicion at or above which the sample is ended; `None` never terminates. Must not be below `reject_at`.
     """
     named = named_children(monitors, "monitor")
+    if not named:
+        raise ValueError("threshold needs at least one child.")
     if not math.isfinite(reject_at) or (
         terminate_at is not None and not math.isfinite(terminate_at)
     ):

@@ -1,10 +1,11 @@
 import logging
+from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
 from inspect_ai._util.registry import registry_info
 
-from inspect_sentinel._compile import compile_sentinel
+from inspect_sentinel._compile import SentinelSpec, compile_sentinel
 from inspect_sentinel._context import Context
 from inspect_sentinel._monitor import ControlProtocol, Monitor, monitor, protocol
 from inspect_sentinel._protocols import concurrent, observe, threshold
@@ -75,33 +76,41 @@ def test_every_unwatched_monitor_is_named(caplog: pytest.LogCaptureFixture) -> N
     }
 
 
-@pytest.mark.parametrize("instance", [blocks(), concurrent([blocks()])])
-def test_a_lone_protocol_is_returned_as_it_is(instance: ControlProtocol) -> None:
-    assert compile_sentinel(instance) is instance
+@pytest.mark.parametrize(
+    "instance", [blocks(), concurrent([blocks()]), observe([noisy()])]
+)
+def test_a_lone_protocol_is_wrapped_in_concurrent(instance: ControlProtocol) -> None:
+    compiled = compile_sentinel(instance)
+    assert compiled is not instance
+    assert registry_info(compiled).name == "inspect_sentinel/concurrent"
 
 
-def test_observe_written_explicitly_is_returned_as_it_is_and_does_not_warn(
+def test_observe_written_explicitly_does_not_warn(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    instance = observe([noisy()])
     with caplog.at_level(logging.WARNING, logger="inspect_sentinel._compile"):
-        assert compile_sentinel(instance) is instance
+        compile_sentinel(observe([noisy()]))
     assert caplog.records == []
 
 
+@pytest.mark.parametrize(
+    "specs",
+    [
+        (lambda: blocks(), lambda: [blocks()]),
+        (lambda: noisy(), lambda: [noisy()]),
+    ],
+)
 @pytest.mark.anyio
-async def test_a_monitor_is_recorded_at_one_path_however_observe_was_reached() -> None:
-    paths: list[str] = []
-    for spec in ([noisy()], observe([noisy()])):
+async def test_a_lone_child_and_a_list_of_one_record_the_same_paths(
+    specs: tuple[Callable[[], SentinelSpec], Callable[[], SentinelSpec]],
+) -> None:
+    paths: list[list[str]] = []
+    for spec in specs:
         recorder = ListRecorder()
         await run_protocol(
-            compile_sentinel(spec), runner_context(recorder=recorder), before_step()
+            compile_sentinel(spec()), runner_context(recorder=recorder), before_step()
         )
-        paths.append(
-            next(
-                r.reported.path for r in recorder.records if r.reported.name == "noisy"
-            )
-        )
+        paths.append([r.reported.path for r in recorder.records])
     assert paths[0] == paths[1]
 
 

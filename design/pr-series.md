@@ -159,7 +159,7 @@ Implemented: the decorators store the accepted payload classes on each instance 
 - `concurrent`: `run_children`; `strongest()`; a `modify` with more than one deciding child becomes `reject` naming the modifier.
 - `threshold(monitors, reject_at, terminate_at=None)`: as written in `sentinel.md`.
 - `check_decision_shape(decision, step)` raises on the deterministic protocol bugs: an action illegal for the stage (`reject` and `modify` are `BeforeToolCall` only), or `modified` not set exactly when `action == "modify"`. `apply_binding_floor(decision, children)` never raises: a decision below the strongest binding child's (or an abstention, or a `modify` with a different replacement) is replaced by that child's decision and recorded on `Reported.overrode`, and disagreeing binding `modify`s resolve to a binding `reject`.
-- `compile_sentinel(spec)`: monitor or monitors-only collection to `observe`; anything else containing a protocol to `concurrent`; a lone protocol returned as it is, which is what `concurrent` of one means.
+- `compile_sentinel(spec)`: monitor or monitors-only collection to `observe`; anything else containing a protocol to `concurrent`; every configuration wrapped, so a lone protocol is `concurrent([protocol])` and a lone monitor `observe([monitor])`, and a lone child records the same paths as a list of one. `observe`, `concurrent` and `threshold` raise `ValueError` when given no children.
 
 Tests: each protocol's rules above; every row of the compile table; each shape rule raising; each binding-floor case resolving and recording.
 

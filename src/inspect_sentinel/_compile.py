@@ -18,7 +18,7 @@ SentinelSpec: TypeAlias = Monitor | ControlProtocol | Children
 def compile_sentinel(spec: SentinelSpec) -> ControlProtocol:
     """Turn a sentinel configuration into the one protocol that owns the layer's decision.
 
-    A lone protocol is returned as it is, since a lone protocol is already `concurrent()` of one and wrapping it would push its children a path segment deeper. A monitor, or a sequence or mapping of monitors only, compiles to `observe()` and logs a warning, since nothing is configured to act on the scores; anything else containing a protocol compiles to `concurrent()`. Every top-level configuration is therefore a protocol.
+    Every configuration is wrapped, so a lone child compiles exactly as a list of one does and records the same paths. A monitor, or a sequence or mapping of monitors only, compiles to `observe()` and logs a warning, since nothing is configured to act on the scores; anything containing a protocol, a lone protocol included, compiles to `concurrent()`. Every top-level configuration is therefore one of the two, and the dispatcher invokes it as the root, so the top-level children's paths are bare.
 
     Args:
         spec: One monitor or protocol, or a sequence or mapping of instance names to them.
@@ -32,8 +32,6 @@ def compile_sentinel(spec: SentinelSpec) -> ControlProtocol:
         raise ValueError(
             "A sentinel configuration needs at least one monitor or protocol."
         )
-    if single and registry_info(spec).type == "protocol":
-        return cast(ControlProtocol, spec)
     if any(registry_info(child).type == "protocol" for _, child in named):
         return concurrent(children)
     for name, _ in named:

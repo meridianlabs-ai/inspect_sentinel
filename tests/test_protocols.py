@@ -1,4 +1,5 @@
 import math
+from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
@@ -344,3 +345,18 @@ def test_thresholds_constants_must_be_finite_and_ordered(
 def test_threshold_rejects_a_monitor_that_never_watches_a_tool_call() -> None:
     with pytest.raises(TypeError, match="afterwards"):
         threshold([afterwards()], reject_at=0.5)
+
+
+@pytest.mark.parametrize(
+    "configure",
+    [
+        lambda: observe([]),
+        lambda: concurrent({}),
+        lambda: threshold([], reject_at=0.5),
+    ],
+)
+def test_a_shipped_protocol_needs_at_least_one_child(
+    configure: Callable[[], ControlProtocol],
+) -> None:
+    with pytest.raises(ValueError, match="needs at least one child"):
+        configure()

@@ -1225,7 +1225,7 @@ inspect eval task.py --sentinel sentinel.yaml
 | a monitor, or a list or mapping of monitors only | `observe(...)` — recorded, never acted on |
 | a protocol, or any list or mapping containing one | `concurrent(...)` — protocols vote, monitors are recorded |
 
-A single protocol is `concurrent` of one, which emits no event of its own, so the single-rule log is exactly what a lone approver's is today.
+A single protocol is `concurrent` of one, and a single monitor `observe` of one, so `Task(sentinel=p)` and `Task(sentinel=[p])` record the same paths. The dispatcher invokes the root itself, so the top-level children's paths are bare (`p`, not `concurrent/p`), and a root with one participating child emits no event of its own, so the single-rule log is exactly what a lone approver's is today.
 
 ``` python
 Task(sentinel=no_curl())  # a rule; acts
