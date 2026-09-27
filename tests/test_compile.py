@@ -134,3 +134,20 @@ def test_a_protocol_handed_to_threshold_fails_under_compile() -> None:
 def test_duplicate_names_nested_in_a_protocol_fail_under_compile() -> None:
     with pytest.raises(ValueError, match="Duplicate"):
         compile_sentinel([concurrent([noisy(), noisy()])])
+
+
+@pytest.mark.parametrize("spec", [{noisy()}, "noisy"])
+def test_a_spec_that_is_neither_a_mapping_nor_a_sequence_is_an_error(spec: Any) -> None:
+    with pytest.raises(TypeError, match="Mapping or a Sequence"):
+        compile_sentinel(spec)
+
+
+def test_each_configured_instance_is_named_in_the_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="inspect_sentinel._compile"):
+        compile_sentinel({"first": noisy(), "second": noisy()})
+    assert {record.getMessage().split(" ")[0] for record in caplog.records} == {
+        "first",
+        "second",
+    }

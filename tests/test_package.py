@@ -61,6 +61,9 @@ def test_integration_names_are_not_exported() -> None:
         "validate_decision",
         "compile_sentinel",
         "SentinelSpec",
+        "check_instance_name",
+        "PRECEDENCE",
+        "named_children",
     ):
         assert name not in inspect_sentinel.__all__
 

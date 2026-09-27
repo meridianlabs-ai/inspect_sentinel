@@ -302,12 +302,14 @@ def named_children(
     | Iterable[Monitor | ControlProtocol],
     expected: Literal["monitor", "protocol"] | None,
 ) -> list[tuple[str, Monitor | ControlProtocol]]:
-    pairs: list[tuple[str | None, Monitor | ControlProtocol]]
+    pairs: list[tuple[object, Monitor | ControlProtocol]]
     if isinstance(children, Mapping):
         mapping = cast(Mapping[str, Monitor | ControlProtocol], children)
         pairs = [(key, child) for key, child in mapping.items()]
+        keyed = True
     elif isinstance(children, Sequence) and not isinstance(children, str):
         pairs = [(None, child) for child in children]
+        keyed = False
     else:
         raise TypeError(
             "children must be a Mapping or a Sequence; a set or an iterator has no configuration order"
@@ -316,9 +318,7 @@ def named_children(
     seen: set[str] = set()
     for given, child in pairs:
         info, _ = _check_child(child, expected)
-        name = check_instance_name(
-            given if given is not None else registry_unqualified_name(info)
-        )
+        name = check_instance_name(given if keyed else registry_unqualified_name(info))
         if name in seen:
             raise ValueError(
                 f"Duplicate instance name {name!r} in one layer. Give the children distinct names with a mapping."

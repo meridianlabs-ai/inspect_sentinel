@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
 from typing import TypeAlias, cast
 
-from inspect_ai._util.registry import registry_info
+from inspect_ai._util.registry import is_registry_object, registry_info
 
 from ._monitor import Children, ControlProtocol, Monitor, Monitors
 from ._protocols import concurrent, observe
@@ -24,10 +23,11 @@ def compile_sentinel(spec: SentinelSpec) -> ControlProtocol:
     Args:
         spec: One monitor or protocol, or a sequence or mapping of instance names to them.
     """
-    if isinstance(spec, (Mapping, Sequence)):
-        children = cast(Children, spec)
-    else:
-        children = [spec]
+    children: Children = (
+        [cast(Monitor | ControlProtocol, spec)]
+        if is_registry_object(spec)
+        else cast(Children, spec)
+    )
     named = named_children(children, None)
     if not named:
         raise ValueError(
@@ -35,9 +35,9 @@ def compile_sentinel(spec: SentinelSpec) -> ControlProtocol:
         )
     if any(registry_info(child).type == "protocol" for _, child in named):
         return concurrent(children)
-    for _, child in named:
+    for name, _ in named:
         logger.warning(
             "%s is a monitor and nothing is configured to act on it; wrap it in a protocol such as threshold() to act, or observe() to say that recording is intended.",
-            registry_info(child).name,
+            name,
         )
     return observe(cast(Monitors, children))

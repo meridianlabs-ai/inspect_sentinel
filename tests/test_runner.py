@@ -716,9 +716,10 @@ async def test_a_child_error_alongside_a_cancellation_surfaces_on_both_backends(
 
 
 @pytest.mark.anyio
-async def test_non_string_mapping_keys_are_a_configuration_error() -> None:
+@pytest.mark.parametrize("key", [1, None])
+async def test_non_string_mapping_keys_are_a_configuration_error(key: Any) -> None:
     with pytest.raises(ValueError, match="non-empty string"):
-        await run_monitors(cast(Any, {1: scores()}), runner_context(), before_step())
+        await run_monitors(cast(Any, {key: scores()}), runner_context(), before_step())
 
 
 @pytest.mark.anyio
