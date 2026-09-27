@@ -14,9 +14,9 @@ def validate_decision(
 ) -> None:
     """Check a layer's decision before anything acts on it, raising `ValueError` on a protocol bug.
 
-    Three rules no type can express: the action is legal for the stage (`reject` and `modify` are not legal after a tool call); `modified` is set exactly when the action is `modify`, and carries the right type for the stage; and the decision is not weaker than any authoritative decision among the layer's own children, where a `modify` that stands on an authoritative `modify` must carry that child's replacement. A layer that abstained is subject to the third rule alone: abstaining after an authoritative child decided drops that decision.
+    Three rules no type can express: the action is legal for the stage (`reject` and `modify` are not legal after a tool call); `modified` is set exactly when the action is `modify`, and carries the right type for the stage; and the decision is not weaker than any binding decision among the layer's own children, where a `modify` that stands on a binding `modify` must carry that child's replacement. A layer that abstained is subject to the third rule alone: abstaining after a binding child decided drops that decision.
 
-    A layer whose children include an authoritative decision returns an authoritative decision itself; the runner sets the flag, so the floor survives every layer above.
+    A layer whose children include a binding decision returns a binding decision itself; the runner sets the flag, so the floor survives every layer above.
 
     Args:
         decision: The decision the layer returned, or `None` if it abstained.
@@ -25,31 +25,29 @@ def validate_decision(
     """
     if decision is not None:
         _check_shape(decision, step)
-    authoritative = [
-        child for child in deciding(children) if child.report.authoritative
-    ]
-    if not authoritative:
+    binding = [child for child in deciding(children) if child.report.binding]
+    if not binding:
         return
-    floor = max(PRECEDENCE[child.report.action] for child in authoritative)
+    floor = max(PRECEDENCE[child.report.action] for child in binding)
     # the alphabetically first child at the floor, so concurrent children
     # finishing in either order name the same culprit
-    binding = min(
-        (child for child in authoritative if PRECEDENCE[child.report.action] == floor),
+    culprit = min(
+        (child for child in binding if PRECEDENCE[child.report.action] == floor),
         key=lambda child: child.name,
     )
     if (0 if decision is None else PRECEDENCE.get(decision.action, 0)) < floor:
         returned = "Abstaining" if decision is None else f"Decision {decision.action!r}"
         raise ValueError(
-            f"{returned} is weaker than the authoritative {binding.report.action!r} from {binding.name!r}."
+            f"{returned} is weaker than the binding {culprit.report.action!r} from {culprit.name!r}."
         )
     if (
-        binding.report.action == "modify"
+        culprit.report.action == "modify"
         and decision is not None
         and decision.action == "modify"
-        and decision.modified != binding.report.modified
+        and decision.modified != culprit.report.modified
     ):
         raise ValueError(
-            f"A modify standing on the authoritative modify from {binding.name!r} must carry that replacement."
+            f"A modify standing on the binding modify from {culprit.name!r} must carry that replacement."
         )
 
 

@@ -40,7 +40,7 @@ def test_decision_constructors_set_action(
     assert decision.action == action
     assert decision.explanation == "because"
     assert decision.audit is False
-    assert decision.authoritative is False
+    assert decision.binding is False
     assert decision.modified is None
 
 
@@ -58,7 +58,7 @@ def test_reports_round_trip_through_json() -> None:
         view=ToolCallContent(title="bash", format="markdown", content="`ls`"),
         type="custom",
     )
-    decision = Decision(action="modify", modified=call, audit=True, authoritative=True)
+    decision = Decision(action="modify", modified=call, audit=True, binding=True)
     restored = Decision.model_validate_json(decision.model_dump_json())
     assert restored == decision
     assert restored.modified == call

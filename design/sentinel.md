@@ -357,8 +357,8 @@ class Decision(BaseModel):
     audit: bool = Field(default=False)
     """Request that oversight budget be spent on this."""
 
-    authoritative: bool = Field(default=False)
-    """A decision no protocol may weaken. Set by human(); see 'Authoritative decisions'."""
+    binding: bool = Field(default=False)
+    """A decision no protocol may weaken. Set by human(); see 'Binding decisions'."""
 
     modified: ToolCall | ChatMessageAssistant | BeforeGenerate | None = Field(
         default=None
@@ -459,7 +459,7 @@ Examples of each:
 | `no_curl` | protocol (a rule) | `action="reject"` |
 | `rm -rf /` guard | protocol (a rule) | `action="reject"` |
 | Strip `--force` from a call | protocol (a rule) | `action="modify", modified=...` |
-| A person | protocol (`human()`) | whatever they say, `authoritative=True` |
+| A person | protocol (`human()`) | whatever they say, `binding=True` |
 
 Note that `Observation` keeps the shape [Progressive disclosure](#progressive-disclosure-through-defaults-not-through-the-return-type) already argued for: `Suspicion` is the flexible value, `Observation` the fixed wrapper — exactly `Score` and `Value`.
 
@@ -495,11 +495,11 @@ Auditing — spending scarce human review — is orthogonal to what happens to t
 
 An earlier draft called this the first concrete consumer of per-task state. It is not. Ctrl-Z's budget is **1% of actions per episode** ([Prior art](#prior-art)), and an episode is one agent trajectory — one sample. So the canonical audit budget is per-*sample* state, which `context.store_as(BudgetState)` already handles with no new machinery. A budget pooled across samples is a different and also defensible design, but it is not what the literature specifies, and [Per-task](#per-task) is not on the critical path because of it.
 
-#### Authoritative decisions {#authoritative-reports}
+#### Binding decisions {#authoritative-reports}
 
-[Child decisions are advisory](#child-decisions-are-advisory): whatever wraps a protocol may honour or ignore what it decided. One class of decision is not, and the doc previously carried it as a prose rule — "a protocol may override advisory decisions, never authoritative ones" — with nothing in the data to enforce it. `authoritative` is that rule made into a field.
+[Child decisions are advisory](#child-decisions-are-advisory): whatever wraps a protocol may honour or ignore what it decided. One class of decision is not, and the doc previously carried it as a prose rule — "a protocol may override advisory decisions, never binding ones" — with nothing in the data to enforce it. `binding` is that rule made into a field.
 
-`human()` sets it. When a person has looked at a call and rejected it, no threshold, budget or aggregation above them gets to turn that into `continue`; the same holds for a human `approve`, which a protocol may not escalate past. The [dispatcher checks this at every layer boundary](#the-boundary-check): a protocol whose return is weaker than an authoritative report from one of its own children has a bug, and the check raises rather than quietly restoring the human's answer.
+`human()` sets it. When a person has looked at a call and rejected it, no threshold, budget or aggregation above them gets to turn that into `continue`; the same holds for a human `approve`, which a protocol may not escalate past. The [dispatcher checks this at every layer boundary](#the-boundary-check): a protocol whose return is weaker than a binding report from one of its own children has a bug, and the check raises rather than quietly restoring the human's answer.
 
 It is a field on the decision rather than a flag on the protocol because the combiner reads decisions, not protocols, and because the log should show which decisions in a trajectory were a person's. Nothing stops an LLM-backed protocol from setting it, and nothing should — the framework cannot verify that a human was involved, only that the author claimed authority — but the claim is visible in the transcript and in code review, which is the same discipline `portable=False` relies on.
 
@@ -580,7 +580,7 @@ That split came out of [Prior art](#prior-art) and is the main architectural con
 
 **"Protocol" is a registry type, and deciding is what puts something in it.** A protocol is any registered function that returns a `Decision`. Most consult monitors — `threshold` reads their scores — or compose other protocols — `chain` and `concurrent` — and those are combinators, the shape Inspect already uses everywhere it composes: `chain(*solvers) -> Solver`, `multi_scorer(scorers, reducer) -> Scorer`, `policy_approver(policies) -> Approver`. But a protocol may have no children at all: `human()` asks a person, `no_curl()` matches a string. Those are rules, and they are protocols because they decide, not because they compose. See [A protocol may have no children](#a-protocol-may-have-no-children) and [The `@protocol` decorator](#the-protocol-marker).
 
-The layering below is therefore mostly about *what code does*. The structural claims are typed; the behavioural ones — that a protocol invokes its children through [the runner](#the-runner) and never weakens an authoritative report — are enforced at the boundary where they can be and recorded where they cannot. [What the collapse costs](#what-the-collapse-costs) keeps the honest residue.
+The layering below is therefore mostly about *what code does*. The structural claims are typed; the behavioural ones — that a protocol invokes its children through [the runner](#the-runner) and never weakens a binding report — are enforced at the boundary where they can be and recorded where they cannot. [What the collapse costs](#what-the-collapse-costs) keeps the honest residue.
 
 Applying the split shrinks the monitor surface rather than growing it. Every control-literature action turns out to live above the monitor:
 
@@ -600,7 +600,7 @@ The collusion countermeasures land here too: paraphrasing and minification are a
 
 The [two registry types](#monitor-or-protocol) are not just two shapes of data. Each implies a way of deciding, and the design has to support both rather than treating one as the degenerate case of the other.
 
-- **Rules, no monitors.** The protocol decides directly from what it sees. No thresholds, no calibration, no budget. This is the shipped-guardrail philosophy — and it is not hypothetical in Inspect, because **it is exactly what `@approver` does today.** An approver consults nothing, its decisions are authoritative, and nobody regards that as unsafe.
+- **Rules, no monitors.** The protocol decides directly from what it sees. No thresholds, no calibration, no budget. This is the shipped-guardrail philosophy — and it is not hypothetical in Inspect, because **it is exactly what `@approver` does today.** An approver consults nothing, its decisions are binding, and nobody regards that as unsafe.
 - **Monitors under a calibrated protocol.** The monitor never decides; thresholds, budget and actions all live in the protocol that reads it. This is the control-literature philosophy, and it is what `threshold`, `defer_to_trusted` and `resample` are for.
 
 Neither is the advanced version of the other. What a protocol is *for* becomes sharper as a result: **a protocol exists to decide.** When there is a score, deciding means thresholding it; when there is not, the rule is the decision.
@@ -626,7 +626,7 @@ Within a wrapping protocol this is forced rather than chosen. `concurrent` combi
 
 The distinction that makes this coherent is **declared versus inferred**. [A bare monitor records only](#observe-only-is-the-default) because acting on it would mean acting on a number the author never thresholded. A rule's action was *declared*: someone who writes `Decision.reject(...)` is not surprised when a call is rejected, any more than an approver author is surprised today, so a rule at the top level acts.
 
-One rule then covers the bimodality: **a wrapping protocol may override advisory decisions, never authoritative ones.** A human's rejection is authoritative and stays so — a threshold overriding a human would be a safety regression. An earlier draft left this as a rule about *what a protocol should do*; it is now carried on the decision as [`authoritative`](#authoritative-reports) and enforced by [the boundary check](#the-boundary-check).
+One rule then covers the bimodality: **a wrapping protocol may override advisory decisions, never binding ones.** A human's rejection is binding and stays so — a threshold overriding a human would be a safety regression. An earlier draft left this as a rule about *what a protocol should do*; it is now carried on the decision as [`binding`](#authoritative-reports) and enforced by [the boundary check](#the-boundary-check).
 
 ### A bare monitor records only {#observe-only-is-the-default}
 
@@ -994,15 +994,15 @@ When any layer returns, the dispatcher validates the decision before anything ac
 
 - **The action is legal for the stage** — no `reject` at `AfterToolCall`, per [One vocabulary across stages](#one-vocabulary-across-stages).
 - **`modified` is set iff `action == "modify"`**, and carries the right type for the stage.
-- **The decision is not weaker than any [authoritative](#authoritative-reports) decision from a child of this layer.** A protocol that turned a human's `reject` into `continue` has a bug. The check reads the layer's own child decisions, which the runner recorded, so it needs no cooperation from the protocol. A layer that stands on an authoritative `modify` and modifies too must pass that child's replacement on; a stronger action may of course replace it.
+- **The decision is not weaker than any [binding](#authoritative-reports) decision from a child of this layer.** A protocol that turned a human's `reject` into `continue` has a bug. The check reads the layer's own child decisions, which the runner recorded, so it needs no cooperation from the protocol. A layer that stands on a binding `modify` and modifies too must pass that child's replacement on; a stronger action may of course replace it.
 
 The check runs per layer, so a nested configuration is validated at every level rather than only at the top. The runner performs this check when a protocol returns, using the child decisions it recorded under that layer, so the dispatcher's own call on the top-level decision is a second line of defence rather than the only one.
 
-A layer whose children include an authoritative decision returns an authoritative decision itself; the runner sets the flag, so the floor survives every layer above.
+A layer whose children include a binding decision returns a binding decision itself; the runner sets the flag, so the floor survives every layer above.
 
 ### Humans in the loop
 
-#5423's chains end in a person, and the first draft had nowhere to put one: humans were `@approver`s, and approvers lived in `Task(approval=)`. A `human()` protocol closes that. It has no children, is `BeforeToolCall` (and in principle any stage the human surfaces can render), prompts through the existing human approval surfaces, renders `step.escalations` above the call so the person sees who asked and why, and returns with `authoritative=True`. Human surfaces already queue requests, so two chains that both end in a person prompt one after the other and the stricter answer wins.
+#5423's chains end in a person, and the first draft had nowhere to put one: humans were `@approver`s, and approvers lived in `Task(approval=)`. A `human()` protocol closes that. It has no children, is `BeforeToolCall` (and in principle any stage the human surfaces can render), prompts through the existing human approval surfaces, renders `step.escalations` above the call so the person sees who asked and why, and returns with `binding=True`. Human surfaces already queue requests, so two chains that both end in a person prompt one after the other and the stricter answer wins.
 
 It is the one protocol whose placement the framework second-guesses: a `human()` inside a concurrent group is almost never intended, and the config-time check says so and suggests `chain()`.
 
@@ -1011,7 +1011,7 @@ It is the one protocol whose placement the framework second-guesses: a `human()`
 Two registry types make the contract mostly explicit, and the residue is small:
 
 - The structural claims — returns a decision, annotates a stage, takes typed children — are [statically checked](#static-checking).
-- Never weakening an authoritative decision is [checked at the boundary](#the-boundary-check).
+- Never weakening a binding decision is [checked at the boundary](#the-boundary-check).
 - **Going through the runner is not preventable.** The factory holds the children and can call them as plain callables, bypassing naming, recording and the concurrency guarantee. What makes this tolerable is that a child invoked any other way produces no event: a protocol that decided with no child reports in the transcript is visible in the log, and a config-time check can flag it.
 - "No `escalate` at the outermost layer" is not expressible in the type. Harmless in practice, since [all-escalate is already defined as `continue`](#composition).
 
@@ -1304,7 +1304,7 @@ Composition is the protocol's job: it collects reports from every configured chi
 
 **Aggregating decisions.** Across `Decision`s, the strongest wins: `terminate` \> `reject` \> `modify` \> `continue`. `escalate` means "I decline to decide", and all-escalate is `continue`. One `Action` ordering covers all four stages, so this is a single comparison function rather than one per stage — it is `Decisions.strongest()`. Claude Code hooks land the same way — all hooks run in parallel, any `deny` blocks. `terminate` additionally cancels siblings still running, since nothing can outrank it.
 
-**Authoritative decisions are a floor**, not a vote: a protocol may combine advisory decisions however it likes, but its own return may not be weaker than an [authoritative](#authoritative-reports) child's, and the [boundary check](#the-boundary-check) enforces that.
+**Binding decisions are a floor**, not a vote: a protocol may combine advisory decisions however it likes, but its own return may not be weaker than a [binding](#authoritative-reports) child's, and the [boundary check](#the-boundary-check) enforces that.
 
 Then the protocol reconciles the two halves with its thresholds and budget, subject to [child decisions being advisory](#child-decisions-are-advisory).
 
@@ -1342,7 +1342,7 @@ class SentinelEvent(BaseEvent):
     suspicion: Suspicion | None
     decision: Action | None
     audit: bool
-    authoritative: bool
+    binding: bool
     outcome: Action | None
     explanation: str | None
     metadata: dict[str, Any] | None
@@ -1360,7 +1360,7 @@ A protocol is recorded exactly as a monitor is, so a nested configuration emits 
 
 ```
 name="internet_attempt",  path="attempt/internet_attempt",  kind="decision",  decision="escalate"
-name="human",             path="attempt/human",             kind="decision",  decision="reject",  authoritative=True
+name="human",             path="attempt/human",             kind="decision",  decision="reject",  binding=True
 name="chain",             path="attempt",                   kind="decision",  decision="reject"
 name="sandbox_escape",    path="escape",                    kind="decision",  decision="continue"
 name="concurrent",        path="",                          kind="decision",  decision="reject"
@@ -1572,7 +1572,7 @@ The reason to consolidate *this* one and not approval is adoption, not elegance:
 Two alternatives, recorded because the choice could be revisited:
 
 - **Façade.** `Approver` and `Reviewer` both stay; `@protocol` adapts into each. Nothing is deprecated, and the parallel machinery stays forever. Rejected: it takes the cost without the consolidation.
-- **Primitive.** A rule subsumes both, and `@approver` goes too. The remaining gap is narrow and nameable — `Approval` is authoritative where a nested protocol's `Decision` is overridable — but it means deprecating a mature concept people have working code against, to gain uniformity they did not ask for. Not now; better answered once sentinels have users.
+- **Primitive.** A rule subsumes both, and `@approver` goes too. The remaining gap is narrow and nameable — `Approval` is binding where a nested protocol's `Decision` is overridable — but it means deprecating a mature concept people have working code against, to gain uniformity they did not ask for. Not now; better answered once sentinels have users.
 
 #### `approve` and `continue` are not the same word for the same thing {#approve-and-continue-are-not-the-same-word-for-the-same-thing}
 
@@ -1594,7 +1594,7 @@ So: `@protocol` uses `continue`, `Approval` keeps `approve`, and the adapter map
 
 ### A protocol layer for approval too
 
-Keeping `@approver` leaves a thin spot: approvers are authoritative today, so a rule adapted into the approval chain effectively runs under an honour-everything protocol while a configured one runs under a real one. Two layerings for one concept.
+Keeping `@approver` leaves a thin spot: approvers are binding today, so a rule adapted into the approval chain effectively runs under an honour-everything protocol while a configured one runs under a real one. Two layerings for one concept.
 
 `policy_approver()` is already a proto-protocol — it does the chaining, the escalate fall-through and the no-approver-means-reject default. It just isn't configurable, and approver decisions map straight to effects.
 
@@ -1611,7 +1611,7 @@ It also gives the framing that dissolves the thin spot without a semantic change
 
 Three constraints:
 
-- **Human approvers stay authoritative.** Same rule as [Child decisions are advisory](#child-decisions-are-advisory): a protocol may override advisory decisions, never authoritative ones. A threshold overriding a human rejection would be a safety regression.
+- **Human approvers stay binding.** Same rule as [Child decisions are advisory](#child-decisions-are-advisory): a protocol may override advisory decisions, never binding ones. A threshold overriding a human rejection would be a safety regression.
 - **Don't grow `Approval` with a score field.** A protocol can consume both shapes — decisions from approvers, reports from monitors — and an approver that wants to score should be a monitor. `Approval` reaches the transcript, the log schema, the viewer and the dataframe, and AGENTS.md wants every producer and consumer named before one of those changes.
 - **Probably a separate PR.** This is the same concept rather than a tangential fix, so it is defensible — but it turns "add a Monitor registry type" into "add a Monitor registry type and introduce a protocol layer to approval". Note that the "protocol layer" here is not new machinery: it is permitting `Task(approval=)` to accept a protocol alongside a policy list, and compiling it down to an `Approver`.
 
@@ -1704,7 +1704,7 @@ to `observe`); whether protocols need their own construct (a
 [decorator](#the-protocol-marker), not a constructor or a type); and whether
 ordered composition should be the default (no — see [Two compositions](#two-compositions-concurrent-and-ordered)).
 
-1.  **Does `@approver` eventually become a protocol?** [Settled for now](#relationship-to-approval-and-review): a rule subsumes the merged `Reviewer`, `@approver` survives. What is open is whether the authoritative/advisory distinction deserves its own type permanently, or whether `@approver` becomes a `BeforeToolCall` rule once protocols have users. Deliberately deferred rather than answered.
+1.  **Does `@approver` eventually become a protocol?** [Settled for now](#relationship-to-approval-and-review): a rule subsumes the merged `Reviewer`, `@approver` survives. What is open is whether the binding/advisory distinction deserves its own type permanently, or whether `@approver` becomes a `BeforeToolCall` rule once protocols have users. Deliberately deferred rather than answered.
 2.  **Who owns the budget when protocols nest?** [Protocols nest](#a-protocol-may-have-no-children), so a budget-owning protocol can wrap a paraphrasing one wrapping leaf monitors — which is the point, but two nested budget-owning protocols need a rule. Outermost wins is the obvious answer; whether an inner one should be an error is open.
 3.  **Which protocols ship in core?** Settled in [Ship protocols, not parts](#ship-protocols-not-parts): `concurrent`, `chain`, `observe`, `threshold`, `defer_to_trusted` and `resample`. `trusted_monitoring` (the audit budget), `trusted_editing`, `untrusted_monitoring` and the pipeline stages are extension candidates.
 4.  **Score aggregation.** Max across monitors is the obvious default; per-dimension max when scores are structured. Weighted combination and requiring agreement are protocol policy — but the framework has to pick a default and say so.

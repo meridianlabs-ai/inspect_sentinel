@@ -93,12 +93,12 @@ class Decisions(_ReportSequence[Decision]):
     """What a layer's protocols decided, in configuration order."""
 
     def strongest(self) -> Reported[Decision] | None:
-        """The strongest decision by `terminate > reject > modify > continue`; an authoritative decision wins a tie; `escalate` does not count; `None` if nobody decided."""
+        """The strongest decision by `terminate > reject > modify > continue`; a binding decision wins a tie; `escalate` does not count; `None` if nobody decided."""
         ranked = deciding(self._items)
         if not ranked:
             return None
         return max(
-            ranked, key=lambda d: (PRECEDENCE[d.report.action], d.report.authoritative)
+            ranked, key=lambda d: (PRECEDENCE[d.report.action], d.report.binding)
         )
 
 
@@ -288,12 +288,10 @@ async def _run_child(
         return None
     if (
         isinstance(report, Decision)
-        and not report.authoritative
-        and any(
-            child.report.authoritative for child in deciding(child_context.decisions)
-        )
+        and not report.binding
+        and any(child.report.binding for child in deciding(child_context.decisions))
     ):
-        report = cast("R", report.model_copy(update={"authoritative": True}))
+        report = cast("R", report.model_copy(update={"binding": True}))
     reported = Reported(name=child_name, path=child_context.path, report=report)
     child_context.recorder.record(child_context, step, reported)
     # the top layer has no parent to validate it, so nothing collects there

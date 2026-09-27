@@ -32,7 +32,7 @@ def observe(monitors: Monitors) -> ControlProtocol:
 def concurrent(children: Children) -> ControlProtocol:
     """Run every child concurrently; the strongest decision wins.
 
-    What a list containing a protocol compiles to. Monitors are recorded and their observations left for a parent to read; protocols vote by `terminate > reject > modify > continue`, an authoritative decision wins a tie, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when more than one protocol decided becomes a `reject` naming the modifier, since the others decided about the call as it stood; the rejection carries the modifier's `authoritative`, `audit` and `metadata`.
+    What a list containing a protocol compiles to. Monitors are recorded and their observations left for a parent to read; protocols vote by `terminate > reject > modify > continue`, a binding decision wins a tie, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when more than one protocol decided becomes a `reject` naming the modifier, since the others decided about the call as it stood; the rejection carries the modifier's `binding`, `audit` and `metadata`.
 
     Args:
         children: Monitors and protocols to run together.

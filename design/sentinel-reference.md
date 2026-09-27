@@ -87,7 +87,7 @@ The pieces:
 | `run_monitors`, `run_protocols`, `run_children` | The runner. The only way a protocol invokes a child. Names, records, and (once implemented) applies the failure policy. |
 | `concurrent`, `chain` | The two shipped compositions: concurrent (every child runs, strongest decision wins) and ordered (first non-`escalate` decides). |
 | `threshold`, `observe`, `defer_to_trusted`, `resample` | The shipped protocols that turn monitors' scores into decisions. |
-| `human` | A rule that asks a person through the human approval surfaces. Its decisions are authoritative. |
+| `human` | A rule that asks a person through the human approval surfaces. Its decisions are binding. |
 | `SentinelEvent` | Transcript record of every report, keyed by instance path. |
 
 ## Writing a monitor
@@ -293,7 +293,7 @@ class Decision(BaseModel):
     audit: bool = Field(default=False)
     """Request that human review be spent on this."""
 
-    authoritative: bool = Field(default=False)
+    binding: bool = Field(default=False)
     """A decision no parent protocol may weaken. Set by human()."""
 
     modified: ToolCall | ChatMessageAssistant | BeforeGenerate | None = Field(
@@ -329,7 +329,7 @@ Rules:
 - **A detector reports `1.0`.** `Observation.flag(explanation)` is a monitor's way of saying "this is definitely it" without holding a threshold; `threshold(detector(), reject_at=1.0)` acts on it.
 - **Set `audit=True` to request human review.** It is independent of the action: you can continue-and-audit or reject-and-audit. A parent protocol owning a budget may decline.
 - **Write `explanation` for the operator.** The model does not see it. If the agent learns why it was flagged, it can learn to avoid being flagged. A separate field, not yet named, carries text the model is meant to read. That field also lets a protocol continue while giving the model information.
-- **Set `authoritative=True` only for a decision a person made.** A parent protocol may not return anything weaker than an authoritative child decision; the dispatcher raises if it does. `human()` sets it. The framework cannot verify a human was involved, so the claim is visible in the log and in code review, as `portable=False` is.
+- **Set `binding=True` only for a decision a person made.** A parent protocol may not return anything weaker than a binding child decision; the dispatcher raises if it does. `human()` sets it. The framework cannot verify a human was involved, so the claim is visible in the log and in code review, as `portable=False` is.
 
 Named constructors for the common cases:
 
@@ -358,7 +358,7 @@ A common mistake is to compute a score and compare it to a constant inside the s
 | `no_curl` | protocol (a rule) | `Decision.reject(...)` |
 | `rm -rf /` guard | protocol (a rule) | `Decision.reject(...)` |
 | Strip `--force` from a call | protocol (a rule) | `action="modify", modified=...` |
-| `human()` | protocol (a rule) | whatever the person said, `authoritative=True` |
+| `human()` | protocol (a rule) | whatever the person said, `binding=True` |
 
 For a first guard, write a rule. It acts with no further configuration. Write a monitor and wrap it in `threshold()` when the function produces a score, or when you want a deterministic detector to be dry-runnable and backtestable before it acts.
 
@@ -589,7 +589,7 @@ Rules:
 - **Return `Decision | None`.** A protocol's job is to produce a decision.
 - **Invoke children only through the runner.** `run_monitors()` and `run_protocols()` for concurrent fan-out over one family, `run_children()` for a mixed group, `run_monitor()` and `run_protocol()` for one child at a time. See [The runner](#the-runner). A child called any other way produces no event, and a protocol that decided with no child reports in the transcript is visible in the log.
 - **Transform `step` before the call, not after.** Paraphrasing, minification, and honeypot injection are transforms on the input to the runner.
-- **Never return something weaker than an authoritative child decision.** The dispatcher raises if you do. See [The boundary check](#the-boundary-check).
+- **Never return something weaker than a binding child decision.** The dispatcher raises if you do. See [The boundary check](#the-boundary-check).
 - **Protocols can nest.** A budget-owning protocol can wrap a paraphrasing protocol that wraps monitors. The rule for two nested budget owners is open; outermost wins is the likely answer.
 - **Everything else is ordinary Python** over the runner's results plus `context.store_as`. Thresholds, budget arithmetic, deferral to a trusted model via `context.host.generate()`, and aggregation need no framework support.
 
@@ -670,11 +670,11 @@ When any protocol returns, the dispatcher validates the decision and raises on a
 
 - The action is legal for the stage.
 - `modified` is set if and only if `action == "modify"`, with the right type for the stage.
-- The decision is not weaker than any authoritative decision from a child of this layer, and a `modify` standing on an authoritative `modify` carries that child's replacement.
+- The decision is not weaker than any binding decision from a child of this layer, and a `modify` standing on a binding `modify` carries that child's replacement.
 
 The check runs at every layer of a nested configuration: the runner performs it when a protocol returns, using the child decisions it recorded under that layer, and the dispatcher's call on the top-level decision is a second line of defence.
 
-A layer whose children include an authoritative decision returns an authoritative decision itself; the runner sets the flag, so the floor survives every layer above.
+A layer whose children include a binding decision returns a binding decision itself; the runner sets the flag, so the floor survives every layer above.
 
 ### Two compositions
 
@@ -726,7 +726,7 @@ def chain(children: Children) -> ControlProtocol:
 
 ### Humans
 
-`human()` is a rule (a protocol with no children) for `BeforeToolCall`. It prompts through the existing human approval surfaces, renders `step.escalations` above the call, and returns with `authoritative=True`. Human surfaces queue requests, so two chains that both end in a person prompt one after the other, and the stricter answer wins.
+`human()` is a rule (a protocol with no children) for `BeforeToolCall`. It prompts through the existing human approval surfaces, renders `step.escalations` above the call, and returns with `binding=True`. Human surfaces queue requests, so two chains that both end in a person prompt one after the other, and the stricter answer wins.
 
 ### Static checking
 
@@ -754,7 +754,7 @@ These rules describe the concurrent composition, which `concurrent()` implements
 - **Aggregate decisions by strength:** `terminate` > `reject` > `modify` > `continue`. `escalate` does not count, so `Decisions.strongest()` returns `None` both when no protocol decided and when every one escalated; the protocol tells them apart by whether `decisions` is empty, and maps all-escalate to `continue`. One ordering covers all four stages.
 - **`terminate` cancels siblings.** Nothing outranks it and the sample is ending. `run_protocols` and `run_children` do this, and a cancelled child is recorded as cancelled rather than left indistinguishable from one that abstained.
 - **Child decisions are advisory to the parent.** A parent protocol may honour or override them, and the log records both; see [Transcript](#transcript).
-- **Authoritative decisions are a floor.** A protocol's return may not be weaker than an authoritative child decision. The dispatcher enforces this at every layer.
+- **Binding decisions are a floor.** A protocol's return may not be weaker than a binding child decision. The dispatcher enforces this at every layer.
 - **Run children concurrently.** Sequential dispatch triples latency with three LLM monitors, and it lets a colluding monitor see the others' conclusions. TraceGuard's result (95% safety versus 0%) depends on independence. The runner fans out on an anyio task group with `tg_collect()`'s semantics; never `asyncio.gather`.
 - **A `modify` with more than one participant is a rejection.** Concurrent children cannot see each other's rewrites, and the others approved the original arguments. `concurrent()` returns `reject` with an explanation naming the modifier. A `modify` that was the only decision is honoured.
 - **Decide on the protocol whether monitors block the agent or run alongside it.** Blocking costs latency. Running alongside means the agent may spend tokens or take a step before a violation is caught. This is a deployment judgement, so the knob belongs on the protocol, not the monitor.
@@ -939,7 +939,7 @@ class SentinelEvent(BaseEvent):
     suspicion: Suspicion | None
     decision: Action | None
     audit: bool
-    authoritative: bool
+    binding: bool
     outcome: Action | None
     explanation: str | None
     metadata: dict[str, Any] | None
@@ -952,7 +952,7 @@ Rules:
 
   ```
   name="internet_attempt",  path="attempt/internet_attempt",  kind="decision",  decision="escalate"
-  name="human",             path="attempt/human",             kind="decision",  decision="reject",  authoritative=True
+  name="human",             path="attempt/human",             kind="decision",  decision="reject",  binding=True
   name="chain",             path="attempt",                   kind="decision",  decision="reject"
   name="sandbox_escape",    path="escape",                    kind="decision",  decision="continue"
   name="concurrent",        path="",                          kind="decision",  decision="reject"
@@ -1020,7 +1020,7 @@ Action = Literal["continue", "modify", "reject", "terminate", "escalate"]
   Task(approval=threshold(..., reject_at=0.8))  # protocol-mediated
   ```
 
-  The list form keeps its current code path. The `ApprovalPolicy` list is shorthand for an honour-everything protocol. Human approvers stay authoritative under any protocol. `Approval` does not gain a score field; an approver that wants to score should be a monitor under `threshold()`. This is probably a separate PR.
+  The list form keeps its current code path. The `ApprovalPolicy` list is shorthand for an honour-everything protocol. Human approvers stay binding under any protocol. `Approval` does not gain a score field; an approver that wants to score should be a monitor under `threshold()`. This is probably a separate PR.
 
 ### The reviewer group's requirements (#5423)
 
@@ -1141,7 +1141,7 @@ Many people will want a chain, and a chain is what approval users know. But orde
 
 A chain hands earlier escalations to the next link so a human sees who is asking and why. #5423 did this by appending to `view.context`, but `view` exists only on the tool stages and is absent under a proxy. A field on all four payloads works everywhere. It is on `step` rather than `Context` because it changes per step, and `Context` is constant for the sample. It is the one field on `step` that monitors wrote rather than the agent, so the injection rule names it as the exception.
 
-### Why `authoritative` is a field
+### Why `binding` is a field
 
 "A protocol may never override a human" was a prose rule. As a field on the report, the dispatcher can enforce it at every layer boundary by reading the child reports the runner recorded, with no cooperation from the protocol. It is on the report rather than the monitor because the combiner reads reports, and because the log should show which decisions were a person's.
 

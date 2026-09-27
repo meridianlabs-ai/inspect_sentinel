@@ -59,7 +59,7 @@ class Decision(BaseModel):
     audit: bool = Field(default=False)
     """Request that oversight budget be spent on this step."""
 
-    authoritative: bool = Field(default=False)
+    binding: bool = Field(default=False)
     """A decision no protocol may weaken. Set by a human decider."""
 
     modified: ToolCall | None = Field(default=None)

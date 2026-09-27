@@ -45,19 +45,19 @@ def afterwards() -> Monitor:
 
 
 @protocol
-def says(action: Action = "continue", authoritative: bool = False) -> ControlProtocol:
+def says(action: Action = "continue", binding: bool = False) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(action=action, authoritative=authoritative)
+        return Decision(action=action, binding=binding)
 
     return decide
 
 
 @protocol
-def rewrites(authoritative: bool = False) -> ControlProtocol:
+def rewrites(binding: bool = False) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(
             action="modify",
-            authoritative=authoritative,
+            binding=binding,
             modified=ToolCall(id="c1", function="bash", arguments={"cmd": "echo hi"}),
         )
 
@@ -141,26 +141,24 @@ async def test_concurrent_turns_a_contested_modify_into_a_reject() -> None:
 
 
 @pytest.mark.anyio
-async def test_concurrent_prefers_an_authoritative_decision_in_a_tie() -> None:
+async def test_concurrent_prefers_a_binding_decision_in_a_tie() -> None:
     decision = await _run(
         concurrent({"advisory": says("reject"), "human": says("reject", True)}),
         before_step(),
         ListRecorder(),
     )
-    assert decision is not None and decision.authoritative is True
+    assert decision is not None and decision.binding is True
 
 
 @pytest.mark.anyio
-async def test_a_stronger_decision_over_an_authoritative_child_is_authoritative() -> (
-    None
-):
+async def test_a_stronger_decision_over_a_binding_child_is_binding() -> None:
     decision = await _run(
         concurrent({"h": says("reject", True), "t": says("terminate")}),
         before_step(),
         ListRecorder(),
     )
     assert decision is not None and decision.action == "terminate"
-    assert decision.authoritative is True
+    assert decision.binding is True
 
 
 @pytest.mark.anyio
@@ -168,12 +166,12 @@ async def test_concurrent_keeps_the_modifiers_authority_when_it_rejects_instead(
     None
 ):
     decision = await _run(
-        concurrent({"human": rewrites(authoritative=True), "rule": says("continue")}),
+        concurrent({"human": rewrites(binding=True), "rule": says("continue")}),
         before_step(),
         ListRecorder(),
     )
     assert decision is not None and decision.action == "reject"
-    assert decision.authoritative is True
+    assert decision.binding is True
 
 
 @pytest.mark.anyio

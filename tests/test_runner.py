@@ -33,11 +33,11 @@ def _obs(name: str, suspicion: float | dict[str, float]) -> Reported[Observation
     return Reported(name=name, path=name, report=Observation.score(suspicion))
 
 
-def _dec(name: str, action: Action, authoritative: bool = False) -> Reported[Decision]:
+def _dec(name: str, action: Action, binding: bool = False) -> Reported[Decision]:
     return Reported(
         name=name,
         path=name,
-        report=Decision(action=action, authoritative=authoritative),
+        report=Decision(action=action, binding=binding),
     )
 
 
@@ -80,9 +80,9 @@ def test_strongest_prefers_the_first_on_ties() -> None:
     assert strongest is not None and strongest.name == "first"
 
 
-def test_strongest_prefers_an_authoritative_decision_on_ties() -> None:
+def test_strongest_prefers_a_binding_decision_on_ties() -> None:
     decisions = Decisions(
-        [_dec("advisory", "reject"), _dec("human", "reject", authoritative=True)]
+        [_dec("advisory", "reject"), _dec("human", "reject", binding=True)]
     )
     strongest = decisions.strongest()
     assert strongest is not None and strongest.name == "human"
@@ -155,7 +155,7 @@ def decides(action: Action = "continue") -> ControlProtocol:
 @protocol
 def insists() -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(action="reject", authoritative=True)
+        return Decision(action="reject", binding=True)
 
     return decide
 
@@ -173,7 +173,7 @@ def overrides(action: Action | None = None) -> ControlProtocol:
 def insists_when(ready: Callable[[], Awaitable[None]]) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         await ready()
-        return Decision(action="reject", authoritative=True)
+        return Decision(action="reject", binding=True)
 
     return decide
 
@@ -808,16 +808,16 @@ async def test_an_illegal_decision_fails_the_layer_that_returned_it() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("action", [None, "continue"])
-async def test_a_layer_may_not_weaken_its_authoritative_child(
+async def test_a_layer_may_not_weaken_its_binding_child(
     action: Action | None,
 ) -> None:
-    with pytest.raises(ValueError, match="authoritative") as info:
+    with pytest.raises(ValueError, match="binding") as info:
         await run_protocol(overrides(action), runner_context(), before_step())
     assert "insists" in str(info.value)
 
 
 @pytest.mark.anyio
-async def test_a_layer_at_the_authoritative_floor_stands() -> None:
+async def test_a_layer_at_the_binding_floor_stands() -> None:
     reported = await run_protocol(overrides("reject"), runner_context(), before_step())
     assert reported is not None and reported.report.action == "reject"
 
@@ -836,7 +836,7 @@ async def test_the_root_collects_nothing_so_one_call_does_not_constrain_the_next
 
 @pytest.mark.anyio
 async def test_authority_survives_a_layer_that_drops_the_flag() -> None:
-    with pytest.raises(ValueError, match="authoritative") as info:
+    with pytest.raises(ValueError, match="binding") as info:
         await run_protocol(
             weakens(launders(insists())), runner_context(), before_step()
         )
@@ -857,7 +857,7 @@ async def test_the_named_culprit_does_not_depend_on_who_finished_first(
         await gate.wait()
 
     ready = {name: second if name == waits else first for name in ("alice", "bob")}
-    with pytest.raises(ValueError, match="authoritative") as info:
+    with pytest.raises(ValueError, match="binding") as info:
         await run_protocol(
             gathers({name: insists_when(fn) for name, fn in ready.items()}),
             runner_context(),
