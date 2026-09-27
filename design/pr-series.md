@@ -158,7 +158,7 @@ Implemented: the decorators store the accepted payload classes on each instance 
 - `concurrent`: `run_children`; `strongest()`; a `modify` with more than one deciding child becomes `reject` naming the modifier.
 - `threshold(monitors, reject_at, terminate_at=None)`: as written in `sentinel.md`.
 - `validate_decision(decision, stage, children)`: action legal for stage (`reject` and `modify` are `BeforeToolCall` only); `modified` set iff `action == "modify"`; not weaker than any authoritative child. Raises.
-- `compile_sentinel(spec)`: monitor or monitors-only collection to `observe`; anything containing a protocol to `concurrent`; single protocol to `concurrent` of one.
+- `compile_sentinel(spec)`: monitor or monitors-only collection to `observe`; anything else containing a protocol to `concurrent`; a lone protocol returned as it is, which is what `concurrent` of one means.
 
 Tests: each protocol's rules above; every row of the compile table; each of the three boundary-check conditions raising.
 

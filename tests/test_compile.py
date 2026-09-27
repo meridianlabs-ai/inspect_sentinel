@@ -49,9 +49,6 @@ def test_monitors_only_compile_to_observe() -> None:
 
 def test_anything_containing_a_protocol_compiles_to_concurrent() -> None:
     assert (
-        registry_info(compile_sentinel(blocks())).name == "inspect_sentinel/concurrent"
-    )
-    assert (
         registry_info(compile_sentinel([noisy(), blocks()])).name
         == "inspect_sentinel/concurrent"
     )
@@ -78,12 +75,34 @@ def test_every_unwatched_monitor_is_named(caplog: pytest.LogCaptureFixture) -> N
     }
 
 
-def test_observe_written_explicitly_does_not_warn(
+@pytest.mark.parametrize("instance", [blocks(), concurrent([blocks()])])
+def test_a_lone_protocol_is_returned_as_it_is(instance: ControlProtocol) -> None:
+    assert compile_sentinel(instance) is instance
+
+
+def test_observe_written_explicitly_is_returned_as_it_is_and_does_not_warn(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    instance = observe([noisy()])
     with caplog.at_level(logging.WARNING, logger="inspect_sentinel._compile"):
-        compile_sentinel(observe([noisy()]))
+        assert compile_sentinel(instance) is instance
     assert caplog.records == []
+
+
+@pytest.mark.anyio
+async def test_a_monitor_is_recorded_at_one_path_however_observe_was_reached() -> None:
+    paths: list[str] = []
+    for spec in ([noisy()], observe([noisy()])):
+        recorder = ListRecorder()
+        await run_protocol(
+            compile_sentinel(spec), runner_context(recorder=recorder), before_step()
+        )
+        paths.append(
+            next(
+                r.reported.path for r in recorder.records if r.reported.name == "noisy"
+            )
+        )
+    assert paths[0] == paths[1]
 
 
 def test_a_protocol_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
