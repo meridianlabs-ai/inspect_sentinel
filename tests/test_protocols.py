@@ -42,18 +42,19 @@ def afterwards() -> Monitor:
 
 
 @protocol
-def says(action: Action = "continue") -> ControlProtocol:
+def says(action: Action = "continue", authoritative: bool = False) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(action=action)
+        return Decision(action=action, authoritative=authoritative)
 
     return decide
 
 
 @protocol
-def rewrites() -> ControlProtocol:
+def rewrites(authoritative: bool = False) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(
             action="modify",
+            authoritative=authoritative,
             modified=ToolCall(id="c1", function="bash", arguments={"cmd": "echo hi"}),
         )
 
@@ -134,6 +135,47 @@ async def test_concurrent_turns_a_contested_modify_into_a_reject() -> None:
     )
     assert decision is not None and decision.action == "reject"
     assert decision.explanation is not None and "rewriter" in decision.explanation
+
+
+@pytest.mark.anyio
+async def test_concurrent_prefers_an_authoritative_decision_in_a_tie() -> None:
+    decision = await _run(
+        concurrent({"advisory": says("reject"), "human": says("reject", True)}),
+        before_step(),
+        ListRecorder(),
+    )
+    assert decision is not None and decision.authoritative is True
+
+
+@pytest.mark.anyio
+async def test_concurrent_keeps_the_modifiers_authority_when_it_rejects_instead() -> (
+    None
+):
+    decision = await _run(
+        concurrent({"human": rewrites(authoritative=True), "rule": says("continue")}),
+        before_step(),
+        ListRecorder(),
+    )
+    assert decision is not None and decision.action == "reject"
+    assert decision.authoritative is True
+
+
+@pytest.mark.anyio
+async def test_concurrent_honours_a_modify_the_others_only_escalated_against() -> None:
+    decision = await _run(
+        concurrent({"rewriter": rewrites(), "abstainer": says("escalate")}),
+        before_step(),
+        ListRecorder(),
+    )
+    assert decision is not None and decision.action == "modify"
+
+
+@pytest.mark.anyio
+async def test_concurrent_turns_two_modifies_into_a_reject() -> None:
+    decision = await _run(
+        concurrent({"a": rewrites(), "b": rewrites()}), before_step(), ListRecorder()
+    )
+    assert decision is not None and decision.action == "reject"
 
 
 @pytest.mark.anyio

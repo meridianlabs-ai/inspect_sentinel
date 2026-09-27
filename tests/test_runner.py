@@ -25,8 +25,12 @@ def _obs(name: str, suspicion: float | dict[str, float]) -> Reported[Observation
     return Reported(name=name, path=name, report=Observation.score(suspicion))
 
 
-def _dec(name: str, action: Action) -> Reported[Decision]:
-    return Reported(name=name, path=name, report=Decision(action=action))
+def _dec(name: str, action: Action, authoritative: bool = False) -> Reported[Decision]:
+    return Reported(
+        name=name,
+        path=name,
+        report=Decision(action=action, authoritative=authoritative),
+    )
 
 
 def test_observations_is_a_sequence() -> None:
@@ -66,6 +70,14 @@ def test_strongest_prefers_the_first_on_ties() -> None:
     decisions = Decisions([_dec("first", "reject"), _dec("second", "reject")])
     strongest = decisions.strongest()
     assert strongest is not None and strongest.name == "first"
+
+
+def test_strongest_prefers_an_authoritative_decision_on_ties() -> None:
+    decisions = Decisions(
+        [_dec("advisory", "reject"), _dec("human", "reject", authoritative=True)]
+    )
+    strongest = decisions.strongest()
+    assert strongest is not None and strongest.name == "human"
 
 
 def test_reports_holds_both_families() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from ._context import Context
 from ._monitor import Children, ControlProtocol, Monitors, protocol
 from ._report import Decision
-from ._runner import run_children, run_monitors
+from ._runner import PRECEDENCE, run_children, run_monitors
 from ._step import BeforeToolCall, Step
 
 
@@ -28,7 +28,7 @@ def observe(monitors: Monitors) -> ControlProtocol:
 def concurrent(children: Children) -> ControlProtocol:
     """Run every child concurrently; the strongest decision wins.
 
-    What a list containing a protocol compiles to. Monitors are recorded and their observations left for a parent to read; protocols vote by `terminate > reject > modify > continue`, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when more than one protocol decided becomes a `reject` naming the modifier, since the other protocols approved the original.
+    What a list containing a protocol compiles to. Monitors are recorded and their observations left for a parent to read; protocols vote by `terminate > reject > modify > continue`, an authoritative decision wins a tie, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when more than one protocol decided becomes a `reject` naming the modifier, since the others decided about the call as it stood; the rejection carries the modifier's `authoritative`, `audit` and `metadata`.
 
     Args:
         children: Monitors and protocols to run together.
@@ -41,9 +41,14 @@ def concurrent(children: Children) -> ControlProtocol:
         strongest = reports.decisions.strongest()
         if strongest is None:
             return Decision.clear()
-        if strongest.report.action == "modify" and len(reports.decisions) > 1:
-            return Decision.reject(
-                f"{strongest.name} modified the call but other protocols approved the original"
+        deciding = [d for d in reports.decisions if d.report.action in PRECEDENCE]
+        if strongest.report.action == "modify" and len(deciding) > 1:
+            return Decision(
+                action="reject",
+                authoritative=strongest.report.authoritative,
+                audit=strongest.report.audit,
+                metadata=strongest.report.metadata,
+                explanation=f"{strongest.name} modified the call but {len(deciding) - 1} other protocol(s) also decided",
             )
         return strongest.report
 

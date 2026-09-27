@@ -91,11 +91,13 @@ class Decisions(_ReportSequence[Decision]):
     """What a layer's protocols decided, in configuration order."""
 
     def strongest(self) -> Reported[Decision] | None:
-        """The strongest decision by `terminate > reject > modify > continue`; `escalate` does not count; `None` if nobody decided."""
+        """The strongest decision by `terminate > reject > modify > continue`; an authoritative decision wins a tie; `escalate` does not count; `None` if nobody decided."""
         ranked = [d for d in self._items if d.report.action in PRECEDENCE]
         if not ranked:
             return None
-        return max(ranked, key=lambda d: PRECEDENCE[d.report.action])
+        return max(
+            ranked, key=lambda d: (PRECEDENCE[d.report.action], d.report.authoritative)
+        )
 
 
 @dataclass(frozen=True)
