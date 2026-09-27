@@ -973,10 +973,10 @@ def concurrent(children: Children) -> ControlProtocol:
         reports = await run_children(children, context, step)
         if not reports.decisions:
             return None                       # monitors only
-        strongest = reports.decisions.strongest()
+        voters = Decisions(deciding(reports.decisions))  # escalations do not count
+        strongest = voters.strongest()
         if strongest is None:
             return Decision.clear()           # every protocol escalated
-        voters = deciding(reports.decisions)  # escalations do not count
         if strongest.report.action == "modify" and len(voters) > 1:
             return strongest.report.model_copy(
                 update={

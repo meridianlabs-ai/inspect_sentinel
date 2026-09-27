@@ -5,7 +5,7 @@ import math
 from ._context import Context
 from ._monitor import Children, ControlProtocol, Monitors, protocol, step_types
 from ._report import Decision, deciding
-from ._runner import named_children, run_children, run_monitors
+from ._runner import Decisions, named_children, run_children, run_monitors
 from ._step import BeforeToolCall, Step
 
 
@@ -31,7 +31,7 @@ def observe(monitors: Monitors) -> ControlProtocol:
 
 @protocol
 def concurrent(children: Children) -> ControlProtocol:
-    """Run every child concurrently; the strongest decision wins.
+    """Run every child at once; the strictest decision wins.
 
     What a list containing a protocol compiles to. Monitors are recorded and their observations left for a parent to read; protocols vote by `terminate > reject > modify > continue`, a binding decision wins a tie, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when more than one protocol decided becomes a `reject` naming the modifier, since the others decided about the call as it stood; the rejection carries the modifier's `binding`, `audit` and `metadata`.
 
@@ -46,10 +46,10 @@ def concurrent(children: Children) -> ControlProtocol:
         reports = await run_children(children, context, step)
         if not reports.decisions:
             return None
-        strongest = reports.decisions.strongest()
+        voters = Decisions(deciding(reports.decisions))
+        strongest = voters.strongest()
         if strongest is None:
             return Decision.clear()
-        voters = deciding(reports.decisions)
         if strongest.report.action == "modify" and len(voters) > 1:
             return strongest.report.model_copy(
                 update={

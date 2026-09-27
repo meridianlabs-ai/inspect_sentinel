@@ -171,6 +171,8 @@ Implemented: both checks take the `Step` rather than a stage string, so the payl
 
 ## Design edits owed (on inspect_ai `design/monitor`)
 
+Rename authoritative → binding on inspect_ai's design/monitor branch and in SentinelEvent when the dispatcher lands.
+
 Move `record` off `Host` into `Recorder` in `sentinel-deployment.md`; add `path` and `RunnerContext` to `sentinel-reference.md`'s `Context`; define `Stage`. (Done in the repo copy: `RunnerContext` named in the runner section; `named()` noted as the runner's private helper; unqualified instance names.)
 
 ## Out of scope
