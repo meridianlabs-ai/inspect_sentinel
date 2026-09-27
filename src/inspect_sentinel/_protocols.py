@@ -49,12 +49,12 @@ def concurrent(children: Children) -> ControlProtocol:
             return Decision.clear()
         voters = deciding(reports.decisions)
         if strongest.report.action == "modify" and len(voters) > 1:
-            return Decision(
-                action="reject",
-                authoritative=strongest.report.authoritative,
-                audit=strongest.report.audit,
-                metadata=strongest.report.metadata,
-                explanation=f"{strongest.name} modified the call but {len(voters) - 1} other protocol(s) also decided",
+            return strongest.report.model_copy(
+                update={
+                    "action": "reject",
+                    "modified": None,
+                    "explanation": f"{strongest.name} modified the call but {len(voters) - 1} other protocol(s) also decided",
+                }
             )
         return strongest.report
 
