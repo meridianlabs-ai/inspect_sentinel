@@ -1,3 +1,6 @@
+import math
+from typing import Any, cast
+
 import pytest
 from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import ToolCall
@@ -261,3 +264,44 @@ def test_step_types_come_from_the_annotations() -> None:
     )
     assert step_types(concurrent([graded()])) == both
     assert step_types(observe([graded()])) == both
+
+
+def test_observe_rejects_a_protocol_when_it_is_configured() -> None:
+    with pytest.raises(TypeError, match="monitor"):
+        observe(cast(Any, [says()]))
+
+
+def test_threshold_rejects_a_protocol_when_it_is_configured() -> None:
+    with pytest.raises(TypeError, match="monitor"):
+        threshold(cast(Any, [says()]), reject_at=0.5)
+
+
+def test_concurrent_rejects_duplicate_names_when_it_is_configured() -> None:
+    with pytest.raises(ValueError, match="Duplicate"):
+        concurrent([graded(), graded()])
+
+
+def test_a_shipped_protocol_rejects_an_uncalled_factory() -> None:
+    with pytest.raises(TypeError, match="call it"):
+        observe(cast(Any, [graded]))
+
+
+@pytest.mark.parametrize(
+    ("reject_at", "terminate_at", "message"),
+    [
+        (math.inf, None, "finite"),
+        (math.nan, None, "finite"),
+        (0.5, math.inf, "finite"),
+        (0.5, 0.4, "terminate_at"),
+    ],
+)
+def test_thresholds_constants_must_be_finite_and_ordered(
+    reject_at: float, terminate_at: float | None, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        threshold([graded()], reject_at=reject_at, terminate_at=terminate_at)
+
+
+def test_threshold_rejects_a_monitor_that_never_watches_a_tool_call() -> None:
+    with pytest.raises(TypeError, match="afterwards"):
+        threshold([afterwards()], reject_at=0.5)

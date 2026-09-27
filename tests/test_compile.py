@@ -7,7 +7,7 @@ from inspect_ai._util.registry import registry_info
 from inspect_sentinel._compile import compile_sentinel
 from inspect_sentinel._context import Context
 from inspect_sentinel._monitor import ControlProtocol, Monitor, monitor, protocol
-from inspect_sentinel._protocols import observe
+from inspect_sentinel._protocols import concurrent, observe, threshold
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._runner import run_protocol
 from inspect_sentinel._step import BeforeToolCall, Step
@@ -124,3 +124,13 @@ def test_an_uncalled_factory_is_a_configuration_error() -> None:
 def test_an_empty_configuration_is_an_error(empty: Any) -> None:
     with pytest.raises(ValueError, match="at least one"):
         compile_sentinel(empty)
+
+
+def test_a_protocol_handed_to_threshold_fails_under_compile() -> None:
+    with pytest.raises(TypeError, match="monitor"):
+        compile_sentinel(threshold(cast(Any, [blocks()]), reject_at=0.5))
+
+
+def test_duplicate_names_nested_in_a_protocol_fail_under_compile() -> None:
+    with pytest.raises(ValueError, match="Duplicate"):
+        compile_sentinel([concurrent([noisy(), noisy()])])
