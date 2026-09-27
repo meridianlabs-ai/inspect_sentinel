@@ -996,7 +996,7 @@ When any layer returns, the dispatcher validates the decision before anything ac
 - **`modified` is set iff `action == "modify"`**, and carries the right type for the stage.
 - **The decision is not weaker than any [authoritative](#authoritative-reports) decision from a child of this layer.** A protocol that turned a human's `reject` into `continue` has a bug. The check reads the layer's own child decisions, which the runner recorded, so it needs no cooperation from the protocol.
 
-The check runs per layer, so a nested configuration is validated at every level rather than only at the top.
+The check runs per layer, so a nested configuration is validated at every level rather than only at the top. The runner performs this check when a protocol returns, using the child decisions it recorded under that layer, so the dispatcher's own call on the top-level decision is a second line of defence rather than the only one.
 
 ### Humans in the loop
 

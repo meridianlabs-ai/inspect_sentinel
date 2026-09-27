@@ -14,6 +14,13 @@ Suspicion: TypeAlias = (
 Action: TypeAlias = Literal["continue", "modify", "reject", "terminate", "escalate"]
 """What a protocol can decide about the step it examined."""
 
+PRECEDENCE: dict[Action, int] = {
+    "terminate": 4,
+    "reject": 3,
+    "modify": 2,
+    "continue": 1,
+}
+
 
 class Observation(BaseModel):
     """Evidence for a protocol to calibrate and threshold. What a monitor returns."""

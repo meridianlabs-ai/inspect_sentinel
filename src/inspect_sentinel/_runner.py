@@ -22,6 +22,7 @@ from inspect_ai._util.registry import (
     registry_unqualified_name,
 )
 
+from ._check import validate_decision
 from ._context import Context, RunnerContext, check_instance_name
 from ._monitor import (
     Children,
@@ -31,18 +32,11 @@ from ._monitor import (
     Protocols,
     step_types,
 )
-from ._report import Action, Decision, Observation, R_co, Report, Reported
+from ._report import PRECEDENCE, Decision, Observation, R_co, Report, Reported
 from ._step import Step
 
 if sys.version_info < (3, 11):
     from exceptiongroup import BaseExceptionGroup
-
-PRECEDENCE: dict[Action, int] = {
-    "terminate": 4,
-    "reject": 3,
-    "modify": 2,
-    "continue": 1,
-}
 
 
 class _ReportSequence(Sequence[Reported[R_co]], Generic[R_co]):
@@ -271,14 +265,23 @@ async def _run_child(
         # something to paper over
         child_context.recorder.cancelled(child_context, step, child_name)
         raise
-    if report is None:
-        return None
-    if not isinstance(report, report_type):
+    if report is not None and not isinstance(report, report_type):
         raise TypeError(
             f"{kind} {child_name!r} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
         )
+    if kind == "protocol":
+        try:
+            validate_decision(
+                cast("Decision | None", report), step, child_context.decisions
+            )
+        except ValueError as ex:
+            raise ValueError(f"{kind} {child_name!r}: {ex}") from ex
+    if report is None:
+        return None
     reported = Reported(name=child_name, path=child_context.path, report=report)
     child_context.recorder.record(child_context, step, reported)
+    if isinstance(report, Decision):
+        context.decisions.append(cast("Reported[Decision]", reported))
     return reported
 
 

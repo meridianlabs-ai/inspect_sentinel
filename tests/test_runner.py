@@ -3,6 +3,7 @@ from typing import Any, cast
 import anyio
 import pytest
 from inspect_ai._util.registry import registry_info
+from inspect_ai.tool import ToolCall
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._monitor import ControlProtocol, Monitor, monitor, protocol
@@ -18,7 +19,7 @@ from inspect_sentinel._runner import (
     run_protocols,
 )
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
-from tests._fakes import ListRecorder, before_step, runner_context
+from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
 
 def _obs(name: str, suspicion: float | dict[str, float]) -> Reported[Observation]:
@@ -134,7 +135,29 @@ def raises() -> Monitor:
 @protocol
 def decides(action: Action = "continue") -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(action=action)
+        return Decision(
+            action=action,
+            modified=ToolCall(id="c1", function="bash", arguments={"cmd": "echo hi"})
+            if action == "modify"
+            else None,
+        )
+
+    return decide
+
+
+@protocol
+def insists() -> ControlProtocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        return Decision(action="reject", authoritative=True)
+
+    return decide
+
+
+@protocol
+def overrides(action: Action | None = None) -> ControlProtocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        await run_protocol(insists(), context, step)
+        return Decision(action=action) if action is not None else None
 
     return decide
 
@@ -723,3 +746,41 @@ async def test_packaged_children_are_named_without_the_package_prefix(
     )
     assert [o.name for o in observations] == ["leaf"]
     assert recorder.records[0].context.path == "leaf"
+
+
+@pytest.mark.anyio
+async def test_an_illegal_decision_fails_the_layer_that_returned_it() -> None:
+    recorder = ListRecorder()
+    with pytest.raises(ValueError, match="rule") as info:
+        await run_protocol(
+            decides("reject"),
+            runner_context(recorder=recorder),
+            after_step(),
+            name="rule",
+        )
+    assert "already run" in str(info.value)
+    assert recorder.records == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("action", [None, "continue"])
+async def test_a_layer_may_not_weaken_its_authoritative_child(
+    action: Action | None,
+) -> None:
+    with pytest.raises(ValueError, match="authoritative") as info:
+        await run_protocol(overrides(action), runner_context(), before_step())
+    assert "insists" in str(info.value)
+
+
+@pytest.mark.anyio
+async def test_a_layer_at_the_authoritative_floor_stands() -> None:
+    reported = await run_protocol(overrides("reject"), runner_context(), before_step())
+    assert reported is not None and reported.report.action == "reject"
+
+
+@pytest.mark.anyio
+async def test_one_layers_children_do_not_constrain_the_next() -> None:
+    context = runner_context()
+    await run_protocol(overrides("reject"), context, before_step(), name="first")
+    reported = await run_protocol(decides("continue"), context, before_step())
+    assert reported is not None and reported.report.action == "continue"

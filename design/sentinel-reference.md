@@ -672,7 +672,7 @@ When any protocol returns, the dispatcher validates the decision and raises on a
 - `modified` is set if and only if `action == "modify"`, with the right type for the stage.
 - The decision is not weaker than any authoritative decision from a child of this layer.
 
-The check runs at every layer of a nested configuration.
+The check runs at every layer of a nested configuration: the runner performs it when a protocol returns, using the child decisions it recorded under that layer, and the dispatcher's call on the top-level decision is a second line of defence.
 
 ### Two compositions
 

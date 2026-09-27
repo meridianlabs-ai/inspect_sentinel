@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
@@ -8,7 +8,7 @@ from inspect_ai.scorer import Target
 from inspect_ai.tool import ToolInfo
 from inspect_ai.util import Store, StoreModel
 
-from ._report import Report, Reported
+from ._report import Decision, Report, Reported
 from ._step import Step
 
 SMT = TypeVar("SMT", bound=StoreModel)
@@ -116,6 +116,11 @@ class RunnerContext(Context):
     recorder: Recorder
     """Where the runner records reports and cancellations."""
 
+    decisions: list[Reported[Decision]] = field(
+        default_factory=list[Reported[Decision]]
+    )
+    """Decisions recorded by this layer's children, for the boundary check. Runner-owned."""
+
     def __post_init__(self) -> None:
         # a runtime check for hosts that are not type-checked against Recorder
         if not isinstance(cast(object, self.recorder), Recorder):
@@ -130,7 +135,9 @@ class RunnerContext(Context):
             name: The child's instance name, appended to this layer's `path`. Must be non-empty and must not contain `/`.
         """
         check_instance_name(name)
-        return replace(self, path=f"{self.path}/{name}" if self.path else name)
+        return replace(
+            self, path=f"{self.path}/{name}" if self.path else name, decisions=[]
+        )
 
 
 def check_instance_name(name: object) -> str:

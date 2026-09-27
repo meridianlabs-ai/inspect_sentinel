@@ -72,6 +72,16 @@ def test_a_decision_may_not_weaken_an_authoritative_child() -> None:
     assert "human" in str(info.value)
 
 
+def test_abstaining_after_an_authoritative_child_is_a_bug() -> None:
+    with pytest.raises(ValueError, match="authoritative") as info:
+        validate_decision(None, before_step(), [_child("reject", authoritative=True)])
+    assert "human" in str(info.value)
+
+
+def test_abstaining_is_legal_when_no_child_was_authoritative() -> None:
+    validate_decision(None, before_step(), [_child("reject", authoritative=False)])
+
+
 @pytest.mark.parametrize("action", ["reject", "terminate"])
 def test_a_decision_at_or_above_the_authoritative_floor_stands(action: Action) -> None:
     validate_decision(
