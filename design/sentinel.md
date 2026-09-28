@@ -977,21 +977,23 @@ def concurrent(children: Children) -> ControlProtocol:
         strongest = reports.decisions.strongest()  # escalations do not count
         if strongest is None:
             return Decision.clear()           # every protocol escalated
-        voters = len(deciding(reports.decisions))
-        if strongest.report.action == "modify" and voters > 1:
-            return strongest.report.model_copy(
-                update={
-                    "action": "reject",
-                    "modified": None,
-                    "explanation": f"{strongest.name} modified the call but {voters - 1} other protocol(s) also decided",
-                }
-            )
-        return strongest.report
+        voters = deciding(reports.decisions)
+        if len(voters) == 1:
+            return strongest.report
+        own = strongest.report.explanation
+        update: dict[str, object] = {}
+        if strongest.report.action == "modify":    # others decided about the call as it stood
+            rewrite = f"{strongest.name} modified the call but {len(voters) - 1} other protocol(s) also decided"
+            own = f"{rewrite}: {own}" if own else rewrite
+            update = {"action": "reject", "modified": None}
+        summary = "; ".join(f"{d.name}: {d.report.action}" for d in voters)
+        update["explanation"] = f"{own} ({summary})" if own else summary
+        return strongest.report.model_copy(update=update)
 
     return run
 ```
 
-That settles the `modify` question this document previously left open: concurrent children cannot see each other's rewrites, so a `modify` when more than one child decided is a rejection naming the modifier, keeping the modifier's `audit` and `metadata`. Re-approving modified arguments is more machinery than the decision is worth for now, and #5423 reached the same answer independently. The name pairs with `chain`: both say how the children run and leave the decision rule to the docs. `strictest` and `all_of` were the alternatives; the first named only the recommendation half of the reduction (observations aggregate by max, not strictness) and the second named what the configuration means rather than its shape.
+That settles the `modify` question this document previously left open: concurrent children cannot see each other's rewrites, so a `modify` when more than one child decided is a rejection naming the modifier, keeping the modifier's `audit`, `metadata` and explanation. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own. Re-approving modified arguments is more machinery than the decision is worth for now, and #5423 reached the same answer independently. The name pairs with `chain`: both say how the children run and leave the decision rule to the docs. `strictest` and `all_of` were the alternatives; the first named only the recommendation half of the reduction (observations aggregate by max, not strictness) and the second named what the configuration means rather than its shape.
 
 **Concurrent is the default, and ordered is one explicit word.** The argument for making ordered the default is that many people will want a chain, which is true. The argument against is that ordered-by-default silences monitors, and silencing is a safety failure while concurrency's cost is latency and tokens. A default should fail safe, and changing one later is a silent semantic change for everyone. So a list with a protocol in it is `concurrent`, and a chain is `chain(...)`. The mistake the wrong default would produce most often — a `human()` in a concurrent group, prompting on every call — is caught at configuration time with a message that names `chain()`.
 

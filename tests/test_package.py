@@ -79,7 +79,5 @@ def test_integration_module_exports_the_dispatcher_surface() -> None:
         "check_instance_name",
         "compile_sentinel",
         "step_types",
-        "Final",
-        "check_decision_shape",
         "run_root",
     }
