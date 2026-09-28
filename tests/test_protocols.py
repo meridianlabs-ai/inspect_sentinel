@@ -384,9 +384,20 @@ def rules() -> Sequence[ControlProtocol]:
 
 
 @monitor
-def before_and_after(value: float = 0.7) -> Sequence[Monitor]:
-    async def before(context: Context, step: BeforeToolCall) -> Observation | None:
+def two_before(value: float = 0.7) -> Sequence[Monitor]:
+    async def low(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(0.1)
+
+    async def high(context: Context, step: BeforeToolCall) -> Observation | None:
         return Observation.score(value)
+
+    return [low, high]
+
+
+@monitor
+def before_and_after() -> Sequence[Monitor]:
+    async def before(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(0.1)
 
     async def after(context: Context, step: AfterToolCall) -> Observation | None:
         return Observation.score(1.0)
@@ -407,10 +418,10 @@ async def test_concurrent_votes_a_groups_members_like_separate_protocols() -> No
 
 
 @pytest.mark.anyio
-async def test_threshold_reads_a_groups_members_at_the_stages_they_watch() -> None:
+async def test_threshold_reads_every_member_of_a_group() -> None:
     recorder = ListRecorder()
     decision = await _run(
-        threshold([before_and_after(0.7)], reject_at=0.5), before_step(), recorder
+        threshold([two_before(0.7)], reject_at=0.5), before_step(), recorder
     )
     assert decision is not None and decision.explanation == "suspicion 0.70"
 
@@ -428,3 +439,10 @@ def test_threshold_rejects_a_group_that_never_watches_a_tool_call() -> None:
 
     with pytest.raises(TypeError, match="later"):
         threshold([later()], reject_at=0.5)
+
+
+def test_threshold_rejects_a_group_with_a_member_that_never_watches_a_tool_call() -> (
+    None
+):
+    with pytest.raises(TypeError, match="'before_and_after' \\(function 'after'\\)"):
+        threshold([before_and_after()], reject_at=0.5)

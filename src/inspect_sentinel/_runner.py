@@ -464,6 +464,10 @@ def _on_final(
     return cast(Final, _surface([], finals))
 
 
+def describe(name: str, function: str, grouped: bool) -> str:
+    return f"{name!r} (function {function!r})" if grouped else repr(name)
+
+
 def _validate_shape(decision: Decision, step: Step, name: str) -> None:
     try:
         validate_decision_shape(decision, step)
