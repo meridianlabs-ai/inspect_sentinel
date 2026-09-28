@@ -33,7 +33,7 @@ def observe(monitors: Monitors) -> ControlProtocol:
 def concurrent(children: Children) -> ControlProtocol:
     """Run every child at once; the strictest decision wins.
 
-    What a list containing a protocol compiles to. Monitors are recorded and their observations left for a parent to read; protocols vote by `terminate > reject > modify > continue`, the first in configuration order winning a tie, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when more than one protocol decided becomes a `reject` naming the modifier, since the others decided about the call as it stood; the rejection carries the modifier's `audit` and `metadata`. A child that calls `final()` ends the step and no vote is taken.
+    What a list containing a protocol compiles to. Monitors are recorded in the transcript; protocols vote by `terminate > reject > modify > continue`, the first in configuration order winning a tie, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when more than one protocol decided becomes a `reject` naming the modifier, since the others decided about the call as it stood; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own. A child that calls `final()` ends the step and no vote is taken.
 
     Args:
         children: Monitors and protocols to run together.
@@ -49,16 +49,18 @@ def concurrent(children: Children) -> ControlProtocol:
         strongest = reports.decisions.strongest()
         if strongest is None:
             return Decision.clear()
-        voters = len(deciding(reports.decisions))
-        if strongest.report.action == "modify" and voters > 1:
-            return strongest.report.model_copy(
-                update={
-                    "action": "reject",
-                    "modified": None,
-                    "explanation": f"{strongest.name} modified the call but {voters - 1} other protocol(s) also decided",
-                }
-            )
-        return strongest.report
+        voters = deciding(reports.decisions)
+        if len(voters) == 1:
+            return strongest.report
+        own = strongest.report.explanation
+        update: dict[str, object] = {}
+        if strongest.report.action == "modify":
+            rewrite = f"{strongest.name} modified the call but {len(voters) - 1} other protocol(s) also decided"
+            own = f"{rewrite}: {own}" if own else rewrite
+            update = {"action": "reject", "modified": None}
+        summary = "; ".join(f"{d.name}: {d.report.action}" for d in voters)
+        update["explanation"] = f"{own} ({summary})" if own else summary
+        return strongest.report.model_copy(update=update)
 
     return run
 

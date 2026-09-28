@@ -224,6 +224,27 @@ async def run_protocol(
     return await _run_child(protocol, "protocol", Decision, context, step, name)
 
 
+async def run_root(
+    protocol: ControlProtocol, context: Context, step: Step
+) -> Decision | None:
+    """Invoke the compiled root protocol for one step and return the step's outcome.
+
+    The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare. Its decision is shape-checked and recorded like any layer's; a `final()` from below records the root as bypassed and its decision is returned, so the caller need not catch `Final`.
+
+    Args:
+        protocol: The root protocol, as `compile_sentinel` returned it.
+        context: The top layer's context, whose `path` is empty.
+        step: The step being examined.
+    """
+    try:
+        reported = await _run_child(
+            protocol, "protocol", Decision, context, step, None, root=True
+        )
+    except Final as ex:
+        return ex.decision
+    return reported.report if reported is not None else None
+
+
 async def run_monitors(
     monitors: Monitors, context: Context, step: Step
 ) -> Observations:
@@ -317,18 +338,27 @@ async def _run_child(
     context: Context,
     step: Step,
     name: str | None,
+    *,
+    root: bool = False,
 ) -> Reported[R] | None:
     if not isinstance(context, RunnerContext):
         raise TypeError(
             "The runner needs the RunnerContext the dispatcher provided; a Context constructed elsewhere cannot record reports."
         )
     info, accepted = _check_child(child, kind)
-    child_name = check_instance_name(
-        name if name is not None else registry_unqualified_name(info)
-    )
+    if root:
+        if context.path != "":
+            raise ValueError(
+                f"The root runs at the top layer, whose path is empty; got path {context.path!r}."
+            )
+        child_name = registry_unqualified_name(info)
+    else:
+        child_name = check_instance_name(
+            name if name is not None else registry_unqualified_name(info)
+        )
     if not isinstance(step, tuple(accepted)):
         return None
-    child_context = context.child(child_name)
+    child_context = context if root else context.child(child_name)
     invoke = cast(Callable[[Context, Step], Awaitable[Report | None]], child)
     report: Report | None = None
     finals: list[Final] = []

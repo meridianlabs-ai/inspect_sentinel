@@ -48,19 +48,22 @@ def afterwards() -> Monitor:
 
 
 @protocol
-def says(action: Action = "continue") -> ControlProtocol:
+def says(
+    action: Action = "continue", explanation: str | None = None
+) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(action=action)
+        return Decision(action=action, explanation=explanation)
 
     return decide
 
 
 @protocol
-def rewrites() -> ControlProtocol:
+def rewrites(explanation: str | None = None) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(
             action="modify",
             modified=ToolCall(id="c1", function="bash", arguments={"cmd": "echo hi"}),
+            explanation=explanation,
         )
 
     return decide
@@ -143,12 +146,34 @@ async def test_concurrent_honours_a_lone_modify() -> None:
 @pytest.mark.anyio
 async def test_concurrent_turns_a_contested_modify_into_a_reject() -> None:
     decision = await _run(
-        concurrent({"rewriter": rewrites(), "approver": says("continue")}),
+        concurrent({"rewriter": rewrites("safer"), "approver": says("continue")}),
         before_step(),
         ListRecorder(),
     )
     assert decision is not None and decision.action == "reject"
-    assert decision.explanation is not None and "rewriter" in decision.explanation
+    assert decision.explanation == (
+        "rewriter modified the call but 1 other protocol(s) also decided: safer"
+        " (rewriter: modify; approver: continue)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("children", "expected"),
+    [
+        (
+            {"a": says("continue"), "b": says("reject", "too risky")},
+            "too risky (a: continue; b: reject)",
+        ),
+        ({"a": says("continue"), "b": says("reject")}, "a: continue; b: reject"),
+        ({"a": says("reject", "alone"), "b": says("escalate")}, "alone"),
+    ],
+)
+@pytest.mark.anyio
+async def test_concurrent_explains_a_contested_decision_by_its_voters(
+    children: Protocols, expected: str
+) -> None:
+    decision = await _run(concurrent(children), before_step(), ListRecorder())
+    assert decision is not None and decision.explanation == expected
 
 
 @protocol

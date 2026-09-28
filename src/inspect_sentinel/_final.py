@@ -20,7 +20,7 @@ class Passed(NamedTuple):
 
 
 class Final(BaseException):
-    """Raised by `final()` and carried out of the runner to the dispatcher. A `BaseException`, so a protocol's own `except Exception` cannot swallow it."""
+    """Raised by `final()` and carried through the runner to `run_root`, which returns its decision. A `BaseException`, so a protocol's own `except Exception` cannot swallow it."""
 
     def __init__(self, decision: Decision) -> None:
         super().__init__(decision.action)

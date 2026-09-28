@@ -1,5 +1,3 @@
-from typing import Any, cast
-
 import pytest
 from inspect_ai.tool import ToolCall
 
@@ -45,12 +43,6 @@ def test_only_a_modify_may_carry_a_replacement() -> None:
         check_decision_shape(
             Decision(action="continue", modified=_call()), before_step()
         )
-
-
-def test_a_modify_before_a_tool_call_replaces_the_call() -> None:
-    decision = Decision.model_construct(action="modify", modified=cast(Any, "rm -rf /"))
-    with pytest.raises(ValueError, match="ToolCall"):
-        check_decision_shape(decision, before_step())
 
 
 def test_final_raises_final_carrying_the_decision() -> None:

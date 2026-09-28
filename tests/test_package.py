@@ -66,6 +66,7 @@ def test_integration_names_are_not_exported() -> None:
         "check_instance_name",
         "PRECEDENCE",
         "named_children",
+        "run_root",
     ):
         assert name not in inspect_sentinel.__all__
 
@@ -80,4 +81,5 @@ def test_integration_module_exports_the_dispatcher_surface() -> None:
         "step_types",
         "Final",
         "check_decision_shape",
+        "run_root",
     }

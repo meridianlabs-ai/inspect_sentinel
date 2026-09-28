@@ -680,11 +680,11 @@ When any protocol returns a decision, or passes one to `final()`, the runner che
 Shape checks raise. Each is a deterministic bug in a protocol, not agent input, and the error names the protocol.
 
 - The action is legal for the stage.
-- `modified` is set if and only if `action == "modify"`, with the right type for the stage.
+- `modified` is set if and only if `action == "modify"`. Its type is enforced by `Decision`'s validation, not by the runner.
 
 `final()` is the mechanism for a decision no layer above may weaken. It replaces an earlier design in which a `binding` flag set a floor that the runner clamped each layer's return up to, recording the override. A value-level rule requires every layer to carry or compare the property, and each patch to it leaked where a middle layer built a new decision; control flow cannot be dropped by a middle layer, because that layer's code does not run. It reuses `terminate`'s cancellation, and the first `final()` wins, as with two `terminate`s. Ordering several authorities is a `chain`, or a panel that collects advisory votes and calls `final()` itself; see [Humans](#humans).
 
-The dispatcher awaits the compiled root inside `try: ... except Final as ex: decision = ex.decision`; a normal return is the root's own decision.
+The dispatcher invokes the compiled root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`.
 
 ### Two compositions
 
@@ -980,7 +980,7 @@ Rules:
   name="concurrent",        path="",                          kind="bypassed"
   ```
 
-  The person's `reject` went through `final()`: its event is the ordinary decision event of `human`, followed by one `bypassed` event per layer above. If two `final()` calls race in one layer, the loser's event is `superseded` and its decision did not take effect. Without a final decision the last line is the summary event. The top-level protocol emits it only when more than one child participated, and its explanation lists each child's decision.
+  The person's `reject` went through `final()`: its event is the ordinary decision event of `human`, followed by one `bypassed` event per layer above. If two `final()` calls race in one layer, the loser's event is `superseded` and its decision did not take effect. Without a final decision the last line is the summary event, the root's own decision at `path=""`. Every layer's decision is recorded, the root's included; when more than one child decided, a layer's explanation lists each child's decision after the winner's own.
 
 - **`name` is which code ran. `path` is which configured instance it was.** Two chains built from the same factory differ only in `path`. `kind` says which family it belongs to, and agrees with the registry type by construction.
 - **`step_id` is what a label matches.** For `BeforeGenerate` it is the id of the message that triggered the generate, with an ordinal suffix on a regenerate; for `AfterGenerate` the assistant message id; for the tool stages the tool call id. All three exist before the monitor runs, so recorded events and replayed steps share ids. See `sentinel-development.md`.

@@ -501,7 +501,7 @@ def final(decision: Decision) -> NoReturn:
     """End the step with this decision."""
 ```
 
-A protocol that has the last word calls `final(decision)`, and the step ends there. Nothing above the calling protocol runs: each layer's `await run_protocol(...)` or `await run_children(...)` never returns, so its decision logic never sees the decision and cannot weaken it. Siblings still in flight are cancelled and recorded as cancelled, as they are for `terminate`, and the decision is the step's outcome. The runner still [checks its shape](#the-boundary-check), records it as the decision of the protocol that called `final()`, and records each layer it passed as `bypassed` (see [Transcript](#transcript)). The dispatcher awaits the compiled root inside `try: ... except Final as ex: decision = ex.decision`; a normal return is the root's own decision.
+A protocol that has the last word calls `final(decision)`, and the step ends there. Nothing above the calling protocol runs: each layer's `await run_protocol(...)` or `await run_children(...)` never returns, so its decision logic never sees the decision and cannot weaken it. Siblings still in flight are cancelled and recorded as cancelled, as they are for `terminate`, and the decision is the step's outcome. The runner still [checks its shape](#the-boundary-check), records it as the decision of the protocol that called `final()`, and records each layer it passed as `bypassed` (see [Transcript](#transcript)). The dispatcher invokes the compiled root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`.
 
 `human()` will call it by default, and `human(final=False)` returns an ordinary advisory decision, which is how a person becomes one vote among several (see [Humans in the loop](#humans-in-the-loop)). Nothing stops an LLM-backed protocol from calling `final()`, and nothing should — the framework cannot verify that a human was involved, only that the author claimed the last word — but the claim is visible in the transcript and in code review, which is the same discipline `portable=False` relies on.
 
@@ -1002,7 +1002,7 @@ When any layer returns a decision, or passes one to `final()`, the runner checks
 **Shape checks raise.** These are the rules no type can express, and a violation is a deterministic bug in the protocol, not agent input, so it raises, per the "invalid state" rule from AGENTS.md, naming the protocol that produced the decision:
 
 - **The action is legal for the stage** — no `reject` or `modify` at `AfterToolCall`, per [One vocabulary across stages](#one-vocabulary-across-stages).
-- **`modified` is set iff `action == "modify"`**, and carries the right type for the stage.
+- **`modified` is set iff `action == "modify"`**. Its type is `Decision`'s field type, which validation already enforces, so the runner does not check it again; a decision built with `model_construct` has opted out of validation.
 
 **A decision no layer above may weaken is [`final()`](#authoritative-reports).** It replaces an earlier design in which a `binding` flag on the decision set a floor: the runner compared each layer's return with its binding children's, clamped a weaker one up, and kept the protocol's own decision on the record as `overrode`.
 
@@ -1386,7 +1386,7 @@ name="sandbox_escape",    path="escape",                    kind="decision",  de
 name="concurrent",        path="",                          kind="bypassed"
 ```
 
-The person's `reject` went through `final()`, so the `chain` and the top-level `concurrent` above it are `bypassed`. Without a final decision the last line is the summary event #5423 wanted: the top-level `concurrent` records the combined decision, and its explanation lists each child's. It is emitted only when more than one child participated, so a configuration with a single rule logs one event per step, as approval does today.
+The person's `reject` went through `final()`, so the `chain` and the top-level `concurrent` above it are `bypassed`. Without a final decision the last line is the summary event #5423 wanted: the top-level `concurrent` records the combined decision at `path=""`. Every layer's decision is recorded, the root's included, so a configuration with a single rule logs two events per step, the rule's and the root's; when more than one child decided, the layer's explanation lists each child's decision after the winner's own.
 
 An earlier draft added a `strategy: str` here and on `Decision`, to record whether a `modify` came from a deferral, a resample or a trusted edit. It was removed: **the layer's identity already is the strategy.** A protocol named `defer_to_trusted` returning `modify` has said what it did, and the aggregate query that justified the field — how often did this protocol defer — is `monitor == "defer_to_trusted" and decision == "modify"`. Worse, on `Decision` it was a field every rule carried and never set.
 

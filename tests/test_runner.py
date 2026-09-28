@@ -5,6 +5,7 @@ import pytest
 from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import ToolCall
 
+from inspect_sentinel._compile import compile_sentinel
 from inspect_sentinel._context import Context
 from inspect_sentinel._final import Final, final
 from inspect_sentinel._monitor import (
@@ -24,6 +25,7 @@ from inspect_sentinel._runner import (
     run_monitors,
     run_protocol,
     run_protocols,
+    run_root,
 )
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from tests._fakes import ListRecorder, after_step, before_step, runner_context
@@ -1013,3 +1015,56 @@ async def test_a_final_propagating_through_a_monitor_names_the_protocol() -> Non
     assert info.value.decision.action == "reject"
     assert [r.reported.path for r in recorder.records] == ["consults/finalizes"]
     assert recorder.bypassed_layers == [("consults", "consults")]
+
+
+@pytest.mark.anyio
+async def test_run_root_returns_a_final_decision_and_records_the_root_bypassed() -> (
+    None
+):
+    recorder = ListRecorder()
+    decision = await run_root(
+        compile_sentinel([finalizes("reject")]),
+        runner_context(recorder=recorder),
+        before_step(),
+    )
+    assert decision == Decision(action="reject")
+    assert [(r.reported.path, r.reported.report) for r in recorder.records] == [
+        ("finalizes", decision)
+    ]
+    assert recorder.bypassed_layers == [("", "concurrent")]
+
+
+@pytest.mark.anyio
+async def test_run_root_records_the_roots_own_decision_at_the_empty_path() -> None:
+    recorder = ListRecorder()
+    decision = await run_root(
+        compile_sentinel([decides("reject")]),
+        runner_context(recorder=recorder),
+        before_step(),
+    )
+    assert decision == Decision(action="reject")
+    assert [(r.reported.name, r.reported.path) for r in recorder.records] == [
+        ("decides", "decides"),
+        ("concurrent", ""),
+    ]
+
+
+@pytest.mark.anyio
+async def test_run_root_checks_the_roots_decision_shape() -> None:
+    @protocol
+    def illegal() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            return Decision(action="modify")
+
+        return decide
+
+    with pytest.raises(ValueError, match="'illegal'"):
+        await run_root(illegal(), runner_context(), before_step())
+
+
+@pytest.mark.anyio
+async def test_run_root_needs_the_top_layer_context() -> None:
+    with pytest.raises(ValueError, match="path"):
+        await run_root(
+            compile_sentinel([decides()]), runner_context(path="x"), before_step()
+        )
