@@ -115,27 +115,38 @@ class Reports:
 R = TypeVar("R", bound=Report)
 
 
+def _leaves(group: BaseExceptionGroup[BaseException]) -> list[BaseException]:
+    # cancellations are dropped; a group of only cancellations has no leaves
+    leaves: list[BaseException] = []
+    for ex in group.exceptions:
+        if isinstance(ex, BaseExceptionGroup):
+            leaves.extend(_leaves(cast(BaseExceptionGroup[BaseException], ex)))
+        elif not isinstance(ex, anyio.get_cancelled_exc_class()):
+            leaves.append(ex)
+    return leaves
+
+
 @asynccontextmanager
 async def _task_group() -> AsyncGenerator[TaskGroup]:
-    # Only the first failure surfaces, as in inspect_ai's tg_collect; a second
-    # concurrent failure and any nested group are not flattened or chained. It is
-    # re-raised outside the handler so its own __cause__ and __context__ survive
-    # and the group does not appear in the traceback. On trio a child error can
-    # arrive alongside the cancellation in one BaseExceptionGroup; the error is
-    # surfaced, as anyio's asyncio backend already does, and a group holding
-    # only cancellations propagates untouched. An error outranks a Final, so a
-    # bug is not hidden behind a final decision; of several Finals the first
-    # to arrive wins, the others having been recorded.
+    # Nested groups are flattened to their leaves, so a Final raised inside a
+    # protocol's own task group is still seen. Only the first failure surfaces,
+    # as in inspect_ai's tg_collect; it is re-raised outside the handler so its
+    # own __cause__ and __context__ survive and the group does not appear in
+    # the traceback. On trio a child error can arrive alongside the
+    # cancellation in one BaseExceptionGroup; the error is surfaced, as anyio's
+    # asyncio backend already does, and a group holding only cancellations
+    # propagates untouched. An error outranks a Final, so a bug is not hidden
+    # behind a final decision; of several Finals the first to arrive wins.
     first: BaseException | None = None
     try:
         async with anyio.create_task_group() as tg:
             yield tg
     except BaseExceptionGroup as ex:
-        _, rest = ex.split(anyio.get_cancelled_exc_class())
-        if rest is None:
+        leaves = _leaves(ex)
+        if not leaves:
             raise
-        _, errors = rest.split(Final)
-        first = (errors if errors is not None else rest).exceptions[0]
+        errors = [leaf for leaf in leaves if not isinstance(leaf, Final)]
+        first = (errors or leaves)[0]
     if first is not None:
         raise first
 
@@ -276,6 +287,8 @@ async def _run_child(
         return None
     child_context = context.child(child_name)
     invoke = cast(Callable[[Context, Step], Awaitable[Report | None]], child)
+    report: Report | None = None
+    fanned: Final | None = None
     try:
         report = await invoke(child_context, step)
     except anyio.get_cancelled_exc_class():
@@ -285,21 +298,17 @@ async def _run_child(
         child_context.recorder.cancelled(child_context, step, child_name)
         raise
     except Final as ex:
-        if kind == "monitor":
-            raise TypeError(
-                f"monitor {child_name!r} called final(); a monitor returns observations, and only a protocol may end the step."
-            ) from ex
-        if ex.origin_path is None:
-            ex.origin_path = child_context.path
-            _check_shape(ex.decision, step, child_name)
-            child_context.recorder.record(
-                child_context,
-                step,
-                Reported(name=child_name, path=child_context.path, report=ex.decision),
-            )
-        else:
-            child_context.recorder.bypassed(child_context, step, child_name)
+        _on_final(ex, kind, child_context, step, child_name)
         raise
+    except BaseExceptionGroup as ex:
+        # a protocol that fanned out with its own task group or tg_collect
+        leaves = _leaves(ex)
+        if not leaves or not all(isinstance(leaf, Final) for leaf in leaves):
+            raise
+        fanned = cast(Final, leaves[0])
+    if fanned is not None:
+        _on_final(fanned, kind, child_context, step, child_name)
+        raise fanned
     if report is not None and not isinstance(report, report_type):
         raise TypeError(
             f"{kind} {child_name!r} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
@@ -311,6 +320,29 @@ async def _run_child(
     reported = Reported(name=child_name, path=child_context.path, report=report)
     child_context.recorder.record(child_context, step, reported)
     return reported
+
+
+def _on_final(
+    ex: Final,
+    kind: Literal["monitor", "protocol"],
+    child_context: RunnerContext,
+    step: Step,
+    child_name: str,
+) -> None:
+    if kind == "monitor":
+        raise TypeError(
+            f"monitor {child_name!r} called final(); a monitor returns observations, and only a protocol may end the step."
+        ) from ex
+    if ex.origin_path is None:
+        ex.origin_path = child_context.path
+        _check_shape(ex.decision, step, child_name)
+        child_context.recorder.record(
+            child_context,
+            step,
+            Reported(name=child_name, path=child_context.path, report=ex.decision),
+        )
+    else:
+        child_context.recorder.bypassed(child_context, step, child_name)
 
 
 def _check_shape(decision: Decision, step: Step, name: str) -> None:

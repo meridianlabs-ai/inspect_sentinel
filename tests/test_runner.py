@@ -897,3 +897,44 @@ async def test_a_monitor_that_calls_final_is_a_bug() -> None:
             [decides_instead()], runner_context(recorder=recorder), before_step()
         )
     assert recorder.records == []
+
+
+@pytest.mark.anyio
+async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -> None:
+    started = anyio.Event()
+
+    @protocol
+    def slow() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            started.set()
+            await anyio.sleep_forever()
+            return None
+
+        return decide
+
+    @protocol
+    def leaf() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await started.wait()
+            final(Decision.reject("fanned out"))
+
+        return decide
+
+    @protocol
+    def custom() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(run_protocol, slow(), context, step)
+                tg.start_soon(run_protocol, leaf(), context, step)
+            return Decision.clear()
+
+        return decide
+
+    recorder = ListRecorder()
+    with anyio.fail_after(5), pytest.raises(Final) as info:
+        await run_protocol(custom(), runner_context(recorder=recorder), before_step())
+    assert info.value.decision == Decision.reject("fanned out")
+    assert [(r.reported.path, r.reported.report) for r in recorder.records] == [
+        ("custom/leaf", info.value.decision)
+    ]
+    assert recorder.bypassed_layers == [("custom", "custom")]
