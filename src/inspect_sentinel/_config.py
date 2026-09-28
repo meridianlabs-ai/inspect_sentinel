@@ -295,7 +295,7 @@ def _config_entry(recorded: RegistryDict) -> SentinelEntry:
     params: dict[str, Any] = {}
     nested: dict[str, SentinelConfig] = {}
     for key, value in recorded["params"].items():
-        layer = _sentinel_layer(value)
+        layer = None if key in ENTRY_FIELDS else _sentinel_layer(value)
         if layer is None:
             params[key] = value
         else:
