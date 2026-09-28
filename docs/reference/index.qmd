@@ -38,8 +38,6 @@ reference: inspect_sentinel
 
 ## Runner
 
-### run_monitor
-### run_protocol
 ### run_monitors
 ### run_protocols
 ### run_children

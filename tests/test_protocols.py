@@ -18,7 +18,7 @@ from inspect_sentinel._monitor import (
 )
 from inspect_sentinel._protocols import concurrent, observe, threshold
 from inspect_sentinel._report import Action, Decision, Observation, Suspicion
-from inspect_sentinel._runner import run_protocol, run_protocols, run_root
+from inspect_sentinel._runner import run_protocols, run_root
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
@@ -72,7 +72,7 @@ def rewrites(explanation: str | None = None) -> ControlProtocol:
 @protocol
 def wrapper(child: ControlProtocol) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        await run_protocol(child, context, step)
+        await run_protocols(child, context, step)
         return Decision.clear()
 
     return decide
@@ -81,8 +81,8 @@ def wrapper(child: ControlProtocol) -> ControlProtocol:
 async def _run(
     instance: ControlProtocol, step: Step, recorder: ListRecorder
 ) -> Decision | None:
-    reported = await run_protocol(instance, runner_context(recorder=recorder), step)
-    return reported.report if reported is not None else None
+    decisions = await run_protocols(instance, runner_context(recorder=recorder), step)
+    return decisions[0].report if decisions else None
 
 
 @pytest.mark.anyio

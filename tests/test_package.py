@@ -40,9 +40,7 @@ def test_author_facing_names_are_exported() -> None:
         "Observations",
         "Reports",
         "run_children",
-        "run_monitor",
         "run_monitors",
-        "run_protocol",
         "run_protocols",
         "observe",
         "concurrent",
@@ -69,6 +67,12 @@ def test_integration_names_are_not_exported() -> None:
         "run_root",
     ):
         assert name not in inspect_sentinel.__all__
+
+
+def test_single_child_runners_are_gone() -> None:
+    for name in ("run_monitor", "run_protocol"):
+        assert name not in inspect_sentinel.__all__
+        assert not hasattr(inspect_sentinel, name)
 
 
 def test_integration_module_exports_the_dispatcher_surface() -> None:

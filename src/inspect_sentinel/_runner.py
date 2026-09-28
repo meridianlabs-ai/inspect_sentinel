@@ -185,36 +185,6 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
         raise first
 
 
-async def run_monitor(
-    monitor: Monitor, context: Context, step: Step, *, name: str | None = None
-) -> Reported[Observation] | None:
-    """Invoke one monitor if it accepts this step's payload.
-
-    Derives the child's context under this layer's path, records the observation, and returns it. Returns `None` if the monitor abstained or does not watch this stage.
-
-    Args:
-        monitor: The monitor instance.
-        context: This layer's context, as the dispatcher provided it.
-        step: The step being examined.
-        name: The child's instance name; the registry name without its package prefix when omitted.
-    """
-    return await _run_child(monitor, "monitor", Observation, context, step, name)
-
-
-async def run_protocol(
-    protocol: ControlProtocol, context: Context, step: Step, *, name: str | None = None
-) -> Reported[Decision] | None:
-    """The same as `run_monitor`, for one protocol.
-
-    Args:
-        protocol: The protocol instance.
-        context: This layer's context, as the dispatcher provided it.
-        step: The step being examined.
-        name: The child's instance name; the registry name without its package prefix when omitted.
-    """
-    return await _run_child(protocol, "protocol", Decision, context, step, name)
-
-
 async def run_root(
     protocol: ControlProtocol, context: Context, step: Step
 ) -> Decision | None:
@@ -243,12 +213,14 @@ async def run_root(
 
 
 async def run_monitors(
-    monitors: Monitors, context: Context, step: Step
+    monitors: Monitor | Monitors, context: Context, step: Step
 ) -> Observations:
     """Run monitors concurrently and collect their observations in configuration order.
 
+    Derives each child's context under this layer's path and records every observation, including the ones the caller goes on to ignore. A monitor that abstained or does not watch this stage contributes nothing, so the result may be empty.
+
     Args:
-        monitors: A sequence of monitors, or a mapping of instance names to monitors.
+        monitors: One monitor, named by its registry name without the package prefix; a sequence of monitors, named the same way; or a mapping of instance names to monitors.
         context: This layer's context.
         step: The step being examined.
     """
@@ -257,14 +229,14 @@ async def run_monitors(
 
 
 async def run_protocols(
-    protocols: Protocols, context: Context, step: Step
+    protocols: ControlProtocol | Protocols, context: Context, step: Step
 ) -> Decisions:
     """Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns `terminate` or calls `final()`.
 
     A `final()` from any protocol at any depth below propagates out of this call, so the caller's own decision logic does not run.
 
     Args:
-        protocols: A sequence of protocols, or a mapping of instance names to protocols.
+        protocols: One protocol, a sequence of protocols, or a mapping of instance names to protocols, named as for `run_monitors`.
         context: This layer's context.
         step: The step being examined.
     """
@@ -272,13 +244,15 @@ async def run_protocols(
     return (await _run_named(named, context, step)).decisions
 
 
-async def run_children(children: Children, context: Context, step: Step) -> Reports:
+async def run_children(
+    children: Monitor | ControlProtocol | Children, context: Context, step: Step
+) -> Reports:
     """Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns `terminate` or calls `final()`.
 
     A child cancelled this way is recorded through `Recorder.cancelled`; one that finishes without awaiting is recorded normally.
 
     Args:
-        children: A sequence of monitors and protocols, or a mapping of instance names to them.
+        children: One monitor or protocol, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.
         context: This layer's context.
         step: The step being examined.
     """
@@ -457,12 +431,17 @@ def _check_child(
 
 
 def named_children(
-    children: Mapping[str, Monitor | ControlProtocol]
+    children: Monitor
+    | ControlProtocol
+    | Mapping[str, Monitor | ControlProtocol]
     | Iterable[Monitor | ControlProtocol],
     expected: Literal["monitor", "protocol"] | None,
 ) -> list[tuple[str, Monitor | ControlProtocol]]:
     pairs: list[tuple[object, Monitor | ControlProtocol]]
-    if isinstance(children, Mapping):
+    if callable(children):
+        pairs = [(None, children)]
+        keyed = False
+    elif isinstance(children, Mapping):
         mapping = cast(Mapping[str, Monitor | ControlProtocol], children)
         pairs = [(key, child) for key, child in mapping.items()]
         keyed = True
@@ -471,7 +450,7 @@ def named_children(
         keyed = False
     else:
         raise TypeError(
-            "children must be a Mapping or a Sequence; a set or an iterator has no configuration order"
+            "children must be a monitor or protocol, a Mapping or a Sequence; a set or an iterator has no configuration order"
         )
     named: list[tuple[str, Monitor | ControlProtocol]] = []
     seen: set[str] = set()
