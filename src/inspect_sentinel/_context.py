@@ -155,11 +155,11 @@ class RunnerContext(Context):
         Args:
             name: The child's instance name, appended to this layer's `path`. Must be non-empty and must not contain `/`.
         """
-        check_instance_name(name)
+        validate_instance_name(name)
         return replace(self, path=f"{self.path}/{name}" if self.path else name)
 
 
-def check_instance_name(name: object) -> str:
+def validate_instance_name(name: object) -> str:
     """Return `name` if it is a string that can be a path segment, else raise `ValueError`.
 
     Args:

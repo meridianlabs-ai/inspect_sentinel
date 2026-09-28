@@ -22,8 +22,8 @@ from inspect_ai._util.registry import (
     registry_unqualified_name,
 )
 
-from ._check import check_decision_shape
-from ._context import Context, RunnerContext, check_instance_name
+from ._check import validate_decision_shape
+from ._context import Context, RunnerContext, validate_instance_name
 from ._final import Final, Origin
 from ._monitor import (
     Children,
@@ -360,7 +360,7 @@ async def _run_child(
             )
         child_name = registry_unqualified_name(info)
     else:
-        child_name = check_instance_name(
+        child_name = validate_instance_name(
             name if name is not None else registry_unqualified_name(info)
         )
     if not isinstance(step, tuple(accepted)):
@@ -398,7 +398,7 @@ async def _run_child(
     if report is None:
         return None
     if isinstance(report, Decision):
-        _check_shape(report, step, child_name)
+        _validate_shape(report, step, child_name)
     reported = Reported(name=child_name, path=child_context.path, report=report)
     child_context.recorder.record(child_context, step, reported)
     return reported
@@ -421,7 +421,7 @@ def _on_final(
     own = winner.origin is None
     try:
         for ex in unclaimed:
-            _check_shape(ex.decision, step, child_name)
+            _validate_shape(ex.decision, step, child_name)
             ex.origin = Origin(
                 child_context,
                 step,
@@ -435,9 +435,9 @@ def _on_final(
     return cast(Final, _surface([], finals))
 
 
-def _check_shape(decision: Decision, step: Step, name: str) -> None:
+def _validate_shape(decision: Decision, step: Step, name: str) -> None:
     try:
-        check_decision_shape(decision, step)
+        validate_decision_shape(decision, step)
     except ValueError as ex:
         raise ValueError(f"protocol {name!r}: {ex}") from ex
 
@@ -475,7 +475,9 @@ def named_children(
     seen: set[str] = set()
     for given, child in pairs:
         info, _ = _check_child(child, expected)
-        name = check_instance_name(given if keyed else registry_unqualified_name(info))
+        name = validate_instance_name(
+            given if keyed else registry_unqualified_name(info)
+        )
         if name in seen:
             raise ValueError(
                 f"Duplicate instance name {name!r} in one layer. Give the children distinct names with a mapping."

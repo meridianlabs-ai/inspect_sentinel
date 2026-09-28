@@ -9,7 +9,7 @@ from inspect_sentinel._context import Context
 from inspect_sentinel._monitor import ControlProtocol, Monitor, monitor, protocol
 from inspect_sentinel._protocols import concurrent, observe, threshold
 from inspect_sentinel._report import Decision, Observation
-from inspect_sentinel._resolve import SentinelSpec, resolve_sentinel
+from inspect_sentinel._resolve import Sentinels, resolve_sentinel
 from inspect_sentinel._runner import run_protocol
 from inspect_sentinel._step import BeforeToolCall, Step
 from tests._fakes import ListRecorder, before_step, runner_context
@@ -102,7 +102,7 @@ def test_observe_written_explicitly_does_not_warn(
 )
 @pytest.mark.anyio
 async def test_a_lone_child_and_a_list_of_one_record_the_same_paths(
-    specs: tuple[Callable[[], SentinelSpec], Callable[[], SentinelSpec]],
+    specs: tuple[Callable[[], Sentinels], Callable[[], Sentinels]],
 ) -> None:
     paths: list[list[str]] = []
     for spec in specs:

@@ -4,7 +4,7 @@ from ._report import Decision
 from ._step import AfterToolCall, Step
 
 
-def check_decision_shape(decision: Decision, step: Step) -> None:
+def validate_decision_shape(decision: Decision, step: Step) -> None:
     """Check a decision for the deterministic protocol bugs no type can express, raising `ValueError` on one.
 
     The action must be legal for the stage (`reject` and `modify` are not legal after a tool call), and `modified` must be set exactly when the action is `modify`.
