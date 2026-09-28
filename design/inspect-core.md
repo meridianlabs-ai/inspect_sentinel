@@ -37,7 +37,7 @@ Static analysis of the transitive closure of the candidate wire-type modules (`_
 The entire cascade traces to **one line**. `_chat_message.py:14`:
 
 ``` python
-from inspect_ai.tool import ToolCall  # package import
+from inspect_ai.tool import ToolCall          # package import
 ```
 
 That runs `inspect_ai/tool/__init__.py`, which pulls the web browser, computer, MCP and skill tools, and from there `inspect_ai.util` → checkpoint → restic → sandbox → everything. Rewritten as `from inspect_ai.tool._tool_call import ToolCall`, the closure collapses to 27 modules.
