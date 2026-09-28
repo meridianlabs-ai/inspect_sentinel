@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Annotated, Any, Generic, Literal, TypeAlias, TypeVar
 
@@ -13,6 +14,17 @@ Suspicion: TypeAlias = (
 
 Action: TypeAlias = Literal["continue", "modify", "reject", "terminate", "escalate"]
 """What a protocol can decide about the step it examined."""
+
+PRECEDENCE: dict[Action, int] = {
+    "terminate": 4,
+    "reject": 3,
+    "modify": 2,
+    "continue": 1,
+}
+
+
+def deciding(items: Iterable[Reported[Decision]]) -> list[Reported[Decision]]:
+    return [item for item in items if item.report.action in PRECEDENCE]
 
 
 class Observation(BaseModel):
@@ -39,16 +51,13 @@ class Observation(BaseModel):
 
 
 class Decision(BaseModel):
-    """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it."""
+    """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to `final()`."""
 
     action: Action
     """What should happen at this step. Required."""
 
     audit: bool = Field(default=False)
     """Request that oversight budget be spent on this step."""
-
-    authoritative: bool = Field(default=False)
-    """A decision no protocol may weaken. Set by a human decider."""
 
     modified: ToolCall | None = Field(default=None)
     """Replacement for the step's subject, for a `modify` decision."""

@@ -30,6 +30,12 @@ reference: inspect_sentinel
 ### Protocols
 ### Children
 
+## Shipped protocols
+
+### observe
+### concurrent
+### threshold
+
 ## Runner
 
 ### run_monitor
@@ -37,6 +43,7 @@ reference: inspect_sentinel
 ### run_monitors
 ### run_protocols
 ### run_children
+### final
 ### Observations
 ### Decisions
 ### Reports

@@ -8,7 +8,7 @@ from inspect_ai.scorer import Target
 from inspect_ai.tool import ToolInfo
 from inspect_ai.util import Store, StoreModel
 
-from ._report import Report, Reported
+from ._report import Decision, Report, Reported
 from ._step import Step
 
 SMT = TypeVar("SMT", bound=StoreModel)
@@ -51,14 +51,40 @@ class Recorder(Protocol):
         ...
 
     def cancelled(self, context: Context, step: Step, name: str) -> None:
-        """Record that a child was cancelled before it reported: a sibling decided `terminate`, a sibling raised, or the layer was cancelled from above.
+        """Record that a child was cancelled before it reported: a sibling decided `terminate` or called `final()`, a sibling raised, or the layer was cancelled from above.
 
-        The cause is not recorded here; a `terminate` or an exception in the same layer says which it was.
+        The cause is not recorded here; a `terminate`, a `final()` or an exception in the same layer says which it was.
 
         Args:
             context: The child's context; its `path` identifies the instance.
             step: The step the child was examining.
             name: The child's instance name.
+        """
+        ...
+
+    def bypassed(self, context: Context, step: Step, name: str) -> None:
+        """Record that a final decision from a descendant passed this layer without running its decision logic. The step ended with that decision unless a later superseded record says otherwise.
+
+        The final decision itself is recorded through `record` for the protocol that made it when it takes effect, at the root, after the `bypassed` record of each layer it passed.
+
+        Args:
+            context: The child's context; its `path` identifies the instance.
+            step: The step the child was examining.
+            name: The child's instance name.
+        """
+        ...
+
+    def superseded(
+        self, context: Context, step: Step, reported: Reported[Decision]
+    ) -> None:
+        """Record a final decision that lost a race to another final decision in the same layer, or that an exception in the same layer outranked; it did not take effect.
+
+        Also records a `terminate`, already recorded through `record`, that a sibling's `final()` outran in a runner-managed group (`run_children`, `run_protocols`): the step ended with the final decision instead. A protocol that fans out with its own task group gets no such record; its children's decisions stay as recorded.
+
+        Args:
+            context: The deciding protocol's context; its `path` identifies the instance.
+            step: The step the protocol was examining.
+            reported: The decision that did not take effect, with its instance identity.
         """
         ...
 
@@ -120,7 +146,7 @@ class RunnerContext(Context):
         # a runtime check for hosts that are not type-checked against Recorder
         if not isinstance(cast(object, self.recorder), Recorder):
             raise TypeError(
-                f"Recorder {type(self.recorder).__name__} must implement record() and cancelled()."
+                f"Recorder {type(self.recorder).__name__} must implement record(), cancelled(), bypassed() and superseded()."
             )
 
     def child(self, name: str) -> RunnerContext:
@@ -129,11 +155,11 @@ class RunnerContext(Context):
         Args:
             name: The child's instance name, appended to this layer's `path`. Must be non-empty and must not contain `/`.
         """
-        check_instance_name(name)
+        validate_instance_name(name)
         return replace(self, path=f"{self.path}/{name}" if self.path else name)
 
 
-def check_instance_name(name: object) -> str:
+def validate_instance_name(name: object) -> str:
     """Return `name` if it is a string that can be a path segment, else raise `ValueError`.
 
     Args:

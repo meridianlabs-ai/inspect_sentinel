@@ -2,6 +2,7 @@ import anyio
 import pytest
 
 import inspect_sentinel
+import inspect_sentinel._integration
 
 
 def test_version_is_exposed() -> None:
@@ -43,6 +44,10 @@ def test_author_facing_names_are_exported() -> None:
         "run_monitors",
         "run_protocol",
         "run_protocols",
+        "observe",
+        "concurrent",
+        "threshold",
+        "final",
     }
     assert expected <= set(inspect_sentinel.__all__)
     for name in expected:
@@ -50,6 +55,29 @@ def test_author_facing_names_are_exported() -> None:
 
 
 def test_integration_names_are_not_exported() -> None:
-    assert "RunnerContext" not in inspect_sentinel.__all__
-    assert "Recorder" not in inspect_sentinel.__all__
-    assert "step_types" not in inspect_sentinel.__all__
+    for name in (
+        "RunnerContext",
+        "Recorder",
+        "step_types",
+        "Final",
+        "validate_decision_shape",
+        "resolve_sentinel",
+        "Sentinels",
+        "validate_instance_name",
+        "PRECEDENCE",
+        "named_children",
+        "run_root",
+    ):
+        assert name not in inspect_sentinel.__all__
+
+
+def test_integration_module_exports_the_dispatcher_surface() -> None:
+    assert set(inspect_sentinel._integration.__all__) == {
+        "Recorder",
+        "RunnerContext",
+        "Sentinels",
+        "validate_instance_name",
+        "resolve_sentinel",
+        "step_types",
+        "run_root",
+    }
