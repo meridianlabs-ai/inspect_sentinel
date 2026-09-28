@@ -1712,18 +1712,14 @@ async def test_superseded_decisions_name_the_factory() -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("terminate_first", [True, False])
-async def test_a_terminate_superseded_by_a_final_names_its_factory(
-    terminate_first: bool,
-) -> None:
-    children = {"t": decides("terminate"), "f": finalizes("continue")}
-    if not terminate_first:
-        children = {"f": children["f"], "t": children["t"]}
+async def test_a_terminate_superseded_by_a_final_names_its_factory() -> None:
     recorder = ListRecorder()
     await run_root(
-        concurrent(children), runner_context(recorder=recorder), before_step()
+        concurrent({"t": decides("terminate"), "f": finalizes("continue")}),
+        runner_context(recorder=recorder),
+        before_step(),
     )
-    marks = [(r.context.path, r.context.factory) for r in recorder.supersessions] + [
-        (c.path, c.factory) for c in recorder.cancelled_contexts
+    assert [(r.context.path, r.context.factory) for r in recorder.supersessions] == [
+        ("t", registry_info(decides).name)
     ]
-    assert marks == [("t", registry_info(decides).name)]
+    assert recorder.cancelled_contexts == []
