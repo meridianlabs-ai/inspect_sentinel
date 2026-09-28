@@ -138,7 +138,7 @@ The four payload types are the vocabulary:
 
 Two pairs: input/output around generate, call/result around a tool. `None` means "didn't participate". A monitor returns an `Observation`, which is evidence; a protocol returns a `Decision`, which is an action. See [What monitors and protocols return](#what-a-monitor-returns).
 
-A monitor watches one point; a protocol may watch one or all four. A concern spanning two points is two monitors — see [One function, one point](#one-function-one-point), which argues that this is rarer than it looks and that the framework is better for not having a construct for it.
+A monitor function watches one point; a protocol function may watch one or all four. A concern spanning two points is two functions: two monitors, or one factory returning both when they share state — see [One function, one point](#one-function-one-point), which argues that this is rarer than it looks and that no function should watch two points.
 
 Each takes a single frozen dataclass rather than positional arguments, following `Hooks` rather than `Approver`. The parameter is named `step` rather than `Hooks`' generic `data`: all four payloads are the thing under examination, and a monitor examines a step in the agent's trajectory — the unit the control literature scores. `step.call`, `step.output`, `step.history` read as a subject; `data.call` reads as a bag. Per-stage names (`generate.input`, `call.call`) were the alternative, and the tool side sinks them. With four payloads that will grow fields, adding a field to a dataclass is additive; adding a positional parameter breaks every monitor.
 
@@ -501,7 +501,7 @@ def final(decision: Decision) -> NoReturn:
     """End the step with this decision."""
 ```
 
-A protocol that has the last word calls `final(decision)`, and the step ends there. Nothing above the calling protocol runs: each layer's `await run_protocol(...)` or `await run_children(...)` never returns, so its decision logic never sees the decision and cannot weaken it. Siblings still in flight are cancelled and recorded as cancelled, as they are for `terminate`, and the decision is the step's outcome. The runner still [checks its shape](#the-boundary-check), records it as the decision of the protocol that called `final()`, and records each layer it passed as `bypassed` (see [Transcript](#transcript)). The dispatcher invokes the resolved root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`.
+A protocol that has the last word calls `final(decision)`, and the step ends there. Nothing above the calling protocol runs: each layer's `await run_protocols(...)` or `await run_children(...)` never returns, so its decision logic never sees the decision and cannot weaken it. Siblings still in flight are cancelled and recorded as cancelled, as they are for `terminate`, and the decision is the step's outcome. The runner still [checks its shape](#the-boundary-check), records it as the decision of the protocol that called `final()`, and records each layer it passed as `bypassed` (see [Transcript](#transcript)). The dispatcher invokes the resolved root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`.
 
 `human()` will call it by default, and `human(final=False)` returns an ordinary advisory decision, which is how a person becomes one vote among several (see [Humans in the loop](#humans-in-the-loop)). Nothing stops an LLM-backed protocol from calling `final()`, and nothing should — the framework cannot verify that a human was involved, only that the author claimed the last word — but the claim is visible in the transcript and in code review, which is the same discipline `portable=False` relies on.
 
@@ -851,48 +851,42 @@ One more rule is runtime-only for a different reason: that a monitor annotates e
 So the runner is not a convenience. It is where core's obligations sit, and it is the *only* sanctioned way to invoke a child. It comes in two families, one per registry type, plus a mixed form for the compositions:
 
 ``` python
-async def run_monitor(
-    monitor: Monitor, context: Context, step: Step, *, name: str | None = None
-) -> Reported[Observation] | None:
-    """Invoke one monitor if it is annotated for this stage.
+async def run_monitors(
+    monitors: Monitor | Monitors, context: Context, step: Step
+) -> Observations:
+    """Invoke each monitor annotated for this stage, concurrently.
 
-    Derives the child's Context under this layer's path, records a
-    SentinelEvent, applies the failure policy (deferred). Returns None if the child
-    abstained or does not watch this stage.
+    Derives each child's Context under this layer's path, records a
+    SentinelEvent per report, applies the failure policy (deferred). Results
+    in configuration order; empty if every child abstained or does not watch
+    this stage.
     """
 
 
-async def run_protocol(
-    protocol: ControlProtocol, context: Context, step: Step, *, name: str | None = None
-) -> Reported[Decision] | None:
-    """The same, for one protocol."""
-
-
-async def run_monitors(
-    monitors: Monitors, context: Context, step: Step
-) -> Observations:
-    """Concurrent fan-out over run_monitor, results in configuration order."""
-
-
 async def run_protocols(
-    protocols: Protocols, context: Context, step: Step
+    protocols: ControlProtocol | Protocols, context: Context, step: Step
 ) -> Decisions:
-    """Concurrent fan-out over run_protocol. Cancels siblings when one returns terminate or calls final()."""
+    """The same, for protocols. Cancels siblings when one returns terminate or calls final()."""
 
 
-async def run_children(children: Children, context: Context, step: Step) -> Reports:
+async def run_children(
+    children: Monitor | ControlProtocol | Children, context: Context, step: Step
+) -> Reports:
     """Both families in one task group. What chain() and concurrent() use."""
 ```
 
-The singular forms carry the per-child obligations:
+Each accepts one instance, a sequence or a mapping, and always returns a sequence, so one child and many are the same call. A single instance is named by its registry name, as a sequence entry is; a one-entry mapping names it explicitly. An earlier draft also had `run_monitor` and `run_protocol` for one child at a time; they were removed when a factory could return [several functions](#one-function-one-point), since one child may then report more than once and a singular return type no longer fits it.
+
+Every form carries the per-child obligations:
 
 - **filter by point** — a child not annotated for this step is skipped, and the skip is indistinguishable from abstention
-- **name the child** — from the mapping key if the protocol was given a `Mapping`, else the registry name without its package prefix; the plural forms treat a duplicate name within one layer as an error rather than inventing a `#2` suffix, and a composition that runs children one at a time validates its names the same way first
+- **name the child** — from the mapping key if the protocol was given a `Mapping`, else the registry name without its package prefix; the runner treats a duplicate name within one layer as an error rather than inventing a `#2` suffix, and a composition that runs children one at a time validates its names the same way first
 - **derive the child's `Context`** — the dispatcher hands the top layer a `RunnerContext`, a `Context` that also carries the recorder and a `child(name)` method; the runner requires it (a bare `Context` is a `TypeError`) and builds each child's context under this layer's path. Naming and duplicate detection live in a private `named()` helper in the runner, which `chain()` will reuse
-- **record the report** — one `SentinelEvent` per participating child, including the ones the protocol goes on to ignore, which is load-bearing because the ignored ones are the benign distribution calibration needs
+- **run each of the instance's functions** — every function of the instance annotated for the step runs, in the order its factory returned them and one after another, since they share one store; a lone function is the one-member case
+- **record the report** — one `SentinelEvent` per report, including the ones the protocol goes on to ignore, which is load-bearing because the ignored ones are the benign distribution calibration needs
 - **apply the [failure policy](#failure-semantics)** uniformly (deferred: the first runner propagates every exception; see `pr-series.md`)
 
-The plural forms add the concurrent obligations: they **fan out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`** (per AGENTS.md, which [Concurrency is a safety property](#concurrency-is-a-safety-property-not-just-a-latency-one) shows is a safety requirement rather than a latency one); and `run_children` **holds the group so a `terminate` decision can cancel the still-running siblings**, since nothing outranks it and the sample is ending — prompting a human about a sample that no longer exists is the concrete thing this avoids. A cancelled child is recorded as cancelled, with no report, so the log distinguishes it from one that abstained; its observation, if wanted, is recovered by replay. Monitors are cancelled too: once a protocol has decided `terminate` no sibling's report can change the outcome, and spending their inference live would only save a replay later. Cancellation lands at a child's next await, so a child that finishes without awaiting is recorded normally. A cancellation from above the layer, or one caused by a sibling raising, is recorded the same way; the `terminate` or the exception in the same layer says which. A child calling [`final()`](#authoritative-reports) cancels its siblings the same way and propagates out of the plural call; if two race, the first to reach the group wins and the other is recorded as `superseded`, a final decision that did not take effect, and an exception in the same group outranks both, so a bug is not hidden behind a final decision.
+Across the children of one call it adds the concurrent obligations: it **fans out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`** (per AGENTS.md, which [Concurrency is a safety property](#concurrency-is-a-safety-property-not-just-a-latency-one) shows is a safety requirement rather than a latency one); and `run_children` **holds the group so a `terminate` decision can cancel the still-running siblings**, since nothing outranks it and the sample is ending — prompting a human about a sample that no longer exists is the concrete thing this avoids. A cancelled child is recorded as cancelled, with no report, so the log distinguishes it from one that abstained; its observation, if wanted, is recovered by replay. Monitors are cancelled too: once a protocol has decided `terminate` no sibling's report can change the outcome, and spending their inference live would only save a replay later. Cancellation lands at a child's next await, so a child that finishes without awaiting is recorded normally. A cancellation from above the layer, or one caused by a sibling raising, is recorded the same way; the `terminate` or the exception in the same layer says which. A child calling [`final()`](#authoritative-reports) cancels its siblings the same way and propagates out of the call; the functions of one instance after the one that called it do not run, and an instance cancelled part way is recorded as cancelled once; if two race, the first to reach the group wins and the other is recorded as `superseded`, a final decision that did not take effect, and an exception in the same group outranks both, so a bug is not hidden behind a final decision.
 
 They return:
 
@@ -902,6 +896,7 @@ class Reported(Generic[R]):
     name: str  # instance name: mapping key, or registry name
     path: str  # "attempt/internet_attempt"
     report: R
+    function: str  # __name__ of the function that produced the report
 
 
 class Observations(Sequence[Reported[Observation]]):
@@ -935,7 +930,7 @@ The reviewer group's requirements (#5423, see [below](#the-reviewer-groups-requi
 
 The first draft treated the ordered form as "wrong for a set of observers" and stopped there. It is wrong *as the default* — that is precisely the bug #5423 reports: A approves, B would have terminated, B never ran — but it is the right shape whenever there is a person at the end of it. Both ship as protocols on the same runner.
 
-**`chain()`** is the ordered one. It loops over the singular runners, so every link is recorded, and it hands escalations forward on the step:
+**`chain()`** is the ordered one. It runs one link at a time, through the runner with a one-entry mapping, so every link is recorded under its name, and it hands escalations forward on the step:
 
 ``` python
 @protocol
@@ -945,19 +940,18 @@ def chain(children: Children) -> ControlProtocol:
         participated = False
         for name, child in named(children):
             if is_monitor(child):
-                if await run_monitor(child, context, step, name=name) is not None:
+                if await run_monitors({name: child}, context, step):
                     participated = True  # recorded; falls through
                 continue
-            reported = await run_protocol(
-                child, context, replace(step, escalations=tuple(escalations)), name=name
+            decisions = await run_protocols(
+                {name: child}, context, replace(step, escalations=tuple(escalations))
             )
-            if reported is None:
-                continue
-            participated = True
-            if reported.report.action == "escalate":
-                escalations.append(reported)
-            else:
-                return reported.report
+            for reported in decisions:
+                participated = True
+                if reported.report.action == "escalate":
+                    escalations.append(reported)
+                else:
+                    return reported.report
         return Decision.clear() if participated else None
 
     return run
@@ -1081,7 +1075,7 @@ Registry params come from the factory signature, so `create_registry_object("mon
 
 #### Instance names
 
-A registry name identifies a factory, not a configured instance, and two instances of one factory in a configuration — two `chain`s, two `suspicion_monitor`s with different models — need telling apart in the log and in the store. So every configured monitor or protocol has an **instance name**: the key, when it was given in a `Mapping`; the registry name without its package prefix otherwise (the prefix contains `/`, the path separator, so two packages' monitors sharing a leaf name in one layer must be told apart with a mapping). Names are unique within a layer, and a duplicate is a configuration error rather than an invented suffix. Nesting composes them into a **path**, `attempt/internet_attempt`, which is what `SentinelEvent` records and what `context.store_as()` namespaces by. This is #5423's dict-of-named-chains, generalised to every layer rather than only the top.
+A registry name identifies a factory, not a configured instance, and two instances of one factory in a configuration — two `chain`s, two `suspicion_monitor`s with different models — need telling apart in the log and in the store. So every configured monitor or protocol has an **instance name**: the key, when it was given in a `Mapping`; the registry name without its package prefix otherwise (the prefix contains `/`, the path separator, so two packages' monitors sharing a leaf name in one layer must be told apart with a mapping). Names are unique within a layer, and a duplicate is a configuration error rather than an invented suffix. Nesting composes them into a **path**, `attempt/internet_attempt`, which is what `SentinelEvent` records and what `context.store_as()` namespaces by. This is #5423's dict-of-named-chains, generalised to every layer rather than only the top. A factory that returns [several functions](#one-function-one-point) configures one instance, with one name and one path; its functions are told apart by their `__name__`, which `Reported` and `SentinelEvent` record as `function`, so path plus function identifies a report within a step.
 
 #### Bare names inside the package, prefixed names outside it
 
@@ -1131,7 +1125,11 @@ An earlier draft made `Monitor` a class with four overridable methods. Dropping 
 - The obvious two-point candidate — correlate a call with its result — collapses to one `AfterToolCall`, because that payload already carries `call`, `result`, `output`, `view` and `history`.
 - Both shipped designs surveyed in [Prior art](#prior-art) agree: OpenAI's Agents SDK registers guardrails individually, and Claude Code hooks are per-event with no grouping construct at all.
 
-So there is no grouping mechanism, and deliberately so. A concern spanning two points is two monitors, listed twice. (A protocol annotating `Step` is one function registered at four points, not a grouping of four functions — it sees whichever step arrives and decides about it.) Two alternatives were considered and rejected:
+So no function watches two points, and deliberately so. A concern spanning two points is two functions. When they are independent, they are two monitors, listed twice. (A protocol annotating `Step` is one function registered at four points, not a grouping of four functions — it sees whichever step arrives and decides about it.)
+
+When the two share state, they come from one factory. Accumulating across stages is the trajectory-score case this design argues for, and closure state is wrong for it, since the factory runs once per configuration and its functions are shared across samples. So a `@monitor` or `@protocol` factory may return a non-empty sequence of functions instead of one, and the sequence is one configured instance: one instance name, one `path`, one child context, and so one `store_as` namespace that every member shares. Each member still watches exactly one point and is validated as a lone function would be; members are told apart by their `__name__`, recorded as `function` on `Reported` and `SentinelEvent`, and a duplicate within one factory is a configuration error when the factory is called. The instance accepts the union of its members' payload types. The runner treats it as one child and runs every member that accepts the step, in the order the factory returned them and one after another since they share a store, so one instance may contribute several reports at a step, which `Observations` and `Decisions` already accommodate as sequences. A member that calls `final()` ends the step as a lone protocol would, and the members after it do not run. This is the class with a method per point that the first paragraph rejected, reached through functions, so the static scan and the per-function portability verdict still work. Two instances of one factory, and two samples, keep separate state as before.
+
+Two alternatives were considered and rejected:
 
 - **A name convention** (`suspicion_on_tool_call`, selected as `suspicion_*`) encodes in the identifier what the annotation already says, so the two can disagree and a consistency check has to adjudicate. Nothing in Inspect's registry parses names for structure today; names are explicit, never meaningful.
 - **Glob selection over registry names** solves a problem that only exists if grouping does. Selection is an explicit list, like scorers. If listing gets tedious a package exports one — `monitors=acme.all_monitors()` — which needs no framework concept.
@@ -1353,7 +1351,10 @@ class SentinelEvent(BaseEvent):
     name: str
     """Registry name of the factory: a monitor or a protocol."""
     path: str
-    """Instance path, e.g. "attempt/internet_attempt". Unique within a sample step."""
+    """Instance path, e.g. "attempt/internet_attempt"."""
+    function: str
+    """`__name__` of the function that produced the report, which tells apart the functions of
+    an instance whose factory returned several. Path plus function is unique within a sample step."""
     step_id: str
     """The step examined: the triggering message id (BeforeGenerate), the assistant
     message id (AfterGenerate), or the tool call id (tool stages). See
@@ -1378,7 +1379,7 @@ A `cancelled` event carries no suspicion, decision or outcome; it says the child
 
 `conversation` is what lets a reader follow one agent through a sample that has several, and across that agent's compactions, without guessing from spans; see [Two histories](#two-histories). `step_id` is what lets a report be matched to a label. It is recorded live, from ids that exist before the monitor runs, so a validation set built against replayed steps also matches the events an eval recorded — the two scan modes in `sentinel-development.md` share it.
 
-`path` is #5423's `chain` field, generalised. That proposal tagged each `ApprovalEvent` with the name of the chain it belonged to; with arbitrary nesting a single parent name is not enough, and a path names the layer at every depth. `monitor` and `path` are both kept because a reader wants both questions answered: which code ran, and which configured instance it was.
+`path` is #5423's `chain` field, generalised. That proposal tagged each `ApprovalEvent` with the name of the chain it belonged to; with arbitrary nesting a single parent name is not enough, and a path names the layer at every depth. `monitor` and `path` are both kept because a reader wants both questions answered: which code ran, and which configured instance it was; `function` says which of that instance's functions, when its factory returned several.
 
 A protocol is recorded exactly as a monitor is, so a nested configuration emits **one `SentinelEvent` per layer**, and that is what makes the layering readable without any further field:
 

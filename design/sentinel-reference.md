@@ -113,7 +113,7 @@ Rules:
   > `suspicion_monitor`: could not resolve the annotation `BeforeToolCall` on parameter `step`. Import it at runtime rather than under `TYPE_CHECKING`.
 
 - **Annotate the return as `Observation | None`.** A monitor observes. If you find yourself wanting to return an action, you are writing a protocol; see [Monitor or protocol?](#monitor-or-protocol).
-- **One function, one stage.** If a concern spans two stages, write two monitors and list both.
+- **One function, one stage.** If a concern spans two stages, write two functions. Independent ones are two monitors, listed both. When they share state, return both from one factory, `return [before, after]`: the functions form one instance, with one name, one path and one `store_as` namespace, and each runs, in the order returned, at the stage it watches. Give them distinct `__name__`s; that is how their reports are told apart.
 - **Never take a threshold as a factory parameter.** If your monitor compares a score to a constant, return the score as an `Observation` and let a protocol hold the constant. See [Monitor or protocol?](#monitor-or-protocol).
 - **Do not keep per-sample state in the closure.** The factory runs once per configuration and the returned function is shared by every sample. Use `context.store_as()`. See [State](#state).
 
@@ -132,7 +132,7 @@ The stage is checked by mypy and pyright against this alias, and read from the a
 
 ### Instance names
 
-Every configured monitor or protocol has an instance name: the key when it was configured in a mapping, the registry name without its package prefix otherwise. Two children of one layer with the same name is a configuration error. Nesting joins names into a path, `attempt/internet_attempt`. The path is what `SentinelEvent` records and what `context.store_as()` namespaces by.
+Every configured monitor or protocol has an instance name: the key when it was configured in a mapping, the registry name without its package prefix otherwise. Two children of one layer with the same name is a configuration error. Nesting joins names into a path, `attempt/internet_attempt`. The path is what `SentinelEvent` records and what `context.store_as()` namespaces by. A factory returning several functions configures one instance; its functions are told apart by `function`, their `__name__`, so path plus function identifies a report within a step.
 
 ### Stages
 
@@ -596,9 +596,9 @@ Rules:
 - **Annotate the return as `ControlProtocol`.** The name avoids `typing.Protocol`; see [Open questions](#open-questions) item 19.
 - **Annotate `step` as `Step`** to run at all four stages. Annotate a single payload to run at one. `threshold` above runs at `BeforeToolCall` so that `reject` is always legal.
 - **Return `Decision | None`.** A protocol's job is to produce a decision.
-- **Invoke children only through the runner.** `run_monitors()` and `run_protocols()` for concurrent fan-out over one family, `run_children()` for a mixed group, `run_monitor()` and `run_protocol()` for one child at a time. See [The runner](#the-runner). A child called any other way produces no event, and a protocol that decided with no child reports in the transcript is visible in the log.
+- **Invoke children only through the runner.** `run_monitors()` and `run_protocols()` for one family, `run_children()` for a mixed group. Each takes one child, a sequence or a mapping, and returns a sequence of reports. See [The runner](#the-runner). A child called any other way produces no event, and a protocol that decided with no child reports in the transcript is visible in the log.
 - **Transform `step` before the call, not after.** Paraphrasing, minification, and honeypot injection are transforms on the input to the runner.
-- **Do not expect to see a final child decision.** A child that calls `final()` ends the step inside your `await run_protocol(...)`, so the rest of your code does not run and you are recorded as bypassed. Do not catch it. See [The boundary check](#the-boundary-check).
+- **Do not expect to see a final child decision.** A child that calls `final()` ends the step inside your `await run_protocols(...)`, so the rest of your code does not run and you are recorded as bypassed. Do not catch it. See [The boundary check](#the-boundary-check).
 - **Protocols can nest.** A budget-owning protocol can wrap a paraphrasing protocol that wraps monitors. The rule for two nested budget owners is open; outermost wins is the likely answer.
 - **Everything else is ordinary Python** over the runner's results plus `context.store_as`. Thresholds, budget arithmetic, deferral to a trusted model via `context.host.generate()`, and aggregation need no framework support.
 
@@ -607,36 +607,27 @@ Rules:
 ### The runner
 
 ```python
-async def run_monitor(
-    monitor: Monitor, context: Context, step: Step, *, name: str | None = None
-) -> Reported[Observation] | None:
-    """Invoke one monitor if it is annotated for this stage.
+async def run_monitors(
+    monitors: Monitor | Monitors, context: Context, step: Step
+) -> Observations:
+    """Invoke each monitor annotated for this stage, concurrently.
 
-    Derives the child's Context under this layer's path, records a
-    SentinelEvent, applies the failure policy (deferred). Returns None if the child
-    abstained or does not watch this stage.
+    Derives each child's Context under this layer's path, records a
+    SentinelEvent per report, applies the failure policy (deferred). Results
+    in configuration order; empty if every child abstained or does not watch
+    this stage.
     """
 
 
-async def run_protocol(
-    protocol: ControlProtocol, context: Context, step: Step, *, name: str | None = None
-) -> Reported[Decision] | None:
-    """The same, for a child protocol."""
-
-
-async def run_monitors(
-    monitors: Monitors, context: Context, step: Step
-) -> Observations:
-    """Concurrent fan-out over run_monitor, results in configuration order."""
-
-
 async def run_protocols(
-    protocols: Protocols, context: Context, step: Step
+    protocols: ControlProtocol | Protocols, context: Context, step: Step
 ) -> Decisions:
-    """Concurrent fan-out over run_protocol. Cancels siblings when one returns terminate."""
+    """The same, for protocols. Cancels siblings when one returns terminate or calls final()."""
 
 
-async def run_children(children: Children, context: Context, step: Step) -> Reports:
+async def run_children(
+    children: Monitor | ControlProtocol | Children, context: Context, step: Step
+) -> Reports:
     """Both families in one task group. What concurrent() and chain() use."""
 
 
@@ -645,6 +636,7 @@ class Reported(Generic[R]):
     name: str  # instance name: mapping key, or registry name
     path: str  # "attempt/internet_attempt"
     report: R
+    function: str  # __name__ of the function that produced the report
 
 
 class Observations(Sequence[Reported[Observation]]):
@@ -664,12 +656,13 @@ class Reports:
 What the runner does for every child:
 
 - Skips children not annotated for this stage. The skip looks like abstention.
-- Names the child from the mapping key, or the registry name without its package prefix. The plural forms raise on a duplicate name within a layer; a composition calling the singular forms validates names itself first.
+- Names the child from the mapping key, or the registry name without its package prefix. A single instance is named as a sequence entry is. The runner raises on a duplicate name within a layer; a composition that runs children one at a time validates names itself first.
 - Derives the child's `Context` under this layer's path.
-- Records one `SentinelEvent` per participating child, including reports the parent ignores. Ignored observations are the benign distribution a protocol later calibrates against.
+- Runs every function of the instance annotated for this stage, in the order its factory returned them and one after another, since they share one store.
+- Records one `SentinelEvent` per report, including reports the parent ignores. Ignored observations are the benign distribution a protocol later calibrates against.
 - Applies the failure policy (deferred; the runner currently propagates every exception).
 
-What the plural forms add: fan-out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`, so children cannot see each other's conclusions; `run_children` holds the group so a `terminate` decision or a `final()` can cancel the still-running siblings, and records any child it cancels. A `final()` propagates out of the plural call; of two that race, the first to reach the group wins and the other is recorded as superseded, and an exception in the same group outranks them.
+Across the children of one call: fan-out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`, so children cannot see each other's conclusions; `run_children` holds the group so a `terminate` decision or a `final()` can cancel the still-running siblings, and records any child it cancels. A `final()` propagates out of the call, and the functions of its instance after it do not run; of two that race, the first to reach the group wins and the other is recorded as superseded, and an exception in the same group outranks them.
 
 Results are split by family because the two aggregate differently. `Decisions.strongest()` applies the precedence in [Combining reports](#combining-reports); `Observations.max_suspicion()` takes the per-dimension max. Identity is attached so a protocol can weight or require agreement across specific children.
 
@@ -718,17 +711,15 @@ def chain(children: Children) -> ControlProtocol:
         for name, child in named(children):
             current = replace(step, escalations=tuple(escalations))
             if is_monitor(child):
-                if await run_monitor(child, context, current, name=name) is not None:
+                if await run_monitors({name: child}, context, current):
                     participated = True  # recorded; falls through
                 continue
-            reported = await run_protocol(child, context, current, name=name)
-            if reported is None:
-                continue
-            participated = True
-            if reported.report.action == "escalate":
-                escalations.append(reported)
-            else:
-                return reported.report
+            for reported in await run_protocols({name: child}, context, current):
+                participated = True
+                if reported.report.action == "escalate":
+                    escalations.append(reported)
+                else:
+                    return reported.report
         return Decision.clear() if participated else None
 
     return run
@@ -953,6 +944,7 @@ class SentinelEvent(BaseEvent):
     event: Literal["sentinel"] = "sentinel"
     name: str  # registry name of the factory, monitor or protocol
     path: str  # instance path, e.g. "attempt/internet_attempt"
+    function: str  # __name__ of the reporting function; path plus function is unique in a step
     step_id: str  # triggering message id, assistant message id, or tool call id
     conversation: (
         str  # the agent conversation; shared with its ModelEvents and CompactionEvents
@@ -982,7 +974,7 @@ Rules:
 
   The person's `reject` went through `final()`: its event is the ordinary decision event of `human`, recorded at the root when it takes effect, after one `bypassed` event per layer above, each written as the `final()` passed it. If two `final()` calls race in one layer, or an exception in the layer outranks one, the losing decision's event is `superseded` and it did not take effect; so is a recorded `terminate` that a sibling's `final()` outran. Without a final decision the last line is the summary event, the root's own decision at `path=""`. Every layer's decision is recorded, the root's included; when more than one child decided, a layer's explanation lists each child's decision after the winner's own.
 
-- **`name` is which code ran. `path` is which configured instance it was.** Two chains built from the same factory differ only in `path`. `kind` says which family it belongs to, and agrees with the registry type by construction.
+- **`name` is which code ran. `path` is which configured instance it was. `function` is which of its functions reported.** Two chains built from the same factory differ only in `path`; two functions of one instance differ only in `function`. `kind` says which family it belongs to, and agrees with the registry type by construction.
 - **`step_id` is what a label matches.** For `BeforeGenerate` it is the id of the message that triggered the generate, with an ordinal suffix on a regenerate; for `AfterGenerate` the assistant message id; for the tool stages the tool call id. All three exist before the monitor runs, so recorded events and replayed steps share ids. See `sentinel-development.md`.
 - **`decision` is what the child decided. `outcome` is what the parent protocol did.** Both are needed to tell an overridden decision from one never made.
 - **There is no `strategy` field.** The protocol's name says what it did. "How often did this protocol defer" is `monitor == "defer_to_trusted" and decision == "modify"`. A protocol that takes several different actions should be composed from nested protocols, or record the detail in `metadata`.
