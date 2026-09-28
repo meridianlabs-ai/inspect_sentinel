@@ -4,6 +4,7 @@ A *monitor* observes a step of an agent's execution and reports a suspicion scor
 """
 
 from ._context import Context, Host
+from ._final import final
 from ._monitor import (
     Children,
     ControlProtocol,
@@ -55,6 +56,7 @@ __all__ = [
     "Step",
     "Suspicion",
     "concurrent",
+    "final",
     "monitor",
     "observe",
     "protocol",

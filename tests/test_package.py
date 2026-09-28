@@ -47,6 +47,7 @@ def test_author_facing_names_are_exported() -> None:
         "observe",
         "concurrent",
         "threshold",
+        "final",
     }
     assert expected <= set(inspect_sentinel.__all__)
     for name in expected:
@@ -58,7 +59,7 @@ def test_integration_names_are_not_exported() -> None:
         "RunnerContext",
         "Recorder",
         "step_types",
-        "apply_binding_floor",
+        "Final",
         "check_decision_shape",
         "compile_sentinel",
         "SentinelSpec",
@@ -77,6 +78,6 @@ def test_integration_module_exports_the_dispatcher_surface() -> None:
         "check_instance_name",
         "compile_sentinel",
         "step_types",
-        "apply_binding_floor",
+        "Final",
         "check_decision_shape",
     }

@@ -7,6 +7,7 @@ from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import ToolCall
 
 from inspect_sentinel._context import Context
+from inspect_sentinel._final import Final, final
 from inspect_sentinel._monitor import (
     ControlProtocol,
     Monitor,
@@ -47,21 +48,29 @@ def afterwards() -> Monitor:
 
 
 @protocol
-def says(action: Action = "continue", binding: bool = False) -> ControlProtocol:
+def says(action: Action = "continue") -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(action=action, binding=binding)
+        return Decision(action=action)
 
     return decide
 
 
 @protocol
-def rewrites(binding: bool = False) -> ControlProtocol:
+def rewrites() -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(
             action="modify",
-            binding=binding,
             modified=ToolCall(id="c1", function="bash", arguments={"cmd": "echo hi"}),
         )
+
+    return decide
+
+
+@protocol
+def wrapper(child: ControlProtocol) -> ControlProtocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        await run_protocol(child, context, step)
+        return Decision.clear()
 
     return decide
 
@@ -142,65 +151,41 @@ async def test_concurrent_turns_a_contested_modify_into_a_reject() -> None:
     assert decision.explanation is not None and "rewriter" in decision.explanation
 
 
-@pytest.mark.anyio
-async def test_concurrent_prefers_a_binding_decision_in_a_tie() -> None:
-    decision = await _run(
-        concurrent({"advisory": says("reject"), "human": says("reject", True)}),
-        before_step(),
-        ListRecorder(),
-    )
-    assert decision is not None and decision.binding is True
-
-
-@pytest.mark.anyio
-async def test_concurrent_does_not_pass_a_childs_binding_flag_to_a_stronger_decision() -> (
-    None
-):
-    decision = await _run(
-        concurrent({"h": says("continue", True), "s": says("reject")}),
-        before_step(),
-        ListRecorder(),
-    )
-    assert decision is not None and decision.action == "reject"
-    assert decision.binding is False
-
-
 @protocol
-def majority(children: Protocols) -> ControlProtocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
-        decisions = await run_protocols(children, context, step)
-        actions: list[Action] = [d.report.action for d in decisions]
-        return Decision(action=max(set(actions), key=actions.count))
+def panel(children: Protocols) -> ControlProtocol:
+    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+        votes = await run_protocols(children, context, step)
+        rejects = sum(v.report.action == "reject" for v in votes)
+        final(Decision.reject() if rejects * 2 > len(votes) else Decision.clear())
 
     return decide
 
 
+@pytest.mark.parametrize(
+    ("votes", "expected"),
+    [
+        (["reject", "reject", "continue"], "reject"),
+        (["reject", "continue", "continue"], "continue"),
+    ],
+)
 @pytest.mark.anyio
-async def test_a_protocol_outvoting_a_binding_child_is_overridden_and_recorded() -> (
-    None
-):
+async def test_a_panel_of_advisory_votes_has_the_last_word(
+    votes: list[Action], expected: Action
+) -> None:
     recorder = ListRecorder()
-    reported = await run_protocol(
-        majority({"h": says("reject", True), "a": says(), "b": says()}),
-        runner_context(recorder=recorder),
-        before_step(),
-    )
-    assert reported is not None and reported.report.action == "reject"
-    assert reported.overrode == Decision.clear()
-    assert recorder.records[-1].reported == reported
-
-
-@pytest.mark.anyio
-async def test_concurrent_keeps_the_modifiers_authority_when_it_rejects_instead() -> (
-    None
-):
-    decision = await _run(
-        concurrent({"human": rewrites(binding=True), "rule": says("continue")}),
-        before_step(),
-        ListRecorder(),
-    )
-    assert decision is not None and decision.action == "reject"
-    assert decision.binding is True
+    children = {f"v{index}": says(vote) for index, vote in enumerate(votes)}
+    with pytest.raises(Final) as info:
+        await run_protocol(
+            wrapper(panel(children)), runner_context(recorder=recorder), before_step()
+        )
+    assert info.value.decision.action == expected
+    assert sorted(r.reported.path for r in recorder.records) == [
+        "wrapper/panel",
+        "wrapper/panel/v0",
+        "wrapper/panel/v1",
+        "wrapper/panel/v2",
+    ]
+    assert recorder.bypassed_layers == [("wrapper", "wrapper")]
 
 
 @pytest.mark.anyio

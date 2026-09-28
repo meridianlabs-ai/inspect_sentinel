@@ -1,4 +1,3 @@
-from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import anyio
@@ -7,13 +6,14 @@ from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import ToolCall
 
 from inspect_sentinel._context import Context
+from inspect_sentinel._final import Final, final
 from inspect_sentinel._monitor import (
     ControlProtocol,
     Monitor,
-    Protocols,
     monitor,
     protocol,
 )
+from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import Action, Decision, Observation, Reported
 from inspect_sentinel._runner import (
     Decisions,
@@ -33,12 +33,8 @@ def _obs(name: str, suspicion: float | dict[str, float]) -> Reported[Observation
     return Reported(name=name, path=name, report=Observation.score(suspicion))
 
 
-def _dec(name: str, action: Action, binding: bool = False) -> Reported[Decision]:
-    return Reported(
-        name=name,
-        path=name,
-        report=Decision(action=action, binding=binding),
-    )
+def _dec(name: str, action: Action) -> Reported[Decision]:
+    return Reported(name=name, path=name, report=Decision(action=action))
 
 
 def test_observations_is_a_sequence() -> None:
@@ -78,14 +74,6 @@ def test_strongest_prefers_the_first_on_ties() -> None:
     decisions = Decisions([_dec("first", "reject"), _dec("second", "reject")])
     strongest = decisions.strongest()
     assert strongest is not None and strongest.name == "first"
-
-
-def test_strongest_prefers_a_binding_decision_on_ties() -> None:
-    decisions = Decisions(
-        [_dec("advisory", "reject"), _dec("human", "reject", binding=True)]
-    )
-    strongest = decisions.strongest()
-    assert strongest is not None and strongest.name == "human"
 
 
 def test_reports_holds_both_families() -> None:
@@ -153,55 +141,17 @@ def decides(action: Action = "continue") -> ControlProtocol:
 
 
 @protocol
-def insists() -> ControlProtocol:
+def finalizes(action: Action = "reject") -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(action="reject", binding=True)
+        final(Decision(action=action))
 
     return decide
 
 
 @protocol
-def overrides(action: Action | None = None) -> ControlProtocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
-        await run_protocol(insists(), context, step)
-        return Decision(action=action) if action is not None else None
-
-    return decide
-
-
-@protocol
-def insists_when(
-    ready: Callable[[], Awaitable[None]], explanation: str
-) -> ControlProtocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
-        await ready()
-        return Decision(action="reject", binding=True, explanation=explanation)
-
-    return decide
-
-
-@protocol
-def launders(child: ControlProtocol) -> ControlProtocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
-        reported = await run_protocol(child, context, step)
-        return None if reported is None else Decision(action=reported.report.action)
-
-    return decide
-
-
-@protocol
-def weakens(child: ControlProtocol) -> ControlProtocol:
+def wrapper(child: ControlProtocol) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         await run_protocol(child, context, step)
-        return Decision.clear()
-
-    return decide
-
-
-@protocol
-def gathers(children: Protocols) -> ControlProtocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
-        await run_protocols(children, context, step)
         return Decision.clear()
 
     return decide
@@ -809,75 +759,141 @@ async def test_an_illegal_decision_fails_the_layer_that_returned_it() -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("action", [None, "continue"])
-async def test_a_layer_below_its_binding_child_is_raised_to_it_and_recorded(
-    action: Action | None,
-) -> None:
+async def test_final_ends_the_step_past_every_layer_above() -> None:
+    started = anyio.Event()
+
+    @protocol
+    def slow() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            started.set()
+            await anyio.sleep_forever()
+            return None
+
+        return decide
+
+    @protocol
+    def leaf() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await started.wait()
+            final(Decision.reject("a person said no"))
+
+        return decide
+
     recorder = ListRecorder()
-    reported = await run_protocol(
-        overrides(action), runner_context(recorder=recorder), before_step()
-    )
-    assert reported is not None
-    assert reported.report.action == "reject" and reported.report.binding is True
-    assert reported.overrode == (Decision(action=action) if action else None)
-    assert recorder.records[-1].reported == reported
+    with anyio.fail_after(5), pytest.raises(Final) as info:
+        await run_protocol(
+            wrapper(concurrent({"slow": slow(), "leaf": leaf()})),
+            runner_context(recorder=recorder),
+            before_step(),
+        )
+    assert info.value.decision == Decision.reject("a person said no")
+    assert [(r.reported.path, r.reported.report) for r in recorder.records] == [
+        ("wrapper/concurrent/leaf", info.value.decision)
+    ]
+    assert recorder.cancellations == [("wrapper/concurrent/slow", "slow")]
+    assert recorder.bypassed_layers == [
+        ("wrapper/concurrent", "concurrent"),
+        ("wrapper", "wrapper"),
+    ]
 
 
 @pytest.mark.anyio
-async def test_a_layer_at_the_binding_floor_stands() -> None:
-    reported = await run_protocol(overrides("reject"), runner_context(), before_step())
-    assert reported is not None and reported.report.action == "reject"
-    assert reported.report.binding is False and reported.overrode is None
+async def test_a_final_decision_illegal_for_the_stage_fails_the_protocol() -> None:
+    recorder = ListRecorder()
+    with pytest.raises(ValueError, match="'finalizes'") as info:
+        await run_protocol(
+            wrapper(finalizes("reject")),
+            runner_context(recorder=recorder),
+            after_step(),
+        )
+    assert "already run" in str(info.value)
+    assert recorder.records == [] and recorder.bypassed_layers == []
 
 
 @pytest.mark.anyio
-async def test_the_root_collects_within_a_call_and_a_fresh_context_starts_empty() -> (
+async def test_two_final_decisions_in_one_layer_let_one_through_and_record_both() -> (
     None
 ):
-    root = runner_context()
-    await run_protocol(overrides("reject"), root, before_step(), name="first")
-    reported = await run_protocol(decides("continue"), root, before_step())
-    assert reported is not None and reported.report.action == "continue"
-    assert [d.name for d in root.decisions] == ["first", "decides"]
-    assert runner_context().decisions == []
-
-
-@pytest.mark.anyio
-async def test_a_layer_that_weakens_a_binding_child_is_recorded_as_overridden() -> None:
-    recorder = ListRecorder()
-    reported = await run_protocol(
-        weakens(insists()), runner_context(recorder=recorder), before_step()
-    )
-    assert reported is not None and reported.report.action == "reject"
-    assert reported.overrode is not None and reported.overrode.action == "continue"
-    assert recorder.records[-1].reported.overrode == reported.overrode
-
-
-@pytest.mark.anyio
-async def test_a_layer_that_drops_the_flag_frees_the_layer_above() -> None:
-    reported = await run_protocol(
-        weakens(launders(insists())), runner_context(), before_step()
-    )
-    assert reported is not None and reported.report.action == "continue"
-    assert reported.overrode is None
-
-
-@pytest.mark.parametrize("waits", ["alice", "bob"])
-@pytest.mark.anyio
-async def test_the_floor_does_not_depend_on_who_finished_first(waits: str) -> None:
+    waiting = anyio.Event()
     gate = anyio.Event()
 
-    async def first() -> None:
-        gate.set()
+    @protocol
+    def opens() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await waiting.wait()
+            gate.set()
+            final(Decision.reject("opens"))
 
-    async def second() -> None:
-        await gate.wait()
+        return decide
 
-    ready = {name: second if name == waits else first for name in ("alice", "bob")}
-    reported = await run_protocol(
-        gathers({name: insists_when(fn, name) for name, fn in ready.items()}),
-        runner_context(),
-        before_step(),
-    )
-    assert reported is not None
-    assert reported.report.explanation == "alice (overrides continue)"
+    @protocol
+    def follows() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            waiting.set()
+            await gate.wait()
+            final(Decision.terminate("follows"))
+
+        return decide
+
+    recorder = ListRecorder()
+    with anyio.fail_after(5), pytest.raises(Final) as info:
+        await run_protocols(
+            {"opens": opens(), "follows": follows()},
+            runner_context(recorder=recorder),
+            before_step(),
+        )
+    assert info.value.decision.explanation in ("opens", "follows")
+    assert sorted(
+        (r.reported.name, r.reported.report.explanation) for r in recorder.records
+    ) == [("follows", "follows"), ("opens", "opens")]
+    assert recorder.cancellations == []
+
+
+@pytest.mark.anyio
+async def test_an_error_beside_a_final_decision_is_not_hidden_by_it() -> None:
+    waiting = anyio.Event()
+    gate = anyio.Event()
+
+    @protocol
+    def opens() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await waiting.wait()
+            gate.set()
+            final(Decision.reject("opens"))
+
+        return decide
+
+    @monitor
+    def explodes() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            waiting.set()
+            await gate.wait()
+            raise RuntimeError("boom")
+
+        return check
+
+    recorder = ListRecorder()
+    with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):
+        await run_children(
+            {"opens": opens(), "explodes": explodes()},
+            runner_context(recorder=recorder),
+            before_step(),
+        )
+    assert [r.reported.name for r in recorder.records] == ["opens"]
+
+
+@pytest.mark.anyio
+async def test_a_monitor_that_calls_final_is_a_bug() -> None:
+    @monitor
+    def decides_instead() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            final(Decision.reject())
+
+        return check
+
+    recorder = ListRecorder()
+    with pytest.raises(TypeError, match="decides_instead"):
+        await run_monitors(
+            [decides_instead()], runner_context(recorder=recorder), before_step()
+        )
+    assert recorder.records == []

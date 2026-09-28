@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
@@ -8,7 +8,7 @@ from inspect_ai.scorer import Target
 from inspect_ai.tool import ToolInfo
 from inspect_ai.util import Store, StoreModel
 
-from ._report import Decision, Report, Reported
+from ._report import Report, Reported
 from ._step import Step
 
 SMT = TypeVar("SMT", bound=StoreModel)
@@ -51,14 +51,26 @@ class Recorder(Protocol):
         ...
 
     def cancelled(self, context: Context, step: Step, name: str) -> None:
-        """Record that a child was cancelled before it reported: a sibling decided `terminate`, a sibling raised, or the layer was cancelled from above.
+        """Record that a child was cancelled before it reported: a sibling decided `terminate` or called `final()`, a sibling raised, or the layer was cancelled from above.
 
-        The cause is not recorded here; a `terminate` or an exception in the same layer says which it was.
+        The cause is not recorded here; a `terminate`, a `final()` or an exception in the same layer says which it was.
 
         Args:
             context: The child's context; its `path` identifies the instance.
             step: The step the child was examining.
             name: The child's instance name.
+        """
+        ...
+
+    def bypassed(self, context: Context, step: Step, name: str) -> None:
+        """Record that a protocol did not decide because a descendant called `final()`, which ended the step past it.
+
+        The final decision itself is recorded through `record` for the protocol that made it.
+
+        Args:
+            context: The protocol's context; its `path` identifies the instance.
+            step: The step the protocol was examining.
+            name: The protocol's instance name.
         """
         ...
 
@@ -116,16 +128,11 @@ class RunnerContext(Context):
     recorder: Recorder
     """Where the runner records reports and cancellations."""
 
-    decisions: list[Reported[Decision]] = field(
-        default_factory=list[Reported[Decision]]
-    )
-    """Decisions recorded by this layer's children, for the binding floor. Runner-owned; the dispatcher builds a fresh RunnerContext per step, so nothing accumulates across steps."""
-
     def __post_init__(self) -> None:
         # a runtime check for hosts that are not type-checked against Recorder
         if not isinstance(cast(object, self.recorder), Recorder):
             raise TypeError(
-                f"Recorder {type(self.recorder).__name__} must implement record() and cancelled()."
+                f"Recorder {type(self.recorder).__name__} must implement record(), cancelled() and bypassed()."
             )
 
     def child(self, name: str) -> RunnerContext:
@@ -135,9 +142,7 @@ class RunnerContext(Context):
             name: The child's instance name, appended to this layer's `path`. Must be non-empty and must not contain `/`.
         """
         check_instance_name(name)
-        return replace(
-            self, path=f"{self.path}/{name}" if self.path else name, decisions=[]
-        )
+        return replace(self, path=f"{self.path}/{name}" if self.path else name)
 
 
 def check_instance_name(name: object) -> str:

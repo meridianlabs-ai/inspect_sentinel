@@ -22,8 +22,9 @@ from inspect_ai._util.registry import (
     registry_unqualified_name,
 )
 
-from ._check import apply_binding_floor, check_decision_shape
+from ._check import check_decision_shape
 from ._context import Context, RunnerContext, check_instance_name
+from ._final import Final
 from ._monitor import (
     Children,
     ControlProtocol,
@@ -93,13 +94,11 @@ class Decisions(_ReportSequence[Decision]):
     """What a layer's protocols decided, in configuration order."""
 
     def strongest(self) -> Reported[Decision] | None:
-        """The strongest decision by `terminate > reject > modify > continue`; a binding decision wins a tie; `escalate` does not count; `None` if nobody decided."""
+        """The strongest decision by `terminate > reject > modify > continue`, the first in configuration order on a tie; `escalate` does not count; `None` if nobody decided."""
         ranked = deciding(self._items)
         if not ranked:
             return None
-        return max(
-            ranked, key=lambda d: (PRECEDENCE[d.report.action], d.report.binding)
-        )
+        return max(ranked, key=lambda d: PRECEDENCE[d.report.action])
 
 
 @dataclass(frozen=True)
@@ -124,16 +123,19 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
     # and the group does not appear in the traceback. On trio a child error can
     # arrive alongside the cancellation in one BaseExceptionGroup; the error is
     # surfaced, as anyio's asyncio backend already does, and a group holding
-    # only cancellations propagates untouched.
+    # only cancellations propagates untouched. An error outranks a Final, so a
+    # bug is not hidden behind a final decision; of several Finals the first
+    # to arrive wins, the others having been recorded.
     first: BaseException | None = None
     try:
         async with anyio.create_task_group() as tg:
             yield tg
     except BaseExceptionGroup as ex:
-        _, errors = ex.split(anyio.get_cancelled_exc_class())
-        if errors is None:
+        _, rest = ex.split(anyio.get_cancelled_exc_class())
+        if rest is None:
             raise
-        first = errors.exceptions[0]
+        _, errors = rest.split(Final)
+        first = (errors if errors is not None else rest).exceptions[0]
     if first is not None:
         raise first
 
@@ -185,7 +187,9 @@ async def run_monitors(
 async def run_protocols(
     protocols: Protocols, context: Context, step: Step
 ) -> Decisions:
-    """Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns `terminate`.
+    """Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns `terminate` or calls `final()`.
+
+    A `final()` from any protocol at any depth below propagates out of this call, so the caller's own decision logic does not run.
 
     Args:
         protocols: A sequence of protocols, or a mapping of instance names to protocols.
@@ -197,7 +201,7 @@ async def run_protocols(
 
 
 async def run_children(children: Children, context: Context, step: Step) -> Reports:
-    """Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns `terminate`.
+    """Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns `terminate` or calls `final()`.
 
     A child cancelled this way is recorded through `Recorder.cancelled`; one that finishes without awaiting is recorded normally.
 
@@ -236,7 +240,6 @@ async def _run_named(
                 context,
                 step,
                 name,
-                collect=False,
             )
             if decided is not None:
                 decisions.append((index, decided))
@@ -247,14 +250,9 @@ async def _run_named(
         for index, (name, child) in enumerate(named):
             tg.start_soon(run_one, index, name, child, tg.cancel_scope.cancel)
 
-    ordered = Decisions(d for _, d in sorted(decisions, key=lambda t: t[0]))
-    # collected in configuration order, so the binding floor's tie-break does
-    # not depend on which child finished first
-    if isinstance(context, RunnerContext):
-        context.decisions.extend(ordered)
     return Reports(
         Observations(o for _, o in sorted(observations, key=lambda t: t[0])),
-        ordered,
+        Decisions(d for _, d in sorted(decisions, key=lambda t: t[0])),
     )
 
 
@@ -265,8 +263,6 @@ async def _run_child(
     context: Context,
     step: Step,
     name: str | None,
-    *,
-    collect: bool = True,
 ) -> Reported[R] | None:
     if not isinstance(context, RunnerContext):
         raise TypeError(
@@ -288,29 +284,40 @@ async def _run_child(
         # something to paper over
         child_context.recorder.cancelled(child_context, step, child_name)
         raise
+    except Final as ex:
+        if kind == "monitor":
+            raise TypeError(
+                f"monitor {child_name!r} called final(); a monitor returns observations, and only a protocol may end the step."
+            ) from ex
+        if ex.origin_path is None:
+            ex.origin_path = child_context.path
+            _check_shape(ex.decision, step, child_name)
+            child_context.recorder.record(
+                child_context,
+                step,
+                Reported(name=child_name, path=child_context.path, report=ex.decision),
+            )
+        else:
+            child_context.recorder.bypassed(child_context, step, child_name)
+        raise
     if report is not None and not isinstance(report, report_type):
         raise TypeError(
             f"{kind} {child_name!r} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
         )
-    overrode: Decision | None = None
-    if kind == "protocol":
-        decision = cast("Decision | None", report)
-        if decision is not None:
-            try:
-                check_decision_shape(decision, step)
-            except ValueError as ex:
-                raise ValueError(f"{kind} {child_name!r}: {ex}") from ex
-        decision, overrode = apply_binding_floor(decision, child_context.decisions)
-        report = cast("R | None", decision)
     if report is None:
         return None
-    reported = Reported(
-        name=child_name, path=child_context.path, report=report, overrode=overrode
-    )
+    if isinstance(report, Decision):
+        _check_shape(report, step, child_name)
+    reported = Reported(name=child_name, path=child_context.path, report=report)
     child_context.recorder.record(child_context, step, reported)
-    if collect and isinstance(report, Decision):
-        context.decisions.append(cast("Reported[Decision]", reported))
     return reported
+
+
+def _check_shape(decision: Decision, step: Step, name: str) -> None:
+    try:
+        check_decision_shape(decision, step)
+    except ValueError as ex:
+        raise ValueError(f"protocol {name!r}: {ex}") from ex
 
 
 def _check_child(

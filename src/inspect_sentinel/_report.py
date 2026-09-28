@@ -51,16 +51,13 @@ class Observation(BaseModel):
 
 
 class Decision(BaseModel):
-    """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it."""
+    """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to `final()`."""
 
     action: Action
     """What should happen at this step. Required."""
 
     audit: bool = Field(default=False)
     """Request that oversight budget be spent on this step."""
-
-    binding: bool = Field(default=False)
-    """A decision no layer above may weaken. The runner clamps a weaker decision up to it and records the override. Set by human() by default; a protocol may set it on its own decision."""
 
     modified: ToolCall | None = Field(default=None)
     """Replacement for the step's subject, for a `modify` decision."""
@@ -110,6 +107,3 @@ class Reported(Generic[R_co]):
 
     report: R_co
     """The observation or decision this instance produced."""
-
-    overrode: Decision | None = None
-    """The protocol's own decision when the binding floor replaced it; None otherwise."""

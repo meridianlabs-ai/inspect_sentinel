@@ -37,12 +37,16 @@ class ListRecorder:
     def __init__(self) -> None:
         self.records: list[Recorded] = []
         self.cancellations: list[tuple[str, str]] = []
+        self.bypassed_layers: list[tuple[str, str]] = []
 
     def record(self, context: Context, step: Step, reported: Reported[Report]) -> None:
         self.records.append(Recorded(context, step, reported))
 
     def cancelled(self, context: Context, step: Step, name: str) -> None:
         self.cancellations.append((context.path, name))
+
+    def bypassed(self, context: Context, step: Step, name: str) -> None:
+        self.bypassed_layers.append((context.path, name))
 
 
 def runner_context(

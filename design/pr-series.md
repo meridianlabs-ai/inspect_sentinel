@@ -11,9 +11,9 @@ The minimal surface that lets `inspect_ai` connect: the types a dispatcher const
 - **Surface only.** Sentinel ships types and functions; `inspect_ai` wiring comes after. Verified by unit tests with fake `Host` and `Recorder`.
 - **Real registration.** `@monitor` and `@protocol` register under `"monitor"` and `"protocol"`, added to `inspect_ai`'s `RegistryType` by PR 0 ([inspect_ai#5514](https://github.com/UKGovernmentBEIS/inspect_ai/pull/5514), branch `feature/sentinel`). Sentinel's `inspect-ai` git ref points at that branch until it merges.
 - **Tool stages only.** `BeforeToolCall` and `AfterToolCall` with the design's full fields; `Step` is their union. The generate stages arrive with the generate-side dispatcher. The schema may change freely until there are users.
-- **Recording is the runner's, through a separate interface.** `Host` is the author-facing ABI (`generate` only for now). `Recorder` has two methods: `record`, called by the runner for every participating child, and `cancelled`, called for a child cancelled before it reported. This departs from `sentinel-deployment.md`, whose `Host` ABI carries `record`; that doc is to be updated.
+- **Recording is the runner's, through a separate interface.** `Host` is the author-facing ABI (`generate` only for now). `Recorder` has three methods: `record`, called by the runner for every participating child; `cancelled`, called for a child cancelled before it reported; and `bypassed`, called for a protocol a descendant's `final()` ended the step past. This departs from `sentinel-deployment.md`, whose `Host` ABI carries `record`; that doc is to be updated.
 - **Two context types.** `Context` is what authors see. `RunnerContext(Context)` adds `recorder` and `child()`; the dispatcher builds it, `dataclasses.replace` preserves it down the layers, and the runner raises `TypeError` if handed a bare `Context`.
-- **Author surface vs integration surface.** `__init__` exports only what an author writes against, including `Reported` and `Report`, since `step.escalations` and the runner's results are typed with them. `inspect_sentinel/_integration.py` re-exports what the dispatcher needs (`RunnerContext`, `Recorder`, `validate_decision`, `compile_sentinel`); `inspect_ai` imports from that module only, so refactors have one file to keep stable.
+- **Author surface vs integration surface.** `__init__` exports only what an author writes against, including `Reported` and `Report`, since `step.escalations` and the runner's results are typed with them. `inspect_sentinel/_integration.py` re-exports what the dispatcher needs (`RunnerContext`, `Recorder`, `Final`, `check_decision_shape`, `compile_sentinel`); `inspect_ai` imports from that module only, so refactors have one file to keep stable.
 - **Shipped protocols:** `observe`, `concurrent`, `threshold`. `chain` and `human` are follow-ups.
 
 ## Layout
@@ -27,7 +27,8 @@ src/inspect_sentinel/
   _monitor.py       Monitor, ControlProtocol, Monitors, Protocols, Children, @monitor, @protocol
   _runner.py        Observations, Decisions, run_monitor, run_protocol,
                     run_monitors, run_protocols, run_children
-  _check.py         check_decision_shape, apply_binding_floor
+  _check.py         check_decision_shape
+  _final.py         final, Final
   _protocols.py     observe, concurrent, threshold
   _compile.py       compile_sentinel
   _integration.py   dispatcher-facing re-exports
@@ -84,7 +85,6 @@ class Observation(BaseModel):
 class Decision(BaseModel):
     action: Action
     audit: bool = False
-    binding: bool = False
     modified: ToolCall | None = None                    # ChatMessageAssistant joins with AfterGenerate
     explanation: str | None = None
     metadata: dict[str, Any] | None = None
@@ -99,7 +99,6 @@ class Reported(Generic[R_co]):
     name: str
     path: str
     report: R_co
-    overrode: Decision | None = None
 ```
 
 ```python
@@ -111,6 +110,7 @@ class Host(Protocol):
 class Recorder(Protocol):
     def record(self, context: Context, step: Step, reported: Reported[Report]) -> None: ...
     def cancelled(self, context: Context, step: Step, name: str) -> None: ...
+    def bypassed(self, context: Context, step: Step, name: str) -> None: ...
 
 @dataclass(frozen=True, kw_only=True)
 class Context:
@@ -151,19 +151,20 @@ Tests use a list-backed `Recorder` and a stub `Host`. Cover: filtering, naming a
 
 Implemented: the decorators store the accepted payload classes on each instance and `step_types(instance)` (runner-facing, not exported) reads them; the runner filters with `isinstance`, so there is no stage-name vocabulary in the filter. Children are named by mapping key or by `registry_unqualified_name`, since a package-qualified registry name (`acme/suspicion`) would put the path separator inside a segment; two packages' monitors sharing a leaf name in one layer therefore collide, and the duplicate-name error tells the author to name them with a mapping. `run_monitor` and `run_protocol` check the child's registry type; `run_monitors`, `run_protocols` and `run_children` all validate their children once in `named_children` and then fan out through one private `_run_named`, which owns the `terminate` cancellation. The task-group unwrap catches `ExceptionGroup` only, never `BaseExceptionGroup`, so a cancellation travelling with an error propagates intact, as in inspect_ai's `tg_collect`. `Observation` now rejects an empty structured suspicion, since `max_suspicion()` has no answer for it. Exceptions propagate unconditionally: the failure policy (warn and continue for a monitor nothing consumes, `fail="open"`) is not implemented here and is not PR 4's either; it needs a per-child hook in `_run_child`, because by the time an exception leaves the task group the siblings' results are gone, and it will be added with that hook in a later PR. A child cancelled before it reported, whether by a sibling's `terminate` or by cancellation from above, is recorded through `Recorder.cancelled()`, and a recorder that raises there fails the layer exactly as one raising from `record()` does, so no recorder bug is hidden behind a log line; cancellation lands at a child's next await, so one that finishes without awaiting is recorded normally. When several children fail concurrently only the first exception surfaces, and a child raising its own `ExceptionGroup` passes through as a group; both match inspect_ai's `tg_collect` and the deferred failure-policy hook will want the sibling errors.
 
-## PR 4: protocols, boundary check, compile, integration
+## PR 4: protocols, boundary check, final decisions, compile, integration
 
-`_protocols.py`, `_check.py`, `_compile.py`, `_integration.py`, `_registry.py`, and the `inspect_ai` entry point in `pyproject.toml`.
+`_protocols.py`, `_check.py`, `_final.py`, `_compile.py`, `_integration.py`, `_registry.py`, and the `inspect_ai` entry point in `pyproject.toml`.
 
 - `observe`: records, returns `None`.
 - `concurrent`: `run_children`; `strongest()`; a `modify` with more than one deciding child becomes `reject` naming the modifier.
 - `threshold(monitors, reject_at, terminate_at=None)`: as written in `sentinel.md`.
-- `check_decision_shape(decision, step)` raises on the deterministic protocol bugs: an action illegal for the stage (`reject` and `modify` are `BeforeToolCall` only), or `modified` not set exactly when `action == "modify"`. `apply_binding_floor(decision, children)` never raises: a decision below the strongest binding child's (or an abstention, or a `modify` with a different replacement) is replaced by that child's decision and recorded on `Reported.overrode`, and disagreeing binding `modify`s resolve to a binding `reject`.
+- `check_decision_shape(decision, step)` raises on the deterministic protocol bugs: an action illegal for the stage (`reject` and `modify` are `BeforeToolCall` only), or `modified` not set exactly when `action == "modify"`.
+- `final(decision)` ends the step: it raises `Final`, a `BaseException`, which the runner records as the calling protocol's decision after the shape check, then carries past every layer above, recording each through `Recorder.bypassed()` and cancelling siblings as `terminate` does. The dispatcher catches it at the root. It replaces the `binding` field and the floor the runner clamped to.
 - `compile_sentinel(spec)`: monitor or monitors-only collection to `observe`; anything else containing a protocol to `concurrent`; every configuration wrapped, so a lone protocol is `concurrent([protocol])` and a lone monitor `observe([monitor])`, and a lone child records the same paths as a list of one. `observe`, `concurrent` and `threshold` raise `ValueError` when given no children.
 
-Tests: each protocol's rules above; every row of the compile table; each shape rule raising; each binding-floor case resolving and recording.
+Tests: each protocol's rules above; every row of the compile table; each shape rule raising; a `final()` passing every layer above, recorded, bypassing and cancelling; two racing `final()`s; an error beside a `final()`; `final()` from a monitor.
 
-Implemented: both checks take the `Step` rather than a stage string, so the payload type stays the stage identity; the runner applies them as each protocol returns, against the child decisions it recorded under that layer, so every level of a nested configuration is resolved and a shape error names the leaf; a layer's children are collected in configuration order for a concurrent group, so the floor's tie-break does not depend on which child finished first; nothing is inherited, so a protocol that builds a new decision from a binding child's decides for itself whether it is binding; the root context collects too, and the dispatcher builds a fresh one per step; `compile_sentinel` reuses the runner's `named_children` so duplicate names and uncalled factories fail at configuration time, classifies a single instance with `is_registry_object` so a set, an iterator or a string gets `named_children`'s message rather than being wrapped in a list, and warns through `logging` for a monitors-only configuration, naming each instance as it is configured, so an explicit `observe()` is how to say recording is intended; the three shipped protocols register as `inspect_sentinel/<name>` through the `inspect_ai` entry point in `pyproject.toml`; inspect_ai imports `RunnerContext`, `Recorder`, `check_instance_name`, `step_types`, `check_decision_shape`, `apply_binding_floor`, `compile_sentinel` and `SentinelSpec` from `inspect_sentinel._integration` only. `threshold` is `BeforeToolCall`-only, as designed, because `reject` is not legal after a tool call.
+Implemented: both checks take the `Step` rather than a stage string, so the payload type stays the stage identity; the runner applies the shape check as each protocol returns or calls `final()`, so a shape error names the leaf; `Final` records its origin path on first catch, so the runner tells the protocol that called `final()` from the layers it bypassed; a `Final` from a monitor is a `TypeError` naming the monitor, since a monitor returns observations; in a task group an exception outranks a `Final`, and of several `Final`s the first to arrive escapes while every one was recorded; `compile_sentinel` reuses the runner's `named_children` so duplicate names and uncalled factories fail at configuration time, classifies a single instance with `is_registry_object` so a set, an iterator or a string gets `named_children`'s message rather than being wrapped in a list, and warns through `logging` for a monitors-only configuration, naming each instance as it is configured, so an explicit `observe()` is how to say recording is intended; the three shipped protocols register as `inspect_sentinel/<name>` through the `inspect_ai` entry point in `pyproject.toml`; inspect_ai imports `RunnerContext`, `Recorder`, `Final`, `check_instance_name`, `step_types`, `check_decision_shape`, `compile_sentinel` and `SentinelSpec` from `inspect_sentinel._integration` only. `threshold` is `BeforeToolCall`-only, as designed, because `reject` is not legal after a tool call.
 
 ## PR 5: multi-function factories
 
@@ -171,7 +172,7 @@ Implemented: both checks take the `Step` rather than a stage string, so the payl
 
 ## Design edits owed (on inspect_ai `design/monitor`)
 
-Rename authoritative → binding on inspect_ai's design/monitor branch and in SentinelEvent when the dispatcher lands.
+Reflect final() on inspect_ai's design/monitor branch.
 
 Move `record` off `Host` into `Recorder` in `sentinel-deployment.md`; add `path` and `RunnerContext` to `sentinel-reference.md`'s `Context`; define `Stage`. (Done in the repo copy: `RunnerContext` named in the runner section; `named()` noted as the runner's private helper; unqualified instance names.)
 

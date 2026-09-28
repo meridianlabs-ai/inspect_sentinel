@@ -43,6 +43,7 @@ reference: inspect_sentinel
 ### run_monitors
 ### run_protocols
 ### run_children
+### final
 ### Observations
 ### Decisions
 ### Reports
