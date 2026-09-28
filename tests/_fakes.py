@@ -10,7 +10,7 @@ from inspect_ai.model import (
 from inspect_ai.tool import ToolCall, ToolCallView, ToolInfo
 from inspect_ai.util import Store
 
-from inspect_sentinel._context import Context, RunnerContext
+from inspect_sentinel._context import RunnerContext
 from inspect_sentinel._report import Decision, Report, Reported
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 
@@ -28,7 +28,7 @@ class FakeHost:
 
 
 class Recorded(NamedTuple):
-    context: Context
+    context: RunnerContext
     step: Step
     reported: Reported[Report]
 
@@ -37,20 +37,26 @@ class ListRecorder:
     def __init__(self) -> None:
         self.records: list[Recorded] = []
         self.cancellations: list[tuple[str, str]] = []
+        self.cancelled_contexts: list[RunnerContext] = []
         self.bypassed_layers: list[tuple[str, str]] = []
+        self.bypassed_contexts: list[RunnerContext] = []
         self.supersessions: list[Recorded] = []
 
-    def record(self, context: Context, step: Step, reported: Reported[Report]) -> None:
+    def record(
+        self, context: RunnerContext, step: Step, reported: Reported[Report]
+    ) -> None:
         self.records.append(Recorded(context, step, reported))
 
-    def cancelled(self, context: Context, step: Step, name: str) -> None:
+    def cancelled(self, context: RunnerContext, step: Step, name: str) -> None:
         self.cancellations.append((context.path, name))
+        self.cancelled_contexts.append(context)
 
-    def bypassed(self, context: Context, step: Step, name: str) -> None:
+    def bypassed(self, context: RunnerContext, step: Step, name: str) -> None:
         self.bypassed_layers.append((context.path, name))
+        self.bypassed_contexts.append(context)
 
     def superseded(
-        self, context: Context, step: Step, reported: Reported[Decision]
+        self, context: RunnerContext, step: Step, reported: Reported[Decision]
     ) -> None:
         self.supersessions.append(Recorded(context, step, reported))
 

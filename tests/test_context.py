@@ -32,14 +32,14 @@ def test_root_store_does_not_share_the_ambient_namespace() -> None:
     [("", "attempt", "attempt"), ("attempt", "judge", "attempt/judge")],
 )
 def test_child_composes_path(parent: str, name: str, expected: str) -> None:
-    child = runner_context(parent).child(name)
+    child = runner_context(parent).child(name, "acme/judge")
     assert isinstance(child, RunnerContext)
-    assert child.path == expected
+    assert (child.path, child.factory) == (expected, "acme/judge")
 
 
 def test_child_shares_store_host_and_recorder() -> None:
     parent = runner_context("")
-    child = parent.child("x")
+    child = parent.child("x", "x")
     assert child.store is parent.store
     assert child.host is parent.host
     assert child.recorder is parent.recorder
@@ -59,7 +59,7 @@ def test_root_store_validates_writes() -> None:
 @pytest.mark.parametrize("name", ["", "a/b"])
 def test_child_rejects_invalid_names(name: str) -> None:
     with pytest.raises(ValueError, match="non-empty"):
-        runner_context().child(name)
+        runner_context().child(name, "x")
 
 
 def test_runner_context_requires_a_complete_recorder() -> None:
