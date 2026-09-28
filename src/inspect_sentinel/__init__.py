@@ -21,9 +21,7 @@ from ._runner import (
     Observations,
     Reports,
     run_children,
-    run_monitor,
     run_monitors,
-    run_protocol,
     run_protocols,
 )
 from ._step import AfterToolCall, BeforeToolCall, Stage, Step
@@ -61,9 +59,7 @@ __all__ = [
     "observe",
     "protocol",
     "run_children",
-    "run_monitor",
     "run_monitors",
-    "run_protocol",
     "run_protocols",
     "threshold",
     "__version__",

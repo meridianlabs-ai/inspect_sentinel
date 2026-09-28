@@ -107,3 +107,6 @@ class Reported(Generic[R_co]):
 
     report: R_co
     """The observation or decision this instance produced."""
+
+    function: str
+    """The `__name__` of the function that produced the report, which tells apart the functions of an instance whose factory returned several."""

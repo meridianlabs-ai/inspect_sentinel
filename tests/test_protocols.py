@@ -1,5 +1,5 @@
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 import pytest
@@ -18,7 +18,7 @@ from inspect_sentinel._monitor import (
 )
 from inspect_sentinel._protocols import concurrent, observe, threshold
 from inspect_sentinel._report import Action, Decision, Observation, Suspicion
-from inspect_sentinel._runner import run_protocol, run_protocols, run_root
+from inspect_sentinel._runner import run_protocols, run_root
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
@@ -72,7 +72,7 @@ def rewrites(explanation: str | None = None) -> ControlProtocol:
 @protocol
 def wrapper(child: ControlProtocol) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        await run_protocol(child, context, step)
+        await run_protocols(child, context, step)
         return Decision.clear()
 
     return decide
@@ -81,8 +81,8 @@ def wrapper(child: ControlProtocol) -> ControlProtocol:
 async def _run(
     instance: ControlProtocol, step: Step, recorder: ListRecorder
 ) -> Decision | None:
-    reported = await run_protocol(instance, runner_context(recorder=recorder), step)
-    return reported.report if reported is not None else None
+    decisions = await run_protocols(instance, runner_context(recorder=recorder), step)
+    return decisions[0].report if decisions else None
 
 
 @pytest.mark.anyio
@@ -152,7 +152,7 @@ async def test_concurrent_turns_a_contested_modify_into_a_reject() -> None:
     )
     assert decision is not None and decision.action == "reject"
     assert decision.explanation == (
-        "rewriter modified the call but 1 other protocol(s) also decided: safer"
+        "rewriter modified the call but 1 other vote(s) also decided: safer"
         " (rewriter: modify; approver: continue)"
     )
 
@@ -370,3 +370,130 @@ def test_a_shipped_protocol_needs_at_least_one_child(
 ) -> None:
     with pytest.raises(ValueError, match="needs at least one child"):
         configure()
+
+
+@protocol
+def rules() -> Sequence[ControlProtocol]:
+    async def lenient(context: Context, step: BeforeToolCall) -> Decision | None:
+        return Decision.clear()
+
+    async def strict(context: Context, step: BeforeToolCall) -> Decision | None:
+        return Decision.reject("strict")
+
+    return [lenient, strict]
+
+
+@monitor
+def two_before(value: float = 0.7) -> Sequence[Monitor]:
+    async def low(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(0.1)
+
+    async def high(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(value)
+
+    return [low, high]
+
+
+@monitor
+def before_and_after() -> Sequence[Monitor]:
+    async def before(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(0.1)
+
+    async def after(context: Context, step: AfterToolCall) -> Observation | None:
+        return Observation.score(1.0)
+
+    return [before, after]
+
+
+@pytest.mark.anyio
+async def test_concurrent_votes_a_groups_members_like_separate_protocols() -> None:
+    recorder = ListRecorder()
+    decision = await _run(concurrent([rules()]), before_step(), recorder)
+    assert decision is not None and decision.action == "reject"
+    assert [
+        (r.reported.path, r.reported.function)
+        for r in recorder.records
+        if r.reported.name == "rules"
+    ] == [("concurrent/rules", "lenient"), ("concurrent/rules", "strict")]
+
+
+@pytest.mark.anyio
+async def test_threshold_reads_every_member_of_a_group() -> None:
+    recorder = ListRecorder()
+    decision = await _run(
+        threshold([two_before(0.7)], reject_at=0.5), before_step(), recorder
+    )
+    assert decision is not None and decision.explanation == "suspicion 0.70"
+
+
+def test_threshold_rejects_a_group_that_never_watches_a_tool_call() -> None:
+    @monitor
+    def later() -> Sequence[Monitor]:
+        async def one(context: Context, step: AfterToolCall) -> Observation | None:
+            return None
+
+        async def two(context: Context, step: AfterToolCall) -> Observation | None:
+            return None
+
+        return [one, two]
+
+    with pytest.raises(TypeError, match="later"):
+        threshold([later()], reject_at=0.5)
+
+
+def test_threshold_rejects_a_group_with_a_member_that_never_watches_a_tool_call() -> (
+    None
+):
+    with pytest.raises(TypeError, match="'before_and_after' \\(function 'after'\\)"):
+        threshold([before_and_after()], reject_at=0.5)
+
+
+def _edits(first: Action, second: Action) -> ControlProtocol:
+    modified = ToolCall(id="c1", function="bash", arguments={"cmd": "echo hi"})
+
+    @protocol
+    def edits() -> Sequence[ControlProtocol]:
+        async def rewrite(context: Context, step: BeforeToolCall) -> Decision | None:
+            return Decision(
+                action=first, modified=modified if first == "modify" else None
+            )
+
+        async def audit(context: Context, step: BeforeToolCall) -> Decision | None:
+            return Decision(
+                action=second, modified=modified if second == "modify" else None
+            )
+
+        return [rewrite, audit]
+
+    return edits()
+
+
+@pytest.mark.parametrize(
+    ("children", "action", "explanation"),
+    [
+        (
+            lambda: [_edits("modify", "continue")],
+            "modify",
+            "edits.rewrite: modify; edits.audit: continue",
+        ),
+        (
+            lambda: [_edits("modify", "modify")],
+            "reject",
+            "edits.rewrite modified the call but 1 other vote(s) also decided"
+            " (edits.rewrite: modify; edits.audit: modify)",
+        ),
+        (
+            lambda: {"e": _edits("modify", "continue"), "ok": says("continue")},
+            "reject",
+            "e.rewrite modified the call but 1 other vote(s) also decided"
+            " (e.rewrite: modify; e.audit: continue; ok: continue)",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_concurrent_counts_a_groups_votes_by_instance(
+    children: Callable[[], Protocols], action: Action, explanation: str
+) -> None:
+    decision = await _run(concurrent(children()), before_step(), ListRecorder())
+    assert decision is not None
+    assert (decision.action, decision.explanation) == (action, explanation)

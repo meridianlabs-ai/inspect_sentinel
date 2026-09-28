@@ -1,5 +1,5 @@
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 import pytest
@@ -273,3 +273,57 @@ def test_bound_method_is_rejected_at_configuration() -> None:
     wrong = monitor(cast(Any, factory))
     with pytest.raises(TypeError, match="plain async function"):
         wrong()
+
+
+@monitor
+def paired() -> Sequence[Monitor]:
+    async def before(context: Context, step: BeforeToolCall) -> Observation | None:
+        return None
+
+    async def after(context: Context, step: AfterToolCall) -> Observation | None:
+        return None
+
+    return [before, after]
+
+
+def test_a_group_is_one_registered_instance() -> None:
+    group = paired()
+    assert registry_info(group).name == "paired"
+    assert registry_info(group).type == "monitor"
+    assert step_types(group) == frozenset({BeforeToolCall, AfterToolCall})
+
+
+async def _before(context: Context, step: BeforeToolCall) -> Observation | None:
+    return None
+
+
+async def _unannotated(context: Context, step: Any) -> Observation | None:
+    return None
+
+
+_unannotated.__annotations__.pop("step")
+
+
+@pytest.mark.parametrize(
+    ("members", "error", "message"),
+    [
+        ([], ValueError, "at least one function"),
+        ([_before, _before], ValueError, "_before"),
+        ([_before, _unannotated], TypeError, "annotat"),
+    ],
+)
+def test_an_invalid_group_is_rejected_at_configuration(
+    members: list[Any], error: type[Exception], message: str
+) -> None:
+    def factory() -> Any:
+        return members
+
+    wrong = monitor(cast(Any, factory))
+    with pytest.raises(error, match=message):
+        wrong()
+
+
+@pytest.mark.anyio
+async def test_a_group_runs_only_through_the_runner() -> None:
+    with pytest.raises(TypeError, match="only through the runner"):
+        await cast(Any, paired())(cast(Any, None), cast(Any, None))

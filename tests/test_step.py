@@ -50,7 +50,10 @@ def test_before_tool_call_defaults_to_no_escalations() -> None:
 
 def test_before_tool_call_carries_escalations() -> None:
     escalation = Reported(
-        name="guard", path="attempt/guard", report=Decision.escalate("unsure")
+        name="guard",
+        path="attempt/guard",
+        report=Decision.escalate("unsure"),
+        function="decide",
     )
     step = BeforeToolCall(
         conversation="conv",

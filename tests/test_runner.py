@@ -1,15 +1,20 @@
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 import anyio
 import pytest
 from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import ToolCall
+from inspect_ai.util import StoreModel
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._final import Final, final
 from inspect_sentinel._monitor import (
+    Children,
     ControlProtocol,
     Monitor,
+    Monitors,
+    Protocols,
     monitor,
     protocol,
 )
@@ -21,9 +26,7 @@ from inspect_sentinel._runner import (
     Observations,
     Reports,
     run_children,
-    run_monitor,
     run_monitors,
-    run_protocol,
     run_protocols,
     run_root,
 )
@@ -32,11 +35,15 @@ from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
 
 def _obs(name: str, suspicion: float | dict[str, float]) -> Reported[Observation]:
-    return Reported(name=name, path=name, report=Observation.score(suspicion))
+    return Reported(
+        name=name, path=name, report=Observation.score(suspicion), function="check"
+    )
 
 
 def _dec(name: str, action: Action) -> Reported[Decision]:
-    return Reported(name=name, path=name, report=Decision(action=action))
+    return Reported(
+        name=name, path=name, report=Decision(action=action), function="decide"
+    )
 
 
 def test_observations_is_a_sequence() -> None:
@@ -153,7 +160,7 @@ def finalizes(action: Action = "reject") -> ControlProtocol:
 @protocol
 def wrapper(child: ControlProtocol) -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        await run_protocol(child, context, step)
+        await run_protocols(child, context, step)
         return Decision.clear()
 
     return decide
@@ -168,11 +175,10 @@ def records_path() -> ControlProtocol:
 
 
 @pytest.mark.anyio
-async def test_run_monitor_records_and_returns_the_report() -> None:
+async def test_a_single_monitor_is_recorded_and_returned() -> None:
     recorder = ListRecorder()
     context = runner_context(recorder=recorder)
-    reported = await run_monitor(scores(0.4), context, before_step())
-    assert reported is not None
+    [reported] = await run_monitors(scores(0.4), context, before_step())
     assert reported.report.suspicion == 0.4
     assert reported.name == "scores" and reported.path == "scores"
     assert [r.reported for r in recorder.records] == [reported]
@@ -180,49 +186,43 @@ async def test_run_monitor_records_and_returns_the_report() -> None:
 
 
 @pytest.mark.anyio
-async def test_run_monitor_skips_a_child_for_another_stage() -> None:
+async def test_a_child_for_another_stage_is_skipped() -> None:
     recorder = ListRecorder()
-    assert (
-        await run_monitor(
-            after_only(), runner_context(recorder=recorder), before_step()
-        )
-        is None
-    )
+    assert await run_monitors(
+        after_only(), runner_context(recorder=recorder), before_step()
+    ) == Observations([])
     assert recorder.records == []
 
 
 @pytest.mark.anyio
 async def test_abstention_records_nothing() -> None:
     recorder = ListRecorder()
-    assert (
-        await run_monitor(abstains(), runner_context(recorder=recorder), before_step())
-        is None
-    )
+    assert await run_monitors(
+        abstains(), runner_context(recorder=recorder), before_step()
+    ) == Observations([])
     assert recorder.records == []
 
 
 @pytest.mark.anyio
-async def test_run_monitor_uses_the_given_name_and_extends_the_path() -> None:
-    reported = await run_monitor(
-        scores(), runner_context(path="attempt"), before_step(), name="judge"
+async def test_a_mapping_key_names_the_child_and_extends_the_path() -> None:
+    [reported] = await run_monitors(
+        {"judge": scores()}, runner_context(path="attempt"), before_step()
     )
-    assert reported is not None
     assert (reported.name, reported.path) == ("judge", "attempt/judge")
 
 
 @pytest.mark.anyio
 async def test_child_context_is_derived_under_the_layer() -> None:
-    reported = await run_protocol(
-        records_path(), runner_context(path="attempt"), before_step(), name="rule"
+    [reported] = await run_protocols(
+        {"rule": records_path()}, runner_context(path="attempt"), before_step()
     )
-    assert reported is not None
     assert reported.report.explanation == "attempt/rule"
 
 
 @pytest.mark.anyio
-async def test_run_monitor_rejects_a_protocol() -> None:
+async def test_run_monitors_rejects_a_single_protocol() -> None:
     with pytest.raises(TypeError, match="monitor"):
-        await run_monitor(cast(Any, decides()), runner_context(), before_step())
+        await run_monitors(cast(Any, decides()), runner_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -241,7 +241,7 @@ async def test_runner_requires_a_runner_context() -> None:
         host=parent.host,
     )
     with pytest.raises(TypeError, match="RunnerContext"):
-        await run_monitor(scores(), bare, before_step())
+        await run_monitors(scores(), bare, before_step())
 
 
 @pytest.mark.anyio
@@ -374,7 +374,7 @@ async def test_wrong_report_type_at_runtime_is_an_error() -> None:
 
     wrong = monitor(cast(Any, factory))()
     with pytest.raises(TypeError, match="must return Observation"):
-        await run_monitor(wrong, runner_context(), before_step())
+        await run_monitors(wrong, runner_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -565,7 +565,7 @@ async def test_undecorated_function_in_a_sequence_gets_the_friendly_error() -> N
     with pytest.raises(TypeError, match="@monitor or @protocol"):
         await run_monitors([cast(Any, plain)], runner_context(), before_step())
     with pytest.raises(TypeError, match="@monitor or @protocol"):
-        await run_monitor(cast(Any, plain), runner_context(), before_step())
+        await run_monitors(cast(Any, plain), runner_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -658,7 +658,7 @@ async def test_terminate_cancels_monitors_at_their_next_await() -> None:
 @pytest.mark.anyio
 async def test_invalid_name_is_rejected_even_when_the_stage_does_not_match() -> None:
     with pytest.raises(ValueError, match="non-empty"):
-        await run_monitor(after_only(), runner_context(), before_step(), name="a/b")
+        await run_monitors({"a/b": after_only()}, runner_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -750,11 +750,10 @@ async def test_packaged_children_are_named_without_the_package_prefix(
 async def test_an_illegal_decision_fails_the_layer_that_returned_it() -> None:
     recorder = ListRecorder()
     with pytest.raises(ValueError, match="rule") as info:
-        await run_protocol(
-            decides("reject"),
+        await run_protocols(
+            {"rule": decides("reject")},
             runner_context(recorder=recorder),
             after_step(),
-            name="rule",
         )
     assert "already run" in str(info.value)
     assert recorder.records == []
@@ -800,7 +799,7 @@ async def test_final_ends_the_step_past_every_layer_above() -> None:
 async def test_a_final_propagating_below_the_root_is_not_yet_recorded() -> None:
     recorder = ListRecorder()
     with pytest.raises(Final):
-        await run_protocol(
+        await run_protocols(
             wrapper(finalizes("reject")),
             runner_context(recorder=recorder),
             before_step(),
@@ -813,7 +812,7 @@ async def test_a_final_propagating_below_the_root_is_not_yet_recorded() -> None:
 async def test_a_final_decision_illegal_for_the_stage_fails_the_protocol() -> None:
     recorder = ListRecorder()
     with pytest.raises(ValueError, match="'finalizes'") as info:
-        await run_protocol(
+        await run_protocols(
             wrapper(finalizes("reject")),
             runner_context(recorder=recorder),
             after_step(),
@@ -940,8 +939,8 @@ async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -
     def custom() -> ControlProtocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             async with anyio.create_task_group() as tg:
-                tg.start_soon(run_protocol, slow(), context, step)
-                tg.start_soon(run_protocol, leaf(), context, step)
+                tg.start_soon(run_protocols, slow(), context, step)
+                tg.start_soon(run_protocols, leaf(), context, step)
             return Decision.clear()
 
         return decide
@@ -987,8 +986,8 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
     def custom() -> ControlProtocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             async with anyio.create_task_group() as tg:
-                tg.start_soon(run_protocol, opens(), context, step)
-                tg.start_soon(run_protocol, follows(), context, step)
+                tg.start_soon(run_protocols, opens(), context, step)
+                tg.start_soon(run_protocols, follows(), context, step)
             return Decision.clear()
 
         return decide
@@ -1014,7 +1013,7 @@ async def test_a_final_propagating_through_a_monitor_names_the_protocol() -> Non
     @monitor
     def consults() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
-            await run_protocol(finalizes("reject"), context, step)
+            await run_protocols(finalizes("reject"), context, step)
             return None
 
         return check
@@ -1134,7 +1133,7 @@ async def test_an_error_beside_a_claimed_final_in_a_protocols_own_group_surfaces
     def custom() -> ControlProtocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             async with anyio.create_task_group() as tg:
-                tg.start_soon(run_protocol, leaf(), context, step)
+                tg.start_soon(run_protocols, leaf(), context, step)
                 tg.start_soon(explodes)
             return None
 
@@ -1173,7 +1172,7 @@ async def test_an_illegal_own_final_supersedes_the_claimed_finals_beside_it() ->
     def custom() -> ControlProtocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             async with anyio.create_task_group() as tg:
-                tg.start_soon(run_protocol, leaf(), context, step)
+                tg.start_soon(run_protocols, leaf(), context, step)
                 tg.start_soon(illegal)
             return None
 
@@ -1211,7 +1210,7 @@ async def test_a_monitors_own_final_supersedes_the_claimed_finals_beside_it() ->
     def meddles() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             async with anyio.create_task_group() as tg:
-                tg.start_soon(run_protocol, leaf(), context, step)
+                tg.start_soon(run_protocols, leaf(), context, step)
                 tg.start_soon(own)
             return None
 
@@ -1275,3 +1274,325 @@ async def test_an_ill_shaped_own_final_supersedes_nothing_it_made_itself(
         await run_root(twice(), runner_context(recorder=recorder), after_step())
     assert recorder.supersessions == []
     assert recorder.records == []
+
+
+@pytest.mark.parametrize(
+    ("configure", "expected"),
+    [
+        (lambda: scores(0.3), ["scores"]),
+        (lambda: [scores(0.3)], ["scores"]),
+        (lambda: {"judge": scores(0.3)}, ["judge"]),
+    ],
+)
+@pytest.mark.anyio
+async def test_run_monitors_takes_one_many_or_named(
+    configure: Callable[[], Monitor | Monitors], expected: list[str]
+) -> None:
+    observations = await run_monitors(configure(), runner_context(), before_step())
+    assert [o.name for o in observations] == expected
+
+
+@pytest.mark.parametrize(
+    ("configure", "expected"),
+    [
+        (lambda: decides("reject"), ["decides"]),
+        (lambda: [decides("reject")], ["decides"]),
+        (lambda: {"rule": decides("reject")}, ["rule"]),
+    ],
+)
+@pytest.mark.anyio
+async def test_run_protocols_takes_one_many_or_named(
+    configure: Callable[[], ControlProtocol | Protocols], expected: list[str]
+) -> None:
+    decisions = await run_protocols(configure(), runner_context(), before_step())
+    assert [d.name for d in decisions] == expected
+
+
+@pytest.mark.parametrize(
+    ("configure", "expected"),
+    [
+        (lambda: scores(0.3), (["scores"], list[str]())),
+        (lambda: decides("reject"), (list[str](), ["decides"])),
+        (lambda: [scores(0.3), decides("reject")], (["scores"], ["decides"])),
+        (lambda: {"m": scores(0.3), "p": decides()}, (["m"], ["p"])),
+    ],
+)
+@pytest.mark.anyio
+async def test_run_children_takes_one_many_or_named(
+    configure: Callable[[], Monitor | ControlProtocol | Children],
+    expected: tuple[list[str], list[str]],
+) -> None:
+    reports = await run_children(configure(), runner_context(), before_step())
+    assert (
+        [o.name for o in reports.observations],
+        [d.name for d in reports.decisions],
+    ) == expected
+
+
+@pytest.mark.anyio
+async def test_a_report_names_the_function_that_made_it() -> None:
+    recorder = ListRecorder()
+    reports = await run_children(
+        {"m": scores(), "p": decides()},
+        runner_context(recorder=recorder),
+        before_step(),
+    )
+    assert [o.function for o in reports.observations] == ["check"]
+    assert [d.function for d in reports.decisions] == ["decide"]
+    assert sorted(r.reported.function for r in recorder.records) == ["check", "decide"]
+
+
+@pytest.mark.anyio
+async def test_a_final_decision_names_the_function_that_made_it() -> None:
+    recorder = ListRecorder()
+    await run_root(
+        concurrent([finalizes("reject")]),
+        runner_context(recorder=recorder),
+        before_step(),
+    )
+    assert [(r.reported.path, r.reported.function) for r in recorder.records] == [
+        ("finalizes", "decide")
+    ]
+
+
+class Seen(StoreModel):
+    before: int = 0
+
+
+@monitor
+def paired() -> Sequence[Monitor]:
+    async def before(context: Context, step: BeforeToolCall) -> Observation | None:
+        seen = context.store_as(Seen)
+        seen.before += 1
+        return Observation.score(seen.before / 10)
+
+    async def after(context: Context, step: AfterToolCall) -> Observation | None:
+        return Observation.score(context.store_as(Seen).before / 10)
+
+    return [before, after]
+
+
+@pytest.mark.anyio
+async def test_a_groups_members_report_at_one_path_and_share_its_state() -> None:
+    recorder = ListRecorder()
+    context = runner_context(recorder=recorder)
+    group = paired()
+    before = await run_monitors(group, context, before_step())
+    after = await run_monitors(group, context, after_step())
+    assert [(o.name, o.path, o.function, o.report.suspicion) for o in before] == [
+        ("paired", "paired", "before", 0.1)
+    ]
+    assert [(o.name, o.path, o.function, o.report.suspicion) for o in after] == [
+        ("paired", "paired", "after", 0.1)
+    ]
+    assert [r.reported for r in recorder.records] == [*before, *after]
+
+
+@pytest.mark.anyio
+async def test_two_instances_of_a_group_keep_separate_state() -> None:
+    context = runner_context()
+    group = {"a": paired(), "b": paired()}
+    await run_monitors(group, context, before_step())
+    observations = await run_monitors(group, context, before_step())
+    assert [(o.path, o.report.suspicion) for o in observations] == [
+        ("a", 0.2),
+        ("b", 0.2),
+    ]
+
+
+@pytest.mark.anyio
+async def test_members_on_one_stage_report_in_factory_order() -> None:
+    @monitor
+    def twins() -> Sequence[Monitor]:
+        async def second(context: Context, step: BeforeToolCall) -> Observation | None:
+            await anyio.sleep(0)
+            return Observation.score(0.2)
+
+        async def first(context: Context, step: BeforeToolCall) -> Observation | None:
+            return Observation.score(0.1)
+
+        return [second, first]
+
+    recorder = ListRecorder()
+    reports = await run_children(
+        [twins(), decides()], runner_context(recorder=recorder), before_step()
+    )
+    assert [(o.path, o.function) for o in reports.observations] == [
+        ("twins", "second"),
+        ("twins", "first"),
+    ]
+    assert [
+        r.reported.function for r in recorder.records if r.reported.name == "twins"
+    ] == ["second", "first"]
+
+
+@pytest.mark.anyio
+async def test_a_group_member_calling_final_ends_the_step() -> None:
+    ran: list[str] = []
+
+    @protocol
+    def gatekeeper() -> Sequence[ControlProtocol]:
+        async def screen(context: Context, step: BeforeToolCall) -> Decision | None:
+            final(Decision.reject("screened"))
+
+        async def later(context: Context, step: BeforeToolCall) -> Decision | None:
+            ran.append("later")
+            return Decision.clear()
+
+        return [screen, later]
+
+    recorder = ListRecorder()
+    decision = await run_root(
+        concurrent([gatekeeper()]), runner_context(recorder=recorder), before_step()
+    )
+    assert decision == Decision.reject("screened")
+    assert ran == []
+    assert [(r.reported.path, r.reported.function) for r in recorder.records] == [
+        ("gatekeeper", "screen")
+    ]
+    assert recorder.bypassed_layers == [("", "concurrent")]
+
+
+@pytest.mark.anyio
+async def test_a_cancelled_group_is_recorded_once() -> None:
+    started = anyio.Event()
+
+    @monitor
+    def quick_then_slow() -> Sequence[Monitor]:
+        async def quick(context: Context, step: BeforeToolCall) -> Observation | None:
+            return Observation.score(0.1)
+
+        async def slow(context: Context, step: BeforeToolCall) -> Observation | None:
+            started.set()
+            await anyio.sleep_forever()
+            return None
+
+        return [quick, slow]
+
+    @protocol
+    def terminates() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await started.wait()
+            return Decision.terminate()
+
+        return decide
+
+    recorder = ListRecorder()
+    with anyio.fail_after(5):
+        reports = await run_children(
+            {"g": quick_then_slow(), "stop": terminates()},
+            runner_context(recorder=recorder),
+            before_step(),
+        )
+    assert [o.function for o in reports.observations] == ["quick"]
+    assert recorder.cancellations == [("g", "g")]
+    assert sorted((r.reported.path, r.reported.function) for r in recorder.records) == [
+        ("g", "quick"),
+        ("stop", "decide"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_the_root_is_one_function() -> None:
+    @protocol
+    def pair() -> Sequence[ControlProtocol]:
+        async def one(context: Context, step: Step) -> Decision | None:
+            return None
+
+        async def two(context: Context, step: Step) -> Decision | None:
+            return None
+
+        return [one, two]
+
+    with pytest.raises(TypeError, match="root"):
+        await run_root(pair(), runner_context(), before_step())
+
+
+@pytest.mark.anyio
+async def test_a_members_terminate_stops_the_group() -> None:
+    ran: list[str] = []
+    started = anyio.Event()
+
+    @protocol
+    def stops() -> Sequence[ControlProtocol]:
+        async def stop(context: Context, step: BeforeToolCall) -> Decision | None:
+            await started.wait()
+            return Decision.terminate()
+
+        async def overrule(context: Context, step: BeforeToolCall) -> Decision | None:
+            ran.append("overrule")
+            final(Decision.reject("overruled"))
+
+        return [stop, overrule]
+
+    @protocol
+    def slow() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            started.set()
+            await anyio.sleep_forever()
+            return None
+
+        return decide
+
+    recorder = ListRecorder()
+    with anyio.fail_after(5):
+        decision = await run_root(
+            concurrent({"g": stops(), "slow": slow()}),
+            runner_context(recorder=recorder),
+            before_step(),
+        )
+    assert decision == Decision.terminate()
+    assert ran == []
+    assert [(r.reported.path, r.reported.function) for r in recorder.records] == [
+        ("g", "stop"),
+        ("", "run"),
+    ]
+    assert recorder.cancellations == [("slow", "slow")]
+    assert recorder.supersessions == []
+
+
+@pytest.mark.anyio
+async def test_a_group_members_error_names_its_function() -> None:
+    @monitor
+    def bad_second() -> Sequence[Monitor]:
+        async def fine(context: Context, step: BeforeToolCall) -> Observation | None:
+            return None
+
+        async def wrong(context: Context, step: BeforeToolCall) -> Observation | None:
+            return cast(Any, Decision.clear())
+
+        return [fine, wrong]
+
+    @monitor
+    def meddles() -> Sequence[Monitor]:
+        async def fine(context: Context, step: BeforeToolCall) -> Observation | None:
+            return None
+
+        async def ends(context: Context, step: BeforeToolCall) -> Observation | None:
+            final(Decision.reject())
+
+        return [fine, ends]
+
+    @protocol
+    def ill_shaped() -> Sequence[ControlProtocol]:
+        async def fine(context: Context, step: AfterToolCall) -> Decision | None:
+            return None
+
+        async def rejects(context: Context, step: AfterToolCall) -> Decision | None:
+            return Decision.reject()
+
+        return [fine, rejects]
+
+    with pytest.raises(
+        TypeError,
+        match=r"monitor 'bad_second' \(function 'wrong'\) returned a Decision",
+    ):
+        await run_monitors(bad_second(), runner_context(), before_step())
+    with pytest.raises(
+        ValueError, match=r"protocol 'ill_shaped' \(function 'rejects'\)"
+    ):
+        await run_protocols(ill_shaped(), runner_context(), after_step())
+    with pytest.raises(
+        TypeError, match=r"monitor 'meddles' \(function 'ends'\) called"
+    ):
+        await run_monitors(meddles(), runner_context(), before_step())

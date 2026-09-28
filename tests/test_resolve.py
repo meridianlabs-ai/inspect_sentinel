@@ -10,7 +10,7 @@ from inspect_sentinel._monitor import ControlProtocol, Monitor, monitor, protoco
 from inspect_sentinel._protocols import concurrent, observe, threshold
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._resolve import Sentinels, resolve_sentinel
-from inspect_sentinel._runner import run_protocol
+from inspect_sentinel._runner import run_protocols
 from inspect_sentinel._step import BeforeToolCall, Step
 from tests._fakes import ListRecorder, before_step, runner_context
 
@@ -107,7 +107,7 @@ async def test_a_lone_child_and_a_list_of_one_record_the_same_paths(
     paths: list[list[str]] = []
     for spec in specs:
         recorder = ListRecorder()
-        await run_protocol(
+        await run_protocols(
             resolve_sentinel(spec()), runner_context(recorder=recorder), before_step()
         )
         paths.append([r.reported.path for r in recorder.records])
@@ -123,19 +123,19 @@ def test_a_protocol_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
 @pytest.mark.anyio
 async def test_a_resolved_monitor_records_and_does_not_act() -> None:
     recorder = ListRecorder()
-    reported = await run_protocol(
+    decisions = await run_protocols(
         resolve_sentinel(noisy()), runner_context(recorder=recorder), before_step()
     )
-    assert reported is None
+    assert not decisions
     assert [record.reported.name for record in recorder.records] == ["noisy"]
 
 
 @pytest.mark.anyio
 async def test_a_resolved_protocol_decides() -> None:
-    reported = await run_protocol(
+    [reported] = await run_protocols(
         resolve_sentinel([blocks()]), runner_context(), before_step()
     )
-    assert reported is not None and reported.report.action == "reject"
+    assert reported.report.action == "reject"
 
 
 def test_duplicate_names_are_a_configuration_error() -> None:

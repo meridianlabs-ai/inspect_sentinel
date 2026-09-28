@@ -3,7 +3,15 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from functools import wraps
-from typing import Any, ParamSpec, TypeAlias, TypeVar, cast, get_args, get_type_hints
+from typing import (
+    Any,
+    NamedTuple,
+    ParamSpec,
+    TypeAlias,
+    cast,
+    get_args,
+    get_type_hints,
+)
 
 from inspect_ai._util.registry import (
     RegistryInfo,
@@ -44,32 +52,62 @@ Children: TypeAlias = (
 """Monitors and protocols together, for the compositions that record either."""
 
 P = ParamSpec("P")
-SentinelT = TypeVar("SentinelT")
 
 _STEP_TYPES = frozenset(get_args(Step))
 STEP_TYPES_ATTR = "__sentinel_step_types__"
 
 
-def monitor(factory: Callable[P, Monitor]) -> Callable[P, Monitor]:
+class Member(NamedTuple):
+    function: Callable[[Context, Step], Awaitable[Report | None]]
+    accepted: frozenset[type[Any]]
+
+
+class Group:
+    def __init__(self, members: Sequence[Member]) -> None:
+        self.members = tuple(members)
+
+
+class MonitorGroup(Group):
+    async def __call__(self, context: Context, step: Step) -> Observation | None:
+        raise TypeError("a group of functions runs only through the runner")
+
+
+class ProtocolGroup(Group):
+    async def __call__(self, context: Context, step: Step) -> Decision | None:
+        raise TypeError("a group of functions runs only through the runner")
+
+
+def members(sentinel: Monitor | ControlProtocol) -> tuple[Member, ...]:
+    if isinstance(sentinel, Group):
+        return sentinel.members
+    function = cast(Callable[[Context, Step], Awaitable[Report | None]], sentinel)
+    return (Member(function, step_types(sentinel)),)
+
+
+def monitor(
+    factory: Callable[P, Monitor | Sequence[Monitor]],
+) -> Callable[P, Monitor]:
     """Register a monitor factory.
 
-    The factory's return annotation must be `Monitor` and the function it returns must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated to return `Observation | None`. These are checked when the factory is called. A monitor watches one stage; a concern spanning two stages is two monitors. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store. The function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
+    The factory returns a function that must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated to return `Observation | None`. These are checked when the factory is called. Each function watches one stage. A factory may instead return a non-empty sequence of such functions with distinct `__name__`s; together they are one configured instance, sharing its name, path and `store_as` namespace, and each runs, in the order given, at the stage it watches, sequentially since they share one store. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     Args:
-        factory: A function returning a monitor.
+        factory: A function returning a monitor, or a sequence of functions that form one.
     """
-    return _register("monitor", factory, Observation)
+    return cast(Callable[P, Monitor], _register("monitor", factory, Observation))
 
 
-def protocol(factory: Callable[P, ControlProtocol]) -> Callable[P, ControlProtocol]:
+def protocol(
+    factory: Callable[P, ControlProtocol | Sequence[ControlProtocol]],
+) -> Callable[P, ControlProtocol]:
     """Register a protocol factory.
 
-    Same contract as `@monitor`, with the returned function annotated to return `Decision | None`, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. The factory must return a fresh function on each call; a shared function would make two configured instances indistinguishable in the log and the store. The function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
+    Same contract as `@monitor`, with each returned function annotated to return `Decision | None`, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. As with `@monitor`, the factory may return a non-empty sequence of functions with distinct `__name__`s that form one instance; a function among them that returns `terminate` or calls `final()` ends the instance's run, and those after it do not run and are not recorded. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     Args:
-        factory: A function returning a protocol.
+        factory: A function returning a protocol, or a sequence of functions that form one.
     """
-    return _register("protocol", factory, Decision)
+    return cast(Callable[P, ControlProtocol], _register("protocol", factory, Decision))
 
 
 def step_types(sentinel: Monitor | ControlProtocol) -> frozenset[type[Any]]:
@@ -97,23 +135,55 @@ def step_types(sentinel: Monitor | ControlProtocol) -> frozenset[type[Any]]:
 
 def _register(
     kind: RegistryType,
-    factory: Callable[P, SentinelT],
+    factory: Callable[P, object],
     report_type: type[Report],
-) -> Callable[P, SentinelT]:
+) -> Callable[P, object]:
     name = registry_name(factory, factory.__name__)
     params = list(inspect.signature(factory).parameters.keys())
     info = RegistryInfo(type=kind, name=name, metadata=dict(params=params))
 
     @wraps(factory)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> SentinelT:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> object:
         instance = factory(*args, **kwargs)
-        accepted = _validate(cast(Callable[..., Any], instance), kind, report_type)
+        if isinstance(instance, Sequence) and not isinstance(instance, str):
+            instance = _group(cast(Sequence[object], instance), kind, report_type)
+            accepted = frozenset[type[Any]]().union(
+                *(member.accepted for member in instance.members)
+            )
+        else:
+            accepted = _validate(cast(Callable[..., Any], instance), kind, report_type)
         setattr(instance, STEP_TYPES_ATTR, accepted)
         registry_tag(factory, instance, info.model_copy(deep=True), *args, **kwargs)
         return instance
 
     registry_add(wrapper, info)
     return wrapper
+
+
+def _group(
+    functions: Sequence[object], kind: RegistryType, report_type: type[Report]
+) -> Group:
+    if not functions:
+        raise ValueError(
+            f"A {kind} factory that returns a sequence must return at least one function."
+        )
+    found: list[Member] = []
+    seen: set[str] = set()
+    for function in functions:
+        accepted = _validate(cast(Callable[..., Any], function), kind, report_type)
+        name: str = cast(Any, function).__name__
+        if name in seen:
+            raise ValueError(
+                f"Duplicate function name {name!r} in one {kind}; the functions of an instance are told apart by name, so give each a distinct one."
+            )
+        seen.add(name)
+        found.append(
+            Member(
+                cast(Callable[[Context, Step], Awaitable[Report | None]], function),
+                accepted,
+            )
+        )
+    return MonitorGroup(found) if kind == "monitor" else ProtocolGroup(found)
 
 
 def _validate(

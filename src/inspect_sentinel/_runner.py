@@ -28,9 +28,11 @@ from ._final import Final, Origin
 from ._monitor import (
     Children,
     ControlProtocol,
+    Group,
     Monitor,
     Monitors,
     Protocols,
+    members,
     step_types,
 )
 from ._report import (
@@ -185,36 +187,6 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
         raise first
 
 
-async def run_monitor(
-    monitor: Monitor, context: Context, step: Step, *, name: str | None = None
-) -> Reported[Observation] | None:
-    """Invoke one monitor if it accepts this step's payload.
-
-    Derives the child's context under this layer's path, records the observation, and returns it. Returns `None` if the monitor abstained or does not watch this stage.
-
-    Args:
-        monitor: The monitor instance.
-        context: This layer's context, as the dispatcher provided it.
-        step: The step being examined.
-        name: The child's instance name; the registry name without its package prefix when omitted.
-    """
-    return await _run_child(monitor, "monitor", Observation, context, step, name)
-
-
-async def run_protocol(
-    protocol: ControlProtocol, context: Context, step: Step, *, name: str | None = None
-) -> Reported[Decision] | None:
-    """The same as `run_monitor`, for one protocol.
-
-    Args:
-        protocol: The protocol instance.
-        context: This layer's context, as the dispatcher provided it.
-        step: The step being examined.
-        name: The child's instance name; the registry name without its package prefix when omitted.
-    """
-    return await _run_child(protocol, "protocol", Decision, context, step, name)
-
-
 async def run_root(
     protocol: ControlProtocol, context: Context, step: Step
 ) -> Decision | None:
@@ -227,9 +199,14 @@ async def run_root(
         context: The top layer's context, whose `path` is empty.
         step: The step being examined.
     """
+    if isinstance(protocol, Group):
+        raise TypeError(
+            "The root is one protocol function, as resolve_sentinel returns it; a group of functions cannot be the root."
+        )
+    found: list[Reported[Decision]] = []
     try:
-        reported = await _run_child(
-            protocol, "protocol", Decision, context, step, None, root=True
+        await _run_child(
+            protocol, "protocol", Decision, context, step, None, found, root=True
         )
     except Final as ex:
         origin = ex.origin
@@ -239,16 +216,18 @@ async def run_root(
             ) from ex
         origin.context.recorder.record(origin.context, origin.step, origin.reported)
         return ex.decision
-    return reported.report if reported is not None else None
+    return found[0].report if found else None
 
 
 async def run_monitors(
-    monitors: Monitors, context: Context, step: Step
+    monitors: Monitor | Monitors, context: Context, step: Step
 ) -> Observations:
     """Run monitors concurrently and collect their observations in configuration order.
 
+    Derives each child's context under this layer's path and records every observation, including the ones the caller goes on to ignore. A monitor that abstained or does not watch this stage contributes nothing, so the result may be empty. An instance whose factory returned several functions contributes one observation per function that reported, in the order the factory returned them.
+
     Args:
-        monitors: A sequence of monitors, or a mapping of instance names to monitors.
+        monitors: One monitor, named by its registry name without the package prefix; a sequence of monitors, named the same way; or a mapping of instance names to monitors.
         context: This layer's context.
         step: The step being examined.
     """
@@ -257,14 +236,14 @@ async def run_monitors(
 
 
 async def run_protocols(
-    protocols: Protocols, context: Context, step: Step
+    protocols: ControlProtocol | Protocols, context: Context, step: Step
 ) -> Decisions:
     """Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns `terminate` or calls `final()`.
 
     A `final()` from any protocol at any depth below propagates out of this call, so the caller's own decision logic does not run.
 
     Args:
-        protocols: A sequence of protocols, or a mapping of instance names to protocols.
+        protocols: One protocol, a sequence of protocols, or a mapping of instance names to protocols, named as for `run_monitors`.
         context: This layer's context.
         step: The step being examined.
     """
@@ -272,13 +251,15 @@ async def run_protocols(
     return (await _run_named(named, context, step)).decisions
 
 
-async def run_children(children: Children, context: Context, step: Step) -> Reports:
+async def run_children(
+    children: Monitor | ControlProtocol | Children, context: Context, step: Step
+) -> Reports:
     """Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns `terminate` or calls `final()`.
 
     A child cancelled this way is recorded through `Recorder.cancelled`; one that finishes without awaiting is recorded normally.
 
     Args:
-        children: A sequence of monitors and protocols, or a mapping of instance names to them.
+        children: One monitor or protocol, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.
         context: This layer's context.
         step: The step being examined.
     """
@@ -299,33 +280,46 @@ async def _run_named(
         child: Monitor | ControlProtocol,
         cancel: Callable[[], None],
     ) -> None:
+        # a group's reports are kept as they arrive, so one cancelled part way
+        # returns what it recorded, as a single child finishing first does
         if registry_info(child).type == "monitor":
-            observed = await _run_child(
-                cast(Monitor, child), "monitor", Observation, context, step, name
-            )
-            if observed is not None:
-                observations.append((index, observed))
+            observed: list[Reported[Observation]] = []
+            try:
+                await _run_child(
+                    cast(Monitor, child),
+                    "monitor",
+                    Observation,
+                    context,
+                    step,
+                    name,
+                    observed,
+                )
+            finally:
+                observations.extend((index, o) for o in observed)
         else:
-            decided = await _run_child(
-                cast(ControlProtocol, child),
-                "protocol",
-                Decision,
-                context,
-                step,
-                name,
-            )
-            if decided is not None:
-                decisions.append((index, decided))
-                if decided.report.action == "terminate":
-                    terminated.append(decided)
-                    cancel()
+            decided: list[Reported[Decision]] = []
+            try:
+                await _run_child(
+                    cast(ControlProtocol, child),
+                    "protocol",
+                    Decision,
+                    context,
+                    step,
+                    name,
+                    decided,
+                )
+            finally:
+                decisions.extend((index, d) for d in decided)
+                terminated.extend(d for d in decided if d.report.action == "terminate")
+            if any(d.report.action == "terminate" for d in decided):
+                cancel()
 
     try:
         async with _task_group() as tg:
             for index, (name, child) in enumerate(named):
                 tg.start_soon(run_one, index, name, child, tg.cancel_scope.cancel)
     except Final:
-        # a sibling's final() outran a terminate already recorded as a decision
+        # a final() outran a terminate already recorded as a decision
         for reported in terminated:
             # _run_child accepted this context, so it is a RunnerContext
             child_context = cast(RunnerContext, context).child(reported.name)
@@ -345,14 +339,15 @@ async def _run_child(
     context: Context,
     step: Step,
     name: str | None,
+    found: list[Reported[R]],
     *,
     root: bool = False,
-) -> Reported[R] | None:
+) -> None:
     if not isinstance(context, RunnerContext):
         raise TypeError(
             "The runner needs the RunnerContext the dispatcher provided; a Context constructed elsewhere cannot record reports."
         )
-    info, accepted = _check_child(child, kind)
+    info, _ = _check_child(child, kind)
     if root:
         if context.path != "":
             raise ValueError(
@@ -363,21 +358,54 @@ async def _run_child(
         child_name = validate_instance_name(
             name if name is not None else registry_unqualified_name(info)
         )
-    if not isinstance(step, tuple(accepted)):
-        return None
+    grouped = isinstance(child, Group)
+    running = [m for m in members(child) if isinstance(step, tuple(m.accepted))]
+    if not running:
+        return
     child_context = context if root else context.child(child_name)
-    invoke = cast(Callable[[Context, Step], Awaitable[Report | None]], child)
-    report: Report | None = None
-    finals: list[Final] = []
-    failure: BaseException | None = None
     try:
-        report = await invoke(child_context, step)
+        # sequential, since a group's members share one store
+        for member in running:
+            reported = await _run_member(
+                member.function,
+                kind,
+                report_type,
+                child_context,
+                step,
+                child_name,
+                grouped,
+            )
+            if reported is not None:
+                found.append(reported)
+                # nothing outranks terminate, so the rest of the group does not run
+                if isinstance(reported.report, Decision) and (
+                    reported.report.action == "terminate"
+                ):
+                    break
     except anyio.get_cancelled_exc_class():
         # a recorder that raises here fails the layer, like one that raises
         # from record(); a cancellation record that cannot be written is not
         # something to paper over
         child_context.recorder.cancelled(child_context, step, child_name)
         raise
+
+
+async def _run_member(
+    invoke: Callable[[Context, Step], Awaitable[Report | None]],
+    kind: Literal["monitor", "protocol"],
+    report_type: type[R],
+    child_context: RunnerContext,
+    step: Step,
+    child_name: str,
+    grouped: bool,
+) -> Reported[R] | None:
+    function = invoke.__name__
+    label = describe(child_name, function, grouped)
+    report: Report | None = None
+    finals: list[Final] = []
+    failure: BaseException | None = None
+    try:
+        report = await invoke(child_context, step)
     except Final as ex:
         finals = [ex]
     except BaseExceptionGroup as ex:
@@ -390,16 +418,18 @@ async def _run_child(
     if failure is not None:
         raise failure
     if finals:
-        raise _on_final(finals, kind, child_context, step, child_name)
+        raise _on_final(finals, kind, child_context, step, child_name, function, label)
     if report is not None and not isinstance(report, report_type):
         raise TypeError(
-            f"{kind} {child_name!r} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
+            f"{kind} {label} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
         )
     if report is None:
         return None
     if isinstance(report, Decision):
-        _validate_shape(report, step, child_name)
-    reported = Reported(name=child_name, path=child_context.path, report=report)
+        _validate_shape(report, step, label)
+    reported = Reported(
+        name=child_name, path=child_context.path, report=report, function=function
+    )
     child_context.recorder.record(child_context, step, reported)
     return reported
 
@@ -410,19 +440,21 @@ def _on_final(
     child_context: RunnerContext,
     step: Step,
     child_name: str,
+    function: str,
+    label: str,
 ) -> Final:
     winner = finals[0]
     unclaimed = [ex for ex in finals if ex.origin is None]
     if kind == "monitor" and unclaimed:
         _supersede([ex for ex in finals if ex.origin is not None])
         raise TypeError(
-            f"monitor {child_name!r} called final(); a monitor returns observations, and only a protocol may end the step."
+            f"monitor {label} called final(); a monitor returns observations, and only a protocol may end the step."
         ) from unclaimed[0]
     own = winner.origin is None
     claimed = [ex for ex in finals if ex.origin is not None]
     for ex in unclaimed:
         try:
-            _validate_shape(ex.decision, step, child_name)
+            _validate_shape(ex.decision, step, label)
         except ValueError:
             _supersede(claimed)
             raise
@@ -430,18 +462,27 @@ def _on_final(
         ex.origin = Origin(
             child_context,
             step,
-            Reported(name=child_name, path=child_context.path, report=ex.decision),
+            Reported(
+                name=child_name,
+                path=child_context.path,
+                report=ex.decision,
+                function=function,
+            ),
         )
     if not own:
         child_context.recorder.bypassed(child_context, step, child_name)
     return cast(Final, _surface([], finals))
 
 
-def _validate_shape(decision: Decision, step: Step, name: str) -> None:
+def describe(name: str, function: str, grouped: bool) -> str:
+    return f"{name!r} (function {function!r})" if grouped else repr(name)
+
+
+def _validate_shape(decision: Decision, step: Step, label: str) -> None:
     try:
         validate_decision_shape(decision, step)
     except ValueError as ex:
-        raise ValueError(f"protocol {name!r}: {ex}") from ex
+        raise ValueError(f"protocol {label}: {ex}") from ex
 
 
 def _check_child(
@@ -457,12 +498,17 @@ def _check_child(
 
 
 def named_children(
-    children: Mapping[str, Monitor | ControlProtocol]
+    children: Monitor
+    | ControlProtocol
+    | Mapping[str, Monitor | ControlProtocol]
     | Iterable[Monitor | ControlProtocol],
     expected: Literal["monitor", "protocol"] | None,
 ) -> list[tuple[str, Monitor | ControlProtocol]]:
     pairs: list[tuple[object, Monitor | ControlProtocol]]
-    if isinstance(children, Mapping):
+    if callable(children):
+        pairs = [(None, children)]
+        keyed = False
+    elif isinstance(children, Mapping):
         mapping = cast(Mapping[str, Monitor | ControlProtocol], children)
         pairs = [(key, child) for key, child in mapping.items()]
         keyed = True
@@ -471,7 +517,7 @@ def named_children(
         keyed = False
     else:
         raise TypeError(
-            "children must be a Mapping or a Sequence; a set or an iterator has no configuration order"
+            "children must be a monitor or protocol, a Mapping or a Sequence; a set or an iterator has no configuration order"
         )
     named: list[tuple[str, Monitor | ControlProtocol]] = []
     seen: set[str] = set()
