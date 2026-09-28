@@ -375,3 +375,49 @@ def test_a_lone_instance_is_recorded_as_a_list_of_one() -> None:
 def test_a_non_sentinel_is_not_recorded() -> None:
     with pytest.raises(TypeError, match="monitor or protocol"):
         config_from_sentinel(cast(Any, [cfg_rule]))
+
+
+@pytest.mark.parametrize(
+    "text, where, key",
+    [
+        (
+            "sentinel:\n  attempt:\n    name: cfg_rule\n  attempt:\n    name: cfg_rule\n",
+            "sentinel",
+            "attempt",
+        ),
+        (
+            "sentinel:\n  - name: cfg_rule\n    params:\n      reason: a\n      reason: b\n",
+            r"sentinel\[0\]\.params",
+            "reason",
+        ),
+        ("sentinel: []\nsentinel: []\n", "the top level", "sentinel"),
+        (
+            '{"sentinel": {"a": {"name": "cfg_rule", "name": "cfg_suspicion"}}}',
+            r"sentinel\.a",
+            "name",
+        ),
+    ],
+)
+def test_a_repeated_key_in_a_file_is_an_error(
+    tmp_path: Path, text: str, where: str, key: str
+) -> None:
+    file = tmp_path / "sentinel.yaml"
+    file.write_text(text)
+    with pytest.raises(
+        ValueError, match=rf"sentinel\.yaml: {where}: duplicate key '{key}'"
+    ):
+        sentinel_from_config(str(file))
+
+
+def test_tab_indented_json_is_read(tmp_path: Path) -> None:
+    file = tmp_path / "sentinel.json"
+    file.write_text('{\n\t"sentinel": [\n\t\t{"name": "cfg_rule"}\n\t]\n}\n')
+    [built] = sentinel_from_config(str(file))
+    assert registry_info(built).name == "cfg_rule"
+
+
+def test_a_malformed_file_names_the_file(tmp_path: Path) -> None:
+    file = tmp_path / "broken.yaml"
+    file.write_text("sentinel: [\n")
+    with pytest.raises(ValueError, match=r"broken\.yaml: could not parse"):
+        sentinel_from_config(str(file))

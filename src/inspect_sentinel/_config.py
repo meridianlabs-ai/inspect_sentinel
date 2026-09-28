@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from typing import Any, NamedTuple, cast
 
 import yaml
@@ -84,6 +84,7 @@ def sentinel_from_config(
 
     Raises:
         ValueError: If the configuration is invalid; the message names the entry, as in `sentinel.attempt.children[1]`.
+        TypeError: If a factory rejects its arguments, with the entry named the same way.
     """
     if isinstance(config, str):
         return _from_string(config)
@@ -105,11 +106,10 @@ def _from_string(config: str) -> Children:
 
 def _read_file(path: str) -> object:
     text = resource(path, type="file")
-    content: object = (
-        json.loads(text)
-        if text.strip().startswith(("{", "["))
-        else yaml.safe_load(text)
-    )
+    try:
+        content = _unique_keys(_parse(text), path, "")
+    except (json.JSONDecodeError, yaml.YAMLError) as ex:
+        raise ValueError(f"{path}: could not parse the file: {ex}") from ex
     if not isinstance(content, dict) or set(cast(dict[str, Any], content)) != {
         "sentinel"
     }:
@@ -117,6 +117,57 @@ def _read_file(path: str) -> object:
             f"{path}: a sentinel config file is a mapping whose only key is 'sentinel'."
         )
     return cast(dict[str, Any], content)["sentinel"]
+
+
+class _Pairs(list[tuple[object, object]]):
+    pass
+
+
+class _PairsLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_pairs(loader: yaml.SafeLoader, node: yaml.MappingNode) -> _Pairs:
+    loader.flatten_mapping(node)
+    construct: Callable[..., object] = cast(Any, loader).construct_object
+    return _Pairs(
+        (construct(key, deep=True), construct(value, deep=True))
+        for key, value in node.value
+    )
+
+
+_PairsLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_pairs
+)
+
+
+def _parse(text: str) -> object:
+    # PyYAML rejects tab indentation, which JSON allows
+    try:
+        return json.loads(text, object_pairs_hook=_Pairs)
+    except json.JSONDecodeError:
+        return yaml.load(text, Loader=_PairsLoader)
+
+
+def _unique_keys(value: object, file: str, path: str) -> object:
+    if isinstance(value, _Pairs):
+        mapping: dict[object, object] = {}
+        for key, item in value:
+            where = path or "the top level"
+            if not isinstance(key, Hashable):
+                raise ValueError(f"{file}: {where}: a key must be a scalar.")
+            if key in mapping:
+                raise ValueError(f"{file}: {where}: duplicate key {key!r}.")
+            mapping[key] = _unique_keys(
+                item, file, f"{path}.{key}" if path else str(key)
+            )
+        return mapping
+    if isinstance(value, list):
+        items = cast(list[object], value)
+        return [
+            _unique_keys(item, file, f"{path}[{i}]") for i, item in enumerate(items)
+        ]
+    return value
 
 
 def _build_layer(layer: object, path: str) -> Children:
