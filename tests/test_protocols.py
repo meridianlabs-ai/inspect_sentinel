@@ -446,3 +446,54 @@ def test_threshold_rejects_a_group_with_a_member_that_never_watches_a_tool_call(
 ):
     with pytest.raises(TypeError, match="'before_and_after' \\(function 'after'\\)"):
         threshold([before_and_after()], reject_at=0.5)
+
+
+def _edits(first: Action, second: Action) -> ControlProtocol:
+    modified = ToolCall(id="c1", function="bash", arguments={"cmd": "echo hi"})
+
+    @protocol
+    def edits() -> Sequence[ControlProtocol]:
+        async def rewrite(context: Context, step: BeforeToolCall) -> Decision | None:
+            return Decision(
+                action=first, modified=modified if first == "modify" else None
+            )
+
+        async def audit(context: Context, step: BeforeToolCall) -> Decision | None:
+            return Decision(
+                action=second, modified=modified if second == "modify" else None
+            )
+
+        return [rewrite, audit]
+
+    return edits()
+
+
+@pytest.mark.parametrize(
+    ("children", "action", "explanation"),
+    [
+        (
+            lambda: [_edits("modify", "continue")],
+            "modify",
+            "edits.rewrite: modify; edits.audit: continue",
+        ),
+        (
+            lambda: [_edits("modify", "modify")],
+            "reject",
+            "edits.rewrite modified the call but 1 other protocol(s) also decided"
+            " (edits.rewrite: modify; edits.audit: modify)",
+        ),
+        (
+            lambda: {"e": _edits("modify", "continue"), "ok": says("continue")},
+            "reject",
+            "e.rewrite modified the call but 1 other protocol(s) also decided"
+            " (e.rewrite: modify; e.audit: continue; ok: continue)",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_concurrent_counts_a_groups_votes_by_instance(
+    children: Callable[[], Protocols], action: Action, explanation: str
+) -> None:
+    decision = await _run(concurrent(children()), before_step(), ListRecorder())
+    assert decision is not None
+    assert (decision.action, decision.explanation) == (action, explanation)
