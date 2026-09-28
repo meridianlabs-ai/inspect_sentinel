@@ -51,7 +51,7 @@ class Recorder(Protocol):
         ...
 
     def cancelled(self, context: Context, step: Step, name: str) -> None:
-        """Record that a child was cancelled before it reported: a sibling decided `terminate` or called `final()`, a sibling raised, or the layer was cancelled from above.
+        """Record that a child was cancelled before it finished: a sibling decided `terminate` or called `final()`, a sibling raised, or the layer was cancelled from above. Any reports it already made, from the earlier functions of an instance whose factory returned several, stand.
 
         The cause is not recorded here; a `terminate`, a `final()` or an exception in the same layer says which it was.
 

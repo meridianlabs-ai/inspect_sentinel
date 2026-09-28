@@ -152,7 +152,7 @@ async def test_concurrent_turns_a_contested_modify_into_a_reject() -> None:
     )
     assert decision is not None and decision.action == "reject"
     assert decision.explanation == (
-        "rewriter modified the call but 1 other protocol(s) also decided: safer"
+        "rewriter modified the call but 1 other vote(s) also decided: safer"
         " (rewriter: modify; approver: continue)"
     )
 
@@ -479,13 +479,13 @@ def _edits(first: Action, second: Action) -> ControlProtocol:
         (
             lambda: [_edits("modify", "modify")],
             "reject",
-            "edits.rewrite modified the call but 1 other protocol(s) also decided"
+            "edits.rewrite modified the call but 1 other vote(s) also decided"
             " (edits.rewrite: modify; edits.audit: modify)",
         ),
         (
             lambda: {"e": _edits("modify", "continue"), "ok": says("continue")},
             "reject",
-            "e.rewrite modified the call but 1 other protocol(s) also decided"
+            "e.rewrite modified the call but 1 other vote(s) also decided"
             " (e.rewrite: modify; e.audit: continue; ok: continue)",
         ),
     ],

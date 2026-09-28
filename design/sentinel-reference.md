@@ -113,7 +113,7 @@ Rules:
   > `suspicion_monitor`: could not resolve the annotation `BeforeToolCall` on parameter `step`. Import it at runtime rather than under `TYPE_CHECKING`.
 
 - **Annotate the return as `Observation | None`.** A monitor observes. If you find yourself wanting to return an action, you are writing a protocol; see [Monitor or protocol?](#monitor-or-protocol).
-- **One function, one stage.** If a concern spans two stages, write two functions. Independent ones are two monitors, listed both. When they share state, return both from one factory, `return [before, after]`: the functions form one instance, with one name, one path and one `store_as` namespace, and each runs, in the order returned, at the stage it watches. Give them distinct `__name__`s; that is how their reports are told apart.
+- **One function, one stage.** If a concern spans two stages, write two functions. Independent ones are two monitors, listed both. When they share state, return both from one factory, `return [before, after]`: the functions form one instance, with one name, one path and one `store_as` namespace, and each runs, in the order returned, at the stage it watches, until one returns `terminate` or calls `final()`; the functions after it do not run and are not recorded. Give them distinct `__name__`s; that is how their reports are told apart.
 - **Never take a threshold as a factory parameter.** If your monitor compares a score to a constant, return the score as an `Observation` and let a protocol hold the constant. See [Monitor or protocol?](#monitor-or-protocol).
 - **Do not keep per-sample state in the closure.** The factory runs once per configuration and the returned function is shared by every sample. Use `context.store_as()`. See [State](#state).
 
@@ -658,11 +658,11 @@ What the runner does for every child:
 - Skips children not annotated for this stage. The skip looks like abstention.
 - Names the child from the mapping key, or the registry name without its package prefix. A single instance is named as a sequence entry is. The runner raises on a duplicate name within a layer; a composition that runs children one at a time validates names itself first.
 - Derives the child's `Context` under this layer's path.
-- Runs every function of the instance annotated for this stage, in the order its factory returned them and one after another, since they share one store.
+- Runs every function of the instance annotated for this stage, in the order its factory returned them and one after another, since they share one store. A `terminate` or a `final()` from one ends the instance's run; the functions after it do not run and are not recorded.
 - Records one `SentinelEvent` per report, including reports the parent ignores. Ignored observations are the benign distribution a protocol later calibrates against.
 - Applies the failure policy (deferred; the runner currently propagates every exception).
 
-Across the children of one call: fan-out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`, so children cannot see each other's conclusions; `run_children` holds the group so a `terminate` decision or a `final()` can cancel the still-running siblings, and records any child it cancels. A `final()` propagates out of the call, and the functions of its instance after it do not run; of two that race, the first to reach the group wins and the other is recorded as superseded, and an exception in the same group outranks them.
+Across the children of one call: fan-out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`, so children cannot see each other's conclusions; `run_children` holds the group so a `terminate` decision or a `final()` can cancel the still-running siblings, and records any child it cancels. A `final()` propagates out of the call; as with `terminate`, the functions of its instance after it do not run and are not recorded; of two that race, the first to reach the group wins and the other is recorded as superseded, and an exception in the same group outranks them.
 
 Results are split by family because the two aggregate differently. `Decisions.strongest()` applies the precedence in [Combining reports](#combining-reports); `Observations.max_suspicion()` takes the per-dimension max. Identity is attached so a protocol can weight or require agreement across specific children.
 
@@ -944,7 +944,7 @@ class SentinelEvent(BaseEvent):
     event: Literal["sentinel"] = "sentinel"
     name: str  # registry name of the factory, monitor or protocol
     path: str  # instance path, e.g. "attempt/internet_attempt"
-    function: str  # __name__ of the reporting function; path plus function is unique in a step
+    function: str | None  # __name__ of the reporting function; None for cancelled and bypassed, which are per instance
     step_id: str  # triggering message id, assistant message id, or tool call id
     conversation: (
         str  # the agent conversation; shared with its ModelEvents and CompactionEvents

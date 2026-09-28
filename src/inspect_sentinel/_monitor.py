@@ -102,7 +102,7 @@ def protocol(
 ) -> Callable[P, ControlProtocol]:
     """Register a protocol factory.
 
-    Same contract as `@monitor`, with each returned function annotated to return `Decision | None`, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. As with `@monitor`, the factory may return a non-empty sequence of functions with distinct `__name__`s that form one instance; a function among them that calls `final()` ends the step, and those after it do not run. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
+    Same contract as `@monitor`, with each returned function annotated to return `Decision | None`, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. As with `@monitor`, the factory may return a non-empty sequence of functions with distinct `__name__`s that form one instance; a function among them that returns `terminate` or calls `final()` ends the instance's run, and those after it do not run and are not recorded. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     Args:
         factory: A function returning a protocol, or a sequence of functions that form one.

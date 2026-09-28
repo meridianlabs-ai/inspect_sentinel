@@ -72,7 +72,7 @@ def concurrent(children: Children) -> ControlProtocol:
             others = {d.path for d in contesting if d.path != strongest.path}
             count = len(others) + sum(d.path == strongest.path for d in contesting)
             if contesting:
-                rewrite = f"{label(strongest)} modified the call but {count} other protocol(s) also decided"
+                rewrite = f"{label(strongest)} modified the call but {count} other vote(s) also decided"
                 own = f"{rewrite}: {own}" if own else rewrite
                 update = {"action": "reject", "modified": None}
         summary = "; ".join(f"{label(d)}: {d.report.action}" for d in voters)
