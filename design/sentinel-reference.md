@@ -919,7 +919,8 @@ Rules:
 - **A nested key is the factory's parameter name.** `monitors:` under `threshold`, `children:` under `chain` or `concurrent`. The top-level key is `sentinel:`, so it cannot be confused with the nested `monitors:`. A nested key under a factory with no such parameter, including every rule and every monitor, is a configuration error. The schema must not parse it silently.
 - **Instance names are unique within a layer.** A duplicate is a configuration error. Registry names are the default when no mapping key is given.
 - **An entry takes `name`, `params` and nested keys, nothing else.** There is no `tools` key; a monitor that watches some tools filters on `step.call.function`. Any other key is a configuration error.
-- **Names are found in both registry types.** A bare name is also looked up in `inspect_sentinel`. A name that finds more than one factory is ambiguous and an error.
+- **Names are found in both registry types.** A monitor and a protocol cannot share a name. A bare name that matches nothing exactly is tried in `inspect_sentinel`.
+- **A key may not repeat.** A repeated key in a file is an error, not the last one winning.
 - **Errors name the entry.** For example `sentinel.attempt.children[1]`.
 - **The log records the inverse.** `config_from_sentinel` writes each instance's registry name and params, with nested monitors and protocols as nested entries; `sentinel_from_config` rebuilds them for retry.
 
