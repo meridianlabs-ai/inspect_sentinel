@@ -203,11 +203,13 @@ def _build_entry(entry: object, path: str) -> Monitor | ControlProtocol:
         raise ValueError(f"{path}.params must be a mapping of arguments.")
     args = dict(cast(Mapping[str, object], params))
     found = _find(name, path)
-    accepted = list(inspect.signature(cast(Any, found.factory)).parameters)
+    signature = inspect.signature(cast(Any, found.factory)).parameters
+    accepted = [key for key, p in signature.items() if p.kind is not p.VAR_KEYWORD]
+    any_key = len(accepted) < len(signature)
     for key, value in fields.items():
         if key in ENTRY_FIELDS:
             continue
-        if key not in accepted:
+        if key not in accepted and not any_key:
             raise ValueError(
                 f"{path}: {key!r} is not a parameter of {name}; an entry takes 'name', 'params', and nested entries under one of {name}'s parameters {accepted}."
             )

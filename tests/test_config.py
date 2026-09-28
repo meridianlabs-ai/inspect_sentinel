@@ -50,6 +50,14 @@ def cfg_pair() -> list[Monitor]:
 
 
 @protocol
+def cfg_bundle(**groups: Monitors) -> ControlProtocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        return None
+
+    return decide
+
+
+@protocol
 def cfg_rule(reason: str = "no") -> ControlProtocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         return Decision.reject(reason)
@@ -297,6 +305,13 @@ ROUND_TRIPS: list[Any] = [
         },
         "escape": {"name": "cfg_rule"},
     },
+    [
+        {
+            "name": "cfg_bundle",
+            "fast": [{"name": "cfg_suspicion"}],
+            "slow": {"s": {"name": "cfg_suspicion", "params": {"model": "m"}}},
+        }
+    ],
 ]
 
 
@@ -335,6 +350,7 @@ async def test_sentinel_to_config_to_sentinel_is_equivalent() -> None:
             {"a": cfg_suspicion(), "b": cfg_suspicion("m")}, reject_at=0.8
         ),
         "pair": cfg_pair(),
+        "bundle": cfg_bundle(fast=[cfg_suspicion()]),
     }
     rebuilt = sentinel_from_config(config_from_sentinel(original))
     assert _identity(rebuilt) == _identity(original)
