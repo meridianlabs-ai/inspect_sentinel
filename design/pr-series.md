@@ -177,7 +177,7 @@ Implemented: `run_monitor` and `run_protocol` are removed; `run_monitors`, `run_
 
 ## Design sync
 
-The canonical docs on inspect_ai's `design/monitor` branch were synced with this series on 2026-09-28 (inspect_ai 12f555a65): `final()`, the runner-side `Recorder`, `Context.path`, `RunnerContext`, the plural-only runner, and multi-function factories. The copies in `design/` match them; edit both together. `Stage` is the `Literal` naming each payload class's point, as `SentinelEvent.stage` records it.
+The canonical docs on inspect_ai's `design/monitor` branch were synced with this series on 2026-09-28 (inspect_ai 12f555a65): `final()`, the runner-side `Recorder`, `Context.path`, `RunnerContext`, the plural-only runner, and multi-function factories. The copies in `design/` match them; edit both together.
 
 ## Out of scope
 
