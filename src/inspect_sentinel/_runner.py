@@ -370,6 +370,11 @@ async def _run_child(
             )
             if reported is not None:
                 found.append(reported)
+                # nothing outranks terminate, so the rest of the group does not run
+                if isinstance(reported.report, Decision) and (
+                    reported.report.action == "terminate"
+                ):
+                    break
     except anyio.get_cancelled_exc_class():
         # a recorder that raises here fails the layer, like one that raises
         # from record(); a cancellation record that cannot be written is not

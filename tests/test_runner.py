@@ -1509,22 +1509,43 @@ async def test_the_root_is_one_function() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_terminate_outrun_by_a_later_members_final_is_superseded() -> None:
+async def test_a_members_terminate_stops_the_group() -> None:
+    ran: list[str] = []
+    started = anyio.Event()
+
     @protocol
-    def overruled() -> Sequence[ControlProtocol]:
+    def stops() -> Sequence[ControlProtocol]:
         async def stop(context: Context, step: BeforeToolCall) -> Decision | None:
+            await started.wait()
             return Decision.terminate()
 
         async def overrule(context: Context, step: BeforeToolCall) -> Decision | None:
+            ran.append("overrule")
             final(Decision.reject("overruled"))
 
         return [stop, overrule]
 
+    @protocol
+    def slow() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            started.set()
+            await anyio.sleep_forever()
+            return None
+
+        return decide
+
     recorder = ListRecorder()
-    decision = await run_root(
-        concurrent([overruled()]), runner_context(recorder=recorder), before_step()
-    )
-    assert decision == Decision.reject("overruled")
-    assert [
-        (r.reported.function, r.reported.report) for r in recorder.supersessions
-    ] == [("stop", Decision.terminate())]
+    with anyio.fail_after(5):
+        decision = await run_root(
+            concurrent({"g": stops(), "slow": slow()}),
+            runner_context(recorder=recorder),
+            before_step(),
+        )
+    assert decision == Decision.terminate()
+    assert ran == []
+    assert [(r.reported.path, r.reported.function) for r in recorder.records] == [
+        ("g", "stop"),
+        ("", "run"),
+    ]
+    assert recorder.cancellations == [("slow", "slow")]
+    assert recorder.supersessions == []
