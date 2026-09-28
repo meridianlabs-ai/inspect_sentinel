@@ -957,6 +957,8 @@ def chain(children: Children) -> ControlProtocol:
     return run
 ```
 
+The functions of one [multi-function](#one-function-one-point) protocol run in one call, so each sees the step as it was before any of their escalations is appended; they share state through the store, not through `step.escalations`.
+
 Three properties fall out of writing it as ordinary code. A monitor in a chain is recorded and falls through, since an observation cannot be "the first decision" — ordered composition is Decision-shaped in substance. An all-escalate chain returns `continue` if anything participated, matching review's default and this document's rule; the [approval adapter](#a-protocol-layer-for-approval-too) keeps approval's fail-closed `reject` on its own path, so existing approval users see no change, and a monitor chain that wants fail-closed ends with a rejecting monitor, as approval lists end with `auto` today. And sequential dispatch stops being a violation of the independence rule, because the loop is a named, shipped protocol whose mode the transcript shows.
 
 **`concurrent()`** is the concurrent composition, and it is also what the top of a configuration resolves to (see [Configuration](#configuration)):
