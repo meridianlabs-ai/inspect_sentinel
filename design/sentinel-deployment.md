@@ -82,14 +82,13 @@ class Host(Protocol):
         self,
         input: str | list[ChatMessage],
         *,
-        model: str
-        | None = None,  # a model name or a model role; default role "monitor"
+        model: str | None = None,          # a model name or a model role; default role "monitor"
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput: ...
     async def fetch(
         self,
-        endpoint: str,  # a NAME, not a URL — see below
+        endpoint: str,                      # a NAME, not a URL — see below
         *,
         method: str = "POST",
         json: Any = None,
@@ -99,16 +98,13 @@ class Host(Protocol):
     ) -> HostResponse: ...
     def get(self, key: str) -> dict | None: ...
     def put(self, key: str, value: dict) -> None: ...
-    def record(self, event: dict) -> None: ...
     async def terminate(self, reason: str) -> bool: ...
-
     """End this session or agent out-of-band. False if unsupported."""
 
 
 class HostResponse(Protocol):
     status: int
     headers: Mapping[str, str]
-
     def json(self) -> Any: ...
     @property
     def text(self) -> str: ...
@@ -117,6 +113,8 @@ class HostResponse(Protocol):
 `generate` returns a `ModelOutput` rather than a string because the protocols that substitute an action (`defer_to_trusted`, `resample`) regenerate with the agent's tools and need the whole response; a text-prompt monitor reads `.completion`. Generating as the agent's own model is, in a proxy, a re-issued upstream request.
 
 The same surface whether the host is Envoy via proxy-wasm, a Go runtime, or ordinary Python in-process where these are normal implementations.
+
+Recording is not on the ABI. The runner records every report, cancellation, bypass and supersession through a separate `Recorder` that the host implements and authors never see (`sentinel-reference.md`, "Context"), so a protocol cannot skip recording by not calling it.
 
 A monitor reaches it as `context.host` (`sentinel.md`, "The context"), never by import. That is what keeps a monitor a pure function of its two arguments, and it is why the ABI is small enough to be worth specifying: everything a monitor can do to the outside world is enumerable from one Protocol.
 
@@ -133,9 +131,8 @@ And it cannot be `httpx`. **A WASM guest has no sockets** — all I/O crosses th
 JSON-RPC then needs no separate primitive — it is a POST with a `{jsonrpc, method, params, id}` body and an envelope to unwrap, so it is a helper over `fetch` rather than a second ABI function:
 
 ``` python
-async def rpc(
-    host: Host, endpoint: str, method: str, params: Any
-) -> Any: ...  # POST the envelope, raise on `error`, return `result`
+async def rpc(host: Host, endpoint: str, method: str, params: Any) -> Any:
+    ...   # POST the envelope, raise on `error`, return `result`
 ```
 
 **gRPC is the right thing to leave out.** In a guest it would need a protobuf runtime and a generated stub per service compiled into the image, and most internal JSON services do not speak it anyway. It also does not need to be in the guest: because endpoints are *named* rather than addressed (below), a host can expose a gRPC service behind a named endpoint and translate. The guest always speaks JSON; whether the host turns that into REST, JSON-RPC or gRPC is configuration.

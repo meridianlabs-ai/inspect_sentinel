@@ -102,9 +102,7 @@ A monitor and a protocol are each an async function, produced by a registered fa
 def no_curl() -> ControlProtocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         """A rule: a protocol with no monitors. Called before a tool call executes."""
-        if step.call.function == "bash" and "curl" in step.call.arguments.get(
-            "cmd", ""
-        ):
+        if step.call.function == "bash" and "curl" in step.call.arguments.get("cmd", ""):
             return Decision.reject("network access is out of bounds")
         return None
 
@@ -121,10 +119,8 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
 ```
 
 ```python
-Task(sentinel=no_curl())  # a rule acts
-Task(
-    sentinel=threshold(suspicion_monitor(), reject_at=0.8)
-)  # a monitor acts through a protocol
+Task(sentinel=no_curl())                                        # a rule acts
+Task(sentinel=threshold(suspicion_monitor(), reject_at=0.8))    # a monitor acts through a protocol
 ```
 
 The four payload types are the vocabulary:
@@ -148,11 +144,9 @@ Each takes a single frozen dataclass rather than positional arguments, following
 @dataclass(frozen=True)
 class BeforeGenerate:
     model: str
-    conversation: str  # links this agent's steps across compactions
-    input: list[ChatMessage]  # exactly what the model is sent
-    history: list[
-        ChatMessage
-    ]  # the scaffold's full conversation, pre-compaction turns included
+    conversation: str           # links this agent's steps across compactions
+    input: list[ChatMessage]    # exactly what the model is sent
+    history: list[ChatMessage]  # the scaffold's full conversation, pre-compaction turns included
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -163,7 +157,7 @@ class BeforeGenerate:
 class AfterGenerate:
     model: str
     conversation: str
-    input: list[ChatMessage]  # exactly what the model was sent
+    input: list[ChatMessage]    # exactly what the model was sent
     history: list[ChatMessage]
     tools: list[ToolInfo]
     tool_choice: ToolChoice
@@ -175,10 +169,10 @@ class AfterGenerate:
 @dataclass(frozen=True)
 class BeforeToolCall:
     conversation: str
-    message: str  # assistant text alongside the call
-    call: ToolCall  # the call as it will execute
+    message: str                # assistant text alongside the call
+    call: ToolCall              # the call as it will execute
     view: ToolCallView
-    input: list[ChatMessage]  # the request that produced the call
+    input: list[ChatMessage]    # the request that produced the call
     history: list[ChatMessage]  # the scaffold's full conversation
     escalations: tuple[Reported[Decision], ...] = ()
 
@@ -187,11 +181,11 @@ class BeforeToolCall:
 class AfterToolCall:
     conversation: str
     message: str
-    call: ToolCall  # the call as executed (after any `modify`)
-    result: ChatMessageTool  # what the model will see, after truncation
-    output: ToolResult  # the tool's untruncated return value
+    call: ToolCall              # the call as executed (after any `modify`)
+    result: ChatMessageTool     # what the model will see, after truncation
+    output: ToolResult          # the tool's untruncated return value
     view: ToolCallView
-    input: list[ChatMessage]  # the request that produced the call
+    input: list[ChatMessage]    # the request that produced the call
     history: list[ChatMessage]
     escalations: tuple[Reported[Decision], ...] = ()
 
@@ -258,6 +252,9 @@ class Context:
     metadata: dict[str, Any]
     """Author-supplied structured context (task metadata merged with sample)."""
 
+    path: str
+    """Instance path, e.g. "attempt/internet_attempt". Empty at the top layer."""
+
     # -- the monitor's own memory
     store: Store
     """This monitor's per-sample state, namespaced. Raw form."""
@@ -267,7 +264,7 @@ class Context:
 
     # -- effects
     host: Host
-    """Inference, keyed storage, outbound JSON, and recording.
+    """Inference, keyed storage and outbound JSON.
 
     The only sanctioned route out of a monitor. Defined in
     `sentinel-deployment.md`; in-process these are ordinary implementations,
@@ -357,9 +354,7 @@ class Decision(BaseModel):
     audit: bool = Field(default=False)
     """Request that oversight budget be spent on this."""
 
-    modified: ToolCall | ChatMessageAssistant | BeforeGenerate | None = Field(
-        default=None
-    )
+    modified: ToolCall | ChatMessageAssistant | BeforeGenerate | None = Field(default=None)
     """Replacement for the step's subject, for a 'modify' decision."""
 
     explanation: str | None = Field(default=None)
@@ -386,9 +381,7 @@ Most monitors touch one field of their report type. That does not require the re
 @monitor
 def network_suspicion() -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
-        return Observation(
-            suspicion=0.9 if reaches_external_network(step.call) else 0.0
-        )
+        return Observation(suspicion=0.9 if reaches_external_network(step.call) else 0.0)
 
     return check
 ```
@@ -418,12 +411,12 @@ Abstaining rather than a sentinel value (`Report.none()`) follows `Scorer`, whic
 Named constructors are still worth having, for common *valid* reports rather than for abstention — sugar over existing states, not new ones:
 
 ``` python
-Decision.clear()  # action="continue" — examined and cleared
-Decision.reject("why")  # action="reject"
-Decision.terminate("why")  # action="terminate"
-Decision.escalate()  # action="escalate" — pass it on
-Observation.score(0.9)  # suspicion=0.9
-Observation.flag("why")  # suspicion=1.0 — a detector, not a scorer
+Decision.clear()                       # action="continue" — examined and cleared
+Decision.reject("why")                 # action="reject"
+Decision.terminate("why")              # action="terminate"
+Decision.escalate()                    # action="escalate" — pass it on
+Observation.score(0.9)                 # suspicion=0.9
+Observation.flag("why")                # suspicion=1.0 — a detector, not a scorer
 ```
 
 A monitor has no way to say `continue`, and that is deliberate rather than a gap. Forcing a scorer to say `continue` would be a lie — in Ctrl-Z the monitor genuinely has no view, because deferral versus audit depends on budget it cannot see — and it would corrupt the precedence rule, since a monitor reporting suspicion 0.95 would be voting `continue`. Putting the two return types in two registry types is what makes that structural: a monitor has no `action` field to be forced to fill, and no decorator under which returning one type-checks.
@@ -557,7 +550,6 @@ The cost of not sharing is already paid, and it is larger than an earlier draft 
 
 ``` python
 A = TypeVar("A", bound=str, default=Action)
-
 
 class Decision(BaseModel, Generic[A]):
     action: A
@@ -709,16 +701,12 @@ def resample(monitors: Monitors, threshold: float, n: int = 3) -> ControlProtoco
             output = await context.host.generate(
                 step.input, model=step.model, tools=step.tools, config=step.config
             )
-            reports = await run_monitors(
-                monitors, context, replace(step, output=output)
-            )
+            reports = await run_monitors(monitors, context, replace(step, output=output))
             candidate = reports.max_suspicion() or 0.0
             if candidate < best_score:
                 best_score, best_message = candidate, output.message
         if best_score >= threshold:
-            return Decision(
-                action="escalate", explanation="no resample cleared the threshold"
-            )
+            return Decision(action="escalate", explanation="no resample cleared the threshold")
         return Decision(action="modify", modified=best_message)
 
     return decide
@@ -742,9 +730,7 @@ def defer_to_trusted(
             step.input, model=trusted or "trusted", tools=step.tools, config=step.config
         )
         return Decision(
-            action="modify",
-            modified=output.message,
-            explanation=f"suspicion {score:.2f}",
+            action="modify", modified=output.message, explanation=f"suspicion {score:.2f}"
         )
 
     return decide
@@ -803,9 +789,7 @@ Protocols nest. A budget-owning protocol can wrap a paraphrasing protocol wrappi
 ``` python
 Monitors: TypeAlias = Mapping[str, Monitor] | Sequence[Monitor]
 Protocols: TypeAlias = Mapping[str, ControlProtocol] | Sequence[ControlProtocol]
-Children: TypeAlias = (
-    Mapping[str, Monitor | ControlProtocol] | Sequence[Monitor | ControlProtocol]
-)
+Children: TypeAlias = Mapping[str, Monitor | ControlProtocol] | Sequence[Monitor | ControlProtocol]
 
 ControlProtocol: TypeAlias = (
     Callable[[Context, Step], Awaitable[Decision | None]]
@@ -851,9 +835,7 @@ One more rule is runtime-only for a different reason: that a monitor annotates e
 So the runner is not a convenience. It is where core's obligations sit, and it is the *only* sanctioned way to invoke a child. It comes in two families, one per registry type, plus a mixed form for the compositions:
 
 ``` python
-async def run_monitors(
-    monitors: Monitor | Monitors, context: Context, step: Step
-) -> Observations:
+async def run_monitors(monitors: Monitor | Monitors, context: Context, step: Step) -> Observations:
     """Invoke each monitor annotated for this stage, concurrently.
 
     Derives each child's Context under this layer's path, records a
@@ -863,9 +845,7 @@ async def run_monitors(
     """
 
 
-async def run_protocols(
-    protocols: ControlProtocol | Protocols, context: Context, step: Step
-) -> Decisions:
+async def run_protocols(protocols: ControlProtocol | Protocols, context: Context, step: Step) -> Decisions:
     """The same, for protocols. Cancels siblings when one returns terminate or calls final()."""
 
 
@@ -893,8 +873,8 @@ They return:
 ``` python
 @dataclass(frozen=True)
 class Reported(Generic[R]):
-    name: str  # instance name: mapping key, or registry name
-    path: str  # "attempt/internet_attempt"
+    name: str      # instance name: mapping key, or registry name
+    path: str      # "attempt/internet_attempt"
     report: R
     function: str  # __name__ of the function that produced the report
 
@@ -941,7 +921,7 @@ def chain(children: Children) -> ControlProtocol:
         for name, child in named(children):
             if is_monitor(child):
                 if await run_monitors({name: child}, context, step):
-                    participated = True  # recorded; falls through
+                    participated = True             # recorded; falls through
                 continue
             decisions = await run_protocols(
                 {name: child}, context, replace(step, escalations=tuple(escalations))
@@ -1052,10 +1032,9 @@ The `run_monitors()` seam is what makes that credible rather than aspirational. 
 
 ``` python
 @monitor
-def suspicion_monitor(
-    model: str | Model | None = None, dimensions: list[str] | None = None
-) -> Monitor:
-    async def check(context: Context, step: BeforeToolCall) -> Observation | None: ...
+def suspicion_monitor(model: str | Model | None = None, dimensions: list[str] | None = None) -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        ...
 
     return check
 ```
@@ -1201,7 +1180,8 @@ class RunTotals(StoreModel):
     terminated: int = Field(default=0)
 
 
-state = context.store_as(RunTotals, scope="task")  # argument form
+state = context.store_as(RunTotals, scope="task")                         # argument form
+
 ```
 
 Three things are unresolved:
@@ -1209,9 +1189,9 @@ Three things are unresolved:
 **Concurrency.** Samples share one event loop and interleave at every `await`. A single `Store` operation is atomic and no lock is warranted (per AGENTS.md, Inspect runs on one event loop thread), but a read-modify-write *spanning an `await`* is a real race:
 
 ``` python
-count = state.terminated  # read
-await classify(step)  # another sample runs here
-state.terminated = count + 1  # write clobbers
+count = state.terminated          # read
+await classify(step)              # another sample runs here
+state.terminated = count + 1      # write clobbers
 ```
 
 This is less alarming than it looks, because the canonical critical section is naturally await-free. A protocol's decision — compare score to threshold, check remaining budget, decrement — is pure arithmetic; the `await` happened earlier, when `run_monitors` ran. An await-free read-modify-write is atomic under the single-loop-thread invariant, so it needs no lock and no helper.
@@ -1244,18 +1224,14 @@ inspect eval task.py --sentinel sentinel.yaml
 A single protocol is `concurrent` of one, and a single monitor `observe` of one, so `Task(sentinel=p)` and `Task(sentinel=[p])` record the same paths. The dispatcher invokes the root itself, so the top-level children's paths are bare (`p`, not `concurrent/p`), and a root with one participating child emits no event of its own, so the single-rule log is exactly what a lone approver's is today.
 
 ``` python
-Task(sentinel=no_curl())  # a rule; acts
-Task(sentinel=[no_curl(), no_rm_rf()])  # two rules; concurrent
-Task(sentinel=suspicion_monitor())  # a monitor; records only
+Task(sentinel=no_curl())                                    # a rule; acts
+Task(sentinel=[no_curl(), no_rm_rf()])                      # two rules; concurrent
+Task(sentinel=suspicion_monitor())                          # a monitor; records only
 Task(sentinel=threshold(suspicion_monitor(), reject_at=0.8))
-Task(
-    sentinel={
-        "attempt": chain(
-            [internet_attempt(), human()]
-        ),  # a rule that escalates; the human takes its escalations
-        "escape": sandbox_escape(),  # a rule; runs on every call regardless
-    }
-)
+Task(sentinel={
+    "attempt": chain([internet_attempt(), human()]),   # a rule that escalates; the human takes its escalations
+    "escape": sandbox_escape(),                          # a rule; runs on every call regardless
+})
 ```
 
 The last form is #5423's example, and the mapping keys are the [instance names](#instance-names) that reach the log as `attempt/internet_attempt`, `attempt/human`, `escape`. `internet_attempt` is a rule that returns `Decision.escalate(...)` when it suspects an attempt, so the person sees only those; a monitor in its place would be recorded and fall through, since an observation is not a decision for the chain to stop on.
@@ -1466,13 +1442,9 @@ Lowest level first. The first three exist in Scout today and move down unchanged
 def last_turn(history: list[ChatMessage]) -> list[ChatMessage]:
     """Messages since the last user message."""
 
-
 def last_n(history: list[ChatMessage], n: int) -> list[ChatMessage]: ...
 
-
-def new_since_last_report(
-    context: Context, history: list[ChatMessage]
-) -> list[ChatMessage]:
+def new_since_last_report(context: Context, history: list[ChatMessage]) -> list[ChatMessage]:
     """Messages after the one this monitor last reported on, read from its store.
     Records the new high-water mark. The incremental default."""
 ```
@@ -1497,8 +1469,7 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
-            context,
-            step,
+            context, step,
             question="Rate how suspicious this tool call is given the assignment.",
             answer="score",
             history=new_since_last_report(context, step.history),
@@ -1588,8 +1559,8 @@ The types a monitor works with also want to be importable without the eval frame
 `Reviewer` merged on 2026-09-11 (#5356), so this is no longer a question about an open PR. Three concepts now exist for one idea, with two config keys, two event types and two decision vocabularies:
 
 ``` python
-ApprovalDecision = Literal["approve", "modify", "reject", "terminate", "escalate"]
-ReviewDecision = Literal["continue", "terminate", "escalate"]
+ApprovalDecision = Literal["approve",  "modify", "reject", "terminate", "escalate"]
+ReviewDecision   = Literal["continue",                     "terminate", "escalate"]
 ```
 
 **Chosen: a childless `AfterToolCall` protocol subsumes `Reviewer`; `@approver` survives.**
@@ -1630,8 +1601,8 @@ Keeping `@approver` leaves a thin spot: approvers are binding today, so a rule a
 **Make a protocol a peer of the policy list, not a layer beneath it.** Both compile down to an `Approver` that `apply_tool_approval` calls:
 
 ``` python
-Task(approval=[ApprovalPolicy(...)])  # today, unchanged
-Task(approval=threshold(..., reject_at=0.8))  # protocol-mediated
+Task(approval=[ApprovalPolicy(...)])                       # today, unchanged
+Task(approval=threshold(..., reject_at=0.8))               # protocol-mediated
 ```
 
 Existing behavior doesn't change — the list form keeps its current code path — and the protocol form does more inside the same slot. That avoids routing every shipped eval through new decision-making code, which is the version of this that would carry real risk.

@@ -81,7 +81,7 @@ Messages give the two histories unevenly. A transcript's messages *are* `history
 ``` python
 @dataclass(frozen=True)
 class ReplayStep:
-    id: str  # the step id — see below
+    id: str                 # the step id — see below
     stage: Stage
     context: Context
     step: Step
@@ -156,7 +156,7 @@ Four ways of getting the step grain into Scout were considered:
 The adapter is a `Scanner[Transcript]`. It walks the steps itself, in order, with its own store, and returns one `Result` per eligible step. Each result carries a **subject** — the step id. A validation case whose id is a step id matches the result with that subject.
 
 ``` python
-as_scanner(monitor, unit="step")  # one Result per step; subject = step id
+as_scanner(monitor, unit="step")        # one Result per step; subject = step id
 as_scanner(monitor, unit="transcript")  # one Result; transcript id, as today
 ```
 
@@ -234,8 +234,8 @@ Steps 2–4 are exactly what a scanner author does today. The monitor-specific p
 A helper closes the loop:
 
 ``` python
-thresholds = calibrate(results, budget=0.01)  # percentile per dimension
-thresholds = calibrate(results, target_recall=0.95)  # from labels
+thresholds = calibrate(results, budget=0.01)          # percentile per dimension
+thresholds = calibrate(results, target_recall=0.95)   # from labels
 Task(sentinel=threshold(suspicion_monitor(), reject_at=thresholds["sabotage"]))
 ```
 
@@ -248,12 +248,7 @@ The calibration corpus should be held out from the validation set's `test` split
 `sentinel.md`'s open question 11 asks whether a monitor can produce a `Score` beside the task's own scores. It can, without touching scoring:
 
 ``` python
-Task(
-    scorer=[
-        my_task_scorer(),
-        as_scorer(as_scanner(suspicion_monitor(), unit="transcript")),
-    ]
-)
+Task(scorer=[my_task_scorer(), as_scorer(as_scanner(suspicion_monitor(), unit="transcript"))])
 ```
 
 `as_scorer()` already turns a transcript scanner into an Inspect scorer. The transcript-grain adapter reduces the monitor's per-step reports to one value, so the monitor's suspicion appears in the log as a score with the usual metrics, and the flagged steps travel as `scanner_references` in the score metadata, which Inspect View already renders. Nothing in `inspect_ai.scorer` changes.

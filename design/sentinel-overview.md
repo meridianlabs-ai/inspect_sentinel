@@ -40,7 +40,6 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
 
     return check
 
-
 Task(sentinel=threshold(suspicion_monitor(), reject_at=0.8))
 ```
 
@@ -99,7 +98,12 @@ class Context:
     store: Store
     """This monitor's per-sample state."""
 
-    def store_as(self, model_cls: Type[SMT], *, scope: Scope = "sample") -> SMT:
+    def store_as(
+        self,
+        model_cls: Type[SMT],
+        *,
+        scope: Scope = "sample"
+    ) -> SMT:
         """Typed view of this monitor's state."""
 
     # -- effects
