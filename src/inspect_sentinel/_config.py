@@ -8,16 +8,22 @@ from typing import Any, NamedTuple, cast
 import yaml
 from inspect_ai._util.file import exists, local_path
 from inspect_ai._util.registry import (
+    RegistryDict,
     RegistryType,
     create_registry_object,
+    has_registry_params,
+    is_registry_dict,
+    is_registry_object,
     registry_info,
     registry_lookup,
+    registry_value,
 )
 from inspect_ai.util import resource
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 from ._context import validate_instance_name
 from ._monitor import Children, ControlProtocol, Monitor
+from ._resolve import Sentinels
 
 PACKAGE = "inspect_sentinel"
 ENTRY_FIELDS = frozenset({"name", "params"})
@@ -187,3 +193,88 @@ def _find_all(name: str) -> list[_Factory]:
                 registered = registry_info(factory).name
                 found[(kind, registered)] = _Factory(kind, registered, factory)
     return list(found.values())
+
+
+def config_from_sentinel(sentinels: Sentinels) -> SentinelConfig:
+    """Record constructed monitors and protocols as the configuration that rebuilds them.
+
+    The inverse of `sentinel_from_config`, for the eval log and retry: each instance becomes an entry with its registry name and the params it was created with, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a list of one.
+
+    Args:
+        sentinels: One monitor or protocol, or a sequence or mapping of instance names to them, as `Task(sentinel=)` accepts.
+
+    Raises:
+        TypeError: If a value is not a configured monitor or protocol.
+    """
+    if is_registry_object(sentinels):
+        return _config_layer([_registry_dict(sentinels)])
+    if isinstance(sentinels, Mapping):
+        mapping = cast(Mapping[str, object], sentinels)
+        return _config_layer(
+            {name: _registry_dict(child) for name, child in mapping.items()}
+        )
+    items = cast(Sequence[object], sentinels)
+    return _config_layer([_registry_dict(child) for child in items])
+
+
+def _registry_dict(instance: object) -> RegistryDict:
+    if not has_registry_params(instance) or registry_info(instance).type not in (
+        "monitor",
+        "protocol",
+    ):
+        raise TypeError(
+            f"{getattr(instance, '__name__', instance)!r} is not a configured monitor or protocol."
+        )
+    return cast(RegistryDict, registry_value(instance))
+
+
+def _config_layer(
+    layer: Sequence[RegistryDict] | Mapping[str, RegistryDict],
+) -> SentinelConfig:
+    if isinstance(layer, Mapping):
+        return SentinelConfig({name: _config_entry(d) for name, d in layer.items()})
+    return SentinelConfig([_config_entry(d) for d in layer])
+
+
+def _config_entry(recorded: RegistryDict) -> SentinelEntry:
+    params: dict[str, Any] = {}
+    nested: dict[str, SentinelConfig] = {}
+    for key, value in recorded["params"].items():
+        layer = _sentinel_layer(value)
+        if layer is None:
+            params[key] = value
+        else:
+            nested[key] = _config_layer(layer)
+    return SentinelEntry.model_validate(
+        {"name": _config_name(recorded["name"]), "params": params, **nested}
+    )
+
+
+def _sentinel_layer(
+    value: object,
+) -> Sequence[RegistryDict] | Mapping[str, RegistryDict] | None:
+    if isinstance(value, list) and value:
+        items = cast(list[object], value)
+        if all(_is_sentinel_dict(item) for item in items):
+            return cast(list[RegistryDict], items)
+    elif isinstance(value, dict) and value:
+        entries = cast(dict[str, object], value)
+        if not is_registry_dict(entries) and all(
+            _is_sentinel_dict(item) for item in entries.values()
+        ):
+            return cast(dict[str, RegistryDict], entries)
+    return None
+
+
+def _is_sentinel_dict(value: object) -> bool:
+    return is_registry_dict(value) and value["type"] in ("monitor", "protocol")
+
+
+def _config_name(name: str) -> str:
+    prefix = f"{PACKAGE}/"
+    if name.startswith(prefix):
+        bare = name[len(prefix) :]
+        found = _find_all(bare)
+        if len(found) == 1 and found[0].name == name:
+            return bare
+    return name

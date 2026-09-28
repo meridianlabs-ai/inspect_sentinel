@@ -1,6 +1,7 @@
 import json
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -9,14 +10,17 @@ from inspect_ai._util.registry import registry_info, registry_params
 from inspect_sentinel._context import Context
 from inspect_sentinel._integration import (
     SentinelConfig,
+    Sentinels,
+    config_from_sentinel,
     resolve_sentinel,
     run_root,
     sentinel_from_config,
 )
 from inspect_sentinel._monitor import ControlProtocol, Monitor, monitor, protocol
+from inspect_sentinel._protocols import concurrent, threshold
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
-from tests._fakes import ListRecorder, before_step, runner_context
+from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
 
 @monitor
@@ -40,7 +44,7 @@ def cfg_pair() -> list[Monitor]:
 
 @protocol
 def cfg_rule(reason: str = "no") -> ControlProtocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         return Decision.reject(reason)
 
     return decide
@@ -276,3 +280,98 @@ def test_a_file_must_hold_only_a_sentinel_key(tmp_path: Path, content: Any) -> N
     file.write_text(yaml.dump(content))
     with pytest.raises(ValueError, match="sentinel"):
         sentinel_from_config(str(file))
+
+
+ROUND_TRIPS: list[Any] = [
+    [{"name": "cfg_suspicion", "params": {"model": "openai/gpt-4o-mini"}}],
+    [{"name": "cfg_pair"}, {"name": "cfg_rule", "params": {"reason": "stop"}}],
+    [
+        {
+            "name": "threshold",
+            "params": {"reject_at": 0.8, "terminate_at": 0.95},
+            "monitors": {
+                "a": {"name": "cfg_suspicion"},
+                "b": {"name": "cfg_suspicion"},
+            },
+        }
+    ],
+    {
+        "attempt": {
+            "name": "concurrent",
+            "children": {
+                "watch": {"name": "cfg_suspicion"},
+                "inner": {
+                    "name": "concurrent",
+                    "children": [
+                        {"name": "cfg_rule"},
+                        {"name": "observe", "monitors": {"m": {"name": "cfg_pair"}}},
+                    ],
+                },
+            },
+        },
+        "escape": {"name": "cfg_rule"},
+    },
+]
+
+
+@pytest.mark.parametrize("raw", ROUND_TRIPS)
+def test_config_to_sentinel_to_config_is_equal(raw: Any) -> None:
+    config = SentinelConfig.model_validate(raw)
+    recorded = config_from_sentinel(sentinel_from_config(raw))
+    assert recorded == config
+    assert SentinelConfig.model_validate_json(recorded.model_dump_json()) == config
+
+
+async def _paths(sentinels: Sentinels) -> list[tuple[str, str]]:
+    recorder = ListRecorder()
+    context = runner_context(recorder=recorder)
+    await run_root(resolve_sentinel(sentinels), context, before_step())
+    await run_root(resolve_sentinel(sentinels), context, after_step())
+    return sorted((r.reported.path, r.reported.function) for r in recorder.records)
+
+
+def _identity(sentinels: object) -> Any:
+    if isinstance(sentinels, Mapping):
+        mapping = cast(Mapping[str, object], sentinels)
+        return {k: _identity(v) for k, v in mapping.items()}
+    if isinstance(sentinels, list):
+        return [_identity(v) for v in cast(list[object], sentinels)]
+    return (registry_info(sentinels).name, registry_params(sentinels))
+
+
+@pytest.mark.anyio
+async def test_sentinel_to_config_to_sentinel_is_equivalent() -> None:
+    original: Sentinels = {
+        "attempt": concurrent(
+            {"watch": cfg_suspicion("openai/gpt-4o-mini"), "block": cfg_rule("stop")}
+        ),
+        "gate": threshold(
+            {"a": cfg_suspicion(), "b": cfg_suspicion("m")}, reject_at=0.8
+        ),
+        "pair": cfg_pair(),
+    }
+    rebuilt = sentinel_from_config(config_from_sentinel(original))
+    assert _identity(rebuilt) == _identity(original)
+    assert await _paths(rebuilt) == await _paths(original)
+
+
+def test_package_names_are_recorded_bare_and_others_in_full() -> None:
+    config = config_from_sentinel([threshold([cfg_suspicion()], reject_at=0.5)])
+    assert config.model_dump() == [
+        {
+            "name": "threshold",
+            "params": {"reject_at": 0.5},
+            "monitors": [{"name": "cfg_suspicion", "params": {}}],
+        }
+    ]
+
+
+def test_a_lone_instance_is_recorded_as_a_list_of_one() -> None:
+    assert config_from_sentinel(cfg_rule()) == SentinelConfig.model_validate(
+        [{"name": "cfg_rule"}]
+    )
+
+
+def test_a_non_sentinel_is_not_recorded() -> None:
+    with pytest.raises(TypeError, match="monitor or protocol"):
+        config_from_sentinel(cast(Any, [cfg_rule]))
