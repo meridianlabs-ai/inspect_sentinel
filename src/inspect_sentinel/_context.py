@@ -40,49 +40,51 @@ class Host(Protocol):
 class Recorder(Protocol):
     """Where the runner records every report. Runner-facing; authors never call it."""
 
-    def record(self, context: Context, step: Step, reported: Reported[Report]) -> None:
+    def record(
+        self, context: RunnerContext, step: Step, reported: Reported[Report]
+    ) -> None:
         """Record one child's report for the step it examined.
 
         Args:
-            context: The child's context; its `path` identifies the instance.
+            context: The child's context; its `path` identifies the instance and its `factory` the code that ran.
             step: The step the child examined.
             reported: The child's report with its instance identity.
         """
         ...
 
-    def cancelled(self, context: Context, step: Step, name: str) -> None:
+    def cancelled(self, context: RunnerContext, step: Step, name: str) -> None:
         """Record that a child was cancelled before it finished: a sibling decided `terminate` or called `final()`, a sibling raised, or the layer was cancelled from above. Any reports it already made, from the earlier functions of an instance whose factory returned several, stand.
 
         The cause is not recorded here; a `terminate`, a `final()` or an exception in the same layer says which it was.
 
         Args:
-            context: The child's context; its `path` identifies the instance.
+            context: The child's context; its `path` identifies the instance and its `factory` the code that ran.
             step: The step the child was examining.
             name: The child's instance name.
         """
         ...
 
-    def bypassed(self, context: Context, step: Step, name: str) -> None:
+    def bypassed(self, context: RunnerContext, step: Step, name: str) -> None:
         """Record that a final decision from a descendant passed this layer without running its decision logic. The step ended with that decision unless a later superseded record says otherwise.
 
         The final decision itself is recorded through `record` for the protocol that made it when it takes effect, at the root, after the `bypassed` record of each layer it passed.
 
         Args:
-            context: The child's context; its `path` identifies the instance.
+            context: The child's context; its `path` identifies the instance and its `factory` the code that ran.
             step: The step the child was examining.
             name: The child's instance name.
         """
         ...
 
     def superseded(
-        self, context: Context, step: Step, reported: Reported[Decision]
+        self, context: RunnerContext, step: Step, reported: Reported[Decision]
     ) -> None:
         """Record a final decision that lost a race to another final decision in the same layer, or that an exception in the same layer outranked; it did not take effect.
 
         Also records a `terminate`, already recorded through `record`, that a sibling's `final()` outran in a runner-managed group (`run_children`, `run_protocols`): the step ended with the final decision instead. A protocol that fans out with its own task group gets no such record; its children's decisions stay as recorded.
 
         Args:
-            context: The deciding protocol's context; its `path` identifies the instance.
+            context: The deciding protocol's context; its `path` identifies the instance and its `factory` the code that ran.
             step: The step the protocol was examining.
             reported: The decision that did not take effect, with its instance identity.
         """
@@ -142,6 +144,9 @@ class RunnerContext(Context):
     recorder: Recorder
     """Where the runner records reports and cancellations."""
 
+    factory: str = ""
+    """Registry name of the factory of the instance at `path`, package prefix included, e.g. `inspect_sentinel/concurrent`. Empty in the context the dispatcher builds; `run_root` sets the root's."""
+
     def __post_init__(self) -> None:
         # a runtime check for hosts that are not type-checked against Recorder
         if not isinstance(cast(object, self.recorder), Recorder):
@@ -149,14 +154,19 @@ class RunnerContext(Context):
                 f"Recorder {type(self.recorder).__name__} must implement record(), cancelled(), bypassed() and superseded()."
             )
 
-    def child(self, name: str) -> RunnerContext:
+    def child(self, name: str, factory: str) -> RunnerContext:
         """The context for a child of this layer.
 
         Args:
             name: The child's instance name, appended to this layer's `path`. Must be non-empty and must not contain `/`.
+            factory: The child's registry name, as `registry_info(child).name` gives it.
         """
         validate_instance_name(name)
-        return replace(self, path=f"{self.path}/{name}" if self.path else name)
+        return replace(
+            self,
+            path=f"{self.path}/{name}" if self.path else name,
+            factory=factory,
+        )
 
 
 def validate_instance_name(name: object) -> str:

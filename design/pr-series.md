@@ -185,6 +185,12 @@ Implemented: the shape is `SentinelConfig`, a pydantic `RootModel` over a list o
 
 The canonical docs on inspect_ai's `design/monitor` branch were synced with this series on 2026-09-28 (inspect_ai 12f555a65): `final()`, the runner-side `Recorder`, `Context.path`, `RunnerContext`, the plural-only runner, and multi-function factories. The copies in `design/` match them; edit both together.
 
+## S7: the factory name for the log
+
+`SentinelEvent.name` is the registry name of the factory and `path` the instance path, but the `Recorder` had no way to learn the registry name: `Reported.name` is the instance name, `cancelled` and `bypassed` receive only the instance name, and `Context` carries no registry name, so for `{"attempt": chain(...)}` the dispatcher could only record `name="attempt"`, repeating the path's last segment.
+
+Implemented: `RunnerContext` gains `factory: str`, the full registry name as `registry_info(child).name` gives it (package prefix included), defaulting to empty so the dispatcher's top-layer context need not know the root; `child(name, factory)` takes it and the runner passes each child's registry name when it derives the child's context; `run_root` sets it on the root's own context, so the root's decision, its `bypassed` record and any `final()` origin at the root carry it. The `Recorder` methods take a `RunnerContext` rather than a `Context`, since the runner always passes one, so the dispatcher reads `context.factory` without a cast. A `terminate` superseded by a sibling's `final()` is re-derived with its factory's name, as the other records are. `Reported` is unchanged: the instance name is what authors compare, and the factory is recording metadata.
+
 ## Out of scope
 
 The failure policy (`design/sentinel.md`, "Failure semantics"): the runner propagates every exception until a later PR adds the per-child hook described under PR 3.

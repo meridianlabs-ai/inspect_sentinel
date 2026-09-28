@@ -11,7 +11,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Generic, Literal, NamedTuple, TypeVar, cast, overload
 
 import anyio
@@ -192,7 +192,7 @@ async def run_root(
 ) -> Decision | None:
     """Invoke the resolved root protocol for one step and return the step's outcome.
 
-    The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare. Its decision is shape-checked and recorded like any layer's; a `final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
+    The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its context's `factory` is set to its full registry name. Its decision is shape-checked and recorded like any layer's; a `final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.
@@ -272,7 +272,7 @@ async def _run_named(
 ) -> Reports:
     observations: list[tuple[int, Reported[Observation]]] = []
     decisions: list[tuple[int, Reported[Decision]]] = []
-    terminated: list[Reported[Decision]] = []
+    terminated: list[tuple[str, Reported[Decision]]] = []
 
     async def run_one(
         index: int,
@@ -310,7 +310,11 @@ async def _run_named(
                 )
             finally:
                 decisions.extend((index, d) for d in decided)
-                terminated.extend(d for d in decided if d.report.action == "terminate")
+                terminated.extend(
+                    (registry_info(child).name, d)
+                    for d in decided
+                    if d.report.action == "terminate"
+                )
             if any(d.report.action == "terminate" for d in decided):
                 cancel()
 
@@ -320,9 +324,9 @@ async def _run_named(
                 tg.start_soon(run_one, index, name, child, tg.cancel_scope.cancel)
     except Final:
         # a final() outran a terminate already recorded as a decision
-        for reported in terminated:
+        for factory, reported in terminated:
             # _run_child accepted this context, so it is a RunnerContext
-            child_context = cast(RunnerContext, context).child(reported.name)
+            child_context = cast(RunnerContext, context).child(reported.name, factory)
             child_context.recorder.superseded(child_context, step, reported)
         raise
 
@@ -362,7 +366,11 @@ async def _run_child(
     running = [m for m in members(child) if isinstance(step, tuple(m.accepted))]
     if not running:
         return
-    child_context = context if root else context.child(child_name)
+    child_context = (
+        replace(context, factory=info.name)
+        if root
+        else context.child(child_name, info.name)
+    )
     try:
         # sequential, since a group's members share one store
         for member in running:

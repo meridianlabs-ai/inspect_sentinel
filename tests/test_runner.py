@@ -1596,3 +1596,130 @@ async def test_a_group_members_error_names_its_function() -> None:
         TypeError, match=r"monitor 'meddles' \(function 'ends'\) called"
     ):
         await run_monitors(meddles(), runner_context(), before_step())
+
+
+@pytest.mark.anyio
+async def test_records_and_cancellations_name_the_factory_apart_from_the_instance() -> (
+    None
+):
+    started = anyio.Event()
+
+    @monitor
+    def quick_then_slow() -> Sequence[Monitor]:
+        async def quick(context: Context, step: BeforeToolCall) -> Observation | None:
+            return Observation.score(0.1)
+
+        async def slow(context: Context, step: BeforeToolCall) -> Observation | None:
+            started.set()
+            await anyio.sleep_forever()
+            return None
+
+        return [quick, slow]
+
+    @protocol
+    def terminates() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await started.wait()
+            return Decision.terminate()
+
+        return decide
+
+    recorder = ListRecorder()
+    with anyio.fail_after(5):
+        await run_children(
+            {"watch": quick_then_slow(), "stop": terminates()},
+            runner_context(recorder=recorder),
+            before_step(),
+        )
+    assert sorted(
+        (r.reported.name, r.reported.function, r.context.factory)
+        for r in recorder.records
+    ) == [
+        ("stop", "decide", registry_info(terminates).name),
+        ("watch", "quick", registry_info(quick_then_slow).name),
+    ]
+    assert [(c.path, c.factory) for c in recorder.cancelled_contexts] == [
+        ("watch", registry_info(quick_then_slow).name)
+    ]
+
+
+@pytest.mark.anyio
+async def test_bypassed_and_root_records_name_the_factory() -> None:
+    recorder = ListRecorder()
+    await run_root(
+        concurrent({"outer": wrapper(finalizes("reject"))}),
+        runner_context(recorder=recorder),
+        before_step(),
+    )
+    assert [(c.path, c.factory) for c in recorder.bypassed_contexts] == [
+        ("outer", registry_info(wrapper).name),
+        ("", "inspect_sentinel/concurrent"),
+    ]
+    assert [(r.context.path, r.context.factory) for r in recorder.records] == [
+        ("outer/finalizes", registry_info(finalizes).name)
+    ]
+
+
+@pytest.mark.anyio
+async def test_the_roots_own_decision_names_its_factory() -> None:
+    recorder = ListRecorder()
+    await run_root(
+        resolve_sentinel({"rule": decides("reject")}),
+        runner_context(recorder=recorder),
+        before_step(),
+    )
+    assert [
+        (r.reported.name, r.context.path, r.context.factory) for r in recorder.records
+    ] == [
+        ("rule", "rule", registry_info(decides).name),
+        ("concurrent", "", "inspect_sentinel/concurrent"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_superseded_decisions_name_the_factory() -> None:
+    waiting = anyio.Event()
+    gate = anyio.Event()
+
+    @protocol
+    def opens() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await waiting.wait()
+            gate.set()
+            final(Decision.reject("opens"))
+
+        return decide
+
+    @protocol
+    def follows() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            waiting.set()
+            await gate.wait()
+            final(Decision.terminate("follows"))
+
+        return decide
+
+    factories = {"a": registry_info(opens).name, "b": registry_info(follows).name}
+    recorder = ListRecorder()
+    with anyio.fail_after(5):
+        await run_root(
+            concurrent({"a": opens(), "b": follows()}),
+            runner_context(recorder=recorder),
+            before_step(),
+        )
+    [lost] = recorder.supersessions
+    assert lost.context.factory == factories[lost.reported.name]
+
+
+@pytest.mark.anyio
+async def test_a_terminate_superseded_by_a_final_names_its_factory() -> None:
+    recorder = ListRecorder()
+    await run_root(
+        concurrent({"t": decides("terminate"), "f": finalizes("continue")}),
+        runner_context(recorder=recorder),
+        before_step(),
+    )
+    assert [(r.context.path, r.context.factory) for r in recorder.supersessions] == [
+        ("t", registry_info(decides).name)
+    ]
+    assert recorder.cancelled_contexts == []

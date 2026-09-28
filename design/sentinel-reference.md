@@ -253,16 +253,19 @@ The dispatcher hands the top layer a `RunnerContext`, which the runner requires 
 @dataclass(frozen=True)
 class RunnerContext(Context):
     recorder: Recorder
-    def child(self, name: str) -> RunnerContext: ...   # context for a child under this path
+    factory: str = ""   # registry name of the instance's factory; run_root sets the root's
+    def child(self, name: str, factory: str) -> RunnerContext: ...   # context for a child under this path
 
 
 class Recorder(Protocol):
     """Where the runner records; the dispatcher implements it, authors never call it."""
-    def record(self, context: Context, step: Step, reported: Reported[Report]) -> None: ...
-    def cancelled(self, context: Context, step: Step, name: str) -> None: ...
-    def bypassed(self, context: Context, step: Step, name: str) -> None: ...
-    def superseded(self, context: Context, step: Step, reported: Reported[Decision]) -> None: ...
+    def record(self, context: RunnerContext, step: Step, reported: Reported[Report]) -> None: ...
+    def cancelled(self, context: RunnerContext, step: Step, name: str) -> None: ...
+    def bypassed(self, context: RunnerContext, step: Step, name: str) -> None: ...
+    def superseded(self, context: RunnerContext, step: Step, reported: Reported[Decision]) -> None: ...
 ```
+
+Every `Recorder` call gets the `RunnerContext` of the instance it concerns, so the dispatcher reads `SentinelEvent.name` from `context.factory` and `path` from `context.path`. `factory` is the full registry name, package prefix included (`inspect_sentinel/concurrent`), where the instance name is a mapping key or the unqualified registry name.
 
 Rules:
 
@@ -941,7 +944,7 @@ Whether a monitor that fails on 3 samples in 500 should fail the eval is open; s
 ```python
 class SentinelEvent(BaseEvent):
     event: Literal["sentinel"] = "sentinel"
-    name: str             # registry name of the factory, monitor or protocol
+    name: str             # registry name of the factory, monitor or protocol: RunnerContext.factory
     path: str             # instance path, e.g. "attempt/internet_attempt"
     function: str | None  # __name__ of the reporting function; None for cancelled and bypassed, which are per instance
     step_id: str          # triggering message id, assistant message id, or tool call id
