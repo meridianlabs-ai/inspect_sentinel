@@ -218,12 +218,12 @@ async def run_protocol(
 async def run_root(
     protocol: ControlProtocol, context: Context, step: Step
 ) -> Decision | None:
-    """Invoke the compiled root protocol for one step and return the step's outcome.
+    """Invoke the resolved root protocol for one step and return the step's outcome.
 
     The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare. Its decision is shape-checked and recorded like any layer's; a `final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 
     Args:
-        protocol: The root protocol, as `compile_sentinel` returned it.
+        protocol: The root protocol, as `resolve_sentinel` returned it.
         context: The top layer's context, whose `path` is empty.
         step: The step being examined.
     """

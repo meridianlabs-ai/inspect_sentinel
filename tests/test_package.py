@@ -61,7 +61,7 @@ def test_integration_names_are_not_exported() -> None:
         "step_types",
         "Final",
         "check_decision_shape",
-        "compile_sentinel",
+        "resolve_sentinel",
         "SentinelSpec",
         "check_instance_name",
         "PRECEDENCE",
@@ -77,7 +77,7 @@ def test_integration_module_exports_the_dispatcher_surface() -> None:
         "RunnerContext",
         "SentinelSpec",
         "check_instance_name",
-        "compile_sentinel",
+        "resolve_sentinel",
         "step_types",
         "run_root",
     }

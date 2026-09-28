@@ -684,7 +684,7 @@ Shape checks raise. Each is a deterministic bug in a protocol, not agent input, 
 
 `final()` is the mechanism for a decision no layer above may weaken. It replaces an earlier design in which a `binding` flag set a floor that the runner clamped each layer's return up to, recording the override. A value-level rule requires every layer to carry or compare the property, and each patch to it leaked where a middle layer built a new decision; control flow cannot be dropped by a middle layer, because that layer's code does not run. It reuses `terminate`'s cancellation, and the first `final()` wins, as with two `terminate`s. Ordering several authorities is a `chain`, or a panel that collects advisory votes and calls `final()` itself; see [Humans](#humans).
 
-The dispatcher invokes the compiled root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`.
+The dispatcher invokes the resolved root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`.
 
 ### Two compositions
 
@@ -698,7 +698,7 @@ The dispatcher invokes the compiled root through `run_root`, which treats it as 
 | `terminate` | cancels the other children | ends the loop |
 | Use for | independent guards that must all be satisfied | a cheap rule ahead of an expensive judge; a human at the end |
 
-`concurrent` is the default. A list or mapping containing a protocol in `Task(sentinel=)` compiles to it. `chain` is one explicit word.
+`concurrent` is the default. A list or mapping containing a protocol in `Task(sentinel=)` resolves to it. `chain` is one explicit word.
 
 Rules:
 
@@ -784,7 +784,7 @@ These rules describe the concurrent composition, which `concurrent()` implements
 
 ### The top level
 
-Every `Task(sentinel=)` configuration compiles to a protocol, so one layer always owns the outcome and records it.
+Every `Task(sentinel=)` configuration resolves to a protocol, so one layer always owns the outcome and records it.
 
 | Configured | Compiles to |
 |---|---|
@@ -814,9 +814,9 @@ Use one of these rather than writing threshold logic by hand. The control papers
 
 | Protocol | Where | What it does |
 |---|---|---|
-| `concurrent` | core | runs every child; strongest decision wins; what a list containing a protocol compiles to |
+| `concurrent` | core | runs every child; strongest decision wins; what a list containing a protocol resolves to |
 | `chain` | core | runs children in order; first non-`escalate` decides; hands escalations forward |
-| `observe` | core | records every observation, acts on none; what a bare monitor compiles to |
+| `observe` | core | records every observation, acts on none; what a bare monitor resolves to |
 | `threshold` | core | `reject` above one constant, `terminate` above another; what calibration feeds |
 | `defer_to_trusted` | core | above a threshold, substitutes the trusted model's action; returns `modify`. `AfterGenerate` only |
 | `resample` | core | above a threshold, draws `n` further completions, executes the least suspicious; `escalate` if none clears. `AfterGenerate` only |
@@ -870,7 +870,7 @@ eval(sentinel=...)
 inspect eval task.py --sentinel sentinel.yaml
 ```
 
-`Task(sentinel=)` takes one monitor or protocol, a list, or a mapping of instance names to either. Monitors alone compile to `observe(...)`; anything containing a protocol compiles to `concurrent(...)`.
+`Task(sentinel=)` takes one monitor or protocol, a list, or a mapping of instance names to either. Monitors alone resolve to `observe(...)`; anything containing a protocol resolves to `concurrent(...)`.
 
 ```python
 Task(sentinel=no_curl())
@@ -1167,7 +1167,7 @@ A chain hands earlier escalations to the next link so a human sees who is asking
 
 "A protocol may never override a human" was a prose rule, then a `binding` field the runner clamped each layer to. A property of a value has to be carried or compared by every layer, and a layer that builds a new decision drops it. `final()` ends the step instead, so no layer above runs to drop anything, and the log shows which decisions were final and which layers they bypassed.
 
-### Why the top level always compiles to a protocol
+### Why the top level always resolves to a protocol
 
 Without it, a bare list combined decisions by severity but no layer owned the outcome, so nothing recorded it. Compiling to `concurrent()` gives the summary event #5423 asked for and gives the `modify` rule one place to live. Compiling bare monitors to `observe()` makes recording-only an explicit configuration rather than a silent one.
 

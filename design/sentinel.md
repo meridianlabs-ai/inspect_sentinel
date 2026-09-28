@@ -501,7 +501,7 @@ def final(decision: Decision) -> NoReturn:
     """End the step with this decision."""
 ```
 
-A protocol that has the last word calls `final(decision)`, and the step ends there. Nothing above the calling protocol runs: each layer's `await run_protocol(...)` or `await run_children(...)` never returns, so its decision logic never sees the decision and cannot weaken it. Siblings still in flight are cancelled and recorded as cancelled, as they are for `terminate`, and the decision is the step's outcome. The runner still [checks its shape](#the-boundary-check), records it as the decision of the protocol that called `final()`, and records each layer it passed as `bypassed` (see [Transcript](#transcript)). The dispatcher invokes the compiled root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`.
+A protocol that has the last word calls `final(decision)`, and the step ends there. Nothing above the calling protocol runs: each layer's `await run_protocol(...)` or `await run_children(...)` never returns, so its decision logic never sees the decision and cannot weaken it. Siblings still in flight are cancelled and recorded as cancelled, as they are for `terminate`, and the decision is the step's outcome. The runner still [checks its shape](#the-boundary-check), records it as the decision of the protocol that called `final()`, and records each layer it passed as `bypassed` (see [Transcript](#transcript)). The dispatcher invokes the resolved root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`.
 
 `human()` will call it by default, and `human(final=False)` returns an ordinary advisory decision, which is how a person becomes one vote among several (see [Humans in the loop](#humans-in-the-loop)). Nothing stops an LLM-backed protocol from calling `final()`, and nothing should — the framework cannot verify that a human was involved, only that the author claimed the last word — but the claim is visible in the transcript and in code review, which is the same discipline `portable=False` relies on.
 
@@ -632,7 +632,7 @@ One rule then covers the bimodality: **a wrapping protocol may override advisory
 
 ### A bare monitor records only {#observe-only-is-the-default}
 
-`Task(sentinel=suspicion_monitor())` with nothing wrapping it compiles to `observe(suspicion_monitor())`: it scores, records to the transcript, and never intervenes. For a monitor, enforcement is opt-in, and it is spelled by wrapping it in a protocol.
+`Task(sentinel=suspicion_monitor())` with nothing wrapping it resolves to `observe(suspicion_monitor())`: it scores, records to the transcript, and never intervenes. For a monitor, enforcement is opt-in, and it is spelled by wrapping it in a protocol.
 
 It is the safe default, and for a specific reason rather than a general caution about safety: a threshold nobody set is a threshold nobody calibrated, so acting on one is acting on a number whose meaning is unestablished. A scoring monitor whose scores nobody reads is a safety mechanism failing open, and under `observe()` that is a *declared mode* rather than an accident.
 
@@ -663,9 +663,9 @@ The literature's protocols are all arrangements of three resources with differen
 
 | Protocol | The arrangement |
 |------------------------|------------------------|
-| `concurrent` | run every child, strongest decision wins; what a list containing a protocol compiles to. Not from the literature — it is the concurrent composition itself, named |
+| `concurrent` | run every child, strongest decision wins; what a list containing a protocol resolves to. Not from the literature — it is the concurrent composition itself, named |
 | `chain` | run children in order, first non-`escalate` decides; approval's chain as a protocol |
-| `observe` | record every monitor's score; never act. What a list of monitors compiles to, and how a benign distribution gets collected |
+| `observe` | record every monitor's score; never act. What a list of monitors resolves to, and how a benign distribution gets collected |
 | `threshold` | act on a score: `reject` above one constant, `terminate` above another. The smallest protocol, and the one calibration feeds |
 | `defer_to_trusted` | above a threshold, substitute the trusted model's action for the untrusted one's |
 | `resample` | above a threshold, draw further completions, score each, execute the least suspicious; escalate if none clears (Ctrl-Z; multi-step settings only) |
@@ -965,7 +965,7 @@ def chain(children: Children) -> ControlProtocol:
 
 Three properties fall out of writing it as ordinary code. A monitor in a chain is recorded and falls through, since an observation cannot be "the first decision" — ordered composition is Decision-shaped in substance. An all-escalate chain returns `continue` if anything participated, matching review's default and this document's rule; the [approval adapter](#a-protocol-layer-for-approval-too) keeps approval's fail-closed `reject` on its own path, so existing approval users see no change, and a monitor chain that wants fail-closed ends with a rejecting monitor, as approval lists end with `auto` today. And sequential dispatch stops being a violation of the independence rule, because the loop is a named, shipped protocol whose mode the transcript shows.
 
-**`concurrent()`** is the concurrent composition, and it is also what the top of a configuration compiles to (see [Configuration](#configuration)):
+**`concurrent()`** is the concurrent composition, and it is also what the top of a configuration resolves to (see [Configuration](#configuration)):
 
 ``` python
 @protocol
@@ -1234,7 +1234,7 @@ eval(monitor=...)
 inspect eval task.py --sentinel sentinel.yaml
 ```
 
-`Task(sentinel=)` accepts one monitor or protocol, a list, or a mapping of names to them. Every top-level configuration compiles to a protocol, so there is always a layer that owns the combined decision and emits the summary event #5423 asked for — and which protocol depends only on what was given:
+`Task(sentinel=)` accepts one monitor or protocol, a list, or a mapping of names to them. Every top-level configuration resolves to a protocol, so there is always a layer that owns the combined decision and emits the summary event #5423 asked for — and which protocol depends only on what was given:
 
 | `Task(sentinel=)` given | Compiles to |
 |------------------------|------------------------|
@@ -1722,8 +1722,8 @@ goal or an observation, which now lives only in `sentinel-deployment.md`;
 whether `modify` composes (settled in [`concurrent()`](#two-compositions-concurrent-and-ordered):
 a `modify` with more than one participant is a rejection naming the modifier);
 what happens in a mixed configuration with no protocol (there is no such
-configuration — a list containing a protocol compiles to `concurrent`, which
-honours decisions and records observations, and a list of monitors compiles
+configuration — a list containing a protocol resolves to `concurrent`, which
+honours decisions and records observations, and a list of monitors resolves
 to `observe`); whether protocols need their own construct (a
 [decorator](#the-protocol-marker), not a constructor or a type); and whether
 ordered composition should be the default (no — see [Two compositions](#two-compositions-concurrent-and-ordered)).

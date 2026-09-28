@@ -124,9 +124,9 @@ Built-in protocols cover the common compositions and basic control scenarios:
 
 | Protocol | Description |
 |------------------------|------------------------------------------------|
-| `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `continue`). What a list containing a protocol compiles to. Use for independent guards that must all be satisfied. |
+| `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `continue`). What a list containing a protocol resolves to. Use for independent guards that must all be satisfied. |
 | `chain()` | Runs children in order until one decides; first non-`escalate` wins, and escalations are handed to the next link so a human at the end sees who asked and why. Use for a cheap rule ahead of an expensive judge. |
-| `observe()` | Records every observation and acts on none. What a bare monitor compiles to, and how a benign score distribution gets collected. |
+| `observe()` | Records every observation and acts on none. What a bare monitor resolves to, and how a benign score distribution gets collected. |
 | `threshold()` | Acts on a score: `reject` above one constant, `terminate` above another. The smallest protocol, and the one calibration feeds. |
 | `defer_to_trusted()` | Above a threshold, substitutes a trusted model's action for the untrusted one's. Defaults to the `trusted` model role. |
 | `resample()` | Above a threshold, draws further completions, scores each, and executes the least suspicious; escalates if none clears. |
@@ -178,7 +178,7 @@ A proxy sits on one HTTP exchange: a request and a response. It never sees a too
 The goal is to enable two deployment modes for proxy servers:
 
 1.  Sidecar (a Python service beside the proxy); or
-2.  Embedded (CPython compiled to WASM inside the proxy)
+2.  Embedded (CPython resolved to WASM inside the proxy)
 
 Both modes depend on sentinels being lightweight. `inspect_sentinel` depends only on `inspect_core`, a new package holding the wire types (`ChatMessage`, `ModelOutput`, `ToolCall`, `ToolInfo`) and the registry primitives, so that a monitor author, a proxy, or a WASM build never pulls in the full Inspect framework.
 

@@ -13,7 +13,7 @@ from ._step import BeforeToolCall, Step
 def observe(monitors: Monitors) -> ControlProtocol:
     """Record every monitor's observation and never act.
 
-    What a bare monitor or a list of monitors compiles to, and how a benign score distribution is collected before anything is configured to act on it.
+    What a bare monitor or a list of monitors resolves to, and how a benign score distribution is collected before anything is configured to act on it.
 
     Args:
         monitors: The monitors to run at every step they watch.
@@ -33,7 +33,7 @@ def observe(monitors: Monitors) -> ControlProtocol:
 def concurrent(children: Children) -> ControlProtocol:
     """Run every child at once; the strictest decision wins.
 
-    What a list containing a protocol compiles to. Monitors are recorded in the transcript; protocols vote by `terminate > reject > modify > continue`, the first in configuration order winning a tie, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when more than one protocol decided becomes a `reject` naming the modifier, since the others decided about the call as it stood; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own. A child that calls `final()` ends the step and no vote is taken.
+    What a list containing a protocol resolves to. Monitors are recorded in the transcript; protocols vote by `terminate > reject > modify > continue`, the first in configuration order winning a tie, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when more than one protocol decided becomes a `reject` naming the modifier, since the others decided about the call as it stood; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own. A child that calls `final()` ends the step and no vote is taken.
 
     Args:
         children: Monitors and protocols to run together.

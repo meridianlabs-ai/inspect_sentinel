@@ -5,7 +5,6 @@ import pytest
 from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import ToolCall
 
-from inspect_sentinel._compile import compile_sentinel
 from inspect_sentinel._context import Context
 from inspect_sentinel._final import Final, final
 from inspect_sentinel._monitor import (
@@ -16,6 +15,7 @@ from inspect_sentinel._monitor import (
 )
 from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import Action, Decision, Observation, Reported
+from inspect_sentinel._resolve import resolve_sentinel
 from inspect_sentinel._runner import (
     Decisions,
     Observations,
@@ -1034,7 +1034,7 @@ async def test_run_root_returns_a_final_decision_and_records_the_root_bypassed()
 ):
     recorder = ListRecorder()
     decision = await run_root(
-        compile_sentinel([finalizes("reject")]),
+        resolve_sentinel([finalizes("reject")]),
         runner_context(recorder=recorder),
         before_step(),
     )
@@ -1049,7 +1049,7 @@ async def test_run_root_returns_a_final_decision_and_records_the_root_bypassed()
 async def test_run_root_records_the_roots_own_decision_at_the_empty_path() -> None:
     recorder = ListRecorder()
     decision = await run_root(
-        compile_sentinel([decides("reject")]),
+        resolve_sentinel([decides("reject")]),
         runner_context(recorder=recorder),
         before_step(),
     )
@@ -1077,7 +1077,7 @@ async def test_run_root_checks_the_roots_decision_shape() -> None:
 async def test_run_root_needs_the_top_layer_context() -> None:
     with pytest.raises(ValueError, match="path"):
         await run_root(
-            compile_sentinel([decides()]), runner_context(path="x"), before_step()
+            resolve_sentinel([decides()]), runner_context(path="x"), before_step()
         )
 
 
