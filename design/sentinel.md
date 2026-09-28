@@ -1266,7 +1266,6 @@ The flat case in YAML is a list, like approval; registry lookup searches both ty
 sentinel:
   - name: no_curl
   - name: no_rm_rf
-    tools: ["bash", "python"]
 ```
 
 Named chains are a mapping, and a protocol with children nests them under the key that names its parameter:
@@ -1295,7 +1294,9 @@ sentinel:
 
 The nested key is the factory's parameter name — `monitors:` for the protocols that read scores, `children:` for the two compositions — and it is legal exactly when the factory has that parameter. The top-level key is `sentinel:`, so it cannot be confused with the nested `monitors:` (an earlier draft used `monitors:` for both). `monitors:` under a rule, or under a monitor, is a configuration error, and the schema must not let it parse silently. Nesting is the shape rather than a cost: `Task(solver=chain(...))` already has it in Python, approval's config already nests policies, and a tree is what permits [nested pipeline stages](#the-extension-surface), which a flat schema could not express at all.
 
-`tools` is a wart. It scopes the tool stages the way `ApprovalPolicy` does, but a `BeforeGenerate` monitor is not tool-scoped and would fire regardless — so the key means "which tools this applies to, if it watches a tool point at all", not "when this monitor runs". Alternatives: a separate `stages:` key, or no globs at all (the monitor filters internally on `step.call.function`, which it can already do and which is more honest about the fact that a monitor is not a per-tool policy).
+There is no `tools` key. An earlier draft borrowed it from `ApprovalPolicy` to scope the tool stages, but it was a wart: a `BeforeGenerate` monitor is not tool-scoped and would fire regardless, so the key could only mean "which tools this applies to, if it watches a tool point at all". A monitor that cares about some tools filters on `step.call.function` itself, which it can already do and which is more honest about a monitor not being a per-tool policy. An entry takes `name`, `params` and nested keys only, so a `tools:` carried over from an approval policy is an error, not a param.
+
+`sentinel_from_config` builds a configuration through `create_registry_object`, nested entries first, and returns the list or mapping unresolved, for `resolve_sentinel`. It takes a YAML or JSON file whose only key is `sentinel:`, a bare registered name, or the parsed shape. A name is looked up as both a monitor and a protocol, and a bare name also in `inspect_sentinel`, so `name: threshold` finds the shipped protocol; a name found more than once is ambiguous and an error. Every error names the entry, as in `sentinel.attempt.children[1]`. `config_from_sentinel` is the inverse, from each instance's registry name and params, with a param holding monitors or protocols written as nested entries; it is what the log records and `eval_retry` rebuilds from. The shape is `SentinelConfig`, a pydantic model over the list or mapping of `SentinelEntry`.
 
 ## Failure semantics {#failure-semantics}
 

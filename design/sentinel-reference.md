@@ -884,7 +884,6 @@ Flat list in YAML, like approval:
 sentinel:
   - name: no_curl
   - name: no_rm_rf
-    tools: ["bash", "python"]
 ```
 
 Named, as a mapping:
@@ -919,7 +918,10 @@ Rules:
 
 - **A nested key is the factory's parameter name.** `monitors:` under `threshold`, `children:` under `chain` or `concurrent`. The top-level key is `sentinel:`, so it cannot be confused with the nested `monitors:`. A nested key under a factory with no such parameter, including every rule and every monitor, is a configuration error. The schema must not parse it silently.
 - **Instance names are unique within a layer.** A duplicate is a configuration error. Registry names are the default when no mapping key is given.
-- **`tools` scopes only the tool stages.** A `BeforeGenerate` monitor fires regardless of it. Read it as "which tools this applies to, if it watches a tool stage at all". A separate `stages:` key, or dropping globs and filtering inside the monitor on `step.call.function`, are the alternatives.
+- **An entry takes `name`, `params` and nested keys, nothing else.** There is no `tools` key; a monitor that watches some tools filters on `step.call.function`. Any other key is a configuration error.
+- **Names are found in both registry types.** A bare name is also looked up in `inspect_sentinel`. A name that finds more than one factory is ambiguous and an error.
+- **Errors name the entry.** For example `sentinel.attempt.children[1]`.
+- **The log records the inverse.** `config_from_sentinel` writes each instance's registry name and params, with nested monitors and protocols as nested entries; `sentinel_from_config` rebuilds them for retry.
 
 ## Failures
 
