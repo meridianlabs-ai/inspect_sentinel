@@ -1224,3 +1224,25 @@ async def test_a_monitors_own_final_supersedes_the_claimed_finals_beside_it() ->
         )
     assert recorder.records == []
     assert [r.reported.path for r in recorder.supersessions] == ["meddles/leaf"]
+
+
+@pytest.mark.parametrize("terminate_first", [True, False])
+@pytest.mark.anyio
+async def test_a_terminate_outrun_by_a_siblings_final_is_superseded(
+    terminate_first: bool,
+) -> None:
+    children = {"t": decides("terminate"), "f": finalizes("continue")}
+    if not terminate_first:
+        children = {"f": children["f"], "t": children["t"]}
+    recorder = ListRecorder()
+    decision = await run_root(
+        concurrent(children), runner_context(recorder=recorder), before_step()
+    )
+    assert decision == Decision(action="continue")
+    recorded = sorted(r.reported.path for r in recorder.records)
+    superseded = [r.reported.path for r in recorder.supersessions]
+    cancelled = [path for path, _ in recorder.cancellations]
+    assert (recorded, superseded, cancelled) in (
+        (["f", "t"], ["t"], []),
+        (["f"], [], ["t"]),
+    )

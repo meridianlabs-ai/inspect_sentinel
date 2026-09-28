@@ -291,6 +291,7 @@ async def _run_named(
 ) -> Reports:
     observations: list[tuple[int, Reported[Observation]]] = []
     decisions: list[tuple[int, Reported[Decision]]] = []
+    terminated: list[Reported[Decision]] = []
 
     async def run_one(
         index: int,
@@ -316,11 +317,20 @@ async def _run_named(
             if decided is not None:
                 decisions.append((index, decided))
                 if decided.report.action == "terminate":
+                    terminated.append(decided)
                     cancel()
 
-    async with _task_group() as tg:
-        for index, (name, child) in enumerate(named):
-            tg.start_soon(run_one, index, name, child, tg.cancel_scope.cancel)
+    try:
+        async with _task_group() as tg:
+            for index, (name, child) in enumerate(named):
+                tg.start_soon(run_one, index, name, child, tg.cancel_scope.cancel)
+    except Final:
+        # a sibling's final() outran a terminate already recorded as a decision
+        for reported in terminated:
+            # _run_child accepted this context, so it is a RunnerContext
+            child_context = cast(RunnerContext, context).child(reported.name)
+            child_context.recorder.superseded(child_context, step, reported)
+        raise
 
     return Reports(
         Observations(o for _, o in sorted(observations, key=lambda t: t[0])),

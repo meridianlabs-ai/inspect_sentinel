@@ -79,10 +79,12 @@ class Recorder(Protocol):
     ) -> None:
         """Record a final decision that lost a race to another final decision in the same layer, or that an exception in the same layer outranked; it did not take effect.
 
+        Also records a `terminate`, already recorded through `record`, that a sibling's `final()` outran: the step ended with the final decision instead.
+
         Args:
-            context: The context of the protocol that called `final()`; its `path` identifies the instance.
+            context: The deciding protocol's context; its `path` identifies the instance.
             step: The step the protocol was examining.
-            reported: The decision it passed to `final()`, with its instance identity.
+            reported: The decision that did not take effect, with its instance identity.
         """
         ...
 

@@ -1370,7 +1370,7 @@ class SentinelEvent(BaseEvent):
     metadata: dict[str, Any] | None
 ```
 
-A `cancelled` event carries no suspicion, decision or outcome; it says the child was in flight when the layer was torn down, by a sibling's `terminate` or `final()` or by cancellation from above. A `final()` decision's event is the ordinary `decision` event of the protocol that called it, written at the root when the decision takes effect, so it follows the `bypassed` event of each layer above it, each a protocol whose own decision logic never ran. When two `final()` calls race in one layer, or an exception in the layer outranks one, the losing decision's event is `superseded`: it did not take effect.
+A `cancelled` event carries no suspicion, decision or outcome; it says the child was in flight when the layer was torn down, by a sibling's `terminate` or `final()` or by cancellation from above. A `final()` decision's event is the ordinary `decision` event of the protocol that called it, written at the root when the decision takes effect, so it follows the `bypassed` event of each layer above it, each a protocol whose own decision logic never ran. When two `final()` calls race in one layer, or an exception in the layer outranks one, the losing decision's event is `superseded`: it did not take effect. A `terminate` already recorded when a sibling's `final()` outran it is followed by a `superseded` event for the same reason.
 
 `decision` versus `outcome` is the layering made legible in the log: what this layer decided, and what the layer above did with it. Without both, a reader cannot tell an overruled decision from one that was never made — which is exactly what a reader of a nested configuration needs to see.
 
