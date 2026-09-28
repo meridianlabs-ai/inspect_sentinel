@@ -228,22 +228,24 @@ def _find(name: str, path: str) -> _Factory:
         raise ValueError(f"{path}: {name!r} is not a registered monitor or protocol.")
     if len(found) > 1:
         candidates = ", ".join(f"{f.kind} {f.name}" for f in found)
-        raise ValueError(
-            f"{path}: {name!r} is ambiguous; it names {candidates}. Use a qualified name."
-        )
+        raise ValueError(f"{path}: {name!r} is ambiguous; it names {candidates}.")
     return found[0]
 
 
 def _find_all(name: str) -> list[_Factory]:
-    names = [name] if "/" in name else [name, f"{PACKAGE}/{name}"]
-    found: dict[tuple[str, str], _Factory] = {}
+    exact = _lookup(name)
+    if exact or "/" in name:
+        return exact
+    return _lookup(f"{PACKAGE}/{name}")
+
+
+def _lookup(name: str) -> list[_Factory]:
+    found: list[_Factory] = []
     for kind in cast(list[RegistryType], ["monitor", "protocol"]):
-        for candidate in names:
-            factory = registry_lookup(kind, candidate)
-            if factory is not None:
-                registered = registry_info(factory).name
-                found[(kind, registered)] = _Factory(kind, registered, factory)
-    return list(found.values())
+        factory = registry_lookup(kind, name)
+        if factory is not None:
+            found.append(_Factory(kind, registry_info(factory).name, factory))
+    return found
 
 
 def config_from_sentinel(sentinels: Sentinels) -> SentinelConfig:

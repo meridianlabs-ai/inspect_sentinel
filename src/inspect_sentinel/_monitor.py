@@ -56,6 +56,9 @@ P = ParamSpec("P")
 _STEP_TYPES = frozenset(get_args(Step))
 STEP_TYPES_ATTR = "__sentinel_step_types__"
 
+# configuration finds a factory by name alone, so the name must be one kind
+_registered_kinds: dict[str, RegistryType] = {}
+
 
 class Member(NamedTuple):
     function: Callable[[Context, Step], Awaitable[Report | None]]
@@ -141,6 +144,11 @@ def _register(
     name = registry_name(factory, factory.__name__)
     params = list(inspect.signature(factory).parameters.keys())
     info = RegistryInfo(type=kind, name=name, metadata=dict(params=params))
+    registered = _registered_kinds.setdefault(name, kind)
+    if registered != kind:
+        raise ValueError(
+            f"{name!r} is already registered as a {registered}; a monitor and a protocol cannot share a name."
+        )
 
     @wraps(factory)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> object:

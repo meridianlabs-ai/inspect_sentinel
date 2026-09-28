@@ -152,10 +152,10 @@ def test_protocol_returning_observations_is_rejected_at_configuration() -> None:
     ) -> Observation | None:
         return None
 
-    def factory_returning() -> Any:
+    def protocol_returning() -> Any:
         return observes_not_decides
 
-    wrong = protocol(cast(Any, factory_returning))
+    wrong = protocol(cast(Any, protocol_returning))
     with pytest.raises(TypeError, match="Decision"):
         wrong()
 
@@ -327,3 +327,31 @@ def test_an_invalid_group_is_rejected_at_configuration(
 async def test_a_group_runs_only_through_the_runner() -> None:
     with pytest.raises(TypeError, match="only through the runner"):
         await cast(Any, paired())(cast(Any, None), cast(Any, None))
+
+
+def test_a_monitor_and_a_protocol_cannot_share_a_name() -> None:
+    def factory() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            return None
+
+        return decide
+
+    factory.__name__ = "before_monitor"
+    with pytest.raises(
+        ValueError, match="'before_monitor' is already registered as a monitor"
+    ):
+        protocol(factory)
+    assert registry_lookup("protocol", "before_monitor") is None
+
+
+def test_a_factory_may_be_registered_again_as_the_same_kind() -> None:
+    def factory() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            return None
+
+        return check
+
+    factory.__name__ = "registered_twice"
+    monitor(factory)
+    again = monitor(factory)
+    assert registry_lookup("monitor", "registered_twice") is again

@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import pytest
 import yaml
+from inspect_ai._util import registry
 from inspect_ai._util.registry import registry_info, registry_params
 
 from inspect_sentinel._context import Context
@@ -16,7 +17,13 @@ from inspect_sentinel._integration import (
     run_root,
     sentinel_from_config,
 )
-from inspect_sentinel._monitor import ControlProtocol, Monitor, monitor, protocol
+from inspect_sentinel._monitor import (
+    ControlProtocol,
+    Monitor,
+    Monitors,
+    monitor,
+    protocol,
+)
 from inspect_sentinel._protocols import concurrent, threshold
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
@@ -48,26 +55,6 @@ def cfg_rule(reason: str = "no") -> ControlProtocol:
         return Decision.reject(reason)
 
     return decide
-
-
-def _twin_monitor() -> Monitor:
-    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
-        return None
-
-    return check
-
-
-def _twin_protocol() -> ControlProtocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
-        return None
-
-    return decide
-
-
-_twin_monitor.__name__ = "cfg_twin"
-_twin_protocol.__name__ = "cfg_twin"
-monitor(_twin_monitor)
-protocol(_twin_protocol)
 
 
 def test_a_list_builds_each_entry_through_the_registry() -> None:
@@ -173,7 +160,6 @@ INVALID: list[tuple[Any, type[Exception], str]] = [
         ValueError,
         r"sentinel\[0\]: 'cfg_nope' is not a registered monitor or protocol",
     ),
-    ([{"name": "cfg_twin"}], ValueError, r"sentinel\[0\]: 'cfg_twin' is ambiguous"),
     (
         [{"name": "cfg_rule", "monitors": [{"name": "cfg_suspicion"}]}],
         ValueError,
@@ -421,3 +407,29 @@ def test_a_malformed_file_names_the_file(tmp_path: Path) -> None:
     file.write_text("sentinel: [\n")
     with pytest.raises(ValueError, match=r"broken\.yaml: could not parse"):
         sentinel_from_config(str(file))
+
+
+@pytest.fixture
+def scratch_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(registry, "_registry", dict(registry._registry))
+
+
+@pytest.mark.usefixtures("scratch_registry")
+def test_an_exact_name_wins_over_the_package_fallback() -> None:
+    @protocol
+    def observe(monitors: Monitors) -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            return None
+
+        return decide
+
+    config: Any = [
+        {"name": "observe", "monitors": [{"name": "cfg_suspicion"}]},
+        {"name": "inspect_sentinel/observe", "monitors": [{"name": "cfg_suspicion"}]},
+    ]
+    built = sentinel_from_config(config)
+    assert [registry_info(child).name for child in built] == [
+        "observe",
+        "inspect_sentinel/observe",
+    ]
+    assert config_from_sentinel(built) == SentinelConfig.model_validate(config)
