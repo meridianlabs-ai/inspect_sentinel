@@ -24,7 +24,7 @@ from ._runner import (
     run_monitors,
     run_protocols,
 )
-from ._step import AfterToolCall, BeforeToolCall, Stage, Step
+from ._step import AfterToolCall, BeforeToolCall, Step
 
 try:
     from ._version import __version__
@@ -50,7 +50,6 @@ __all__ = [
     "Report",
     "Reported",
     "Reports",
-    "Stage",
     "Step",
     "Suspicion",
     "concurrent",

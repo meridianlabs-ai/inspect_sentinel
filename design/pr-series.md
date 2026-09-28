@@ -179,7 +179,7 @@ Implemented: `run_monitor` and `run_protocol` are removed; `run_monitors`, `run_
 
 Reflect final() on inspect_ai's design/monitor branch.
 
-Move `record` off `Host` into `Recorder` in `sentinel-deployment.md`; add `path` and `RunnerContext` to `sentinel-reference.md`'s `Context`; define `Stage`. (Done in the repo copy: `RunnerContext` named in the runner section; `named()` noted as the runner's private helper; unqualified instance names.)
+Move `record` off `Host` into `Recorder` in `sentinel-deployment.md`; add `path` and `RunnerContext` to `sentinel-reference.md`'s `Context`. (Done in the repo copy: `RunnerContext` named in the runner section; `named()` noted as the runner's private helper; unqualified instance names.)
 
 ## Out of scope
 

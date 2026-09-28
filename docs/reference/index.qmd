@@ -9,7 +9,6 @@ reference: inspect_sentinel
 ### BeforeToolCall
 ### AfterToolCall
 ### Step
-### Stage
 
 ## Report types
 
