@@ -892,7 +892,7 @@ The singular forms carry the per-child obligations:
 - **record the report** — one `SentinelEvent` per participating child, including the ones the protocol goes on to ignore, which is load-bearing because the ignored ones are the benign distribution calibration needs
 - **apply the [failure policy](#failure-semantics)** uniformly (deferred: the first runner propagates every exception; see `pr-series.md`)
 
-The plural forms add the concurrent obligations: they **fan out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`** (per AGENTS.md, which [Concurrency is a safety property](#concurrency-is-a-safety-property-not-just-a-latency-one) shows is a safety requirement rather than a latency one); and `run_children` **holds the group so a `terminate` decision can cancel the still-running siblings**, since nothing outranks it and the sample is ending — prompting a human about a sample that no longer exists is the concrete thing this avoids. A cancelled child is recorded as cancelled, with no report, so the log distinguishes it from one that abstained; its observation, if wanted, is recovered by replay. Monitors are cancelled too: once a protocol has decided `terminate` no sibling's report can change the outcome, and spending their inference live would only save a replay later. Cancellation lands at a child's next await, so a child that finishes without awaiting is recorded normally. A cancellation from above the layer, or one caused by a sibling raising, is recorded the same way; the `terminate` or the exception in the same layer says which. A child calling [`final()`](#authoritative-reports) cancels its siblings the same way and propagates out of the plural call; if two race, the first to reach the group wins and the other's decision is still recorded, and an exception in the same group outranks both, so a bug is not hidden behind a final decision.
+The plural forms add the concurrent obligations: they **fan out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`** (per AGENTS.md, which [Concurrency is a safety property](#concurrency-is-a-safety-property-not-just-a-latency-one) shows is a safety requirement rather than a latency one); and `run_children` **holds the group so a `terminate` decision can cancel the still-running siblings**, since nothing outranks it and the sample is ending — prompting a human about a sample that no longer exists is the concrete thing this avoids. A cancelled child is recorded as cancelled, with no report, so the log distinguishes it from one that abstained; its observation, if wanted, is recovered by replay. Monitors are cancelled too: once a protocol has decided `terminate` no sibling's report can change the outcome, and spending their inference live would only save a replay later. Cancellation lands at a child's next await, so a child that finishes without awaiting is recorded normally. A cancellation from above the layer, or one caused by a sibling raising, is recorded the same way; the `terminate` or the exception in the same layer says which. A child calling [`final()`](#authoritative-reports) cancels its siblings the same way and propagates out of the plural call; if two race, the first to reach the group wins and the other is recorded as `superseded`, a final decision that did not take effect, and an exception in the same group outranks both, so a bug is not hidden behind a final decision.
 
 They return:
 
@@ -1358,8 +1358,8 @@ class SentinelEvent(BaseEvent):
     """The agent conversation this step belongs to; the same id the loop's
     `ModelEvent`s and `CompactionEvent`s carry. See "Two histories"."""
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
-    kind: Literal["observation", "decision", "cancelled", "bypassed"]
-    """`observation` or `decision` agrees with the registry type of `name` by construction; `cancelled` and `bypassed` record no report."""
+    kind: Literal["observation", "decision", "cancelled", "bypassed", "superseded"]
+    """`observation` or `decision` agrees with the registry type of `name` by construction; `cancelled` and `bypassed` record no report; `superseded` carries the decision of a protocol whose `final()` lost a race."""
     suspicion: Suspicion | None
     decision: Action | None
     audit: bool
@@ -1368,7 +1368,7 @@ class SentinelEvent(BaseEvent):
     metadata: dict[str, Any] | None
 ```
 
-A `cancelled` event carries no suspicion, decision or outcome; it says the child was in flight when the layer was torn down, by a sibling's `terminate` or `final()` or by cancellation from above. A `final()` decision's event is the ordinary `decision` event of the protocol that called it, followed by one `bypassed` event per layer above it, each a protocol whose own decision logic never ran.
+A `cancelled` event carries no suspicion, decision or outcome; it says the child was in flight when the layer was torn down, by a sibling's `terminate` or `final()` or by cancellation from above. A `final()` decision's event is the ordinary `decision` event of the protocol that called it, followed by one `bypassed` event per layer above it, each a protocol whose own decision logic never ran. When two `final()` calls race in one layer, the loser's event is `superseded`: its decision did not take effect.
 
 `decision` versus `outcome` is the layering made legible in the log: what this layer decided, and what the layer above did with it. Without both, a reader cannot tell an overruled decision from one that was never made — which is exactly what a reader of a nested configuration needs to see.
 

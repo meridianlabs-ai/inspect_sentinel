@@ -1,8 +1,22 @@
 from __future__ import annotations
 
-from typing import NoReturn
+from typing import NamedTuple, NoReturn
 
-from ._report import Decision
+from ._context import RunnerContext
+from ._report import Decision, Reported
+from ._step import Step
+
+
+class Origin(NamedTuple):
+    context: RunnerContext
+    step: Step
+    reported: Reported[Decision]
+
+
+class Passed(NamedTuple):
+    context: RunnerContext
+    step: Step
+    name: str
 
 
 class Final(BaseException):
@@ -11,7 +25,8 @@ class Final(BaseException):
     def __init__(self, decision: Decision) -> None:
         super().__init__(decision.action)
         self.decision = decision
-        self.origin_path: str | None = None
+        self.origin: Origin | None = None
+        self.bypassed: list[Passed] = []
 
 
 def final(decision: Decision) -> NoReturn:

@@ -811,9 +811,7 @@ async def test_a_final_decision_illegal_for_the_stage_fails_the_protocol() -> No
 
 
 @pytest.mark.anyio
-async def test_two_final_decisions_in_one_layer_let_one_through_and_record_both() -> (
-    None
-):
+async def test_the_loser_of_a_final_race_is_recorded_as_superseded() -> None:
     waiting = anyio.Event()
     gate = anyio.Event()
 
@@ -842,10 +840,14 @@ async def test_two_final_decisions_in_one_layer_let_one_through_and_record_both(
             runner_context(recorder=recorder),
             before_step(),
         )
-    assert info.value.decision.explanation in ("opens", "follows")
-    assert sorted(
-        (r.reported.name, r.reported.report.explanation) for r in recorder.records
-    ) == [("follows", "follows"), ("opens", "opens")]
+    won = info.value.decision.explanation
+    assert won in ("opens", "follows")
+    assert [(r.reported.name, r.reported.report) for r in recorder.records] == [
+        (won, info.value.decision)
+    ]
+    assert [r.reported.name for r in recorder.supersessions] == [
+        "follows" if won == "opens" else "opens"
+    ]
     assert recorder.cancellations == []
 
 
@@ -938,3 +940,56 @@ async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -
         ("custom/leaf", info.value.decision)
     ]
     assert recorder.bypassed_layers == [("custom", "custom")]
+
+
+@pytest.mark.anyio
+async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decision() -> (
+    None
+):
+    waiting = anyio.Event()
+    gate = anyio.Event()
+
+    @protocol
+    def opens() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await waiting.wait()
+            gate.set()
+            final(Decision.reject("opens"))
+
+        return decide
+
+    @protocol
+    def follows() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            waiting.set()
+            await gate.wait()
+            final(Decision.terminate("follows"))
+
+        return decide
+
+    @protocol
+    def custom() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(run_protocol, opens(), context, step)
+                tg.start_soon(run_protocol, follows(), context, step)
+            return Decision.clear()
+
+        return decide
+
+    recorder = ListRecorder()
+    with anyio.fail_after(5), pytest.raises(Final) as info:
+        await run_protocol(
+            wrapper(custom()), runner_context(recorder=recorder), before_step()
+        )
+    won = info.value.decision.explanation
+    assert [(r.reported.path, r.reported.report) for r in recorder.records] == [
+        (f"wrapper/custom/{won}", info.value.decision)
+    ]
+    assert [r.reported.path for r in recorder.supersessions] == [
+        f"wrapper/custom/{'follows' if won == 'opens' else 'opens'}"
+    ]
+    assert recorder.bypassed_layers == [
+        ("wrapper/custom", "custom"),
+        ("wrapper", "wrapper"),
+    ]

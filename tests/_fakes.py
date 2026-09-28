@@ -11,7 +11,7 @@ from inspect_ai.tool import ToolCall, ToolCallView, ToolInfo
 from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context, RunnerContext
-from inspect_sentinel._report import Report, Reported
+from inspect_sentinel._report import Decision, Report, Reported
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 
 
@@ -38,6 +38,7 @@ class ListRecorder:
         self.records: list[Recorded] = []
         self.cancellations: list[tuple[str, str]] = []
         self.bypassed_layers: list[tuple[str, str]] = []
+        self.supersessions: list[Recorded] = []
 
     def record(self, context: Context, step: Step, reported: Reported[Report]) -> None:
         self.records.append(Recorded(context, step, reported))
@@ -47,6 +48,11 @@ class ListRecorder:
 
     def bypassed(self, context: Context, step: Step, name: str) -> None:
         self.bypassed_layers.append((context.path, name))
+
+    def superseded(
+        self, context: Context, step: Step, reported: Reported[Decision]
+    ) -> None:
+        self.supersessions.append(Recorded(context, step, reported))
 
 
 def runner_context(

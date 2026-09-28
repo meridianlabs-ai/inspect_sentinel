@@ -669,7 +669,7 @@ What the runner does for every child:
 - Records one `SentinelEvent` per participating child, including reports the parent ignores. Ignored observations are the benign distribution a protocol later calibrates against.
 - Applies the failure policy (deferred; the runner currently propagates every exception).
 
-What the plural forms add: fan-out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`, so children cannot see each other's conclusions; `run_children` holds the group so a `terminate` decision or a `final()` can cancel the still-running siblings, and records any child it cancels. A `final()` propagates out of the plural call; of two that race, the first to reach the group wins and both decisions are recorded, and an exception in the same group outranks them.
+What the plural forms add: fan-out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`, so children cannot see each other's conclusions; `run_children` holds the group so a `terminate` decision or a `final()` can cancel the still-running siblings, and records any child it cancels. A `final()` propagates out of the plural call; of two that race, the first to reach the group wins and the other is recorded as superseded, and an exception in the same group outranks them.
 
 Results are split by family because the two aggregate differently. `Decisions.strongest()` applies the precedence in [Combining reports](#combining-reports); `Observations.max_suspicion()` takes the per-dimension max. Identity is attached so a protocol can weight or require agreement across specific children.
 
@@ -958,7 +958,7 @@ class SentinelEvent(BaseEvent):
         str  # the agent conversation; shared with its ModelEvents and CompactionEvents
     )
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
-    kind: Literal["observation", "decision", "cancelled", "bypassed"]
+    kind: Literal["observation", "decision", "cancelled", "bypassed", "superseded"]
     suspicion: Suspicion | None
     decision: Action | None
     audit: bool
@@ -980,7 +980,7 @@ Rules:
   name="concurrent",        path="",                          kind="bypassed"
   ```
 
-  The person's `reject` went through `final()`: its event is the ordinary decision event of `human`, followed by one `bypassed` event per layer above. Without a final decision the last line is the summary event. The top-level protocol emits it only when more than one child participated, and its explanation lists each child's decision.
+  The person's `reject` went through `final()`: its event is the ordinary decision event of `human`, followed by one `bypassed` event per layer above. If two `final()` calls race in one layer, the loser's event is `superseded` and its decision did not take effect. Without a final decision the last line is the summary event. The top-level protocol emits it only when more than one child participated, and its explanation lists each child's decision.
 
 - **`name` is which code ran. `path` is which configured instance it was.** Two chains built from the same factory differ only in `path`. `kind` says which family it belongs to, and agrees with the registry type by construction.
 - **`step_id` is what a label matches.** For `BeforeGenerate` it is the id of the message that triggered the generate, with an ordinal suffix on a regenerate; for `AfterGenerate` the assistant message id; for the tool stages the tool call id. All three exist before the monitor runs, so recorded events and replayed steps share ids. See `sentinel-development.md`.

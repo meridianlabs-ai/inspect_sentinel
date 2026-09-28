@@ -8,7 +8,7 @@ from inspect_ai.scorer import Target
 from inspect_ai.tool import ToolInfo
 from inspect_ai.util import Store, StoreModel
 
-from ._report import Report, Reported
+from ._report import Decision, Report, Reported
 from ._step import Step
 
 SMT = TypeVar("SMT", bound=StoreModel)
@@ -65,12 +65,24 @@ class Recorder(Protocol):
     def bypassed(self, context: Context, step: Step, name: str) -> None:
         """Record that a protocol did not decide because a descendant called `final()`, which ended the step past it.
 
-        The final decision itself is recorded through `record` for the protocol that made it.
+        The final decision itself is recorded through `record` for the protocol that made it, immediately before the `bypassed` records of the layers it passed.
 
         Args:
             context: The protocol's context; its `path` identifies the instance.
             step: The step the protocol was examining.
             name: The protocol's instance name.
+        """
+        ...
+
+    def superseded(
+        self, context: Context, step: Step, reported: Reported[Decision]
+    ) -> None:
+        """Record a final decision that lost a race to another final decision in the same layer; it did not take effect.
+
+        Args:
+            context: The context of the protocol that called `final()`; its `path` identifies the instance.
+            step: The step the protocol was examining.
+            reported: The decision it passed to `final()`, with its instance identity.
         """
         ...
 
@@ -132,7 +144,7 @@ class RunnerContext(Context):
         # a runtime check for hosts that are not type-checked against Recorder
         if not isinstance(cast(object, self.recorder), Recorder):
             raise TypeError(
-                f"Recorder {type(self.recorder).__name__} must implement record(), cancelled() and bypassed()."
+                f"Recorder {type(self.recorder).__name__} must implement record(), cancelled(), bypassed() and superseded()."
             )
 
     def child(self, name: str) -> RunnerContext:
