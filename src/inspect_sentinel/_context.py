@@ -63,14 +63,14 @@ class Recorder(Protocol):
         ...
 
     def bypassed(self, context: Context, step: Step, name: str) -> None:
-        """Record that a protocol did not decide because a descendant called `final()`, which ended the step past it.
+        """Record that a child did not report because a descendant protocol called `final()`, which ended the step past it.
 
         The final decision itself is recorded through `record` for the protocol that made it, immediately before the `bypassed` records of the layers it passed.
 
         Args:
-            context: The protocol's context; its `path` identifies the instance.
-            step: The step the protocol was examining.
-            name: The protocol's instance name.
+            context: The child's context; its `path` identifies the instance.
+            step: The step the child was examining.
+            name: The child's instance name.
         """
         ...
 

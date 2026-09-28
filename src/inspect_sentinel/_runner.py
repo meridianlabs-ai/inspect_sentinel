@@ -378,10 +378,11 @@ def _on_final(
     outermost: bool,
 ) -> Final:
     winner = finals[0]
-    if kind == "monitor":
+    unclaimed = [ex for ex in finals if ex.origin is None]
+    if kind == "monitor" and unclaimed:
         raise TypeError(
             f"monitor {child_name!r} called final(); a monitor returns observations, and only a protocol may end the step."
-        ) from winner
+        ) from unclaimed[0]
     own = winner.origin is None
     for ex in finals:
         if ex.origin is None:

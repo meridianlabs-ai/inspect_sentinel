@@ -993,3 +993,23 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
         ("wrapper/custom", "custom"),
         ("wrapper", "wrapper"),
     ]
+
+
+@pytest.mark.anyio
+async def test_a_final_propagating_through_a_monitor_names_the_protocol() -> None:
+    @monitor
+    def consults() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            await run_protocol(finalizes("reject"), context, step)
+            return None
+
+        return check
+
+    recorder = ListRecorder()
+    with pytest.raises(Final) as info:
+        await run_monitors(
+            [consults()], runner_context(recorder=recorder), before_step()
+        )
+    assert info.value.decision.action == "reject"
+    assert [r.reported.path for r in recorder.records] == ["consults/finalizes"]
+    assert recorder.bypassed_layers == [("consults", "consults")]
