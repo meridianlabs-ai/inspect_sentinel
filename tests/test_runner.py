@@ -1549,3 +1549,50 @@ async def test_a_members_terminate_stops_the_group() -> None:
     ]
     assert recorder.cancellations == [("slow", "slow")]
     assert recorder.supersessions == []
+
+
+@pytest.mark.anyio
+async def test_a_group_members_error_names_its_function() -> None:
+    @monitor
+    def bad_second() -> Sequence[Monitor]:
+        async def fine(context: Context, step: BeforeToolCall) -> Observation | None:
+            return None
+
+        async def wrong(context: Context, step: BeforeToolCall) -> Observation | None:
+            return cast(Any, Decision.clear())
+
+        return [fine, wrong]
+
+    @monitor
+    def meddles() -> Sequence[Monitor]:
+        async def fine(context: Context, step: BeforeToolCall) -> Observation | None:
+            return None
+
+        async def ends(context: Context, step: BeforeToolCall) -> Observation | None:
+            final(Decision.reject())
+
+        return [fine, ends]
+
+    @protocol
+    def ill_shaped() -> Sequence[ControlProtocol]:
+        async def fine(context: Context, step: AfterToolCall) -> Decision | None:
+            return None
+
+        async def rejects(context: Context, step: AfterToolCall) -> Decision | None:
+            return Decision.reject()
+
+        return [fine, rejects]
+
+    with pytest.raises(
+        TypeError,
+        match=r"monitor 'bad_second' \(function 'wrong'\) returned a Decision",
+    ):
+        await run_monitors(bad_second(), runner_context(), before_step())
+    with pytest.raises(
+        ValueError, match=r"protocol 'ill_shaped' \(function 'rejects'\)"
+    ):
+        await run_protocols(ill_shaped(), runner_context(), after_step())
+    with pytest.raises(
+        TypeError, match=r"monitor 'meddles' \(function 'ends'\) called"
+    ):
+        await run_monitors(meddles(), runner_context(), before_step())

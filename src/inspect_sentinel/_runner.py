@@ -358,6 +358,7 @@ async def _run_child(
         child_name = validate_instance_name(
             name if name is not None else registry_unqualified_name(info)
         )
+    grouped = isinstance(child, Group)
     running = [m for m in members(child) if isinstance(step, tuple(m.accepted))]
     if not running:
         return
@@ -366,7 +367,13 @@ async def _run_child(
         # sequential, since a group's members share one store
         for member in running:
             reported = await _run_member(
-                member.function, kind, report_type, child_context, step, child_name
+                member.function,
+                kind,
+                report_type,
+                child_context,
+                step,
+                child_name,
+                grouped,
             )
             if reported is not None:
                 found.append(reported)
@@ -390,8 +397,10 @@ async def _run_member(
     child_context: RunnerContext,
     step: Step,
     child_name: str,
+    grouped: bool,
 ) -> Reported[R] | None:
     function = invoke.__name__
+    label = describe(child_name, function, grouped)
     report: Report | None = None
     finals: list[Final] = []
     failure: BaseException | None = None
@@ -409,15 +418,15 @@ async def _run_member(
     if failure is not None:
         raise failure
     if finals:
-        raise _on_final(finals, kind, child_context, step, child_name, function)
+        raise _on_final(finals, kind, child_context, step, child_name, function, label)
     if report is not None and not isinstance(report, report_type):
         raise TypeError(
-            f"{kind} {child_name!r} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
+            f"{kind} {label} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
         )
     if report is None:
         return None
     if isinstance(report, Decision):
-        _validate_shape(report, step, child_name)
+        _validate_shape(report, step, label)
     reported = Reported(
         name=child_name, path=child_context.path, report=report, function=function
     )
@@ -432,19 +441,20 @@ def _on_final(
     step: Step,
     child_name: str,
     function: str,
+    label: str,
 ) -> Final:
     winner = finals[0]
     unclaimed = [ex for ex in finals if ex.origin is None]
     if kind == "monitor" and unclaimed:
         _supersede([ex for ex in finals if ex.origin is not None])
         raise TypeError(
-            f"monitor {child_name!r} called final(); a monitor returns observations, and only a protocol may end the step."
+            f"monitor {label} called final(); a monitor returns observations, and only a protocol may end the step."
         ) from unclaimed[0]
     own = winner.origin is None
     claimed = [ex for ex in finals if ex.origin is not None]
     for ex in unclaimed:
         try:
-            _validate_shape(ex.decision, step, child_name)
+            _validate_shape(ex.decision, step, label)
         except ValueError:
             _supersede(claimed)
             raise
@@ -468,11 +478,11 @@ def describe(name: str, function: str, grouped: bool) -> str:
     return f"{name!r} (function {function!r})" if grouped else repr(name)
 
 
-def _validate_shape(decision: Decision, step: Step, name: str) -> None:
+def _validate_shape(decision: Decision, step: Step, label: str) -> None:
     try:
         validate_decision_shape(decision, step)
     except ValueError as ex:
-        raise ValueError(f"protocol {name!r}: {ex}") from ex
+        raise ValueError(f"protocol {label}: {ex}") from ex
 
 
 def _check_child(
