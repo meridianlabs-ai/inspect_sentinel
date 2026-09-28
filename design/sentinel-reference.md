@@ -548,8 +548,8 @@ def threshold(
         terminate_at is not None and not math.isfinite(terminate_at)
     ):
         raise ValueError("threshold's constants must be finite")
-    if terminate_at is not None and terminate_at < reject_at:
-        raise ValueError("threshold's terminate_at is below its reject_at")
+    if terminate_at is not None and terminate_at <= reject_at:
+        raise ValueError("terminate_at must be above reject_at, or reject would never fire")
     for name, child in named:
         if BeforeToolCall not in step_types(child):
             raise TypeError(f"threshold acts before tool calls; {name!r} never watches that stage")

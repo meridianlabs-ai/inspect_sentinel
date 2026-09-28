@@ -74,7 +74,7 @@ def threshold(
     Args:
         monitors: The monitors whose scores are thresholded; the highest wins.
         reject_at: Suspicion at or above which the call is rejected.
-        terminate_at: Suspicion at or above which the sample is ended; `None` never terminates. Must not be below `reject_at`.
+        terminate_at: Suspicion at or above which the sample is ended; `None` never terminates. Must be above `reject_at`.
     """
     named = named_children(monitors, "monitor")
     if not named:
@@ -85,9 +85,9 @@ def threshold(
         raise ValueError(
             f"threshold's constants must be finite; got reject_at={reject_at}, terminate_at={terminate_at}."
         )
-    if terminate_at is not None and terminate_at < reject_at:
+    if terminate_at is not None and terminate_at <= reject_at:
         raise ValueError(
-            f"threshold's terminate_at {terminate_at} is below its reject_at {reject_at}; nothing would ever reject."
+            f"threshold's terminate_at must be above reject_at, or reject would never fire; got reject_at={reject_at}, terminate_at={terminate_at}."
         )
     for name, child in named:
         if BeforeToolCall not in step_types(child):

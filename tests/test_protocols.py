@@ -317,7 +317,8 @@ def test_a_shipped_protocol_rejects_an_uncalled_factory() -> None:
         (math.inf, None, "finite"),
         (math.nan, None, "finite"),
         (0.5, math.inf, "finite"),
-        (0.5, 0.4, "terminate_at"),
+        (0.5, 0.4, "terminate_at must be above reject_at"),
+        (0.5, 0.5, "terminate_at must be above reject_at"),
     ],
 )
 def test_thresholds_constants_must_be_finite_and_ordered(
