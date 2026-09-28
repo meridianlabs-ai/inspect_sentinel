@@ -12,7 +12,7 @@ from collections.abc import (
 )
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, TypeVar, cast, overload
+from typing import Any, Generic, Literal, NamedTuple, TypeVar, cast, overload
 
 import anyio
 from anyio.abc import TaskGroup
@@ -126,6 +126,19 @@ def _leaves(group: BaseExceptionGroup[BaseException]) -> list[BaseException]:
     return leaves
 
 
+class _Partition(NamedTuple):
+    errors: list[BaseException]
+    finals: list[Final]
+
+
+def _partition(group: BaseExceptionGroup[BaseException]) -> _Partition:
+    leaves = _leaves(group)
+    return _Partition(
+        errors=[leaf for leaf in leaves if not isinstance(leaf, Final)],
+        finals=[leaf for leaf in leaves if isinstance(leaf, Final)],
+    )
+
+
 def _supersede(finals: Sequence[Final]) -> None:
     for ex in finals:
         origin = ex.origin
@@ -134,6 +147,19 @@ def _supersede(finals: Sequence[Final]) -> None:
                 f"Runner invariant violated: Final({ex.decision.action!r}) reached a task group without an origin; every Final leaving a child is given one by the runner."
             )
         origin.context.recorder.superseded(origin.context, origin.step, origin.reported)
+
+
+def _surface(errors: Sequence[BaseException], finals: Sequence[Final]) -> BaseException:
+    # The one policy for a group's failures. An error outranks every Final, so a
+    # bug is not hidden behind a final decision; the Finals that were decided
+    # are superseded, and one without an origin came from the failing child's
+    # own body, so it is not a decision to record. Otherwise the first Final to
+    # arrive propagates and the rest are superseded.
+    if errors:
+        _supersede([ex for ex in finals if ex.origin is not None])
+        return errors[0]
+    _supersede(finals[1:])
+    return finals[0]
 
 
 @asynccontextmanager
@@ -145,26 +171,16 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
     # the traceback. On trio a child error can arrive alongside the
     # cancellation in one BaseExceptionGroup; the error is surfaced, as anyio's
     # asyncio backend already does, and a group holding only cancellations
-    # propagates untouched. An error outranks a Final, so a bug is not hidden
-    # behind a final decision. A Final that does not propagate, a race's loser
-    # or one an error outranked, is recorded as superseded here.
+    # propagates untouched.
     first: BaseException | None = None
     try:
         async with anyio.create_task_group() as tg:
             yield tg
     except BaseExceptionGroup as ex:
-        leaves = _leaves(ex)
-        if not leaves:
+        errors, finals = _partition(ex)
+        if not errors and not finals:
             raise
-        errors = [leaf for leaf in leaves if not isinstance(leaf, Final)]
-        finals = [leaf for leaf in leaves if isinstance(leaf, Final)]
-        if errors:
-            # an origin-less Final here came from inside a child's own failing
-            # group, not from a decided protocol; the error surfaces instead
-            _supersede([f for f in finals if f.origin is not None])
-        else:
-            _supersede(finals[1:])
-        first = (errors or leaves)[0]
+        first = _surface(errors, finals)
     if first is not None:
         raise first
 
@@ -343,6 +359,7 @@ async def _run_child(
     invoke = cast(Callable[[Context, Step], Awaitable[Report | None]], child)
     report: Report | None = None
     finals: list[Final] = []
+    failure: BaseException | None = None
     try:
         report = await invoke(child_context, step)
     except anyio.get_cancelled_exc_class():
@@ -355,10 +372,13 @@ async def _run_child(
         finals = [ex]
     except BaseExceptionGroup as ex:
         # a protocol that fanned out with its own task group or tg_collect
-        leaves = _leaves(ex)
-        finals = [leaf for leaf in leaves if isinstance(leaf, Final)]
-        if not finals or len(finals) != len(leaves):
+        errors, finals = _partition(ex)
+        if not errors and not finals:
             raise
+        if errors:
+            failure = _surface(errors, finals)
+    if failure is not None:
+        raise failure
     if finals:
         raise _on_final(finals, kind, child_context, step, child_name)
     if report is not None and not isinstance(report, report_type):
@@ -384,21 +404,25 @@ def _on_final(
     winner = finals[0]
     unclaimed = [ex for ex in finals if ex.origin is None]
     if kind == "monitor" and unclaimed:
+        _supersede([ex for ex in finals if ex.origin is not None])
         raise TypeError(
             f"monitor {child_name!r} called final(); a monitor returns observations, and only a protocol may end the step."
         ) from unclaimed[0]
     own = winner.origin is None
-    for ex in unclaimed:
-        _check_shape(ex.decision, step, child_name)
-        ex.origin = Origin(
-            child_context,
-            step,
-            Reported(name=child_name, path=child_context.path, report=ex.decision),
-        )
+    try:
+        for ex in unclaimed:
+            _check_shape(ex.decision, step, child_name)
+            ex.origin = Origin(
+                child_context,
+                step,
+                Reported(name=child_name, path=child_context.path, report=ex.decision),
+            )
+    except ValueError:
+        _supersede([ex for ex in finals if ex.origin is not None])
+        raise
     if not own:
         child_context.recorder.bypassed(child_context, step, child_name)
-    _supersede(finals[1:])
-    return winner
+    return cast(Final, _surface([], finals))
 
 
 def _check_shape(decision: Decision, step: Step, name: str) -> None:

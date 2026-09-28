@@ -1107,3 +1107,120 @@ async def test_an_error_beside_a_protocols_own_final_in_its_task_group_surfaces(
 
     with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):
         await run_children([custom()], runner_context(), before_step())
+
+
+@pytest.mark.anyio
+async def test_an_error_beside_a_claimed_final_in_a_protocols_own_group_surfaces() -> (
+    None
+):
+    waiting = anyio.Event()
+    gate = anyio.Event()
+
+    @protocol
+    def leaf() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await waiting.wait()
+            gate.set()
+            final(Decision.reject("leaf"))
+
+        return decide
+
+    async def explodes() -> None:
+        waiting.set()
+        await gate.wait()
+        raise RuntimeError("boom")
+
+    @protocol
+    def custom() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(run_protocol, leaf(), context, step)
+                tg.start_soon(explodes)
+            return None
+
+        return decide
+
+    recorder = ListRecorder()
+    with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):
+        await run_root(
+            wrapper(custom()), runner_context(recorder=recorder), before_step()
+        )
+    assert recorder.records == []
+    assert [r.reported.path for r in recorder.supersessions] == ["custom/leaf"]
+    assert recorder.bypassed_layers == []
+
+
+@pytest.mark.anyio
+async def test_an_illegal_own_final_supersedes_the_claimed_finals_beside_it() -> None:
+    waiting = anyio.Event()
+    gate = anyio.Event()
+
+    @protocol
+    def leaf() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await waiting.wait()
+            gate.set()
+            final(Decision.reject("leaf"))
+
+        return decide
+
+    async def illegal() -> None:
+        waiting.set()
+        await gate.wait()
+        final(Decision(action="modify"))
+
+    @protocol
+    def custom() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(run_protocol, leaf(), context, step)
+                tg.start_soon(illegal)
+            return None
+
+        return decide
+
+    recorder = ListRecorder()
+    with anyio.fail_after(5), pytest.raises(ValueError, match="'custom'"):
+        await run_root(
+            wrapper(custom()), runner_context(recorder=recorder), before_step()
+        )
+    assert recorder.records == []
+    assert [r.reported.path for r in recorder.supersessions] == ["custom/leaf"]
+
+
+@pytest.mark.anyio
+async def test_a_monitors_own_final_supersedes_the_claimed_finals_beside_it() -> None:
+    waiting = anyio.Event()
+    gate = anyio.Event()
+
+    @protocol
+    def leaf() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await waiting.wait()
+            gate.set()
+            final(Decision.reject("leaf"))
+
+        return decide
+
+    async def own() -> None:
+        waiting.set()
+        await gate.wait()
+        final(Decision.reject("own"))
+
+    @monitor
+    def meddles() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(run_protocol, leaf(), context, step)
+                tg.start_soon(own)
+            return None
+
+        return check
+
+    recorder = ListRecorder()
+    with anyio.fail_after(5), pytest.raises(TypeError, match="meddles"):
+        await run_root(
+            concurrent([meddles()]), runner_context(recorder=recorder), before_step()
+        )
+    assert recorder.records == []
+    assert [r.reported.path for r in recorder.supersessions] == ["meddles/leaf"]
