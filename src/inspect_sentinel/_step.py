@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
 from inspect_ai.model import ChatMessage, ChatMessageTool
 from inspect_ai.tool import ToolCall, ToolCallView, ToolResult
 
 from ._report import Decision, Reported
-
-Stage: TypeAlias = Literal["tool_call", "tool_result"]
-"""Which point in the loop a step belongs to: `tool_call` for `BeforeToolCall`, `tool_result` for `AfterToolCall`. Grows with the generate stages."""
 
 
 @dataclass(frozen=True)

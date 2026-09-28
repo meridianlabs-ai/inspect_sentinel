@@ -9,6 +9,12 @@
 # recorded there, when it takes effect, and returned as the step's outcome, so
 # the dispatcher neither catches `Final` nor checks a decision's shape.
 
+from ._config import (
+    SentinelConfig,
+    SentinelEntry,
+    config_from_sentinel,
+    sentinel_from_config,
+)
 from ._context import Recorder, RunnerContext, validate_instance_name
 from ._monitor import step_types
 from ._resolve import Sentinels, resolve_sentinel
@@ -17,7 +23,11 @@ from ._runner import run_root
 __all__ = [
     "Recorder",
     "RunnerContext",
+    "SentinelConfig",
+    "config_from_sentinel",
+    "SentinelEntry",
     "Sentinels",
+    "sentinel_from_config",
     "validate_instance_name",
     "resolve_sentinel",
     "run_root",
