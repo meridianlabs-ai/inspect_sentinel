@@ -13,20 +13,13 @@ class Origin(NamedTuple):
     reported: Reported[Decision]
 
 
-class Passed(NamedTuple):
-    context: RunnerContext
-    step: Step
-    name: str
-
-
 class Final(BaseException):
-    """Raised by `final()` and carried through the runner to `run_root`, which returns its decision. A `BaseException`, so a protocol's own `except Exception` cannot swallow it."""
+    """Raised by `final()` and carried through the runner to `run_root`, which records its decision, the one time it is recorded, and returns it; each layer it passes is recorded as bypassed as it is passed. A `BaseException`, so a protocol's own `except Exception` cannot swallow it."""
 
     def __init__(self, decision: Decision) -> None:
         super().__init__(decision.action)
         self.decision = decision
         self.origin: Origin | None = None
-        self.bypassed: list[Passed] = []
 
 
 def final(decision: Decision) -> NoReturn:

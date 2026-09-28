@@ -5,14 +5,12 @@ from collections.abc import (
     AsyncGenerator,
     Awaitable,
     Callable,
-    Generator,
     Iterable,
     Iterator,
     Mapping,
     Sequence,
 )
-from contextlib import asynccontextmanager, contextmanager
-from contextvars import ContextVar
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
@@ -26,7 +24,7 @@ from inspect_ai._util.registry import (
 
 from ._check import check_decision_shape
 from ._context import Context, RunnerContext, check_instance_name
-from ._final import Final, Origin, Passed
+from ._final import Final, Origin
 from ._monitor import (
     Children,
     ControlProtocol,
@@ -128,41 +126,14 @@ def _leaves(group: BaseExceptionGroup[BaseException]) -> list[BaseException]:
     return leaves
 
 
-# Recording a final decision waits for the outermost runner frame, since only
-# there is it known to have won every race on the way out.
-_nested: ContextVar[bool] = ContextVar("inspect_sentinel_nested", default=False)
-
-
-@contextmanager
-def _frame() -> Generator[bool]:
-    outermost = not _nested.get()
-    token = _nested.set(True)
-    try:
-        yield outermost
-    finally:
-        _nested.reset(token)
-
-
-def _settle(ex: Final, *, won: bool) -> None:
-    origin = ex.origin
-    if origin is None:
-        raise RuntimeError(
-            f"Final({ex.decision.action!r}) reached the runner's task group without passing through a protocol."
-        )
-    recorder = origin.context.recorder
-    if won:
-        recorder.record(origin.context, origin.step, origin.reported)
-    else:
-        recorder.superseded(origin.context, origin.step, origin.reported)
-    for passed in ex.bypassed:
-        passed.context.recorder.bypassed(passed.context, passed.step, passed.name)
-
-
-def _settle_race(finals: Sequence[Final], *, record_winner: bool) -> None:
-    for loser in finals[1:]:
-        _settle(loser, won=False)
-    if finals and record_winner:
-        _settle(finals[0], won=True)
+def _supersede(finals: Sequence[Final]) -> None:
+    for ex in finals:
+        origin = ex.origin
+        if origin is None:
+            raise RuntimeError(
+                f"Runner invariant violated: Final({ex.decision.action!r}) reached a task group without an origin; every Final leaving a child is given one by the runner."
+            )
+        origin.context.recorder.superseded(origin.context, origin.step, origin.reported)
 
 
 @asynccontextmanager
@@ -175,23 +146,27 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
     # cancellation in one BaseExceptionGroup; the error is surfaced, as anyio's
     # asyncio backend already does, and a group holding only cancellations
     # propagates untouched. An error outranks a Final, so a bug is not hidden
-    # behind a final decision; the first Final is still recorded as a decision.
-    # Of several Finals the first to arrive wins and the rest are superseded.
+    # behind a final decision. A Final that does not propagate, a race's loser
+    # or one an error outranked, is recorded as superseded here.
     first: BaseException | None = None
-    with _frame() as outermost:
-        try:
-            async with anyio.create_task_group() as tg:
-                yield tg
-        except BaseExceptionGroup as ex:
-            leaves = _leaves(ex)
-            if not leaves:
-                raise
-            errors = [leaf for leaf in leaves if not isinstance(leaf, Final)]
-            finals = [leaf for leaf in leaves if isinstance(leaf, Final)]
-            _settle_race(finals, record_winner=outermost or bool(errors))
-            first = (errors or leaves)[0]
-        if first is not None:
-            raise first
+    try:
+        async with anyio.create_task_group() as tg:
+            yield tg
+    except BaseExceptionGroup as ex:
+        leaves = _leaves(ex)
+        if not leaves:
+            raise
+        errors = [leaf for leaf in leaves if not isinstance(leaf, Final)]
+        finals = [leaf for leaf in leaves if isinstance(leaf, Final)]
+        if errors:
+            # an origin-less Final here came from inside a child's own failing
+            # group, not from a decided protocol; the error surfaces instead
+            _supersede([f for f in finals if f.origin is not None])
+        else:
+            _supersede(finals[1:])
+        first = (errors or leaves)[0]
+    if first is not None:
+        raise first
 
 
 async def run_monitor(
@@ -229,7 +204,7 @@ async def run_root(
 ) -> Decision | None:
     """Invoke the compiled root protocol for one step and return the step's outcome.
 
-    The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare. Its decision is shape-checked and recorded like any layer's; a `final()` from below records the root as bypassed and its decision is returned, so the caller need not catch `Final`.
+    The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare. Its decision is shape-checked and recorded like any layer's; a `final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 
     Args:
         protocol: The root protocol, as `compile_sentinel` returned it.
@@ -241,6 +216,12 @@ async def run_root(
             protocol, "protocol", Decision, context, step, None, root=True
         )
     except Final as ex:
+        origin = ex.origin
+        if origin is None:
+            raise RuntimeError(
+                f"Runner invariant violated: Final({ex.decision.action!r}) left the root without an origin."
+            ) from ex
+        origin.context.recorder.record(origin.context, origin.step, origin.reported)
         return ex.decision
     return reported.report if reported is not None else None
 
@@ -362,30 +343,24 @@ async def _run_child(
     invoke = cast(Callable[[Context, Step], Awaitable[Report | None]], child)
     report: Report | None = None
     finals: list[Final] = []
-    with _frame() as outermost:
-        try:
-            report = await invoke(child_context, step)
-        except anyio.get_cancelled_exc_class():
-            # a recorder that raises here fails the layer, like one that raises
-            # from record(); a cancellation record that cannot be written is
-            # not something to paper over
-            child_context.recorder.cancelled(child_context, step, child_name)
+    try:
+        report = await invoke(child_context, step)
+    except anyio.get_cancelled_exc_class():
+        # a recorder that raises here fails the layer, like one that raises
+        # from record(); a cancellation record that cannot be written is not
+        # something to paper over
+        child_context.recorder.cancelled(child_context, step, child_name)
+        raise
+    except Final as ex:
+        finals = [ex]
+    except BaseExceptionGroup as ex:
+        # a protocol that fanned out with its own task group or tg_collect
+        leaves = _leaves(ex)
+        finals = [leaf for leaf in leaves if isinstance(leaf, Final)]
+        if not finals or len(finals) != len(leaves):
             raise
-        except Final as ex:
-            finals = [ex]
-        except BaseExceptionGroup as ex:
-            # a protocol that fanned out with its own task group or tg_collect
-            leaves = _leaves(ex)
-            finals = [leaf for leaf in leaves if isinstance(leaf, Final)]
-            if not finals or len(finals) != len(leaves):
-                if outermost:
-                    _settle_race(
-                        [f for f in finals if f.origin is not None],
-                        record_winner=True,
-                    )
-                raise
     if finals:
-        raise _on_final(finals, kind, child_context, step, child_name, outermost)
+        raise _on_final(finals, kind, child_context, step, child_name)
     if report is not None and not isinstance(report, report_type):
         raise TypeError(
             f"{kind} {child_name!r} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
@@ -405,7 +380,6 @@ def _on_final(
     child_context: RunnerContext,
     step: Step,
     child_name: str,
-    outermost: bool,
 ) -> Final:
     winner = finals[0]
     unclaimed = [ex for ex in finals if ex.origin is None]
@@ -414,17 +388,16 @@ def _on_final(
             f"monitor {child_name!r} called final(); a monitor returns observations, and only a protocol may end the step."
         ) from unclaimed[0]
     own = winner.origin is None
-    for ex in finals:
-        if ex.origin is None:
-            _check_shape(ex.decision, step, child_name)
-            ex.origin = Origin(
-                child_context,
-                step,
-                Reported(name=child_name, path=child_context.path, report=ex.decision),
-            )
+    for ex in unclaimed:
+        _check_shape(ex.decision, step, child_name)
+        ex.origin = Origin(
+            child_context,
+            step,
+            Reported(name=child_name, path=child_context.path, report=ex.decision),
+        )
     if not own:
-        winner.bypassed.append(Passed(child_context, step, child_name))
-    _settle_race(finals, record_winner=outermost)
+        child_context.recorder.bypassed(child_context, step, child_name)
+    _supersede(finals[1:])
     return winner
 
 

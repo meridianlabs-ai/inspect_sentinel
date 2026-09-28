@@ -65,7 +65,7 @@ class Recorder(Protocol):
     def bypassed(self, context: Context, step: Step, name: str) -> None:
         """Record that a child did not report because a descendant protocol called `final()`, which ended the step past it.
 
-        The final decision itself is recorded through `record` for the protocol that made it, immediately before the `bypassed` records of the layers it passed.
+        The final decision itself is recorded through `record` for the protocol that made it when it takes effect, at the root, after the `bypassed` record of each layer it passed.
 
         Args:
             context: The child's context; its `path` identifies the instance.
@@ -77,7 +77,7 @@ class Recorder(Protocol):
     def superseded(
         self, context: Context, step: Step, reported: Reported[Decision]
     ) -> None:
-        """Record a final decision that lost a race to another final decision in the same layer; it did not take effect.
+        """Record a final decision that lost a race to another final decision in the same layer, or that an exception in the same layer outranked; it did not take effect.
 
         Args:
             context: The context of the protocol that called `final()`; its `path` identifies the instance.

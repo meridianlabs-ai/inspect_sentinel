@@ -5,8 +5,9 @@
 # to keep stable.
 #
 # The dispatcher invokes the compiled root through `run_root`, which records
-# the root's decision at the empty path like any layer's and returns a final
-# decision as the step's outcome, so the dispatcher need not catch `Final`.
+# the root's decision at the empty path like any layer's; a final decision is
+# recorded there, when it takes effect, and returned as the step's outcome, so
+# the dispatcher need not catch `Final`.
 
 from ._check import check_decision_shape
 from ._compile import SentinelSpec, compile_sentinel

@@ -782,21 +782,31 @@ async def test_final_ends_the_step_past_every_layer_above() -> None:
         return decide
 
     recorder = ListRecorder()
-    with anyio.fail_after(5), pytest.raises(Final) as info:
-        await run_protocol(
+    with anyio.fail_after(5):
+        decision = await run_root(
             wrapper(concurrent({"slow": slow(), "leaf": leaf()})),
             runner_context(recorder=recorder),
             before_step(),
         )
-    assert info.value.decision == Decision.reject("a person said no")
+    assert decision == Decision.reject("a person said no")
     assert [(r.reported.path, r.reported.report) for r in recorder.records] == [
-        ("wrapper/concurrent/leaf", info.value.decision)
+        ("concurrent/leaf", decision)
     ]
-    assert recorder.cancellations == [("wrapper/concurrent/slow", "slow")]
-    assert recorder.bypassed_layers == [
-        ("wrapper/concurrent", "concurrent"),
-        ("wrapper", "wrapper"),
-    ]
+    assert recorder.cancellations == [("concurrent/slow", "slow")]
+    assert recorder.bypassed_layers == [("concurrent", "concurrent"), ("", "wrapper")]
+
+
+@pytest.mark.anyio
+async def test_a_final_propagating_below_the_root_is_not_yet_recorded() -> None:
+    recorder = ListRecorder()
+    with pytest.raises(Final):
+        await run_protocol(
+            wrapper(finalizes("reject")),
+            runner_context(recorder=recorder),
+            before_step(),
+        )
+    assert recorder.records == []
+    assert recorder.bypassed_layers == [("wrapper", "wrapper")]
 
 
 @pytest.mark.anyio
@@ -836,16 +846,17 @@ async def test_the_loser_of_a_final_race_is_recorded_as_superseded() -> None:
         return decide
 
     recorder = ListRecorder()
-    with anyio.fail_after(5), pytest.raises(Final) as info:
-        await run_protocols(
-            {"opens": opens(), "follows": follows()},
+    with anyio.fail_after(5):
+        decision = await run_root(
+            concurrent({"opens": opens(), "follows": follows()}),
             runner_context(recorder=recorder),
             before_step(),
         )
-    won = info.value.decision.explanation
+    assert decision is not None
+    won = decision.explanation
     assert won in ("opens", "follows")
     assert [(r.reported.name, r.reported.report) for r in recorder.records] == [
-        (won, info.value.decision)
+        (won, decision)
     ]
     assert [r.reported.name for r in recorder.supersessions] == [
         "follows" if won == "opens" else "opens"
@@ -883,7 +894,8 @@ async def test_an_error_beside_a_final_decision_is_not_hidden_by_it() -> None:
             runner_context(recorder=recorder),
             before_step(),
         )
-    assert [r.reported.name for r in recorder.records] == ["opens"]
+    assert recorder.records == []
+    assert [r.reported.name for r in recorder.supersessions] == ["opens"]
 
 
 @pytest.mark.anyio
@@ -935,13 +947,15 @@ async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -
         return decide
 
     recorder = ListRecorder()
-    with anyio.fail_after(5), pytest.raises(Final) as info:
-        await run_protocol(custom(), runner_context(recorder=recorder), before_step())
-    assert info.value.decision == Decision.reject("fanned out")
+    with anyio.fail_after(5):
+        decision = await run_root(
+            custom(), runner_context(recorder=recorder), before_step()
+        )
+    assert decision == Decision.reject("fanned out")
     assert [(r.reported.path, r.reported.report) for r in recorder.records] == [
-        ("custom/leaf", info.value.decision)
+        ("leaf", decision)
     ]
-    assert recorder.bypassed_layers == [("custom", "custom")]
+    assert recorder.bypassed_layers == [("", "custom")]
 
 
 @pytest.mark.anyio
@@ -980,21 +994,19 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
         return decide
 
     recorder = ListRecorder()
-    with anyio.fail_after(5), pytest.raises(Final) as info:
-        await run_protocol(
+    with anyio.fail_after(5):
+        decision = await run_root(
             wrapper(custom()), runner_context(recorder=recorder), before_step()
         )
-    won = info.value.decision.explanation
+    assert decision is not None
+    won = decision.explanation
     assert [(r.reported.path, r.reported.report) for r in recorder.records] == [
-        (f"wrapper/custom/{won}", info.value.decision)
+        (f"custom/{won}", decision)
     ]
     assert [r.reported.path for r in recorder.supersessions] == [
-        f"wrapper/custom/{'follows' if won == 'opens' else 'opens'}"
+        f"custom/{'follows' if won == 'opens' else 'opens'}"
     ]
-    assert recorder.bypassed_layers == [
-        ("wrapper/custom", "custom"),
-        ("wrapper", "wrapper"),
-    ]
+    assert recorder.bypassed_layers == [("custom", "custom"), ("", "wrapper")]
 
 
 @pytest.mark.anyio
@@ -1008,13 +1020,12 @@ async def test_a_final_propagating_through_a_monitor_names_the_protocol() -> Non
         return check
 
     recorder = ListRecorder()
-    with pytest.raises(Final) as info:
-        await run_monitors(
-            [consults()], runner_context(recorder=recorder), before_step()
-        )
-    assert info.value.decision.action == "reject"
+    decision = await run_root(
+        concurrent([consults()]), runner_context(recorder=recorder), before_step()
+    )
+    assert decision is not None and decision.action == "reject"
     assert [r.reported.path for r in recorder.records] == ["consults/finalizes"]
-    assert recorder.bypassed_layers == [("consults", "consults")]
+    assert recorder.bypassed_layers == [("consults", "consults"), ("", "concurrent")]
 
 
 @pytest.mark.anyio
@@ -1068,3 +1079,31 @@ async def test_run_root_needs_the_top_layer_context() -> None:
         await run_root(
             compile_sentinel([decides()]), runner_context(path="x"), before_step()
         )
+
+
+@pytest.mark.anyio
+async def test_an_error_beside_a_protocols_own_final_in_its_task_group_surfaces() -> (
+    None
+):
+    gate = anyio.Event()
+
+    async def finals_now() -> None:
+        await gate.wait()
+        final(Decision.reject("own"))
+
+    async def explodes() -> None:
+        gate.set()
+        raise RuntimeError("boom")
+
+    @protocol
+    def custom() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(finals_now)
+                tg.start_soon(explodes)
+            return None
+
+        return decide
+
+    with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):
+        await run_children([custom()], runner_context(), before_step())

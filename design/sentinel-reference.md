@@ -974,13 +974,13 @@ Rules:
 
   ```
   name="internet_attempt",  path="attempt/internet_attempt",  kind="decision",  decision="escalate"
-  name="human",             path="attempt/human",             kind="decision",  decision="reject"
   name="chain",             path="attempt",                   kind="bypassed"
   name="sandbox_escape",    path="escape",                    kind="decision",  decision="continue"
   name="concurrent",        path="",                          kind="bypassed"
+  name="human",             path="attempt/human",             kind="decision",  decision="reject"
   ```
 
-  The person's `reject` went through `final()`: its event is the ordinary decision event of `human`, followed by one `bypassed` event per layer above. If two `final()` calls race in one layer, the loser's event is `superseded` and its decision did not take effect. Without a final decision the last line is the summary event, the root's own decision at `path=""`. Every layer's decision is recorded, the root's included; when more than one child decided, a layer's explanation lists each child's decision after the winner's own.
+  The person's `reject` went through `final()`: its event is the ordinary decision event of `human`, recorded at the root when it takes effect, after one `bypassed` event per layer above, each written as the `final()` passed it. If two `final()` calls race in one layer, or an exception in the layer outranks one, the losing decision's event is `superseded` and it did not take effect. Without a final decision the last line is the summary event, the root's own decision at `path=""`. Every layer's decision is recorded, the root's included; when more than one child decided, a layer's explanation lists each child's decision after the winner's own.
 
 - **`name` is which code ran. `path` is which configured instance it was.** Two chains built from the same factory differ only in `path`. `kind` says which family it belongs to, and agrees with the registry type by construction.
 - **`step_id` is what a label matches.** For `BeforeGenerate` it is the id of the message that triggered the generate, with an ordinal suffix on a regenerate; for `AfterGenerate` the assistant message id; for the tool stages the tool call id. All three exist before the monitor runs, so recorded events and replayed steps share ids. See `sentinel-development.md`.

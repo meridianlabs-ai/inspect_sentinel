@@ -1004,6 +1004,8 @@ When any layer returns a decision, or passes one to `final()`, the runner checks
 - **The action is legal for the stage** — no `reject` or `modify` at `AfterToolCall`, per [One vocabulary across stages](#one-vocabulary-across-stages).
 - **`modified` is set iff `action == "modify"`**. Its type is `Decision`'s field type, which validation already enforces, so the runner does not check it again; a decision built with `model_construct` has opted out of validation.
 
+A `final()` decision is shape-checked when it is made. The decision is recorded when it takes effect, at the root; each layer it passes is recorded as bypassed as it is passed; a losing final decision is recorded as superseded where it lost.
+
 **A decision no layer above may weaken is [`final()`](#authoritative-reports).** It replaces an earlier design in which a `binding` flag on the decision set a floor: the runner compared each layer's return with its binding children's, clamped a weaker one up, and kept the protocol's own decision on the record as `overrode`.
 
 Control flow rather than a value-level rule, because a rule about decision values requires every layer to carry or compare the property — inherit the flag, preserve it through `concurrent`'s rewrite of a contested `modify`, break ties toward it, reconcile two binding `modify`s — and each patch to that design leaked wherever a middle layer built a new decision. Control flow cannot be dropped by a middle layer, because the middle layer's code does not run. It reuses the cancellation `terminate` already has, so there is no new concurrency machinery, and it settles conflict the way `terminate` does: the first `final()` to reach a layer wins and the rest are recorded, as with two `terminate`s. Ordering several authorities is a `chain`, or a panel that collects advisory votes and calls `final()` itself (see [Humans in the loop](#humans-in-the-loop)).
@@ -1359,7 +1361,7 @@ class SentinelEvent(BaseEvent):
     `ModelEvent`s and `CompactionEvent`s carry. See "Two histories"."""
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
     kind: Literal["observation", "decision", "cancelled", "bypassed", "superseded"]
-    """`observation` or `decision` agrees with the registry type of `name` by construction; `cancelled` and `bypassed` record no report; `superseded` carries the decision of a protocol whose `final()` lost a race."""
+    """`observation` or `decision` agrees with the registry type of `name` by construction; `cancelled` and `bypassed` record no report; `superseded` carries the decision of a protocol whose `final()` lost a race or was outranked by an exception."""
     suspicion: Suspicion | None
     decision: Action | None
     audit: bool
@@ -1368,7 +1370,7 @@ class SentinelEvent(BaseEvent):
     metadata: dict[str, Any] | None
 ```
 
-A `cancelled` event carries no suspicion, decision or outcome; it says the child was in flight when the layer was torn down, by a sibling's `terminate` or `final()` or by cancellation from above. A `final()` decision's event is the ordinary `decision` event of the protocol that called it, followed by one `bypassed` event per layer above it, each a protocol whose own decision logic never ran. When two `final()` calls race in one layer, the loser's event is `superseded`: its decision did not take effect.
+A `cancelled` event carries no suspicion, decision or outcome; it says the child was in flight when the layer was torn down, by a sibling's `terminate` or `final()` or by cancellation from above. A `final()` decision's event is the ordinary `decision` event of the protocol that called it, written at the root when the decision takes effect, so it follows the `bypassed` event of each layer above it, each a protocol whose own decision logic never ran. When two `final()` calls race in one layer, or an exception in the layer outranks one, the losing decision's event is `superseded`: it did not take effect.
 
 `decision` versus `outcome` is the layering made legible in the log: what this layer decided, and what the layer above did with it. Without both, a reader cannot tell an overruled decision from one that was never made — which is exactly what a reader of a nested configuration needs to see.
 
@@ -1380,13 +1382,13 @@ A protocol is recorded exactly as a monitor is, so a nested configuration emits 
 
 ```
 name="internet_attempt",  path="attempt/internet_attempt",  kind="decision",  decision="escalate"
-name="human",             path="attempt/human",             kind="decision",  decision="reject"
 name="chain",             path="attempt",                   kind="bypassed"
 name="sandbox_escape",    path="escape",                    kind="decision",  decision="continue"
 name="concurrent",        path="",                          kind="bypassed"
+name="human",             path="attempt/human",             kind="decision",  decision="reject"
 ```
 
-The person's `reject` went through `final()`, so the `chain` and the top-level `concurrent` above it are `bypassed`. Without a final decision the last line is the summary event #5423 wanted: the top-level `concurrent` records the combined decision at `path=""`. Every layer's decision is recorded, the root's included, so a configuration with a single rule logs two events per step, the rule's and the root's; when more than one child decided, the layer's explanation lists each child's decision after the winner's own.
+The person's `reject` went through `final()`, so the `chain` and the top-level `concurrent` above it are `bypassed`, and the `reject` itself is recorded last, at the root, when it takes effect. Without a final decision the last line is the summary event #5423 wanted: the top-level `concurrent` records the combined decision at `path=""`. Every layer's decision is recorded, the root's included, so a configuration with a single rule logs two events per step, the rule's and the root's; when more than one child decided, the layer's explanation lists each child's decision after the winner's own.
 
 An earlier draft added a `strategy: str` here and on `Decision`, to record whether a `modify` came from a deferral, a resample or a trusted edit. It was removed: **the layer's identity already is the strategy.** A protocol named `defer_to_trusted` returning `modify` has said what it did, and the aggregate query that justified the field — how often did this protocol defer — is `monitor == "defer_to_trusted" and decision == "modify"`. Worse, on `Decision` it was a field every rule carried and never set.
 

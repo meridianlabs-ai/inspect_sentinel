@@ -7,7 +7,7 @@ from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import ToolCall
 
 from inspect_sentinel._context import Context
-from inspect_sentinel._final import Final, final
+from inspect_sentinel._final import final
 from inspect_sentinel._monitor import (
     ControlProtocol,
     Monitor,
@@ -18,7 +18,7 @@ from inspect_sentinel._monitor import (
 )
 from inspect_sentinel._protocols import concurrent, observe, threshold
 from inspect_sentinel._report import Action, Decision, Observation, Suspicion
-from inspect_sentinel._runner import run_protocol, run_protocols
+from inspect_sentinel._runner import run_protocol, run_protocols, run_root
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
@@ -199,18 +199,17 @@ async def test_a_panel_of_advisory_votes_has_the_last_word(
 ) -> None:
     recorder = ListRecorder()
     children = {f"v{index}": says(vote) for index, vote in enumerate(votes)}
-    with pytest.raises(Final) as info:
-        await run_protocol(
-            wrapper(panel(children)), runner_context(recorder=recorder), before_step()
-        )
-    assert info.value.decision.action == expected
+    decision = await run_root(
+        wrapper(panel(children)), runner_context(recorder=recorder), before_step()
+    )
+    assert decision is not None and decision.action == expected
     assert sorted(r.reported.path for r in recorder.records) == [
-        "wrapper/panel",
-        "wrapper/panel/v0",
-        "wrapper/panel/v1",
-        "wrapper/panel/v2",
+        "panel",
+        "panel/v0",
+        "panel/v1",
+        "panel/v2",
     ]
-    assert recorder.bypassed_layers == [("wrapper", "wrapper")]
+    assert recorder.bypassed_layers == [("", "wrapper")]
 
 
 @pytest.mark.anyio
