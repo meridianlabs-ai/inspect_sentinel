@@ -419,17 +419,19 @@ def _on_final(
             f"monitor {child_name!r} called final(); a monitor returns observations, and only a protocol may end the step."
         ) from unclaimed[0]
     own = winner.origin is None
-    try:
-        for ex in unclaimed:
+    claimed = [ex for ex in finals if ex.origin is not None]
+    for ex in unclaimed:
+        try:
             _validate_shape(ex.decision, step, child_name)
-            ex.origin = Origin(
-                child_context,
-                step,
-                Reported(name=child_name, path=child_context.path, report=ex.decision),
-            )
-    except ValueError:
-        _supersede([ex for ex in finals if ex.origin is not None])
-        raise
+        except ValueError:
+            _supersede(claimed)
+            raise
+    for ex in unclaimed:
+        ex.origin = Origin(
+            child_context,
+            step,
+            Reported(name=child_name, path=child_context.path, report=ex.decision),
+        )
     if not own:
         child_context.recorder.bypassed(child_context, step, child_name)
     return cast(Final, _surface([], finals))

@@ -79,7 +79,7 @@ class Recorder(Protocol):
     ) -> None:
         """Record a final decision that lost a race to another final decision in the same layer, or that an exception in the same layer outranked; it did not take effect.
 
-        Also records a `terminate`, already recorded through `record`, that a sibling's `final()` outran: the step ended with the final decision instead.
+        Also records a `terminate`, already recorded through `record`, that a sibling's `final()` outran in a runner-managed group (`run_children`, `run_protocols`): the step ended with the final decision instead. A protocol that fans out with its own task group gets no such record; its children's decisions stay as recorded.
 
         Args:
             context: The deciding protocol's context; its `path` identifies the instance.

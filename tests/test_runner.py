@@ -1246,3 +1246,32 @@ async def test_a_terminate_outrun_by_a_siblings_final_is_superseded(
         (["f", "t"], ["t"], []),
         (["f"], [], ["t"]),
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("valid_first", [True, False])
+async def test_an_ill_shaped_own_final_supersedes_nothing_it_made_itself(
+    valid_first: bool,
+) -> None:
+    @protocol
+    def twice() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            async def valid() -> None:
+                final(Decision.terminate())
+
+            async def invalid() -> None:
+                final(Decision(action="reject"))
+
+            async with anyio.create_task_group() as tg:
+                first, second = (valid, invalid) if valid_first else (invalid, valid)
+                tg.start_soon(first)
+                tg.start_soon(second)
+            return None
+
+        return decide
+
+    recorder = ListRecorder()
+    with pytest.raises(ValueError, match="twice"):
+        await run_root(twice(), runner_context(recorder=recorder), after_step())
+    assert recorder.supersessions == []
+    assert recorder.records == []

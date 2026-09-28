@@ -178,7 +178,7 @@ A proxy sits on one HTTP exchange: a request and a response. It never sees a too
 The goal is to enable two deployment modes for proxy servers:
 
 1.  Sidecar (a Python service beside the proxy); or
-2.  Embedded (CPython resolved to WASM inside the proxy)
+2.  Embedded (CPython compiled to WASM inside the proxy)
 
 Both modes depend on sentinels being lightweight. `inspect_sentinel` depends only on `inspect_core`, a new package holding the wire types (`ChatMessage`, `ModelOutput`, `ToolCall`, `ToolInfo`) and the registry primitives, so that a monitor author, a proxy, or a WASM build never pulls in the full Inspect framework.
 
