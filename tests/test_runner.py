@@ -34,11 +34,15 @@ from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
 
 def _obs(name: str, suspicion: float | dict[str, float]) -> Reported[Observation]:
-    return Reported(name=name, path=name, report=Observation.score(suspicion))
+    return Reported(
+        name=name, path=name, report=Observation.score(suspicion), function="check"
+    )
 
 
 def _dec(name: str, action: Action) -> Reported[Decision]:
-    return Reported(name=name, path=name, report=Decision(action=action))
+    return Reported(
+        name=name, path=name, report=Decision(action=action), function="decide"
+    )
 
 
 def test_observations_is_a_sequence() -> None:
@@ -1322,3 +1326,29 @@ async def test_run_children_takes_one_many_or_named(
         [o.name for o in reports.observations],
         [d.name for d in reports.decisions],
     ) == expected
+
+
+@pytest.mark.anyio
+async def test_a_report_names_the_function_that_made_it() -> None:
+    recorder = ListRecorder()
+    reports = await run_children(
+        {"m": scores(), "p": decides()},
+        runner_context(recorder=recorder),
+        before_step(),
+    )
+    assert [o.function for o in reports.observations] == ["check"]
+    assert [d.function for d in reports.decisions] == ["decide"]
+    assert sorted(r.reported.function for r in recorder.records) == ["check", "decide"]
+
+
+@pytest.mark.anyio
+async def test_a_final_decision_names_the_function_that_made_it() -> None:
+    recorder = ListRecorder()
+    await run_root(
+        concurrent([finalizes("reject")]),
+        runner_context(recorder=recorder),
+        before_step(),
+    )
+    assert [(r.reported.path, r.reported.function) for r in recorder.records] == [
+        ("finalizes", "decide")
+    ]

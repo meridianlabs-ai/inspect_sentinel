@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from inspect_sentinel._report import Decision, Observation, Report, Reported
 
 if TYPE_CHECKING:
-    _observed: Reported[Observation] = Reported("n", "p", Observation.score(0.0))
+    _observed: Reported[Observation] = Reported("n", "p", Observation.score(0.0), "f")
     _widens: Reported[Report] = _observed
 
 
@@ -72,11 +72,15 @@ def test_observation_rejects_non_numeric_suspicion(bad: object) -> None:
 
 def test_reported_attaches_identity() -> None:
     reported = Reported(
-        name="judge", path="attempt/judge", report=Observation.score(0.2)
+        name="judge",
+        path="attempt/judge",
+        report=Observation.score(0.2),
+        function="check",
     )
     assert reported.name == "judge"
     assert reported.path == "attempt/judge"
     assert reported.report.suspicion == 0.2
+    assert reported.function == "check"
 
 
 def test_observation_rejects_empty_suspicion_dimensions() -> None:

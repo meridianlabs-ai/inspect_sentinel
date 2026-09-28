@@ -341,6 +341,7 @@ async def _run_child(
         return None
     child_context = context if root else context.child(child_name)
     invoke = cast(Callable[[Context, Step], Awaitable[Report | None]], child)
+    function = invoke.__name__
     report: Report | None = None
     finals: list[Final] = []
     failure: BaseException | None = None
@@ -364,7 +365,7 @@ async def _run_child(
     if failure is not None:
         raise failure
     if finals:
-        raise _on_final(finals, kind, child_context, step, child_name)
+        raise _on_final(finals, kind, child_context, step, child_name, function)
     if report is not None and not isinstance(report, report_type):
         raise TypeError(
             f"{kind} {child_name!r} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
@@ -373,7 +374,9 @@ async def _run_child(
         return None
     if isinstance(report, Decision):
         _validate_shape(report, step, child_name)
-    reported = Reported(name=child_name, path=child_context.path, report=report)
+    reported = Reported(
+        name=child_name, path=child_context.path, report=report, function=function
+    )
     child_context.recorder.record(child_context, step, reported)
     return reported
 
@@ -384,6 +387,7 @@ def _on_final(
     child_context: RunnerContext,
     step: Step,
     child_name: str,
+    function: str,
 ) -> Final:
     winner = finals[0]
     unclaimed = [ex for ex in finals if ex.origin is None]
@@ -404,7 +408,12 @@ def _on_final(
         ex.origin = Origin(
             child_context,
             step,
-            Reported(name=child_name, path=child_context.path, report=ex.decision),
+            Reported(
+                name=child_name,
+                path=child_context.path,
+                report=ex.decision,
+                function=function,
+            ),
         )
     if not own:
         child_context.recorder.bypassed(child_context, step, child_name)
