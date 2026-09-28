@@ -1,0 +1,189 @@
+from __future__ import annotations
+
+import inspect
+import json
+from collections.abc import Mapping, Sequence
+from typing import Any, NamedTuple, cast
+
+import yaml
+from inspect_ai._util.file import exists, local_path
+from inspect_ai._util.registry import (
+    RegistryType,
+    create_registry_object,
+    registry_info,
+    registry_lookup,
+)
+from inspect_ai.util import resource
+from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+
+from ._context import validate_instance_name
+from ._monitor import Children, ControlProtocol, Monitor
+
+PACKAGE = "inspect_sentinel"
+ENTRY_FIELDS = frozenset({"name", "params"})
+
+
+class SentinelEntry(BaseModel):
+    """One configured monitor or protocol.
+
+    Any key besides `name` and `params` names a parameter of the factory whose value is nested monitors or protocols, such as `monitors` for `threshold` or `children` for `concurrent`; it holds a list or a mapping of entries, and `nested` returns them.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    """Registry name of the factory; a bare name also finds one in `inspect_sentinel`."""
+
+    params: dict[str, Any] = Field(default_factory=dict)
+    """Arguments passed to the factory, other than the nested ones."""
+
+    @model_validator(mode="after")
+    def _validate_nested(self) -> SentinelEntry:
+        extra = self.__pydantic_extra__ or {}
+        for key, value in extra.items():
+            extra[key] = SentinelConfig.model_validate(value)
+        return self
+
+    @property
+    def nested(self) -> dict[str, SentinelConfig]:
+        """Nested monitors or protocols, by the factory parameter they are passed as."""
+        return cast(dict[str, SentinelConfig], dict(self.__pydantic_extra__ or {}))
+
+
+class SentinelConfig(RootModel[list[SentinelEntry] | dict[str, SentinelEntry]]):
+    """A sentinel configuration: a list of entries, or a mapping of instance names to entries.
+
+    The value of the `sentinel:` key in a configuration file, and what the eval log records.
+    """
+
+
+class _Factory(NamedTuple):
+    kind: RegistryType
+    name: str
+    factory: object
+
+
+def sentinel_from_config(
+    config: str
+    | SentinelConfig
+    | Sequence[Mapping[str, Any]]
+    | Mapping[str, Mapping[str, Any]],
+) -> Children:
+    """Build the monitors and protocols a configuration describes.
+
+    Each entry is constructed through the registry with its `params` and its nested entries, which are built first. The result is not resolved; pass it to `resolve_sentinel`.
+
+    Args:
+        config: A YAML or JSON file whose only key is `sentinel`, a registered monitor or protocol name, or the configuration itself: a list of entries or a mapping of instance names to entries.
+
+    Raises:
+        ValueError: If the configuration is invalid; the message names the entry, as in `sentinel.attempt.children[1]`.
+    """
+    if isinstance(config, str):
+        return _from_string(config)
+    if isinstance(config, SentinelConfig):
+        return _build_layer(config.model_dump(), "sentinel")
+    return _build_layer(config, "sentinel")
+
+
+def _from_string(config: str) -> Children:
+    path = local_path(config)
+    if exists(path):
+        return _build_layer(_read_file(path), "sentinel")
+    if _find_all(config):
+        return [_build_entry({"name": config}, "sentinel[0]")]
+    raise ValueError(
+        f"{config!r} is neither a config file nor a registered monitor or protocol."
+    )
+
+
+def _read_file(path: str) -> object:
+    text = resource(path, type="file")
+    content: object = (
+        json.loads(text)
+        if text.strip().startswith(("{", "["))
+        else yaml.safe_load(text)
+    )
+    if not isinstance(content, dict) or set(cast(dict[str, Any], content)) != {
+        "sentinel"
+    }:
+        raise ValueError(
+            f"{path}: a sentinel config file is a mapping whose only key is 'sentinel'."
+        )
+    return cast(dict[str, Any], content)["sentinel"]
+
+
+def _build_layer(layer: object, path: str) -> Children:
+    if isinstance(layer, Mapping):
+        entries = cast(Mapping[object, object], layer)
+        built: dict[str, Monitor | ControlProtocol] = {}
+        for key, entry in entries.items():
+            try:
+                name = validate_instance_name(key)
+            except ValueError as ex:
+                raise ValueError(f"{path}: {ex}") from ex
+            built[name] = _build_entry(entry, f"{path}.{name}")
+        return built
+    if isinstance(layer, Sequence) and not isinstance(layer, str):
+        items = cast(Sequence[object], layer)
+        return [_build_entry(entry, f"{path}[{i}]") for i, entry in enumerate(items)]
+    raise ValueError(
+        f"{path} must be a list or a mapping of entries, not {type(layer).__name__}."
+    )
+
+
+def _build_entry(entry: object, path: str) -> Monitor | ControlProtocol:
+    if not isinstance(entry, Mapping):
+        raise ValueError(f"{path} must be a mapping with a 'name', not {entry!r}.")
+    fields = cast(Mapping[str, object], entry)
+    name = fields.get("name")
+    if not isinstance(name, str):
+        raise ValueError(
+            f"{path}: an entry needs a 'name' naming a monitor or protocol."
+        )
+    params = fields.get("params", {})
+    if not isinstance(params, Mapping):
+        raise ValueError(f"{path}.params must be a mapping of arguments.")
+    args = dict(cast(Mapping[str, object], params))
+    found = _find(name, path)
+    accepted = list(inspect.signature(cast(Any, found.factory)).parameters)
+    for key, value in fields.items():
+        if key in ENTRY_FIELDS:
+            continue
+        if key not in accepted:
+            raise ValueError(
+                f"{path}: {key!r} is not a parameter of {name}; an entry takes 'name', 'params', and nested entries under one of {name}'s parameters {accepted}."
+            )
+        if key in args:
+            raise ValueError(f"{path}: {key!r} is given both nested and in params.")
+        args[key] = _build_layer(value, f"{path}.{key}")
+    try:
+        instance = create_registry_object(found.kind, found.name, args)
+    except (TypeError, ValueError) as ex:
+        error = TypeError if isinstance(ex, TypeError) else ValueError
+        raise error(f"{path}: {ex}") from ex
+    return cast(Monitor | ControlProtocol, instance)
+
+
+def _find(name: str, path: str) -> _Factory:
+    found = _find_all(name)
+    if not found:
+        raise ValueError(f"{path}: {name!r} is not a registered monitor or protocol.")
+    if len(found) > 1:
+        candidates = ", ".join(f"{f.kind} {f.name}" for f in found)
+        raise ValueError(
+            f"{path}: {name!r} is ambiguous; it names {candidates}. Use a qualified name."
+        )
+    return found[0]
+
+
+def _find_all(name: str) -> list[_Factory]:
+    names = [name] if "/" in name else [name, f"{PACKAGE}/{name}"]
+    found: dict[tuple[str, str], _Factory] = {}
+    for kind in cast(list[RegistryType], ["monitor", "protocol"]):
+        for candidate in names:
+            factory = registry_lookup(kind, candidate)
+            if factory is not None:
+                registered = registry_info(factory).name
+                found[(kind, registered)] = _Factory(kind, registered, factory)
+    return list(found.values())
