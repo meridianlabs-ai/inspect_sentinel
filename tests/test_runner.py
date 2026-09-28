@@ -1,10 +1,11 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 import anyio
 import pytest
 from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import ToolCall
+from inspect_ai.util import StoreModel
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._final import Final, final
@@ -1352,3 +1353,178 @@ async def test_a_final_decision_names_the_function_that_made_it() -> None:
     assert [(r.reported.path, r.reported.function) for r in recorder.records] == [
         ("finalizes", "decide")
     ]
+
+
+class Seen(StoreModel):
+    before: int = 0
+
+
+@monitor
+def paired() -> Sequence[Monitor]:
+    async def before(context: Context, step: BeforeToolCall) -> Observation | None:
+        seen = context.store_as(Seen)
+        seen.before += 1
+        return Observation.score(seen.before / 10)
+
+    async def after(context: Context, step: AfterToolCall) -> Observation | None:
+        return Observation.score(context.store_as(Seen).before / 10)
+
+    return [before, after]
+
+
+@pytest.mark.anyio
+async def test_a_groups_members_report_at_one_path_and_share_its_state() -> None:
+    recorder = ListRecorder()
+    context = runner_context(recorder=recorder)
+    group = paired()
+    before = await run_monitors(group, context, before_step())
+    after = await run_monitors(group, context, after_step())
+    assert [(o.name, o.path, o.function, o.report.suspicion) for o in before] == [
+        ("paired", "paired", "before", 0.1)
+    ]
+    assert [(o.name, o.path, o.function, o.report.suspicion) for o in after] == [
+        ("paired", "paired", "after", 0.1)
+    ]
+    assert [r.reported for r in recorder.records] == [*before, *after]
+
+
+@pytest.mark.anyio
+async def test_two_instances_of_a_group_keep_separate_state() -> None:
+    context = runner_context()
+    group = {"a": paired(), "b": paired()}
+    await run_monitors(group, context, before_step())
+    observations = await run_monitors(group, context, before_step())
+    assert [(o.path, o.report.suspicion) for o in observations] == [
+        ("a", 0.2),
+        ("b", 0.2),
+    ]
+
+
+@pytest.mark.anyio
+async def test_members_on_one_stage_report_in_factory_order() -> None:
+    @monitor
+    def twins() -> Sequence[Monitor]:
+        async def second(context: Context, step: BeforeToolCall) -> Observation | None:
+            await anyio.sleep(0)
+            return Observation.score(0.2)
+
+        async def first(context: Context, step: BeforeToolCall) -> Observation | None:
+            return Observation.score(0.1)
+
+        return [second, first]
+
+    recorder = ListRecorder()
+    reports = await run_children(
+        [twins(), decides()], runner_context(recorder=recorder), before_step()
+    )
+    assert [(o.path, o.function) for o in reports.observations] == [
+        ("twins", "second"),
+        ("twins", "first"),
+    ]
+    assert [
+        r.reported.function for r in recorder.records if r.reported.name == "twins"
+    ] == ["second", "first"]
+
+
+@pytest.mark.anyio
+async def test_a_group_member_calling_final_ends_the_step() -> None:
+    ran: list[str] = []
+
+    @protocol
+    def gatekeeper() -> Sequence[ControlProtocol]:
+        async def screen(context: Context, step: BeforeToolCall) -> Decision | None:
+            final(Decision.reject("screened"))
+
+        async def later(context: Context, step: BeforeToolCall) -> Decision | None:
+            ran.append("later")
+            return Decision.clear()
+
+        return [screen, later]
+
+    recorder = ListRecorder()
+    decision = await run_root(
+        concurrent([gatekeeper()]), runner_context(recorder=recorder), before_step()
+    )
+    assert decision == Decision.reject("screened")
+    assert ran == []
+    assert [(r.reported.path, r.reported.function) for r in recorder.records] == [
+        ("gatekeeper", "screen")
+    ]
+    assert recorder.bypassed_layers == [("", "concurrent")]
+
+
+@pytest.mark.anyio
+async def test_a_cancelled_group_is_recorded_once() -> None:
+    started = anyio.Event()
+
+    @monitor
+    def quick_then_slow() -> Sequence[Monitor]:
+        async def quick(context: Context, step: BeforeToolCall) -> Observation | None:
+            return Observation.score(0.1)
+
+        async def slow(context: Context, step: BeforeToolCall) -> Observation | None:
+            started.set()
+            await anyio.sleep_forever()
+            return None
+
+        return [quick, slow]
+
+    @protocol
+    def terminates() -> ControlProtocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await started.wait()
+            return Decision.terminate()
+
+        return decide
+
+    recorder = ListRecorder()
+    with anyio.fail_after(5):
+        reports = await run_children(
+            {"g": quick_then_slow(), "stop": terminates()},
+            runner_context(recorder=recorder),
+            before_step(),
+        )
+    assert [o.function for o in reports.observations] == ["quick"]
+    assert recorder.cancellations == [("g", "g")]
+    assert sorted((r.reported.path, r.reported.function) for r in recorder.records) == [
+        ("g", "quick"),
+        ("stop", "decide"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_the_root_is_one_function() -> None:
+    @protocol
+    def pair() -> Sequence[ControlProtocol]:
+        async def one(context: Context, step: Step) -> Decision | None:
+            return None
+
+        async def two(context: Context, step: Step) -> Decision | None:
+            return None
+
+        return [one, two]
+
+    with pytest.raises(TypeError, match="root"):
+        await run_root(pair(), runner_context(), before_step())
+
+
+@pytest.mark.anyio
+async def test_a_terminate_outrun_by_a_later_members_final_is_superseded() -> None:
+    @protocol
+    def overruled() -> Sequence[ControlProtocol]:
+        async def stop(context: Context, step: BeforeToolCall) -> Decision | None:
+            return Decision.terminate()
+
+        async def overrule(context: Context, step: BeforeToolCall) -> Decision | None:
+            final(Decision.reject("overruled"))
+
+        return [stop, overrule]
+
+    recorder = ListRecorder()
+    decision = await run_root(
+        concurrent([overruled()]), runner_context(recorder=recorder), before_step()
+    )
+    assert decision == Decision.reject("overruled")
+    assert [
+        (r.reported.function, r.reported.report) for r in recorder.supersessions
+    ] == [("stop", Decision.terminate())]

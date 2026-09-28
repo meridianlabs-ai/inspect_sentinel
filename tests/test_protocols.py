@@ -1,5 +1,5 @@
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 import pytest
@@ -370,3 +370,61 @@ def test_a_shipped_protocol_needs_at_least_one_child(
 ) -> None:
     with pytest.raises(ValueError, match="needs at least one child"):
         configure()
+
+
+@protocol
+def rules() -> Sequence[ControlProtocol]:
+    async def lenient(context: Context, step: BeforeToolCall) -> Decision | None:
+        return Decision.clear()
+
+    async def strict(context: Context, step: BeforeToolCall) -> Decision | None:
+        return Decision.reject("strict")
+
+    return [lenient, strict]
+
+
+@monitor
+def before_and_after(value: float = 0.7) -> Sequence[Monitor]:
+    async def before(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(value)
+
+    async def after(context: Context, step: AfterToolCall) -> Observation | None:
+        return Observation.score(1.0)
+
+    return [before, after]
+
+
+@pytest.mark.anyio
+async def test_concurrent_votes_a_groups_members_like_separate_protocols() -> None:
+    recorder = ListRecorder()
+    decision = await _run(concurrent([rules()]), before_step(), recorder)
+    assert decision is not None and decision.action == "reject"
+    assert [
+        (r.reported.path, r.reported.function)
+        for r in recorder.records
+        if r.reported.name == "rules"
+    ] == [("concurrent/rules", "lenient"), ("concurrent/rules", "strict")]
+
+
+@pytest.mark.anyio
+async def test_threshold_reads_a_groups_members_at_the_stages_they_watch() -> None:
+    recorder = ListRecorder()
+    decision = await _run(
+        threshold([before_and_after(0.7)], reject_at=0.5), before_step(), recorder
+    )
+    assert decision is not None and decision.explanation == "suspicion 0.70"
+
+
+def test_threshold_rejects_a_group_that_never_watches_a_tool_call() -> None:
+    @monitor
+    def later() -> Sequence[Monitor]:
+        async def one(context: Context, step: AfterToolCall) -> Observation | None:
+            return None
+
+        async def two(context: Context, step: AfterToolCall) -> Observation | None:
+            return None
+
+        return [one, two]
+
+    with pytest.raises(TypeError, match="later"):
+        threshold([later()], reject_at=0.5)
