@@ -12,4 +12,6 @@ This also installs the development version of `inspect_ai` from its `main` branc
 
 The package is under active design. The design documents are in [`design/`](design/); start with [`sentinel-overview.md`](design/sentinel-overview.md).
 
+Runnable examples are in [`examples/`](examples/).
+
 Documentation: <https://meridianlabs-ai.github.io/inspect_sentinel>.

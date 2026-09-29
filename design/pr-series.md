@@ -191,6 +191,10 @@ The canonical docs on inspect_ai's `design/monitor` branch were synced with this
 
 Implemented: `RunnerContext` gains `factory: str`, the full registry name as `registry_info(child).name` gives it (package prefix included), defaulting to empty so the dispatcher's top-layer context need not know the root; `child(name, factory)` takes it and the runner passes each child's registry name when it derives the child's context; `run_root` sets it on the root's own context, so the root's decision, its `bypassed` record and any `final()` origin at the root carry it. The `Recorder` methods take a `RunnerContext` rather than a `Context`, since the runner always passes one, so the dispatcher reads `context.factory` without a cast. A `terminate` superseded by a sibling's `final()` is re-derived with its factory's name, as the other records are. `Reported` is unchanged: the instance name is what authors compare, and the factory is recording metadata.
 
+## No outcome field
+
+Decided with the user 2026-09-29: `SentinelEvent.outcome` is removed (inspect_ai c6d332ba6). What the layer above did with a report is the decision event at the parent path, so the field only duplicated the log. Which child a top-level result came from stays inferred by the viewer, exact after `final()`.
+
 ## Threshold explanations
 
 Implemented, agreed with the user 2026-09-29: `threshold`'s reject carries no explanation, so the agent gets inspect's standard "Tool call not approved." and learns nothing about what the monitors saw; the monitors' scores and reasoning stay on their observation events in the log. A terminate, which reaches only the log, names the highest-scoring monitor (first in configuration order on a tie) and carries its explanation: `suspicion 0.95 from audit: <reason>`. It previously said only `suspicion 0.95` for both.
