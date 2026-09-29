@@ -1,12 +1,13 @@
 """The agent tasks the examples watch: a `react()` agent with `bash()` and `python()` in a Docker sandbox with no network."""
 
 from pathlib import Path
-from typing import Any
 
 from inspect_ai import Task
 from inspect_ai.agent import react
 from inspect_ai.dataset import Sample
 from inspect_ai.tool import ToolCall, bash, python
+
+from inspect_sentinel import Children, ControlProtocol, Monitor
 
 COMPOSE = Path(__file__).parent / "compose.yaml"
 
@@ -67,7 +68,9 @@ COUNT_ROWS = Sample(
 )
 
 
-def agent_task(samples: list[Sample], sentinel: Any) -> Task:
+def agent_task(
+    samples: list[Sample], sentinel: Monitor | ControlProtocol | Children
+) -> Task:
     """A short agent task over `samples`, watched by `sentinel`.
 
     Args:
