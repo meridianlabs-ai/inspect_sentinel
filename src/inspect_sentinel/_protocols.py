@@ -95,7 +95,7 @@ def threshold(
 ) -> ControlProtocol:
     """Act on a suspicion score: `reject` at or above one constant, `terminate` at or above another.
 
-    When it acts, the decision's explanation names the highest-scoring monitor (the first in configuration order on a tie) and carries that monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`. The agent sees it as the reason the call was refused.
+    A reject carries no explanation, so the agent is told only that the call was not permitted and learns nothing about what the monitors saw; their scores and reasoning stay in the log, on their own observation events. A terminate, which the agent never sees, is explained for the log: it names the highest-scoring monitor (the first in configuration order on a tie) and carries that monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`.
 
     The smallest protocol, and the one calibration feeds: the constants come from a benign score distribution, which is why they live here and not on a monitor. Every monitor, and every function of a monitor whose factory returned several, must watch `BeforeToolCall`, since that is the only stage a `reject` is legal at.
 
@@ -134,7 +134,7 @@ def threshold(
         if terminate_at is not None and score >= terminate_at:
             return Decision.terminate(_explain(observations, score))
         if score >= reject_at:
-            return Decision.reject(_explain(observations, score))
+            return Decision.reject()
         return Decision.clear()
 
     return decide

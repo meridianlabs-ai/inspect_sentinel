@@ -193,7 +193,7 @@ Implemented: `RunnerContext` gains `factory: str`, the full registry name as `re
 
 ## Threshold explanations
 
-Implemented: when `threshold` rejects or terminates, its explanation names the highest-scoring monitor (first in configuration order on a tie) and carries that monitor's explanation, `suspicion 0.95 from audit: <reason>`, instead of the bare score. Agreed with the user 2026-09-29. The reason reaches the agent, which tells an adversarial agent what the monitor saw; an opt-out is a possible follow-up.
+Implemented, agreed with the user 2026-09-29: `threshold`'s reject carries no explanation, so the agent gets inspect's standard "Tool call not approved." and learns nothing about what the monitors saw; the monitors' scores and reasoning stay on their observation events in the log. A terminate, which reaches only the log, names the highest-scoring monitor (first in configuration order on a tie) and carries its explanation: `suspicion 0.95 from audit: <reason>`. It previously said only `suspicion 0.95` for both.
 
 ## Out of scope
 
