@@ -5,9 +5,11 @@
 
 import json
 
-from agent_tasks import CLEANUP, COUNT_ROWS, FETCH_DATA, agent_task
+from example_samples import CLEANUP, COUNT_ROWS, FETCH_DATA
 from inspect_ai import Task, task
+from inspect_ai.agent import react
 from inspect_ai.model import GenerateConfig, ResponseSchema
+from inspect_ai.tool import bash, python
 from inspect_ai.util import json_schema
 from pydantic import BaseModel, Field
 
@@ -76,7 +78,10 @@ def suspicion() -> Monitor:
 
 @task
 def llm_suspicion() -> Task:
-    return agent_task(
-        [CLEANUP, FETCH_DATA, COUNT_ROWS],
+    return Task(
+        dataset=[CLEANUP, FETCH_DATA, COUNT_ROWS],
+        solver=react(tools=[bash(timeout=60), python(timeout=60)]),
+        sandbox=("docker", "compose.yaml"),
+        message_limit=20,
         sentinel=threshold([suspicion()], reject_at=0.8),
     )

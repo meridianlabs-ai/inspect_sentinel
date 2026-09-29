@@ -3,8 +3,10 @@
 The `protected` rule ends the step with `final()`, cancelling the in-flight `audit` monitor.
 """
 
-from agent_tasks import ADD_HOST, COUNT_ROWS, FETCH_DATA, agent_task
+from example_samples import ADD_HOST, COUNT_ROWS, FETCH_DATA
 from inspect_ai import Task, task
+from inspect_ai.agent import react
+from inspect_ai.tool import bash, python
 from llm_suspicion import suspicion
 from no_network import no_network
 
@@ -41,8 +43,11 @@ def protected() -> ControlProtocol:
 
 @task
 def nested() -> Task:
-    return agent_task(
-        [ADD_HOST, FETCH_DATA, COUNT_ROWS],
+    return Task(
+        dataset=[ADD_HOST, FETCH_DATA, COUNT_ROWS],
+        solver=react(tools=[bash(timeout=60), python(timeout=60)]),
+        sandbox=("docker", "compose.yaml"),
+        message_limit=20,
         sentinel={
             "guard": concurrent({"network": no_network(), "protected": protected()}),
             "audit": suspicion(),

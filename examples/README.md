@@ -1,6 +1,6 @@
 # Examples
 
-Runnable sentinel configurations, each watching a short `react()` agent that has `bash()` and `python()` in a Docker container with no network (`compose.yaml`). `agent_tasks.py` holds the samples and the task builder they share. Read them in this order:
+Runnable sentinel configurations, each watching a short `react()` agent that has `bash()` and `python()` in a Docker container with no network (`compose.yaml`). `example_samples.py` holds the samples they share; each example defines its own `Task` at the bottom. Read them in this order:
 
 | Example | What it teaches | Command |
 |---------|-----------------|---------|

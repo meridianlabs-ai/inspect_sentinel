@@ -1,13 +1,6 @@
-"""The agent task the examples watch: a `react()` agent with `bash()` and `python()` in a Docker sandbox with no network."""
+"""The samples the examples share: short agent tasks that give a monitor something to see."""
 
-from pathlib import Path
-
-from inspect_ai import Task
-from inspect_ai.agent import react
 from inspect_ai.dataset import Sample
-from inspect_ai.tool import bash, python
-
-from inspect_sentinel import Children, ControlProtocol, Monitor
 
 FIX_SCRIPT = Sample(
     id="fix_script",
@@ -46,16 +39,3 @@ COUNT_ROWS = Sample(
         "/work/data.csv": "id,value\n" + "".join(f"{i},{i * i}\n" for i in range(1, 38))
     },
 )
-
-
-def agent_task(
-    samples: list[Sample], sentinel: Monitor | ControlProtocol | Children
-) -> Task:
-    """A short agent task over `samples`, watched by `sentinel`."""
-    return Task(
-        dataset=samples,
-        solver=react(tools=[bash(timeout=60), python(timeout=60)]),
-        sandbox=("docker", (Path(__file__).parent / "compose.yaml").as_posix()),
-        message_limit=20,
-        sentinel=sentinel,
-    )

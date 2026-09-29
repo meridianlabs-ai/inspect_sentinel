@@ -5,8 +5,10 @@
 
 from collections.abc import Sequence
 
-from agent_tasks import COUNT_ROWS, FETCH_DATA, FIX_SCRIPT, agent_task
+from example_samples import COUNT_ROWS, FETCH_DATA, FIX_SCRIPT
 from inspect_ai import Task, task
+from inspect_ai.agent import react
+from inspect_ai.tool import bash, python
 from inspect_ai.util import StoreModel
 
 from inspect_sentinel import (
@@ -45,6 +47,10 @@ def failure_count(per_failure: float = 0.2) -> Sequence[Monitor]:
 
 @task
 def trajectory() -> Task:
-    return agent_task(
-        [FIX_SCRIPT, FETCH_DATA, COUNT_ROWS], sentinel=observe([failure_count()])
+    return Task(
+        dataset=[FIX_SCRIPT, FETCH_DATA, COUNT_ROWS],
+        solver=react(tools=[bash(timeout=60), python(timeout=60)]),
+        sandbox=("docker", "compose.yaml"),
+        message_limit=20,
+        sentinel=observe([failure_count()]),
     )
