@@ -371,7 +371,7 @@ The report type is the registry type. A `@monitor` function returns `Observation
 
 #### The name says the layering
 
-`Decision.action` reads as a command, and under this split it is one: the thing that returned it is the thing configured to decide. What softens it is nesting — a child protocol's decision is advisory to the protocol above it, which may overrule it ([Child decisions are advisory](#child-decisions-are-advisory)) — and the transcript carries that as two fields, `decision` (what this layer returned) and `outcome` (what happened). An earlier draft called the type `Decision`, because a leaf monitor could also return one and "decision" was accurate only when nothing wrapped it. With leaves out of the picture the shorter name is accurate at every position, and the event's two fields say the rest.
+`Decision.action` reads as a command, and under this split it is one: the thing that returned it is the thing configured to decide. What softens it is nesting — a child protocol's decision is advisory to the protocol above it, which may overrule it ([Child decisions are advisory](#child-decisions-are-advisory)) — and the transcript carries that as one event per layer: each records `decision`, what that layer returned, so a child's event and its parent's together show what happened. An earlier draft called the type `Decision`, because a leaf monitor could also return one and "decision" was accurate only when nothing wrapped it. With leaves out of the picture the shorter name is accurate at every position, and the events of the layers above say the rest.
 
 #### Progressive disclosure through defaults, not through the return type {#progressive-disclosure-through-defaults-not-through-the-return-type}
 

@@ -1103,7 +1103,7 @@ Making the report type the registry type removes them. A monitor cannot act, so 
 
 The decision-emitting tradition is served by rules: a protocol with no children is today's `Decision` monitor under an accurate name. The score-emitting tradition is served by monitors plus `threshold()`.
 
-The name `Decision.action` rather than the earlier draft's `Recommendation.recommend`: with leaves out of the picture, a protocol's return is a decision at every position. A nested protocol's decision may be overridden by its parent, and the event's `decision` and `outcome` fields carry that, but what the protocol returned was still what it decided.
+The name `Decision.action` rather than the earlier draft's `Recommendation.recommend`: with leaves out of the picture, a protocol's return is a decision at every position. A nested protocol's decision may be overridden by its parent, and the parent's own decision event shows that, but what the protocol returned was still what it decided.
 
 ### Why not return a bare number
 
