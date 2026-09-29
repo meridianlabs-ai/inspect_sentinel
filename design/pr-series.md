@@ -191,6 +191,10 @@ The canonical docs on inspect_ai's `design/monitor` branch were synced with this
 
 Implemented: `RunnerContext` gains `factory: str`, the full registry name as `registry_info(child).name` gives it (package prefix included), defaulting to empty so the dispatcher's top-layer context need not know the root; `child(name, factory)` takes it and the runner passes each child's registry name when it derives the child's context; `run_root` sets it on the root's own context, so the root's decision, its `bypassed` record and any `final()` origin at the root carry it. The `Recorder` methods take a `RunnerContext` rather than a `Context`, since the runner always passes one, so the dispatcher reads `context.factory` without a cast. A `terminate` superseded by a sibling's `final()` is re-derived with its factory's name, as the other records are. `Reported` is unchanged: the instance name is what authors compare, and the factory is recording metadata.
 
+## No outcome field
+
+Decided with the user 2026-09-29: `SentinelEvent.outcome` is removed (inspect_ai c6d332ba6). What the layer above did with a report is the decision event at the parent path, so the field only duplicated the log. Which child a top-level result came from stays inferred by the viewer, exact after `final()`.
+
 ## Out of scope
 
 The failure policy (`design/sentinel.md`, "Failure semantics"): the runner propagates every exception until a later PR adds the per-child hook described under PR 3.
