@@ -981,6 +981,7 @@ When any layer returns a decision, or passes one to `final()`, the runner checks
 
 - **The action is legal for the stage** — no `reject` or `modify` at `AfterToolCall`, per [One vocabulary across stages](#one-vocabulary-across-stages).
 - **`modified` is set iff `action == "modify"`**. Its type is `Decision`'s field type, which validation already enforces, so the runner does not check it again; a decision built with `model_construct` has opted out of validation.
+- **A `modify` rewrites only the arguments.** The replacement keeps the call's `id` and `function`: the tool was resolved and the model's `tool_call_id` fixed before the protocol ran, so a different function or id would run one tool while the log and the model name another. A protocol that wants a different tool rejects the call and says what to run instead.
 
 A `final()` decision is shape-checked when it is made. The decision is recorded when it takes effect, at the root; each layer it passes is recorded as bypassed as it is passed; a losing final decision is recorded as superseded where it lost.
 
