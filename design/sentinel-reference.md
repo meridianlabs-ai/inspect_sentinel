@@ -679,6 +679,7 @@ Shape checks raise. Each is a deterministic bug in a protocol, not agent input, 
 
 - The action is legal for the stage.
 - `modified` is set if and only if `action == "modify"`. Its type is enforced by `Decision`'s validation, not by the runner.
+- A `modify` keeps the call's `id` and `function` and rewrites only its arguments. To run a different tool, reject and say what to run instead.
 
 `final()` is the mechanism for a decision no layer above may weaken. It replaces an earlier design in which a `binding` flag set a floor that the runner clamped each layer's return up to, recording the override. A value-level rule requires every layer to carry or compare the property, and each patch to it leaked where a middle layer built a new decision; control flow cannot be dropped by a middle layer, because that layer's code does not run. It reuses `terminate`'s cancellation, and the first `final()` wins, as with two `terminate`s. Ordering several authorities is a `chain`, or a panel that collects advisory votes and calls `final()` itself; see [Humans](#humans).
 
