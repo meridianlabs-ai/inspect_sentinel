@@ -292,7 +292,71 @@ async def test_threshold_thresholds_the_highest_dimension() -> None:
         ListRecorder(),
     )
     assert decision is not None and decision.action == "reject"
-    assert decision.explanation == "suspicion 0.80"
+    assert decision.explanation is None
+
+
+@monitor
+def explained(value: float, reason: str) -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(value, reason)
+
+    return check
+
+
+_MONITORS = {
+    "quiet": explained(0.2, "looks routine"),
+    "loud": explained(0.9, "posts credentials to an external host"),
+}
+
+
+@pytest.mark.anyio
+async def test_threshold_rejects_without_telling_the_agent_why() -> None:
+    decision = await _run(
+        threshold(_MONITORS, reject_at=0.5), before_step(), ListRecorder()
+    )
+    assert decision is not None and decision.action == "reject"
+    assert decision.explanation is None
+
+
+@pytest.mark.anyio
+async def test_threshold_explains_a_termination_with_the_monitors_reasoning() -> None:
+    decision = await _run(
+        threshold(_MONITORS, reject_at=0.5, terminate_at=0.8),
+        before_step(),
+        ListRecorder(),
+    )
+    assert decision is not None and decision.action == "terminate"
+    assert (
+        decision.explanation
+        == "suspicion 0.90 from loud: posts credentials to an external host"
+    )
+
+
+@pytest.mark.anyio
+async def test_threshold_names_the_first_monitor_on_a_tie() -> None:
+    decision = await _run(
+        threshold(
+            {"a": explained(0.9, "first"), "b": explained(0.9, "second")},
+            reject_at=0.5,
+            terminate_at=0.8,
+        ),
+        before_step(),
+        ListRecorder(),
+    )
+    assert (
+        decision is not None and decision.explanation == "suspicion 0.90 from a: first"
+    )
+
+
+@pytest.mark.anyio
+async def test_threshold_explains_nothing_when_it_clears() -> None:
+    decision = await _run(
+        threshold([explained(0.1, "fine")], reject_at=0.5),
+        before_step(),
+        ListRecorder(),
+    )
+    assert decision is not None and decision.action == "continue"
+    assert decision.explanation is None
 
 
 def test_the_shipped_protocols_register_under_the_package() -> None:
@@ -423,7 +487,7 @@ async def test_threshold_reads_every_member_of_a_group() -> None:
     decision = await _run(
         threshold([two_before(0.7)], reject_at=0.5), before_step(), recorder
     )
-    assert decision is not None and decision.explanation == "suspicion 0.70"
+    assert decision is not None and decision.action == "reject"
 
 
 def test_threshold_rejects_a_group_that_never_watches_a_tool_call() -> None:

@@ -5,7 +5,14 @@ import math
 from ._context import Context
 from ._monitor import Children, ControlProtocol, Group, Monitors, members, protocol
 from ._report import Decision, Reported, deciding
-from ._runner import describe, named_children, run_children, run_monitors
+from ._runner import (
+    Observations,
+    describe,
+    named_children,
+    peak_suspicion,
+    run_children,
+    run_monitors,
+)
 from ._step import BeforeToolCall, Step
 
 
@@ -88,6 +95,8 @@ def threshold(
 ) -> ControlProtocol:
     """Act on a suspicion score: `reject` at or above one constant, `terminate` at or above another.
 
+    A reject carries no explanation, so the agent is told only that the call was not permitted and learns nothing about what the monitors saw; their scores and reasoning stay in the log, on their own observation events. A terminate, which the agent never sees, is explained for the log: it names the highest-scoring monitor (the first in configuration order on a tie) and carries that monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`.
+
     The smallest protocol, and the one calibration feeds: the constants come from a benign score distribution, which is why they live here and not on a monitor. Every monitor, and every function of a monitor whose factory returned several, must watch `BeforeToolCall`, since that is the only stage a `reject` is legal at.
 
     Args:
@@ -118,13 +127,20 @@ def threshold(
                 )
 
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
-        score = (await run_monitors(monitors, context, step)).max_suspicion()
+        observations = await run_monitors(monitors, context, step)
+        score = observations.max_suspicion()
         if score is None:
             return None
         if terminate_at is not None and score >= terminate_at:
-            return Decision.terminate(f"suspicion {score:.2f}")
+            return Decision.terminate(_explain(observations, score))
         if score >= reject_at:
-            return Decision.reject(f"suspicion {score:.2f}")
+            return Decision.reject()
         return Decision.clear()
 
     return decide
+
+
+def _explain(observations: Observations, score: float) -> str:
+    top = next(o for o in observations if peak_suspicion(o.report) == score)
+    reason = f"suspicion {score:.2f} from {top.name}"
+    return f"{reason}: {top.report.explanation}" if top.report.explanation else reason

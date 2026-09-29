@@ -78,17 +78,17 @@ class _ReportSequence(Sequence[Reported[R_co]], Generic[R_co]):
         return f"{type(self).__name__}({list(self._items)!r})"
 
 
+def peak_suspicion(observation: Observation) -> float:
+    suspicion = observation.suspicion
+    return max(suspicion.values()) if isinstance(suspicion, dict) else suspicion
+
+
 class Observations(_ReportSequence[Observation]):
     """What a layer's monitors reported, in configuration order."""
 
     def max_suspicion(self) -> float | None:
         """The highest suspicion reported, taking the highest dimension of a structured score; `None` if nobody observed."""
-        scores = [
-            max(o.report.suspicion.values())
-            if isinstance(o.report.suspicion, dict)
-            else o.report.suspicion
-            for o in self._items
-        ]
+        scores = [peak_suspicion(o.report) for o in self._items]
         return max(scores) if scores else None
 
 

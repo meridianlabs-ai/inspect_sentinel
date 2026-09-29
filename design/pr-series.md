@@ -195,6 +195,10 @@ Implemented: `RunnerContext` gains `factory: str`, the full registry name as `re
 
 Decided with the user 2026-09-29: `SentinelEvent.outcome` is removed (inspect_ai c6d332ba6). What the layer above did with a report is the decision event at the parent path, so the field only duplicated the log. Which child a top-level result came from stays inferred by the viewer, exact after `final()`.
 
+## Threshold explanations
+
+Implemented, agreed with the user 2026-09-29: `threshold`'s reject carries no explanation, so the agent gets inspect's standard "Tool call not approved." and learns nothing about what the monitors saw; the monitors' scores and reasoning stay on their observation events in the log. A terminate, which reaches only the log, names the highest-scoring monitor (first in configuration order on a tie) and carries its explanation: `suspicion 0.95 from audit: <reason>`. It previously said only `suspicion 0.95` for both.
+
 ## Out of scope
 
 The failure policy (`design/sentinel.md`, "Failure semantics"): the runner propagates every exception until a later PR adds the per-child hook described under PR 3.

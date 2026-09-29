@@ -572,15 +572,15 @@ def threshold(
         if score is None:
             return None
         if terminate_at is not None and score >= terminate_at:
-            return Decision.terminate(f"suspicion {score:.2f}")
+            return Decision.terminate(explain(observations, score))
         if score >= reject_at:
-            return Decision.reject(f"suspicion {score:.2f}")
+            return Decision.reject()
         return Decision.clear()
 
     return decide
 ```
 
-It holds the constants a monitor must not, validates them and its children when it is configured, reads its children's scores through the runner, and returns a decision.
+It holds the constants a monitor must not, validates them and its children when it is configured, reads its children's scores through the runner, and returns a decision. A reject carries no explanation, so the agent is told only that the call was not permitted and learns nothing about what the monitors saw, which matters where the agent is the adversary; the monitors' scores and reasoning stay in the log on their observation events. A terminate, which the agent never sees, is explained for the log: `explain` names the highest-scoring monitor and carries its explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`.
 
 ```python
 ControlProtocol: TypeAlias = (

@@ -763,15 +763,15 @@ def threshold(
         if score is None:
             return None
         if terminate_at is not None and score >= terminate_at:
-            return Decision.terminate(f"suspicion {score:.2f}")
+            return Decision.terminate(explain(observations, score))
         if score >= reject_at:
-            return Decision.reject(f"suspicion {score:.2f}")
+            return Decision.reject()
         return Decision.clear()
 
     return decide
 ```
 
-It holds the constants a monitor cannot, reads its children's scores through the runner, and returns a decision. Nothing else.
+It holds the constants a monitor cannot, reads its children's scores through the runner, and returns a decision. Nothing else. Its reject says nothing, so the agent learns only that the call was refused; the monitors' reasoning is on their own events. A terminate is explained for the log, with the highest-scoring monitor's name, score and explanation.
 
 And `no_curl` from [Shape](#shape), which is the same thing with the middle removed: no monitors, no runner call, a decision straight from the step. Both are protocols. **Deciding is what makes something a protocol, not having children.** An earlier draft defined a protocol as "a monitor that takes monitors", which made the combinator the essence and left rules and `human()` as a special kind of monitor — the kind that decides — with a decorator whose only job was to distinguish the two. That was the wrong seam. The seam the literature draws, and the one the report types already encode, is between observing and deciding; whether a decider consults anything is a detail of its implementation.
 
