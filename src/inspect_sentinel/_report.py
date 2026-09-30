@@ -51,7 +51,7 @@ class Observation(BaseModel):
 
 
 class Decision(BaseModel):
-    """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to `final()`."""
+    """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to `decide_final()`."""
 
     action: Action
     """What should happen at this step. Required."""

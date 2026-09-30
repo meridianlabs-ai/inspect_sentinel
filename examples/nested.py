@@ -1,6 +1,6 @@
 """Composition: a mapping of named children, one of them a `concurrent()` of rules.
 
-The `protected` rule ends the step with `final()`, cancelling the in-flight `audit` monitor.
+The `protected` rule ends the step with `decide_final()`, cancelling the in-flight `audit` monitor.
 """
 
 from example_samples import ADD_HOST, COUNT_ROWS, FETCH_DATA
@@ -16,7 +16,7 @@ from inspect_sentinel import (
     ControlProtocol,
     Decision,
     concurrent,
-    final,
+    decide_final,
     protocol,
 )
 
@@ -25,7 +25,7 @@ PROTECTED_PATHS = ["/etc", "~/.aws"]
 
 @protocol
 def protected() -> ControlProtocol:
-    """Reject, with `final()`, any `bash()` command that mentions `/etc` or `~/.aws`."""
+    """Reject, with `decide_final()`, any `bash()` command that mentions `/etc` or `~/.aws`."""
 
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         command = step.call.arguments.get("command")
@@ -33,7 +33,7 @@ def protected() -> ControlProtocol:
             return None
         for path in PROTECTED_PATHS:
             if path in command:
-                final(
+                decide_final(
                     Decision.reject(
                         f"command mentions {path}",
                         message=f"`{path}` is off limits; work only under /work.",

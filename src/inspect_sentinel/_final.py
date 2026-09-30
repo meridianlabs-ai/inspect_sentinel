@@ -14,7 +14,7 @@ class Origin(NamedTuple):
 
 
 class Final(BaseException):
-    """Raised by `final()` and carried through the runner to `run_root`, which records its decision, the one time it is recorded, and returns it; each layer it passes is recorded as bypassed as it is passed. A `BaseException`, so a protocol's own `except Exception` cannot swallow it."""
+    """Raised by `decide_final()` and carried through the runner to `run_root`, which records its decision, the one time it is recorded, and returns it; each layer it passes is recorded as bypassed as it is passed. A `BaseException`, so a protocol's own `except Exception` cannot swallow it."""
 
     def __init__(self, decision: Decision) -> None:
         super().__init__(decision.action)
@@ -22,7 +22,7 @@ class Final(BaseException):
         self.origin: Origin | None = None
 
 
-def final(decision: Decision) -> NoReturn:
+def decide_final(decision: Decision) -> NoReturn:
     """End the step with this decision.
 
     Nothing above the calling protocol runs; siblings still in flight are cancelled and recorded as such. First call wins if two race.

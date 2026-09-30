@@ -8,7 +8,7 @@ from inspect_ai.tool import ToolCall
 from inspect_ai.util import StoreModel
 
 from inspect_sentinel._context import Context
-from inspect_sentinel._final import Final, final
+from inspect_sentinel._final import Final, decide_final
 from inspect_sentinel._monitor import (
     Children,
     ControlProtocol,
@@ -152,7 +152,7 @@ def decides(action: Action = "continue") -> ControlProtocol:
 @protocol
 def finalizes(action: Action = "reject") -> ControlProtocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        final(Decision(action=action))
+        decide_final(Decision(action=action))
 
     return decide
 
@@ -776,7 +776,7 @@ async def test_final_ends_the_step_past_every_layer_above() -> None:
     def leaf() -> ControlProtocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
-            final(Decision.reject("a person said no"))
+            decide_final(Decision.reject("a person said no"))
 
         return decide
 
@@ -831,7 +831,7 @@ async def test_the_loser_of_a_final_race_is_recorded_as_superseded() -> None:
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
             gate.set()
-            final(Decision.reject("opens"))
+            decide_final(Decision.reject("opens"))
 
         return decide
 
@@ -840,7 +840,7 @@ async def test_the_loser_of_a_final_race_is_recorded_as_superseded() -> None:
         async def decide(context: Context, step: Step) -> Decision | None:
             waiting.set()
             await gate.wait()
-            final(Decision.terminate("follows"))
+            decide_final(Decision.terminate("follows"))
 
         return decide
 
@@ -873,7 +873,7 @@ async def test_an_error_beside_a_final_decision_is_not_hidden_by_it() -> None:
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
             gate.set()
-            final(Decision.reject("opens"))
+            decide_final(Decision.reject("opens"))
 
         return decide
 
@@ -902,7 +902,7 @@ async def test_a_monitor_that_calls_final_is_a_bug() -> None:
     @monitor
     def decides_instead() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
-            final(Decision.reject())
+            decide_final(Decision.reject())
 
         return check
 
@@ -931,7 +931,7 @@ async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -
     def leaf() -> ControlProtocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
-            final(Decision.reject("fanned out"))
+            decide_final(Decision.reject("fanned out"))
 
         return decide
 
@@ -969,7 +969,7 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
             gate.set()
-            final(Decision.reject("opens"))
+            decide_final(Decision.reject("opens"))
 
         return decide
 
@@ -978,7 +978,7 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
         async def decide(context: Context, step: Step) -> Decision | None:
             waiting.set()
             await gate.wait()
-            final(Decision.terminate("follows"))
+            decide_final(Decision.terminate("follows"))
 
         return decide
 
@@ -1088,7 +1088,7 @@ async def test_an_error_beside_a_protocols_own_final_in_its_task_group_surfaces(
 
     async def finals_now() -> None:
         await gate.wait()
-        final(Decision.reject("own"))
+        decide_final(Decision.reject("own"))
 
     async def explodes() -> None:
         gate.set()
@@ -1120,7 +1120,7 @@ async def test_an_error_beside_a_claimed_final_in_a_protocols_own_group_surfaces
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
             gate.set()
-            final(Decision.reject("leaf"))
+            decide_final(Decision.reject("leaf"))
 
         return decide
 
@@ -1159,14 +1159,14 @@ async def test_an_illegal_own_final_supersedes_the_claimed_finals_beside_it() ->
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
             gate.set()
-            final(Decision.reject("leaf"))
+            decide_final(Decision.reject("leaf"))
 
         return decide
 
     async def illegal() -> None:
         waiting.set()
         await gate.wait()
-        final(Decision(action="modify"))
+        decide_final(Decision(action="modify"))
 
     @protocol
     def custom() -> ControlProtocol:
@@ -1197,14 +1197,14 @@ async def test_a_monitors_own_final_supersedes_the_claimed_finals_beside_it() ->
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
             gate.set()
-            final(Decision.reject("leaf"))
+            decide_final(Decision.reject("leaf"))
 
         return decide
 
     async def own() -> None:
         waiting.set()
         await gate.wait()
-        final(Decision.reject("own"))
+        decide_final(Decision.reject("own"))
 
     @monitor
     def meddles() -> Monitor:
@@ -1256,10 +1256,10 @@ async def test_an_ill_shaped_own_final_supersedes_nothing_it_made_itself(
     def twice() -> ControlProtocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             async def valid() -> None:
-                final(Decision.terminate())
+                decide_final(Decision.terminate())
 
             async def invalid() -> None:
-                final(Decision(action="reject"))
+                decide_final(Decision(action="reject"))
 
             async with anyio.create_task_group() as tg:
                 first, second = (valid, invalid) if valid_first else (invalid, valid)
@@ -1433,7 +1433,7 @@ async def test_a_group_member_calling_final_ends_the_step() -> None:
     @protocol
     def gatekeeper() -> Sequence[ControlProtocol]:
         async def screen(context: Context, step: BeforeToolCall) -> Decision | None:
-            final(Decision.reject("screened"))
+            decide_final(Decision.reject("screened"))
 
         async def later(context: Context, step: BeforeToolCall) -> Decision | None:
             ran.append("later")
@@ -1521,7 +1521,7 @@ async def test_a_members_terminate_stops_the_group() -> None:
 
         async def overrule(context: Context, step: BeforeToolCall) -> Decision | None:
             ran.append("overrule")
-            final(Decision.reject("overruled"))
+            decide_final(Decision.reject("overruled"))
 
         return [stop, overrule]
 
@@ -1569,7 +1569,7 @@ async def test_a_group_members_error_names_its_function() -> None:
             return None
 
         async def ends(context: Context, step: BeforeToolCall) -> Observation | None:
-            final(Decision.reject())
+            decide_final(Decision.reject())
 
         return [fine, ends]
 
@@ -1686,7 +1686,7 @@ async def test_superseded_decisions_name_the_factory() -> None:
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
             gate.set()
-            final(Decision.reject("opens"))
+            decide_final(Decision.reject("opens"))
 
         return decide
 
@@ -1695,7 +1695,7 @@ async def test_superseded_decisions_name_the_factory() -> None:
         async def decide(context: Context, step: Step) -> Decision | None:
             waiting.set()
             await gate.wait()
-            final(Decision.terminate("follows"))
+            decide_final(Decision.terminate("follows"))
 
         return decide
 
