@@ -230,8 +230,17 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 
 Implemented: the old private `Group`/`MonitorGroup`/`ProtocolGroup` with a raising `__call__` is gone; one internal base, `Group`, remains for `isinstance` checks and holds `functions`. Each member's accepted stages are recorded on its guarded function and `members()` reads them from there. `named_children` treats a group as one instance, as it does a callable.
 
-## Out of scope
+## Deferred
 
-The failure policy (`design/sentinel.md`, "Failure semantics"): the runner propagates every exception until a later PR adds the per-child hook described under PR 3.
+Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands.
 
-Generate stages, `sequential`, `human`, `defer_to_trusted`, `resample`, views and rendering helpers, `store_as(scope=)`, `fetch`/`terminate` on `Host`, the `inspect_ai` dispatcher and `SentinelEvent`.
+- **Generate stages** (`BeforeGenerate`, `AfterGenerate`), and with them the design of what a generate-stage `modify` may replace.
+- **`Decision.modify(step, arguments=...)`**, a constructor that keeps the call's id and function by construction. Waits for the generate stages, since the constructor's shape depends on what a generate-stage modify replaces. Until then, authors write `Decision(action="modify", modified=replace(step.call, arguments={...}))`, and the shape check rejects a changed id or function.
+- **`sequential()` and `human()`**, shipped together: the case that needs both is a rule that escalates to a person, who ends the step with `decide_final()`.
+- **The failure policy** (`sentinel.md`, "Failure semantics"): until the per-child hook lands, the runner propagates every exception.
+- **Containing `decide_final()`**: a parent configured to hold back a child's final decision, e.g. `shadow(child)` for trialling a protocol on live traffic, recorded as its own event kind. Waits for a user who needs shadow mode.
+- **Monitor model calls tied to their row**: today they are listed together at the end of the sentinel block, because a `ModelEvent` records no instance path. Needs a span per instance inside the sentinel span, or the model event ids on the `SentinelEvent`.
+- **`compaction_summary(step)`**, a helper returning the latest compaction summary text. Waits on inspect_ai making the `"summary"` message metadata key a documented constant, and must handle a summary merged into the task prompt.
+- **`react` overflow recovery rewriting history**: when a call overflows the context window, `react` replaces `state.messages` with the compacted list, so `step.history` loses the folded turns. To raise with inspect_ai.
+- **`defer_to_trusted`, `resample`, views and rendering helpers, `store_as(scope=)`, and `fetch`/`terminate` on `Host`**: designed, not yet built.
+- **Threshold comparisons in the viewer** (`0.62 < 0.80`): the event does not record the threshold a protocol applied.
