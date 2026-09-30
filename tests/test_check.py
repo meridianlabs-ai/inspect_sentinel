@@ -2,7 +2,7 @@ import pytest
 from inspect_ai.tool import ToolCall
 
 from inspect_sentinel._check import validate_decision_shape
-from inspect_sentinel._final import Final, final
+from inspect_sentinel._final import Final, decide_final
 from inspect_sentinel._report import Action, Decision
 from tests._fakes import after_step, before_step
 
@@ -80,5 +80,5 @@ def test_only_a_reject_may_carry_a_message(action: Action) -> None:
 def test_final_raises_final_carrying_the_decision() -> None:
     decision = Decision.reject("a person said no")
     with pytest.raises(Final) as info:
-        final(decision)
+        decide_final(decision)
     assert info.value.decision is decision

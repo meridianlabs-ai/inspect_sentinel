@@ -44,7 +44,7 @@ def test_author_facing_names_are_exported() -> None:
         "observe",
         "concurrent",
         "threshold",
-        "final",
+        "decide_final",
     }
     assert expected <= set(inspect_sentinel.__all__)
     for name in expected:

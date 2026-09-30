@@ -7,7 +7,7 @@ from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import ToolCall
 
 from inspect_sentinel._context import Context
-from inspect_sentinel._final import final
+from inspect_sentinel._final import decide_final
 from inspect_sentinel._monitor import (
     ControlProtocol,
     Monitor,
@@ -181,7 +181,9 @@ def panel(children: Protocols) -> ControlProtocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         votes = await run_protocols(children, context, step)
         rejects = sum(v.report.action == "reject" for v in votes)
-        final(Decision.reject() if rejects * 2 > len(votes) else Decision.clear())
+        decide_final(
+            Decision.reject() if rejects * 2 > len(votes) else Decision.clear()
+        )
 
     return decide
 

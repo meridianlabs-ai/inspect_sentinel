@@ -192,7 +192,7 @@ async def run_root(
 ) -> Decision | None:
     """Invoke the resolved root protocol for one step and return the step's outcome.
 
-    The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its context's `factory` is set to its full registry name. Its decision is shape-checked and recorded like any layer's; a `final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
+    The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its context's `factory` is set to its full registry name. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.
@@ -238,9 +238,9 @@ async def run_monitors(
 async def run_protocols(
     protocols: ControlProtocol | Protocols, context: Context, step: Step
 ) -> Decisions:
-    """Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns `terminate` or calls `final()`.
+    """Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns `terminate` or calls `decide_final()`.
 
-    A `final()` from any protocol at any depth below propagates out of this call, so the caller's own decision logic does not run.
+    A `decide_final()` from any protocol at any depth below propagates out of this call, so the caller's own decision logic does not run.
 
     Args:
         protocols: One protocol, a sequence of protocols, or a mapping of instance names to protocols, named as for `run_monitors`.
@@ -254,7 +254,7 @@ async def run_protocols(
 async def run_children(
     children: Monitor | ControlProtocol | Children, context: Context, step: Step
 ) -> Reports:
-    """Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns `terminate` or calls `final()`.
+    """Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns `terminate` or calls `decide_final()`.
 
     A child cancelled this way is recorded through `Recorder.cancelled`; one that finishes without awaiting is recorded normally.
 
@@ -323,7 +323,7 @@ async def _run_named(
             for index, (name, child) in enumerate(named):
                 tg.start_soon(run_one, index, name, child, tg.cancel_scope.cancel)
     except Final:
-        # a final() outran a terminate already recorded as a decision
+        # a decide_final() outran a terminate already recorded as a decision
         for factory, reported in terminated:
             # _run_child accepted this context, so it is a RunnerContext
             child_context = cast(RunnerContext, context).child(reported.name, factory)
@@ -456,7 +456,7 @@ def _on_final(
     if kind == "monitor" and unclaimed:
         _supersede([ex for ex in finals if ex.origin is not None])
         raise TypeError(
-            f"monitor {label} called final(); a monitor returns observations, and only a protocol may end the step."
+            f"monitor {label} called decide_final(); a monitor returns observations, and only a protocol may end the step."
         ) from unclaimed[0]
     own = winner.origin is None
     claimed = [ex for ex in finals if ex.origin is not None]
