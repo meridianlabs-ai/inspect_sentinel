@@ -198,7 +198,11 @@ Decided with the user 2026-09-29: `SentinelEvent.outcome` is removed (inspect_ai
 
 ## Threshold explanations
 
-Implemented, agreed with the user 2026-09-29: `threshold`'s reject carries no explanation, so the agent gets inspect's standard "Tool call not approved." and learns nothing about what the monitors saw; the monitors' scores and reasoning stay on their observation events in the log. A terminate, which reaches only the log, names the highest-scoring monitor (first in configuration order on a tie) and carries its explanation: `suspicion 0.95 from audit: <reason>`. It previously said only `suspicion 0.95` for both.
+Implemented, agreed with the user 2026-09-29: a terminate names the highest-scoring monitor (first in configuration order on a tie) and carries its explanation: `suspicion 0.95 from audit: <reason>`. It previously said only `suspicion 0.95`. The reject at first carried no explanation, to keep the reasoning from the agent; superseded by [Decision.message and single-instance protocols](#decisionmessage-and-single-instance-protocols), which makes `explanation` log-only, so the reject now carries the same explanation.
+
+## Decision.message and single-instance protocols
+
+Implemented, agreed with the user 2026-09-29: `Decision` gains `message: str | None`, the only text the agent reads from a decision; `explanation` is log-only. `Decision.reject(explanation, *, message=None)` takes it keyword-only and the other constructors do not. The shape check allows `message` only on a `reject`, since "continue, but tell the model X" needs a way to deliver text while the step proceeds, which does not exist yet. `threshold`'s reject and terminate both carry `suspicion 0.95 from <name>: <reason>` and neither sets `message`, so the agent gets the host's default "not approved" text. `observe`, `threshold` and `concurrent` take a single instance as well as a sequence or mapping (`Monitor | Monitors`, `Monitor | ControlProtocol | Children`), matching `run_monitors`, so `threshold(suspicion_monitor(), reject_at=0.8)` type-checks. The inspect_ai dispatcher must pass `message`, not `explanation`, to the agent.
 
 ## Out of scope
 

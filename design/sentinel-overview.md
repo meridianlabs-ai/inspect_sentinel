@@ -156,7 +156,7 @@ def threshold(
         if terminate_at is not None and score >= terminate_at:
             return Decision.terminate(explain(observations, score))
         if score >= reject_at:
-            return Decision.reject()
+            return Decision.reject(explain(observations, score))
         return Decision.clear()
 
     return decide
