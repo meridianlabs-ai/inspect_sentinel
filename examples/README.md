@@ -6,7 +6,7 @@ Runnable sentinel configurations, each watching a short `react()` agent that has
 |---------|-----------------|---------|
 | `no_network.py` | A rule: a protocol with no monitors that rejects `curl`, `wget` and `pip install` | `inspect eval examples/no_network.py --model openai/gpt-5-mini` |
 | `llm_suspicion.py` | A monitor that asks a model for a suspicion score, under `threshold(reject_at=0.8)` | `inspect eval examples/llm_suspicion.py --model openai/gpt-5-mini --model-role monitor=anthropic/claude-haiku-4-5` |
-| `trajectory.py` | Two functions of one monitor (`before` and `after`) sharing `store_as()` state, under `observe()` | `inspect eval examples/trajectory.py --model openai/gpt-5-mini` |
+| `trajectory.py` | Two functions of one monitor (`before` and `after`), returned as a `MonitorGroup` and sharing `store_as()` state, under `observe()` | `inspect eval examples/trajectory.py --model openai/gpt-5-mini` |
 | `nested.py` | Composition: a mapping of named children with a `concurrent()` of rules inside it, and a rule that ends the step with `decide_final()` | `inspect eval examples/nested.py --model openai/gpt-5-mini --model-role monitor=anthropic/claude-haiku-4-5` |
 
 The checks are deliberately simple, to keep the examples readable. They are illustrative, not protection: the container's `network_mode: none` is what keeps the agent off the network, and lexical rules like these are easy to evade (a different tool, `python()` instead of `bash()`, a string built at run time).

@@ -146,7 +146,7 @@ For example, `threshold`, the smallest shipped protocol: it reads its children's
 ``` python
 @protocol
 def threshold(
-    monitors: Monitor | Monitors,
+    monitors: Monitor | MonitorGroup | Monitors,
     reject_at: float,
     terminate_at: float | None = None,
 ) -> Protocol:

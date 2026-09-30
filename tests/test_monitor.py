@@ -1,5 +1,5 @@
 import inspect
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
@@ -15,13 +15,18 @@ from inspect_ai._util.registry import (
 from inspect_sentinel._context import Context
 from inspect_sentinel._monitor import (
     Monitor,
+    MonitorGroup,
     Protocol,
+    ProtocolGroup,
     monitor,
     protocol,
     step_types,
 )
+from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import Decision, Observation
+from inspect_sentinel._runner import run_monitors, run_root
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
+from tests._fakes import before_step, runner_context
 
 
 @monitor
@@ -141,7 +146,7 @@ def test_monitor_returning_decisions_is_rejected_at_configuration() -> None:
     def factory_returning() -> Any:
         return decides_not_observes
 
-    wrong = monitor(cast(Any, factory_returning))
+    wrong = monitor(cast(Callable[[], Monitor], factory_returning))
     with pytest.raises(TypeError, match="Observation"):
         wrong()
 
@@ -155,7 +160,7 @@ def test_protocol_returning_observations_is_rejected_at_configuration() -> None:
     def protocol_returning() -> Any:
         return observes_not_decides
 
-    wrong = protocol(cast(Any, protocol_returning))
+    wrong = protocol(cast(Callable[[], Protocol], protocol_returning))
     with pytest.raises(TypeError, match="Decision"):
         wrong()
 
@@ -169,7 +174,7 @@ def test_unannotated_step_parameter_is_rejected_at_configuration() -> None:
     def factory_returning() -> Any:
         return unannotated_step
 
-    wrong = monitor(cast(Any, factory_returning))
+    wrong = monitor(cast(Callable[[], Monitor], factory_returning))
     with pytest.raises(TypeError, match="annotat"):
         wrong()
 
@@ -183,7 +188,7 @@ def test_unresolvable_annotation_names_the_fix() -> None:
     def factory_returning() -> Any:
         return unresolvable_step
 
-    wrong = monitor(cast(Any, factory_returning))
+    wrong = monitor(cast(Callable[[], Monitor], factory_returning))
     with pytest.raises(TypeError, match="Missing"):
         wrong()
 
@@ -195,7 +200,7 @@ def test_non_async_function_is_rejected_at_configuration() -> None:
     def factory_returning() -> Any:
         return not_async
 
-    wrong = monitor(cast(Any, factory_returning))
+    wrong = monitor(cast(Callable[[], Monitor], factory_returning))
     with pytest.raises(TypeError, match="async"):
         wrong()
 
@@ -222,7 +227,7 @@ def test_keyword_only_step_is_rejected_at_configuration() -> None:
     def factory() -> Any:
         return keyword_only
 
-    wrong = monitor(cast(Any, factory))
+    wrong = monitor(cast(Callable[[], Monitor], factory))
     with pytest.raises(TypeError, match="positional"):
         wrong()
 
@@ -234,7 +239,7 @@ def test_monitor_annotating_step_is_rejected_at_configuration() -> None:
     def factory() -> Any:
         return every_stage
 
-    wrong = monitor(cast(Any, factory))
+    wrong = monitor(cast(Callable[[], Monitor], factory))
     with pytest.raises(TypeError, match="one stage"):
         wrong()
 
@@ -270,20 +275,20 @@ def test_bound_method_is_rejected_at_configuration() -> None:
     def factory() -> Any:
         return Detector().observe
 
-    wrong = monitor(cast(Any, factory))
+    wrong = monitor(cast(Callable[[], Monitor], factory))
     with pytest.raises(TypeError, match="plain async function"):
         wrong()
 
 
 @monitor
-def paired() -> Sequence[Monitor]:
+def paired() -> MonitorGroup:
     async def before(context: Context, step: BeforeToolCall) -> Observation | None:
         return None
 
     async def after(context: Context, step: AfterToolCall) -> Observation | None:
         return None
 
-    return [before, after]
+    return MonitorGroup(before, after)
 
 
 def test_a_group_is_one_registered_instance() -> None:
@@ -297,6 +302,10 @@ async def _before(context: Context, step: BeforeToolCall) -> Observation | None:
     return None
 
 
+async def _after(context: Context, step: AfterToolCall) -> Observation | None:
+    return None
+
+
 async def _unannotated(context: Context, step: Any) -> Observation | None:
     return None
 
@@ -304,29 +313,137 @@ async def _unannotated(context: Context, step: Any) -> Observation | None:
 _unannotated.__annotations__.pop("step")
 
 
+async def _decide(context: Context, step: Step) -> Decision | None:
+    return None
+
+
 @pytest.mark.parametrize(
-    ("members", "error", "message"),
+    ("functions", "message"),
+    [([], "at least one function"), ([_before, _before], "'_before'")],
+)
+def test_an_invalid_group_is_rejected_when_built(
+    functions: list[Monitor], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        MonitorGroup(*functions)
+
+
+@pytest.mark.parametrize(
+    ("returned", "error", "message"),
     [
-        ([], ValueError, "at least one function"),
-        ([_before, _before], ValueError, "_before"),
-        ([_before, _unannotated], TypeError, "annotat"),
+        (lambda: MonitorGroup(_before, _unannotated), TypeError, "annotat"),
+        (lambda: [_before, _after], TypeError, r"return MonitorGroup\(\.\.\.\)"),
+        (lambda: (_before, _after), TypeError, r"return MonitorGroup\(\.\.\.\)"),
+        (lambda: ProtocolGroup(_decide), TypeError, "not a ProtocolGroup"),
     ],
 )
-def test_an_invalid_group_is_rejected_at_configuration(
-    members: list[Any], error: type[Exception], message: str
+def test_a_factory_returning_the_wrong_thing_is_rejected_at_configuration(
+    returned: Callable[[], object], error: type[Exception], message: str
 ) -> None:
-    def factory() -> Any:
-        return members
-
-    wrong = monitor(cast(Any, factory))
+    wrong = monitor(cast(Callable[[], Monitor], returned))
     with pytest.raises(error, match=message):
         wrong()
 
 
+def test_a_monitor_group_from_a_protocol_factory_is_rejected() -> None:
+    def returns_monitor_group() -> MonitorGroup:
+        return MonitorGroup(_before)
+
+    wrong = protocol(cast(Callable[[], Protocol], returns_monitor_group))
+    with pytest.raises(TypeError, match="not a MonitorGroup"):
+        wrong()
+
+
 @pytest.mark.anyio
-async def test_a_group_runs_only_through_the_runner() -> None:
-    with pytest.raises(TypeError, match="only through the runner"):
-        await cast(Any, paired())(cast(Any, None), cast(Any, None))
+async def test_a_group_cannot_be_called() -> None:
+    with pytest.raises(TypeError, match="not callable"):
+        await cast(Any, paired())(runner_context(), before_step())
+
+
+@monitor(name="renamed_monitor", version=3)
+def configured_monitor() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation:
+        return Observation.score(0.1)
+
+    return check
+
+
+@protocol()
+def bare_call_protocol() -> ProtocolGroup:
+    async def first(context: Context, step: BeforeToolCall) -> Decision | None:
+        return None
+
+    async def second(context: Context, step: AfterToolCall) -> Decision | None:
+        return None
+
+    return ProtocolGroup(first, second)
+
+
+def test_decorator_arguments_set_the_name_and_version() -> None:
+    instance = configured_monitor()
+    assert registry_info(instance).name == "renamed_monitor"
+    assert registry_info(instance).metadata["version"] == 3
+    assert registry_lookup("monitor", "renamed_monitor") is configured_monitor
+    assert registry_lookup("monitor", "configured_monitor") is None
+    assert registry_info(before_monitor()).metadata["version"] == 0
+    group = bare_call_protocol()
+    assert registry_info(group).name == "bare_call_protocol"
+    assert step_types(group) == frozenset({BeforeToolCall, AfterToolCall})
+
+
+@pytest.mark.anyio
+async def test_a_configured_function_keeps_its_identity() -> None:
+    check = cast(Callable[..., Any], configured_monitor())
+    assert check.__name__ == "check"
+    assert list(inspect.signature(check).parameters) == ["context", "step"]
+    assert inspect.iscoroutinefunction(check)
+    assert await check(runner_context(), before_step()) == Observation.score(0.1)
+
+
+@monitor
+def watched() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation:
+        return Observation.score(0.4)
+
+    return check
+
+
+@protocol
+def calls_directly(child: Monitor) -> Protocol:
+    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+        await cast(Callable[..., Any], child)(context, step)
+        return None
+
+    return decide
+
+
+@protocol
+def calls_through_runner(child: Monitor) -> Protocol:
+    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+        observations = await run_monitors(child, context, step)
+        return Decision.reject() if observations.max_suspicion() else None
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_direct_call_during_a_run_is_rejected() -> None:
+    root = concurrent(calls_directly(watched()))
+    with pytest.raises(RuntimeError, match="run_monitors/run_protocols/run_children"):
+        await run_root(root, runner_context(), before_step())
+
+
+@pytest.mark.anyio
+async def test_a_call_through_the_runner_during_a_run_is_allowed() -> None:
+    root = concurrent(calls_through_runner(watched()))
+    decision = await run_root(root, runner_context(), before_step())
+    assert decision is not None and decision.action == "reject"
+
+
+@pytest.mark.anyio
+async def test_a_direct_call_outside_a_run_is_allowed() -> None:
+    decide = cast(Callable[..., Any], calls_directly(watched()))
+    assert await decide(runner_context(), before_step()) is None
 
 
 def test_a_monitor_and_a_protocol_cannot_share_a_name() -> None:

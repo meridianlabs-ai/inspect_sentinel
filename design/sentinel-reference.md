@@ -75,8 +75,8 @@ The pieces:
 | Piece | What it is |
 |---|---|
 | Sentinel | The umbrella: the feature, and a configured tree of one protocol with its monitors. `Task(sentinel=)`, `SentinelEvent`, `inspect_ai.sentinel`. |
-| `@monitor` | Registry decorator on a factory that returns a monitor function. A monitor observes and returns `Observation \| None`. Registry type `"monitor"`. |
-| `@protocol` | Registry decorator on a factory that returns a protocol function. A protocol decides and returns `Decision \| None`. It may take monitors or other protocols as children, or none. Registry type `"protocol"`. |
+| `@monitor` | Registry decorator on a factory that returns a monitor function, or a `MonitorGroup` of several. A monitor observes and returns `Observation`, or `None` to abstain. Registry type `"monitor"`. `@monitor(name=..., version=...)` sets the registered name and version. |
+| `@protocol` | Registry decorator on a factory that returns a protocol function, or a `ProtocolGroup` of several. A protocol decides and returns `Decision`, or `None` to abstain. It may take monitors or other protocols as children, or none. Registry type `"protocol"`. |
 | `Context` | The first argument. What the agent was asked to do, the caller's own state, and its route to inference and other effects. Constant for a sample. |
 | `BeforeGenerate`, `AfterGenerate`, `BeforeToolCall`, `AfterToolCall` | The second argument. Which one you annotate selects the stage. |
 | `Observation` | A monitor's report: a suspicion score and an explanation. Recorded; acted on only by a protocol. |
@@ -109,8 +109,9 @@ Rules:
 
   > `suspicion_monitor`: could not resolve the annotation `BeforeToolCall` on parameter `step`. Import it at runtime rather than under `TYPE_CHECKING`.
 
-- **Annotate the return as `Observation | None`.** A monitor observes. If you find yourself wanting to return an action, you are writing a protocol; see [Monitor or protocol?](#monitor-or-protocol).
-- **One function, one stage.** If a concern spans two stages, write two functions. Independent ones are two monitors, listed both. When they share state, return both from one factory, `return [before, after]`: the functions form one instance, with one name, one path and one `store_as` namespace, and each runs, in the order returned, at the stage it watches, until one returns `terminate` or calls `decide_final()`; the functions after it do not run and are not recorded. Give them distinct `__name__`s; that is how their reports are told apart.
+- **Annotate `-> Observation`, or `-> Observation | None` if it can abstain.** A monitor observes. If you find yourself wanting to return an action, you are writing a protocol; see [Monitor or protocol?](#monitor-or-protocol).
+- **One function, one stage.** If a concern spans two stages, write two functions. Independent ones are two monitors, listed both. When they share state, return both from one factory as `return MonitorGroup(before, after)` (a `ProtocolGroup` for protocols): the functions form one instance, with one name, one path and one `store_as` namespace, and each runs, in the order returned, at the stage it watches, until one returns `terminate` or calls `decide_final()`; the functions after it do not run and are not recorded. Give them distinct `__name__`s; that is how their reports are told apart, and the group's constructor rejects a duplicate. A group is not callable, so it cannot be invoked by mistake, and a factory that returns a plain list or tuple is an error that says to return the group.
+- **Name and version it in the decorator when you need to.** `@monitor(name="suspicion", version=2)` registers under `name` in place of the factory's `__name__`, as `@solver(name=)` does, and records `version` (an `int`, default 0) in the registry metadata so a calibration can record which version it measured; bump it when a change alters the scores. Bare `@monitor` is the same with the defaults. `portable=` and `fail=` are future arguments on this form.
 - **Never take a threshold as a factory parameter.** If your monitor compares a score to a constant, return the score as an `Observation` and let a protocol hold the constant. See [Monitor or protocol?](#monitor-or-protocol).
 - **Do not keep per-sample state in the closure.** The factory runs once per configuration and the returned function is shared by every sample. Use `context.store_as()`. See [State](#state).
 
@@ -595,21 +596,29 @@ Protocol: TypeAlias = (
     | Callable[[Context, AfterToolCall], Awaitable[Decision | None]]
 )
 
-Monitors: TypeAlias = Mapping[str, Monitor] | Sequence[Monitor]
-Protocols: TypeAlias = Mapping[str, Protocol] | Sequence[Protocol]
-Children: TypeAlias = Mapping[str, Monitor | Protocol] | Sequence[Monitor | Protocol]
+Monitors: TypeAlias = Mapping[str, Monitor | MonitorGroup] | Sequence[Monitor | MonitorGroup]
+Protocols: TypeAlias = Mapping[str, Protocol | ProtocolGroup] | Sequence[Protocol | ProtocolGroup]
+Children: TypeAlias = (
+    Mapping[str, Monitor | MonitorGroup | Protocol | ProtocolGroup]
+    | Sequence[Monitor | MonitorGroup | Protocol | ProtocolGroup]
+)
 
-def protocol(factory: Callable[P, Protocol]) -> Callable[P, Protocol]: ...
+@overload
+def protocol(factory: Callable[P, Protocol], /) -> Callable[P, Protocol]: ...
+@overload
+def protocol(factory: Callable[P, ProtocolGroup], /) -> Callable[P, ProtocolGroup]: ...
+@overload
+def protocol(*, name: str | None = None, version: int = 0) -> ProtocolDecorator: ...
 ```
 
 Rules:
 
 - **Decorate with `@protocol`.** It registers under the `"protocol"` registry type. The returned callable must be `Decision`-kind; see [Static checking](#static-checking).
-- **Take children as one named parameter, if any.** `monitors: Monitor | Monitors` for a protocol that reads scores (`threshold`), `children: Monitor | Protocol | Children` for a composition (`sequential`, `concurrent`), so one instance needs no list around it. Not `*args`: a mapping is how children get names, and the parameter name is the nested key in YAML. A rule takes no children at all.
+- **Take children as one named parameter, if any.** `monitors: Monitor | MonitorGroup | Monitors` for a protocol that reads scores (`threshold`), `children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Children` for a composition (`sequential`, `concurrent`), so one instance needs no list around it. Not `*args`: a mapping is how children get names, and the parameter name is the nested key in YAML. A rule takes no children at all.
 - **Annotate the return as `Protocol`.** A control protocol, not `typing.Protocol`; see [Open questions](#open-questions) item 19.
 - **Annotate `step` as `Step`** to run at all four stages. Annotate a single payload to run at one. `threshold` above runs at `BeforeToolCall` so that `reject` is always legal.
-- **Return `Decision | None`.** A protocol's job is to produce a decision.
-- **Invoke children only through the runner.** `run_monitors()` and `run_protocols()` for one family, `run_children()` for a mixed group. Each takes one child, a sequence or a mapping, and returns a sequence of reports. See [The runner](#the-runner). A child called any other way produces no event, and a protocol that decided with no child reports in the transcript is visible in the log.
+- **Annotate `-> Decision`, or `-> Decision | None` if it can abstain.** A protocol's job is to produce a decision.
+- **Invoke children only through the runner.** `run_monitors()` and `run_protocols()` for one family, `run_children()` for a mixed group. Each takes one child, a sequence or a mapping, and returns a sequence of reports. See [The runner](#the-runner). A configured child called directly while a sentinel is running raises `RuntimeError` telling you to use the runner; outside a run, as in a unit test, a direct call works.
 - **Transform `step` before the call, not after.** Paraphrasing, minification, and honeypot injection are transforms on the input to the runner.
 - **Do not expect to see a final child decision.** A child that calls `decide_final()` ends the step inside your `await run_protocols(...)`, so the rest of your code does not run and you are recorded as bypassed. Do not catch it. See [The boundary check](#the-boundary-check).
 - **Protocols can nest.** A budget-owning protocol can wrap a paraphrasing protocol that wraps monitors. The rule for two nested budget owners is open; outermost wins is the likely answer.
@@ -757,7 +766,8 @@ mypy and pyright check the structural claims before the runtime pass does. `@sco
 
 | Claim | Static check |
 |---|---|
-| A monitor returns `Observation \| None` | `@monitor` is typed `Callable[P, Monitor] -> Callable[P, Monitor]`; a `Decision`-returning body matches no member of `Monitor` |
+| A monitor returns `Observation \| None` | `@monitor` is typed `Callable[P, Monitor] -> Callable[P, Monitor]`, with an overload `Callable[P, MonitorGroup] -> Callable[P, MonitorGroup]` for a group; a `Decision`-returning body matches no member of `Monitor` |
+| A group is not called directly | `MonitorGroup` and `ProtocolGroup` have no `__call__`, so calling one is a type error |
 | A protocol returns `Decision \| None` | the same with `Protocol`; an `Observation`-returning body matches no member |
 | The inner function's second parameter is a stage type | `Callable` parameters are contravariant; `Step` matches the `Step` variant, `BeforeToolCall` matches that variant, an unannotated parameter matches nothing |
 | `threshold` takes monitors; `sequential` takes children | the parameter types; `threshold(human())` is a type error because a rule has no score |

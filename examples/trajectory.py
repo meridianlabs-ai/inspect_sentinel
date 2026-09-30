@@ -3,8 +3,6 @@
 `after` counts the calls that failed; `before` grows more suspicious with each failure.
 """
 
-from collections.abc import Sequence
-
 from example_samples import COUNT_ROWS, FETCH_DATA, FIX_SCRIPT
 from inspect_ai import Task, task
 from inspect_ai.agent import react
@@ -15,7 +13,7 @@ from inspect_sentinel import (
     AfterToolCall,
     BeforeToolCall,
     Context,
-    Monitor,
+    MonitorGroup,
     Observation,
     monitor,
     observe,
@@ -27,7 +25,7 @@ class Failures(StoreModel):
 
 
 @monitor
-def failure_count(per_failure: float = 0.2) -> Sequence[Monitor]:
+def failure_count(per_failure: float = 0.2) -> MonitorGroup:
     """Suspicion that rises by `per_failure` with each failed call so far."""
 
     async def before(context: Context, step: BeforeToolCall) -> Observation:
@@ -42,7 +40,7 @@ def failure_count(per_failure: float = 0.2) -> Sequence[Monitor]:
             context.store_as(Failures).count += 1
         return Observation.score(0.0, "call failed" if failed else "call succeeded")
 
-    return [before, after]
+    return MonitorGroup(before, after)
 
 
 @task
