@@ -34,7 +34,10 @@ def protected() -> ControlProtocol:
         for path in PROTECTED_PATHS:
             if path in command:
                 final(
-                    Decision.reject(f"`{path}` is off limits; work only under /work.")
+                    Decision.reject(
+                        f"command mentions {path}",
+                        message=f"`{path}` is off limits; work only under /work.",
+                    )
                 )
         return Decision.clear()
 

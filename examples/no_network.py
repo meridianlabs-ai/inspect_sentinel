@@ -30,7 +30,8 @@ def no_network() -> ControlProtocol:
         for name in NETWORK_COMMANDS:
             if name in command:
                 return Decision.reject(
-                    f"`{name}` needs the network, which this task does not allow."
+                    f"command uses {name}",
+                    message=f"`{name}` needs the network, which this task does not allow.",
                 )
         return Decision.clear()
 
