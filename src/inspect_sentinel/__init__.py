@@ -7,9 +7,9 @@ from ._context import Context, Host
 from ._final import decide_final
 from ._monitor import (
     Children,
-    ControlProtocol,
     Monitor,
     Monitors,
+    Protocol,
     Protocols,
     monitor,
     protocol,
@@ -38,7 +38,6 @@ __all__ = [
     "BeforeToolCall",
     "Children",
     "Context",
-    "ControlProtocol",
     "Decision",
     "Decisions",
     "Host",
@@ -46,6 +45,7 @@ __all__ = [
     "Monitors",
     "Observation",
     "Observations",
+    "Protocol",
     "Protocols",
     "Report",
     "Reported",

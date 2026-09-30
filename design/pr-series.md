@@ -14,7 +14,7 @@ The minimal surface that lets `inspect_ai` connect: the types a dispatcher const
 - **Recording is the runner's, through a separate interface.** `Host` is the author-facing ABI (`generate` only for now). `Recorder` has four methods: `record`, called by the runner for every participating child; `cancelled`, called for a child cancelled before it reported; `bypassed`, called for a protocol a descendant's `decide_final()` ended the step past; and `superseded`, called for a `decide_final()` decision that lost a race to another in the same layer or was outranked by an exception there. This departs from `sentinel-deployment.md`, whose `Host` ABI carries `record`; that doc is to be updated.
 - **Two context types.** `Context` is what authors see. `RunnerContext(Context)` adds `recorder` and `child()`; the dispatcher builds it, `dataclasses.replace` preserves it down the layers, and the runner raises `TypeError` if handed a bare `Context`.
 - **Author surface vs integration surface.** `__init__` exports only what an author writes against, including `Reported` and `Report`, since `step.escalations` and the runner's results are typed with them. `inspect_sentinel/_integration.py` re-exports what the dispatcher needs (`RunnerContext`, `Recorder`, `validate_instance_name`, `step_types`, `resolve_sentinel`, `Sentinels`, `run_root`); `inspect_ai` imports from that module only, so refactors have one file to keep stable.
-- **Shipped protocols:** `observe`, `concurrent`, `threshold`. `chain` and `human` are follow-ups.
+- **Shipped protocols:** `observe`, `concurrent`, `threshold`. `sequential` and `human` are follow-ups.
 
 ## Layout
 
@@ -24,7 +24,7 @@ src/inspect_sentinel/
   _step.py          BeforeToolCall, AfterToolCall, Step, Stage
   _report.py        Suspicion, Action, Observation, Decision, Report, Reported
   _context.py       Host, Recorder, Context, RunnerContext
-  _monitor.py       Monitor, ControlProtocol, Monitors, Protocols, Children, @monitor, @protocol
+  _monitor.py       Monitor, Protocol, Monitors, Protocols, Children, @monitor, @protocol
   _runner.py        Observations, Decisions, run_monitors, run_protocols,
                     run_children
   _check.py         validate_decision_shape
@@ -89,7 +89,7 @@ class Decision(BaseModel):
     explanation: str | None = None                      # log-only; the agent never sees it
     message: str | None = None                          # what the agent reads; reject only, for now
     metadata: dict[str, Any] | None = None
-    @classmethod clear / reject(explanation, *, message) / terminate / escalate
+    @classmethod proceed / reject(explanation, *, message) / terminate / escalate
 
 Report = Observation | Decision
 
@@ -103,12 +103,12 @@ class Reported(Generic[R_co]):
 ```
 
 ```python
-class Host(Protocol):
+class Host(typing.Protocol):
     async def generate(self, input: str | list[ChatMessage], *, model: str | None = None,
                        tools: list[ToolInfo] | None = None,
                        config: GenerateConfig | None = None) -> ModelOutput: ...
 
-class Recorder(Protocol):
+class Recorder(typing.Protocol):
     def record(self, context: Context, step: Step, reported: Reported[Report]) -> None: ...
     def cancelled(self, context: Context, step: Step, name: str) -> None: ...
     def bypassed(self, context: Context, step: Step, name: str) -> None: ...
@@ -143,7 +143,7 @@ Tests: report constructors set the fields the design says; `Observation` and `De
 
 Tests: stage inference for each payload and for `Step`; an unannotated second parameter is an error; `@monitor` on a function annotated `-> Decision | None` is an error, and vice versa; `registry_create("protocol", "no_curl")` resolves; factory params recorded in registry info.
 
-Implemented: stages are read at factory-call time from the returned function's second-parameter annotation via `get_type_hints` and stored on the instance; `stages(instance)` exposes them to the runner and is integration surface. A union of stage payloads registers at every member. The return annotation must be the report type, optionally with `None`. `registry_create` is not a construction path for sentinels: it instantiates only factories whose return annotation's class name equals the registry type, and `Monitor`/`ControlProtocol` are union aliases, so it returns the factory uncalled and `inspect_ai` deliberately has no `registry_create` overload for the two types, which makes such a call a type error. Configuration and replay construct through `create_registry_object`.
+Implemented: stages are read at factory-call time from the returned function's second-parameter annotation via `get_type_hints` and stored on the instance; `stages(instance)` exposes them to the runner and is integration surface. A union of stage payloads registers at every member. The return annotation must be the report type, optionally with `None`. `registry_create` is not a construction path for sentinels: it instantiates only factories whose return annotation's class name equals the registry type, and `Monitor`/`Protocol` are union aliases, so it returns the factory uncalled and `inspect_ai` deliberately has no `registry_create` overload for the two types, which makes such a call a type error. Configuration and replay construct through `create_registry_object`.
 
 ## PR 3: runner
 
@@ -174,7 +174,7 @@ Known limit: a `terminate` outrun by a sibling's `decide_final()` inside a proto
 
 **Multi-function monitors (agreed 2026-09-25).** A `@monitor` or `@protocol` factory may return a sequence of functions instead of one. The group is one configured instance: one instance name, one `path`, one child context, and so one `store_as` namespace that every member shares; that is the point, since accumulating across stages is the trajectory-score case the design argues for and closure state is wrong for it (created once per configuration, shared across samples). Members are told apart by the inner function's `__name__`, recorded as a `function` field on `Reported` and `SentinelEvent`; path plus function identifies a report, and read-mode validation keys on both. Duplicate function names within one factory are a configuration error, checked when the factory is called. The decorators validate each member and record the union of their payload types; the runner treats the group as one child and dispatches to every member that accepts the step, so one instance may contribute several reports at a step, which `Observations` and `Decisions` already accommodate as sequences. Each member still watches exactly one stage, so "One function, one point" stands; what changes is that a factory may emit several functions when they share state, which is the class-with-a-method-per-stage the design rejected, reached through functions so the static scan and per-function portability verdict still work. Two instances of one factory, and two samples, keep separate state as before. `sentinel.md` "One function, one point", "Instance names", and the `SentinelEvent` listing need updating.
 
-Implemented: `run_monitor` and `run_protocol` are removed; `run_monitors`, `run_protocols` and `run_children` accept one instance, a sequence or a mapping and always return a possibly empty sequence, since one instance may now report more than once; `named_children` treats any callable as a single instance, so an uncalled factory or an undecorated function still gets its own message. A factory returning a sequence (not a string) gets a private group object, a `MonitorGroup` or `ProtocolGroup`, registry-tagged and carrying the union of its members' payload types, whose `__call__` is typed so it fits every `Monitor` or `ControlProtocol` alias and raises `TypeError` if called directly. `_run_child` derives one child context and runs the members that accept the step through `_run_member`, which holds the per-function shape checks, the `decide_final()` handling and the recording; a group cancelled part way is recorded once, through `Recorder.cancelled`, at the instance level. The fan-out collects a group's reports as they are recorded, so a group cancelled after one member reported returns that report, as a lone child that finished first does; a member's `terminate` stops the group, since nothing outranks it: the members after it do not run, so none can override it with `decide_final()`, and sibling instances are cancelled as for a lone child. `Reported.function` is set for every report, a lone function's included. `threshold` requires every function of every monitor to watch `BeforeToolCall`, since it runs only there and a member watching another stage would never run. `run_root` rejects a group, since the root is what `resolve_sentinel` returns and a step has one outcome. `concurrent` counts votes by instance, so a group's `modify` is contested only by another instance's decision or by another of its own functions modifying, and its explanation labels a group member's vote `name.function`.
+Implemented: `run_monitor` and `run_protocol` are removed; `run_monitors`, `run_protocols` and `run_children` accept one instance, a sequence or a mapping and always return a possibly empty sequence, since one instance may now report more than once; `named_children` treats any callable as a single instance, so an uncalled factory or an undecorated function still gets its own message. A factory returning a sequence (not a string) gets a private group object, a `MonitorGroup` or `ProtocolGroup`, registry-tagged and carrying the union of its members' payload types, whose `__call__` is typed so it fits every `Monitor` or `Protocol` alias and raises `TypeError` if called directly. `_run_child` derives one child context and runs the members that accept the step through `_run_member`, which holds the per-function shape checks, the `decide_final()` handling and the recording; a group cancelled part way is recorded once, through `Recorder.cancelled`, at the instance level. The fan-out collects a group's reports as they are recorded, so a group cancelled after one member reported returns that report, as a lone child that finished first does; a member's `terminate` stops the group, since nothing outranks it: the members after it do not run, so none can override it with `decide_final()`, and sibling instances are cancelled as for a lone child. `Reported.function` is set for every report, a lone function's included. `threshold` requires every function of every monitor to watch `BeforeToolCall`, since it runs only there and a member watching another stage would never run. `run_root` rejects a group, since the root is what `resolve_sentinel` returns and a step has one outcome. `concurrent` counts votes by instance, so a group's `modify` is contested only by another instance's decision or by another of its own functions modifying, and its explanation labels a group member's vote `name.function`.
 
 ## S6: configuration
 
@@ -202,14 +202,24 @@ Implemented, agreed with the user 2026-09-29: a terminate names the highest-scor
 
 ## Decision.message and single-instance protocols
 
-Implemented, agreed with the user 2026-09-29: `Decision` gains `message: str | None`, the only text the agent reads from a decision; `explanation` is log-only. `Decision.reject(explanation, *, message=None)` takes it keyword-only and the other constructors do not. The shape check allows `message` only on a `reject`, since "continue, but tell the model X" needs a way to deliver text while the step proceeds, which does not exist yet. `threshold`'s reject and terminate both carry `suspicion 0.95 from <name>: <reason>` and neither sets `message`, so the agent gets the host's default "not approved" text. `observe`, `threshold` and `concurrent` take a single instance as well as a sequence or mapping (`Monitor | Monitors`, `Monitor | ControlProtocol | Children`), matching `run_monitors`, so `threshold(suspicion_monitor(), reject_at=0.8)` type-checks. The inspect_ai dispatcher must pass `message`, not `explanation`, to the agent.
+Implemented, agreed with the user 2026-09-29: `Decision` gains `message: str | None`, the only text the agent reads from a decision; `explanation` is log-only. `Decision.reject(explanation, *, message=None)` takes it keyword-only and the other constructors do not. The shape check allows `message` only on a `reject`, since "continue, but tell the model X" needs a way to deliver text while the step proceeds, which does not exist yet. `threshold`'s reject and terminate both carry `suspicion 0.95 from <name>: <reason>` and neither sets `message`, so the agent gets the host's default "not approved" text. `observe`, `threshold` and `concurrent` take a single instance as well as a sequence or mapping (`Monitor | Monitors`, `Monitor | Protocol | Children`), matching `run_monitors`, so `threshold(suspicion_monitor(), reject_at=0.8)` type-checks. The inspect_ai dispatcher must pass `message`, not `explanation`, to the agent.
 
 ## decide_final()
 
 Renamed from `final()` with the user 2026-09-30: `final` shadowed `typing.final` and read as a decorator, while the function raises and ends the step. A verb says that nothing after it runs. The exception it raises is still the internal `Final`.
 
+## Public names
+
+Decided with the user 2026-09-30, before the first release, so nothing is kept for compatibility:
+
+- The protocol alias is `Protocol`, not `ControlProtocol`: it pairs with `@protocol` as `Tool` pairs with `@tool`. The collision with `typing.Protocol` is accepted; the package imports typing's as `TypingProtocol`, and the docs say "a control protocol, not `typing.Protocol`" on first use. The decorator stays `@protocol`, the registry type `"protocol"`, and the plural `Protocols`.
+- `Decision.clear()` is `Decision.proceed()`, which says what happens to the step rather than what the protocol concluded; it still produces `continue`.
+- `Reports`, what `run_children` returns, is a `NamedTuple` of `observations` and `decisions`, so `observations, decisions = await run_children(...)` works beside named access.
+- The planned ordered composition is `sequential`, not `chain`: it pairs with `concurrent` and does not collide with `inspect_ai.solver.chain`. It is not implemented yet.
+- Vocabulary: a *step* is the payload a monitor receives, a *stage* is its type (`BeforeToolCall`, `AfterToolCall`, and the generate stages), and "a point in the loop" is only an informal gloss on stage. `Context` and `Step` are unrelated to inspect_ai's `StepEvent` and `step()`. A monitor judges a call against `step.input`, exactly what the model was sent; `context.input` is the sample's input, the assignment.
+
 ## Out of scope
 
 The failure policy (`design/sentinel.md`, "Failure semantics"): the runner propagates every exception until a later PR adds the per-child hook described under PR 3.
 
-Generate stages, `chain`, `human`, `defer_to_trusted`, `resample`, views and rendering helpers, `store_as(scope=)`, `fetch`/`terminate` on `Host`, the `inspect_ai` dispatcher and `SentinelEvent`.
+Generate stages, `sequential`, `human`, `defer_to_trusted`, `resample`, views and rendering helpers, `store_as(scope=)`, `fetch`/`terminate` on `Host`, the `inspect_ai` dispatcher and `SentinelEvent`.

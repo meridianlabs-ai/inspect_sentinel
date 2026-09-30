@@ -5,17 +5,17 @@ from typing import TypeAlias, cast
 
 from inspect_ai._util.registry import is_registry_object, registry_info
 
-from ._monitor import Children, ControlProtocol, Monitor, Monitors
+from ._monitor import Children, Monitor, Monitors, Protocol
 from ._protocols import concurrent, observe
 from ._runner import named_children
 
 logger = logging.getLogger(__name__)
 
-Sentinels: TypeAlias = Monitor | ControlProtocol | Children
+Sentinels: TypeAlias = Monitor | Protocol | Children
 """What `Task(sentinel=)` accepts: one monitor or protocol, or a sequence or mapping of them."""
 
 
-def resolve_sentinel(spec: Sentinels) -> ControlProtocol:
+def resolve_sentinel(spec: Sentinels) -> Protocol:
     """Turn a sentinel configuration into the one protocol that owns the layer's decision.
 
     Every configuration is wrapped, so a lone child resolves exactly as a list of one does and records the same paths. A monitor, or a sequence or mapping of monitors only, resolves to `observe()` and logs a warning, since nothing is configured to act on the scores; anything containing a protocol, a lone protocol included, resolves to `concurrent()`. Every top-level configuration is therefore one of the two, and the dispatcher invokes it as the root, so the top-level children's paths are bare.
@@ -25,7 +25,7 @@ def resolve_sentinel(spec: Sentinels) -> ControlProtocol:
     """
     single = is_registry_object(spec)
     children: Children = (
-        [cast(Monitor | ControlProtocol, spec)] if single else cast(Children, spec)
+        [cast(Monitor | Protocol, spec)] if single else cast(Children, spec)
     )
     named = named_children(children, None)
     if not named:

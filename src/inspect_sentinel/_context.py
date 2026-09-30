@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Protocol, TypeVar, cast, runtime_checkable
+from typing import Any, TypeVar, cast, runtime_checkable
+from typing import Protocol as TypingProtocol
 
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
 from inspect_ai.scorer import Target
@@ -14,7 +15,7 @@ from ._step import Step
 SMT = TypeVar("SMT", bound=StoreModel)
 
 
-class Host(Protocol):
+class Host(TypingProtocol):
     """What a monitor or protocol may do to the outside world. Author-facing."""
 
     async def generate(
@@ -37,7 +38,7 @@ class Host(Protocol):
 
 
 @runtime_checkable
-class Recorder(Protocol):
+class Recorder(TypingProtocol):
     """Where the runner records every report. Runner-facing; authors never call it."""
 
     def record(
@@ -111,7 +112,7 @@ class Context:
     """What is distinctive about this instance."""
 
     input: str | list[ChatMessage]
-    """The prompt this agent was given."""
+    """The sample's input: the assignment the agent was given. Judge a step against `step.input`, which is exactly what the model was sent; use this for what the agent was asked to do."""
 
     metadata: dict[str, Any]
     """Task metadata merged with sample metadata."""

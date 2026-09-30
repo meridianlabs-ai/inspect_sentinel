@@ -6,6 +6,8 @@ reference: inspect_sentinel
 
 ## Steps
 
+A `Step` here is the payload a monitor or protocol receives, and `Context` is what it knows about the sample; both are unrelated to inspect_ai's `StepEvent` and `step()`.
+
 ### BeforeToolCall
 ### AfterToolCall
 ### Step
@@ -21,10 +23,12 @@ reference: inspect_sentinel
 
 ## Monitors and protocols
 
+`Protocol` is a control protocol, not `typing.Protocol`.
+
 ### monitor
 ### protocol
 ### Monitor
-### ControlProtocol
+### Protocol
 ### Monitors
 ### Protocols
 ### Children
@@ -40,7 +44,7 @@ reference: inspect_sentinel
 ### run_monitors
 ### run_protocols
 ### run_children
-### final
+### decide_final
 ### Observations
 ### Decisions
 ### Reports

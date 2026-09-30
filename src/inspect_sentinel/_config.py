@@ -22,7 +22,7 @@ from inspect_ai.util import resource
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 from ._context import validate_instance_name
-from ._monitor import Children, ControlProtocol, Monitor
+from ._monitor import Children, Monitor, Protocol
 from ._resolve import Sentinels
 
 PACKAGE = "inspect_sentinel"
@@ -173,7 +173,7 @@ def _unique_keys(value: object, file: str, path: str) -> object:
 def _build_layer(layer: object, path: str) -> Children:
     if isinstance(layer, Mapping):
         entries = cast(Mapping[object, object], layer)
-        built: dict[str, Monitor | ControlProtocol] = {}
+        built: dict[str, Monitor | Protocol] = {}
         for key, entry in entries.items():
             try:
                 name = validate_instance_name(key)
@@ -189,7 +189,7 @@ def _build_layer(layer: object, path: str) -> Children:
     )
 
 
-def _build_entry(entry: object, path: str) -> Monitor | ControlProtocol:
+def _build_entry(entry: object, path: str) -> Monitor | Protocol:
     if not isinstance(entry, Mapping):
         raise ValueError(f"{path} must be a mapping with a 'name', not {entry!r}.")
     fields = cast(Mapping[str, object], entry)
@@ -221,7 +221,7 @@ def _build_entry(entry: object, path: str) -> Monitor | ControlProtocol:
     except (TypeError, ValueError) as ex:
         error = TypeError if isinstance(ex, TypeError) else ValueError
         raise error(f"{path}: {ex}") from ex
-    return cast(Monitor | ControlProtocol, instance)
+    return cast(Monitor | Protocol, instance)
 
 
 def _find(name: str, path: str) -> _Factory:

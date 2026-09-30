@@ -13,8 +13,8 @@ from no_network import no_network
 from inspect_sentinel import (
     BeforeToolCall,
     Context,
-    ControlProtocol,
     Decision,
+    Protocol,
     concurrent,
     decide_final,
     protocol,
@@ -24,7 +24,7 @@ PROTECTED_PATHS = ["/etc", "~/.aws"]
 
 
 @protocol
-def protected() -> ControlProtocol:
+def protected() -> Protocol:
     """Reject, with `decide_final()`, any `bash()` command that mentions `/etc` or `~/.aws`."""
 
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
@@ -39,7 +39,7 @@ def protected() -> ControlProtocol:
                         message=f"`{path}` is off limits; work only under /work.",
                     )
                 )
-        return Decision.clear()
+        return Decision.proceed()
 
     return decide
 

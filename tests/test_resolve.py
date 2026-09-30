@@ -6,7 +6,7 @@ import pytest
 from inspect_ai._util.registry import registry_info
 
 from inspect_sentinel._context import Context
-from inspect_sentinel._monitor import ControlProtocol, Monitor, monitor, protocol
+from inspect_sentinel._monitor import Monitor, Protocol, monitor, protocol
 from inspect_sentinel._protocols import concurrent, observe, threshold
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._resolve import Sentinels, resolve_sentinel
@@ -32,7 +32,7 @@ def quieter() -> Monitor:
 
 
 @protocol
-def blocks() -> ControlProtocol:
+def blocks() -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision.reject("no")
 
@@ -79,7 +79,7 @@ def test_every_unwatched_monitor_is_named(caplog: pytest.LogCaptureFixture) -> N
 @pytest.mark.parametrize(
     "instance", [blocks(), concurrent([blocks()]), observe([noisy()])]
 )
-def test_a_lone_protocol_is_wrapped_in_concurrent(instance: ControlProtocol) -> None:
+def test_a_lone_protocol_is_wrapped_in_concurrent(instance: Protocol) -> None:
     resolved = resolve_sentinel(instance)
     assert resolved is not instance
     assert registry_info(resolved).name == "inspect_sentinel/concurrent"

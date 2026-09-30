@@ -11,7 +11,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any, Generic, Literal, NamedTuple, TypeVar, cast, overload
 
 import anyio
@@ -27,10 +27,10 @@ from ._context import Context, RunnerContext, validate_instance_name
 from ._final import Final, Origin
 from ._monitor import (
     Children,
-    ControlProtocol,
     Group,
     Monitor,
     Monitors,
+    Protocol,
     Protocols,
     members,
     step_types,
@@ -103,9 +103,8 @@ class Decisions(_ReportSequence[Decision]):
         return max(ranked, key=lambda d: PRECEDENCE[d.report.action])
 
 
-@dataclass(frozen=True)
-class Reports:
-    """Both families of report from one layer."""
+class Reports(NamedTuple):
+    """Both families of report from one layer, unpackable as `observations, decisions = await run_children(...)`."""
 
     observations: Observations
     """From the layer's monitors."""
@@ -187,9 +186,7 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
         raise first
 
 
-async def run_root(
-    protocol: ControlProtocol, context: Context, step: Step
-) -> Decision | None:
+async def run_root(protocol: Protocol, context: Context, step: Step) -> Decision | None:
     """Invoke the resolved root protocol for one step and return the step's outcome.
 
     The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its context's `factory` is set to its full registry name. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
@@ -236,7 +233,7 @@ async def run_monitors(
 
 
 async def run_protocols(
-    protocols: ControlProtocol | Protocols, context: Context, step: Step
+    protocols: Protocol | Protocols, context: Context, step: Step
 ) -> Decisions:
     """Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns `terminate` or calls `decide_final()`.
 
@@ -252,7 +249,7 @@ async def run_protocols(
 
 
 async def run_children(
-    children: Monitor | ControlProtocol | Children, context: Context, step: Step
+    children: Monitor | Protocol | Children, context: Context, step: Step
 ) -> Reports:
     """Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns `terminate` or calls `decide_final()`.
 
@@ -268,7 +265,7 @@ async def run_children(
 
 
 async def _run_named(
-    named: Sequence[tuple[str, Monitor | ControlProtocol]], context: Context, step: Step
+    named: Sequence[tuple[str, Monitor | Protocol]], context: Context, step: Step
 ) -> Reports:
     observations: list[tuple[int, Reported[Observation]]] = []
     decisions: list[tuple[int, Reported[Decision]]] = []
@@ -277,7 +274,7 @@ async def _run_named(
     async def run_one(
         index: int,
         name: str,
-        child: Monitor | ControlProtocol,
+        child: Monitor | Protocol,
         cancel: Callable[[], None],
     ) -> None:
         # a group's reports are kept as they arrive, so one cancelled part way
@@ -300,7 +297,7 @@ async def _run_named(
             decided: list[Reported[Decision]] = []
             try:
                 await _run_child(
-                    cast(ControlProtocol, child),
+                    cast(Protocol, child),
                     "protocol",
                     Decision,
                     context,
@@ -337,7 +334,7 @@ async def _run_named(
 
 
 async def _run_child(
-    child: Monitor | ControlProtocol,
+    child: Monitor | Protocol,
     kind: Literal["monitor", "protocol"],
     report_type: type[R],
     context: Context,
@@ -507,17 +504,17 @@ def _check_child(
 
 def named_children(
     children: Monitor
-    | ControlProtocol
-    | Mapping[str, Monitor | ControlProtocol]
-    | Iterable[Monitor | ControlProtocol],
+    | Protocol
+    | Mapping[str, Monitor | Protocol]
+    | Iterable[Monitor | Protocol],
     expected: Literal["monitor", "protocol"] | None,
-) -> list[tuple[str, Monitor | ControlProtocol]]:
-    pairs: list[tuple[object, Monitor | ControlProtocol]]
+) -> list[tuple[str, Monitor | Protocol]]:
+    pairs: list[tuple[object, Monitor | Protocol]]
     if callable(children):
         pairs = [(None, children)]
         keyed = False
     elif isinstance(children, Mapping):
-        mapping = cast(Mapping[str, Monitor | ControlProtocol], children)
+        mapping = cast(Mapping[str, Monitor | Protocol], children)
         pairs = [(key, child) for key, child in mapping.items()]
         keyed = True
     elif isinstance(children, Sequence) and not isinstance(children, str):
@@ -527,7 +524,7 @@ def named_children(
         raise TypeError(
             "children must be a monitor or protocol, a Mapping or a Sequence; a set or an iterator has no configuration order"
         )
-    named: list[tuple[str, Monitor | ControlProtocol]] = []
+    named: list[tuple[str, Monitor | Protocol]] = []
     seen: set[str] = set()
     for given, child in pairs:
         info, _ = _check_child(child, expected)
