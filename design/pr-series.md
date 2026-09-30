@@ -216,6 +216,7 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 - `Decision.clear()` is `Decision.proceed()`, which says what happens to the step rather than what the protocol concluded; it still produces `continue`.
 - `Reports`, what `run_children` returns, is a `NamedTuple` of `observations` and `decisions`, so `observations, decisions = await run_children(...)` works beside named access.
 - The planned ordered composition is `sequential`, not `chain`: it pairs with `concurrent` and does not collide with `inspect_ai.solver.chain`. It is not implemented yet.
+- `Reported` keeps its name. It was reviewed as a possible verb form of `Report`; read as an adjective on its type parameter, like `typing.Annotated`, `Reported[Decision]` is a reported decision: the decision together with the identity of the instance that reported it. `ChildReport` and `Attributed` were considered.
 - Vocabulary: a *step* is the payload a monitor receives, a *stage* is its type (`BeforeToolCall`, `AfterToolCall`, and the generate stages), and "a point in the loop" is only an informal gloss on stage. `Context` and `Step` are unrelated to inspect_ai's `StepEvent` and `step()`. A monitor judges a call against `step.input`, exactly what the model was sent; `context.input` is the sample's input, the assignment.
 
 ## Explicit groups, decorator arguments and the call guard
