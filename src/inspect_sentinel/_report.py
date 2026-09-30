@@ -63,7 +63,10 @@ class Decision(BaseModel):
     """Replacement for the step's subject, for a `modify` decision."""
 
     explanation: str | None = Field(default=None)
-    """Why. Operator-facing by default."""
+    """Why, for the log. The agent never sees it."""
+
+    message: str | None = Field(default=None)
+    """Text the agent reads when the step is rejected. The agent sees nothing else from a decision."""
 
     metadata: dict[str, Any] | None = Field(default=None)
     """Author-supplied structured context, recorded verbatim."""
@@ -74,9 +77,11 @@ class Decision(BaseModel):
         return cls(action="continue", explanation=explanation)
 
     @classmethod
-    def reject(cls, explanation: str | None = None) -> Decision:
-        """Reject the step, telling the agent it was rejected."""
-        return cls(action="reject", explanation=explanation)
+    def reject(
+        cls, explanation: str | None = None, *, message: str | None = None
+    ) -> Decision:
+        """Reject the step, telling the agent it was rejected: with `message` if given, else with the host's default text."""
+        return cls(action="reject", explanation=explanation, message=message)
 
     @classmethod
     def terminate(cls, explanation: str | None = None) -> Decision:

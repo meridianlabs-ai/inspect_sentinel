@@ -42,7 +42,7 @@ The smallest protocol is a rule with no monitors:
 def no_curl() -> ControlProtocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         if step.call.function == "bash" and "curl" in step.call.arguments.get("cmd", ""):
-            return Decision.reject("network access is out of bounds")
+            return Decision.reject("uses curl", message="network access is out of bounds")
         return None
 
     return decide
@@ -316,7 +316,10 @@ class Decision(BaseModel):
     """Replacement for the step's subject. Set if and only if action == "modify"."""
 
     explanation: str | None = Field(default=None)
-    """Why. Operator-facing. The model does not see it."""
+    """Why, for the log. The agent never sees it."""
+
+    message: str | None = Field(default=None)
+    """Text the agent reads when the step is rejected. Set only on a reject, for now."""
 
     metadata: dict[str, Any] | None = Field(default=None)
 
@@ -342,7 +345,7 @@ Rules:
 - **Prefer structured suspicion.** `{"goal_alignment": 0.1, "sabotage": 0.8}` lets a protocol threshold per dimension and lets independent monitors score separate dimensions. A scalar is accepted.
 - **A detector reports `1.0`.** `Observation.flag(explanation)` is a monitor's way of saying "this is definitely it" without holding a threshold; `threshold(detector(), reject_at=1.0)` acts on it.
 - **Set `audit=True` to request human review.** It is independent of the action: you can continue-and-audit or reject-and-audit. A parent protocol owning a budget may decline.
-- **Write `explanation` for the operator.** The model does not see it. If the agent learns why it was flagged, it can learn to avoid being flagged. A separate field, not yet named, carries text the model is meant to read. That field also lets a protocol continue while giving the model information.
+- **Write `explanation` for the operator.** It is log-only; the agent never sees it. If the agent learns why it was flagged, it can learn to avoid being flagged. Text the agent is meant to read goes in `message`, `Decision.reject(explanation, message=...)`, which is legal only on a reject for now; a reject without one gets the host's default "not approved" text. Continuing while telling the agent something needs a delivery mechanism that does not exist yet.
 - **Call `final(decision)` only for a decision no layer above may weaken**, in practice one a person made. It ends the step: siblings still in flight are cancelled, every layer above is recorded as bypassed, and the decision is the outcome. `human()` calls it by default. The framework cannot verify a human was involved, so the claim is visible in the log and in code review, as `portable=False` is.
 
 Named constructors for the common cases:
@@ -351,7 +354,8 @@ Named constructors for the common cases:
 Observation.score(0.9)                  # suspicion=0.9
 Observation.flag("definite match")      # suspicion=1.0
 Decision.clear()                        # action="continue"
-Decision.reject("why")                  # action="reject"
+Decision.reject("why")                  # action="reject"; the agent gets the host's default text
+Decision.reject("why", message="...")   # the agent reads message, never explanation
 Decision.terminate("why")
 Decision.escalate("why")
 ```
@@ -551,7 +555,7 @@ The shipped `threshold` protocol, in full:
 ```python
 @protocol
 def threshold(
-    monitors: Monitors,
+    monitors: Monitor | Monitors,
     reject_at: float,
     terminate_at: float | None = None,
 ) -> ControlProtocol:
@@ -574,13 +578,13 @@ def threshold(
         if terminate_at is not None and score >= terminate_at:
             return Decision.terminate(explain(observations, score))
         if score >= reject_at:
-            return Decision.reject()
+            return Decision.reject(explain(observations, score))
         return Decision.clear()
 
     return decide
 ```
 
-It holds the constants a monitor must not, validates them and its children when it is configured, reads its children's scores through the runner, and returns a decision. A reject carries no explanation, so the agent is told only that the call was not permitted and learns nothing about what the monitors saw, which matters where the agent is the adversary; the monitors' scores and reasoning stay in the log on their observation events. A terminate, which the agent never sees, is explained for the log: `explain` names the highest-scoring monitor and carries its explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`.
+It holds the constants a monitor must not, validates them and its children when it is configured, reads its children's scores through the runner, and returns a decision. A reject or terminate is explained for the log: `explain` names the highest-scoring monitor and carries its explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`. Neither sets `message`, so the agent gets the host's default "not approved" text and learns nothing about what the monitors saw, which matters where the agent is the adversary.
 
 ```python
 ControlProtocol: TypeAlias = (
@@ -601,7 +605,7 @@ def protocol(factory: Callable[P, ControlProtocol]) -> Callable[P, ControlProtoc
 Rules:
 
 - **Decorate with `@protocol`.** It registers under the `"protocol"` registry type. The returned callable must be `Decision`-kind; see [Static checking](#static-checking).
-- **Take children as one named parameter, if any.** `monitors: Monitors` for a protocol that reads scores (`threshold`), `children: Children` for a composition (`chain`, `concurrent`). Not `*args`: a mapping is how children get names, and the parameter name is the nested key in YAML. A rule takes no children at all.
+- **Take children as one named parameter, if any.** `monitors: Monitor | Monitors` for a protocol that reads scores (`threshold`), `children: Monitor | ControlProtocol | Children` for a composition (`chain`, `concurrent`), so one instance needs no list around it. Not `*args`: a mapping is how children get names, and the parameter name is the nested key in YAML. A rule takes no children at all.
 - **Annotate the return as `ControlProtocol`.** The name avoids `typing.Protocol`; see [Open questions](#open-questions) item 19.
 - **Annotate `step` as `Step`** to run at all four stages. Annotate a single payload to run at one. `threshold` above runs at `BeforeToolCall` so that `reject` is always legal.
 - **Return `Decision | None`.** A protocol's job is to produce a decision.
@@ -710,7 +714,7 @@ Rules:
 
 ```python
 @protocol
-def chain(children: Children) -> ControlProtocol:
+def chain(children: Monitor | ControlProtocol | Children) -> ControlProtocol:
     async def run(context: Context, step: Step) -> Decision | None:
         escalations: list[Reported[Decision]] = []
         participated = False
@@ -825,7 +829,7 @@ Use one of these rather than writing threshold logic by hand. The control papers
 
 ```python
 @protocol
-def resample(monitors: Monitors, threshold: float, n: int = 3) -> ControlProtocol:
+def resample(monitors: Monitor | Monitors, threshold: float, n: int = 3) -> ControlProtocol:
     async def decide(context: Context, step: AfterGenerate) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         score = observations.max_suspicion()

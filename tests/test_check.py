@@ -66,6 +66,17 @@ def test_a_modify_may_rewrite_the_arguments() -> None:
     )
 
 
+def test_a_reject_may_carry_a_message_for_the_agent() -> None:
+    validate_decision_shape(Decision.reject(message="not allowed"), before_step())
+
+
+@pytest.mark.parametrize("action", ["continue", "modify", "terminate", "escalate"])
+def test_only_a_reject_may_carry_a_message(action: Action) -> None:
+    decision = _decision(action).model_copy(update={"message": "psst"})
+    with pytest.raises(ValueError, match="message"):
+        validate_decision_shape(decision, before_step())
+
+
 def test_final_raises_final_carrying_the_decision() -> None:
     decision = Decision.reject("a person said no")
     with pytest.raises(Final) as info:

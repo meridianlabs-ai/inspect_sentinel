@@ -103,7 +103,7 @@ def no_curl() -> ControlProtocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         """A rule: a protocol with no monitors. Called before a tool call executes."""
         if step.call.function == "bash" and "curl" in step.call.arguments.get("cmd", ""):
-            return Decision.reject("network access is out of bounds")
+            return Decision.reject("uses curl", message="network access is out of bounds")
         return None
 
     return decide
@@ -358,7 +358,10 @@ class Decision(BaseModel):
     """Replacement for the step's subject, for a 'modify' decision."""
 
     explanation: str | None = Field(default=None)
-    """Why. Operator-facing by default; see 'Two audiences' below."""
+    """Why, for the log. The agent never sees it; see 'Two audiences' below."""
+
+    message: str | None = Field(default=None)
+    """Text the agent reads when the step is rejected. The agent sees nothing else from a decision."""
 
     metadata: dict[str, Any] | None = Field(default=None)
 
@@ -413,6 +416,7 @@ Named constructors are still worth having, for common *valid* reports rather tha
 ``` python
 Decision.clear()                       # action="continue" — examined and cleared
 Decision.reject("why")                 # action="reject"
+Decision.reject("why", message="...")  # message is what the agent reads
 Decision.terminate("why")              # action="terminate"
 Decision.escalate()                    # action="escalate" — pass it on
 Observation.score(0.9)                 # suspicion=0.9
@@ -500,9 +504,9 @@ A protocol that has the last word calls `final(decision)`, and the step ends the
 
 #### Two audiences
 
-Claude Code hooks separate `additionalContext` (the model sees it) from `systemMessage` (the operator sees it, the model does not). We should too, and the reason is security rather than tidiness: **telling an agent why it was flagged teaches it to evade.** `explanation` should be operator-facing by default, with a separate, explicit field for anything the model is meant to read.
+Claude Code hooks separate `additionalContext` (the model sees it) from `systemMessage` (the operator sees it, the model does not). We do too, and the reason is security rather than tidiness: **telling an agent why it was flagged teaches it to evade.** `explanation` is log-only: the agent never sees it, so it can carry the full reasoning. `message` is the one field the agent reads, set explicitly with `Decision.reject(explanation, message=...)`; a reject without one gets the host's default "not approved" text.
 
-That separate field is also the soft intervention we otherwise lack — a way to say "continue, but the model should know X" without rejecting anything.
+`message` is legal only on a `reject` for now, and the shape check rejects it on any other action. The same field would give us the soft intervention we otherwise lack — a way to say "continue, but the model should know X" without rejecting anything — but that needs a way to deliver text to the agent while the step proceeds, which does not exist yet.
 
 #### One vocabulary across stages
 
@@ -690,7 +694,7 @@ All of which is ordinary code, not framework surface — see [The runner](#the-r
 
 ``` python
 @protocol
-def resample(monitors: Monitors, threshold: float, n: int = 3) -> ControlProtocol:
+def resample(monitors: Monitor | Monitors, threshold: float, n: int = 3) -> ControlProtocol:
     async def decide(context: Context, step: AfterGenerate) -> Decision | None:
         reports = await run_monitors(monitors, context, step)
         score = reports.max_suspicion()
@@ -717,7 +721,7 @@ Each candidate's scores go through the runner, so the log holds every draw, not 
 ``` python
 @protocol
 def defer_to_trusted(
-    monitors: Monitors, threshold: float, trusted: str | None = None
+    monitors: Monitor | Monitors, threshold: float, trusted: str | None = None
 ) -> ControlProtocol:
     """`trusted` is a model name; None means the `trusted` model role."""
 
@@ -753,7 +757,7 @@ The shipped `threshold` protocol, in full:
 ``` python
 @protocol
 def threshold(
-    monitors: Monitors,
+    monitors: Monitor | Monitors,
     reject_at: float,
     terminate_at: float | None = None,
 ) -> ControlProtocol:
@@ -765,13 +769,13 @@ def threshold(
         if terminate_at is not None and score >= terminate_at:
             return Decision.terminate(explain(observations, score))
         if score >= reject_at:
-            return Decision.reject()
+            return Decision.reject(explain(observations, score))
         return Decision.clear()
 
     return decide
 ```
 
-It holds the constants a monitor cannot, reads its children's scores through the runner, and returns a decision. Nothing else. Its reject says nothing, so the agent learns only that the call was refused; the monitors' reasoning is on their own events. A terminate is explained for the log, with the highest-scoring monitor's name, score and explanation.
+It holds the constants a monitor cannot, reads its children's scores through the runner, and returns a decision. Nothing else. A reject or terminate is explained for the log, with the highest-scoring monitor's name, score and explanation. Neither sets `message`, so the agent learns only that the call was refused.
 
 And `no_curl` from [Shape](#shape), which is the same thing with the middle removed: no monitors, no runner call, a decision straight from the step. Both are protocols. **Deciding is what makes something a protocol, not having children.** An earlier draft defined a protocol as "a monitor that takes monitors", which made the combinator the essence and left rules and `human()` as a special kind of monitor — the kind that decides — with a decorator whose only job was to distinguish the two. That was the wrong seam. The seam the literature draws, and the one the report types already encode, is between observing and deciding; whether a decider consults anything is a detail of its implementation.
 
@@ -914,7 +918,7 @@ The first draft treated the ordered form as "wrong for a set of observers" and s
 
 ``` python
 @protocol
-def chain(children: Children) -> ControlProtocol:
+def chain(children: Monitor | ControlProtocol | Children) -> ControlProtocol:
     async def run(context: Context, step: Step) -> Decision | None:
         escalations: list[Reported[Decision]] = []
         participated = False
@@ -945,7 +949,7 @@ Three properties fall out of writing it as ordinary code. A monitor in a chain i
 
 ``` python
 @protocol
-def concurrent(children: Children) -> ControlProtocol:
+def concurrent(children: Monitor | ControlProtocol | Children) -> ControlProtocol:
     async def run(context: Context, step: Step) -> Decision | None:
         reports = await run_children(children, context, step)
         if not reports.decisions:
