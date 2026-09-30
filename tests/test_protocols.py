@@ -359,6 +359,49 @@ async def test_threshold_explains_nothing_when_it_clears() -> None:
     assert decision.explanation is None
 
 
+@monitor
+def suspicion_monitor(model: str | None = None) -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(0.9, "posts credentials to an external host")
+
+    return check
+
+
+@pytest.mark.parametrize(
+    ("configure", "expected"),
+    [
+        (lambda: observe(suspicion_monitor()), None),
+        (lambda: threshold(suspicion_monitor(), reject_at=0.8), "reject"),
+        (lambda: concurrent(suspicion_monitor()), None),
+        (lambda: concurrent(says("terminate")), "terminate"),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_shipped_protocol_takes_a_single_instance(
+    configure: Callable[[], ControlProtocol], expected: Action | None
+) -> None:
+    recorder = ListRecorder()
+    decision = await _run(configure(), before_step(), recorder)
+    assert (decision.action if decision else None) == expected
+    assert recorder.records[0].reported.name in ("suspicion_monitor", "says")
+
+
+@pytest.mark.parametrize(
+    ("configure", "error", "match"),
+    [
+        (lambda: observe(cast(Any, says())), TypeError, "monitor"),
+        (lambda: threshold(cast(Any, says()), reject_at=0.5), TypeError, "monitor"),
+        (lambda: threshold(afterwards(), reject_at=0.5), TypeError, "afterwards"),
+        (lambda: concurrent(cast(Any, graded)), TypeError, "call it"),
+    ],
+)
+def test_a_single_instance_is_validated_when_it_is_configured(
+    configure: Callable[[], ControlProtocol], error: type[Exception], match: str
+) -> None:
+    with pytest.raises(error, match=match):
+        configure()
+
+
 def test_the_shipped_protocols_register_under_the_package() -> None:
     assert [registry_info(f).name for f in (observe, concurrent, threshold)] == [
         "inspect_sentinel/observe",

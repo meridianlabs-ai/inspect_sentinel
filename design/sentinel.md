@@ -690,7 +690,7 @@ All of which is ordinary code, not framework surface — see [The runner](#the-r
 
 ``` python
 @protocol
-def resample(monitors: Monitors, threshold: float, n: int = 3) -> ControlProtocol:
+def resample(monitors: Monitor | Monitors, threshold: float, n: int = 3) -> ControlProtocol:
     async def decide(context: Context, step: AfterGenerate) -> Decision | None:
         reports = await run_monitors(monitors, context, step)
         score = reports.max_suspicion()
@@ -717,7 +717,7 @@ Each candidate's scores go through the runner, so the log holds every draw, not 
 ``` python
 @protocol
 def defer_to_trusted(
-    monitors: Monitors, threshold: float, trusted: str | None = None
+    monitors: Monitor | Monitors, threshold: float, trusted: str | None = None
 ) -> ControlProtocol:
     """`trusted` is a model name; None means the `trusted` model role."""
 
@@ -753,7 +753,7 @@ The shipped `threshold` protocol, in full:
 ``` python
 @protocol
 def threshold(
-    monitors: Monitors,
+    monitors: Monitor | Monitors,
     reject_at: float,
     terminate_at: float | None = None,
 ) -> ControlProtocol:
@@ -914,7 +914,7 @@ The first draft treated the ordered form as "wrong for a set of observers" and s
 
 ``` python
 @protocol
-def chain(children: Children) -> ControlProtocol:
+def chain(children: Monitor | ControlProtocol | Children) -> ControlProtocol:
     async def run(context: Context, step: Step) -> Decision | None:
         escalations: list[Reported[Decision]] = []
         participated = False
@@ -945,7 +945,7 @@ Three properties fall out of writing it as ordinary code. A monitor in a chain i
 
 ``` python
 @protocol
-def concurrent(children: Children) -> ControlProtocol:
+def concurrent(children: Monitor | ControlProtocol | Children) -> ControlProtocol:
     async def run(context: Context, step: Step) -> Decision | None:
         reports = await run_children(children, context, step)
         if not reports.decisions:

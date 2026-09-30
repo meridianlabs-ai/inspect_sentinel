@@ -551,7 +551,7 @@ The shipped `threshold` protocol, in full:
 ```python
 @protocol
 def threshold(
-    monitors: Monitors,
+    monitors: Monitor | Monitors,
     reject_at: float,
     terminate_at: float | None = None,
 ) -> ControlProtocol:
@@ -601,7 +601,7 @@ def protocol(factory: Callable[P, ControlProtocol]) -> Callable[P, ControlProtoc
 Rules:
 
 - **Decorate with `@protocol`.** It registers under the `"protocol"` registry type. The returned callable must be `Decision`-kind; see [Static checking](#static-checking).
-- **Take children as one named parameter, if any.** `monitors: Monitors` for a protocol that reads scores (`threshold`), `children: Children` for a composition (`chain`, `concurrent`). Not `*args`: a mapping is how children get names, and the parameter name is the nested key in YAML. A rule takes no children at all.
+- **Take children as one named parameter, if any.** `monitors: Monitor | Monitors` for a protocol that reads scores (`threshold`), `children: Monitor | ControlProtocol | Children` for a composition (`chain`, `concurrent`), so one instance needs no list around it. Not `*args`: a mapping is how children get names, and the parameter name is the nested key in YAML. A rule takes no children at all.
 - **Annotate the return as `ControlProtocol`.** The name avoids `typing.Protocol`; see [Open questions](#open-questions) item 19.
 - **Annotate `step` as `Step`** to run at all four stages. Annotate a single payload to run at one. `threshold` above runs at `BeforeToolCall` so that `reject` is always legal.
 - **Return `Decision | None`.** A protocol's job is to produce a decision.
@@ -710,7 +710,7 @@ Rules:
 
 ```python
 @protocol
-def chain(children: Children) -> ControlProtocol:
+def chain(children: Monitor | ControlProtocol | Children) -> ControlProtocol:
     async def run(context: Context, step: Step) -> Decision | None:
         escalations: list[Reported[Decision]] = []
         participated = False
@@ -825,7 +825,7 @@ Use one of these rather than writing threshold logic by hand. The control papers
 
 ```python
 @protocol
-def resample(monitors: Monitors, threshold: float, n: int = 3) -> ControlProtocol:
+def resample(monitors: Monitor | Monitors, threshold: float, n: int = 3) -> ControlProtocol:
     async def decide(context: Context, step: AfterGenerate) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         score = observations.max_suspicion()
