@@ -32,6 +32,8 @@ def test_author_facing_names_are_exported() -> None:
         "Protocol",
         "Monitor",
         "Monitors",
+        "MonitorGroup",
+        "ProtocolGroup",
         "Protocols",
         "monitor",
         "protocol",

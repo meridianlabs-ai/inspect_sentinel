@@ -218,6 +218,17 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 - The planned ordered composition is `sequential`, not `chain`: it pairs with `concurrent` and does not collide with `inspect_ai.solver.chain`. It is not implemented yet.
 - Vocabulary: a *step* is the payload a monitor receives, a *stage* is its type (`BeforeToolCall`, `AfterToolCall`, and the generate stages), and "a point in the loop" is only an informal gloss on stage. `Context` and `Step` are unrelated to inspect_ai's `StepEvent` and `step()`. A monitor judges a call against `step.input`, exactly what the model was sent; `context.input` is the sample's input, the assignment.
 
+## Explicit groups, decorator arguments and the call guard
+
+Decided with the user 2026-09-30, before the first release, so nothing is kept for compatibility:
+
+- A multi-function factory returns `MonitorGroup(before, after)` or `ProtocolGroup(a, b)`, both exported, instead of a list. They are final classes holding the functions in order with no `__call__`, so pyright rejects calling a group; construction checks that there is at least one function and that `__name__`s are distinct, and the decorator's `_register` still validates each member (stage, return annotation, kind), since it knows the kind: a `MonitorGroup` from `@protocol`, or the reverse, is a `TypeError`, and so is a plain list or tuple, with a message saying to return the group. `@monitor` is overloaded so a factory returning `Monitor` gives `Callable[P, Monitor]` and one returning `MonitorGroup` gives `Callable[P, MonitorGroup]`; `@protocol` likewise. `Monitors`, `Protocols`, `Children`, `Sentinels`, the runners' parameters and the shipped protocols' parameters name the groups beside the functions. Runtime behaviour is unchanged.
+- `@monitor(name=..., version=...)` and `@protocol(name=..., version=...)` beside the bare form, with typed overloads. `name` overrides the registered name as `@solver(name=)` does; `version` is an `int`, default 0 as for Inspect Scout's scanners, stored under `version` in the registry info's metadata for calibration to record. `portable=` and `fail=` are future arguments on this form.
+- A configured function called directly while a runner is invoking a sentinel raises `RuntimeError` ("call children through run_monitors/run_protocols/run_children"). The decorator wraps each inner function in a guard with `functools.wraps`, so `__name__`, `__wrapped__`, the signature and the annotations are preserved; the runner sets a context variable to the function it is about to invoke, and the guard sets it to `None` for the body, so a direct call from inside a body fails and a call through the runner (which sets it again, in its own task) passes. The variable defaults to "no run", so a direct call outside any run, as in a unit test, works.
+- The docs say "annotate `-> Observation`, or `-> Observation | None` if it can abstain" (and the same for `Decision`), since both annotations are accepted.
+
+Implemented: the old private `Group`/`MonitorGroup`/`ProtocolGroup` with a raising `__call__` is gone; one internal base, `Group`, remains for `isinstance` checks and holds `functions`. Each member's accepted stages are recorded on its guarded function and `members()` reads them from there. `named_children` treats a group as one instance, as it does a callable.
+
 ## Out of scope
 
 The failure policy (`design/sentinel.md`, "Failure semantics"): the runner propagates every exception until a later PR adds the per-child hook described under PR 3.

@@ -19,6 +19,7 @@ from inspect_sentinel._integration import (
 )
 from inspect_sentinel._monitor import (
     Monitor,
+    MonitorGroup,
     Monitors,
     Protocol,
     monitor,
@@ -39,14 +40,14 @@ def cfg_suspicion(model: str | None = None) -> Monitor:
 
 
 @monitor
-def cfg_pair() -> list[Monitor]:
+def cfg_pair() -> MonitorGroup:
     async def before(context: Context, step: BeforeToolCall) -> Observation | None:
         return Observation.score(0.1)
 
     async def after(context: Context, step: AfterToolCall) -> Observation | None:
         return Observation.score(0.2)
 
-    return [before, after]
+    return MonitorGroup(before, after)
 
 
 @protocol

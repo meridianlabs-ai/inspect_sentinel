@@ -134,7 +134,7 @@ The four payload types are the vocabulary:
 
 Two pairs: input/output around generate, call/result around a tool. `None` means "didn't participate". A monitor returns an `Observation`, which is evidence; a protocol returns a `Decision`, which is an action. See [What monitors and protocols return](#what-a-monitor-returns).
 
-A monitor function watches one stage; a protocol function may watch one or all four. A concern spanning two stages is two functions: two monitors, or one factory returning both when they share state — see [One function, one stage](#one-function-one-stage), which argues that this is rarer than it looks and that no function should watch two stages.
+A monitor function watches one stage; a protocol function may watch one or all four. A concern spanning two stages is two functions: two monitors, or one factory returning both as a `MonitorGroup` when they share state — see [One function, one stage](#one-function-one-stage), which argues that this is rarer than it looks and that no function should watch two stages.
 
 Each takes a single frozen dataclass rather than positional arguments, following `Hooks` rather than `Approver`. The parameter is named `step` rather than `Hooks`' generic `data`: all four payloads are the thing under examination, and a monitor examines a step in the agent's trajectory — the unit the control literature scores. `step.call`, `step.output`, `step.history` read as a subject; `data.call` reads as a bag. Per-stage names (`generate.input`, `call.call`) were the alternative, and the tool side sinks them. With four payloads that will grow fields, adding a field to a dataclass is additive; adding a positional parameter breaks every monitor.
 
@@ -370,7 +370,7 @@ Report: TypeAlias = Observation | Decision
 """What the transcript records; the union nothing else needs to handle."""
 ```
 
-The report type is the registry type. A `@monitor` function returns `Observation | None`, a `@protocol` function returns `Decision | None`, and neither can return the other — see [Monitor or protocol?](#monitor-or-protocol) for how to pick, and [The kind is the decorator](#the-kind-comes-from-the-return-annotation) for how it is checked.
+The report type is the registry type. A `@monitor` function is annotated `-> Observation`, or `-> Observation | None` if it can abstain, a `@protocol` function `-> Decision` or `-> Decision | None`, and neither can return the other — see [Monitor or protocol?](#monitor-or-protocol) for how to pick, and [The kind is the decorator](#the-kind-comes-from-the-return-annotation) for how it is checked.
 
 #### The name says the layering
 
@@ -791,9 +791,12 @@ Protocols nest. A budget-owning protocol can wrap a paraphrasing protocol wrappi
 ### The `@protocol` decorator {#the-protocol-marker}
 
 ``` python
-Monitors: TypeAlias = Mapping[str, Monitor] | Sequence[Monitor]
-Protocols: TypeAlias = Mapping[str, Protocol] | Sequence[Protocol]
-Children: TypeAlias = Mapping[str, Monitor | Protocol] | Sequence[Monitor | Protocol]
+Monitors: TypeAlias = Mapping[str, Monitor | MonitorGroup] | Sequence[Monitor | MonitorGroup]
+Protocols: TypeAlias = Mapping[str, Protocol | ProtocolGroup] | Sequence[Protocol | ProtocolGroup]
+Children: TypeAlias = (
+    Mapping[str, Monitor | MonitorGroup | Protocol | ProtocolGroup]
+    | Sequence[Monitor | MonitorGroup | Protocol | ProtocolGroup]
+)
 
 Protocol: TypeAlias = (
     Callable[[Context, Step], Awaitable[Decision | None]]
@@ -804,12 +807,17 @@ Protocol: TypeAlias = (
 )
 
 
-def protocol(factory: Callable[P, Protocol]) -> Callable[P, Protocol]: ...
+@overload
+def protocol(factory: Callable[P, Protocol], /) -> Callable[P, Protocol]: ...
+@overload
+def protocol(factory: Callable[P, ProtocolGroup], /) -> Callable[P, ProtocolGroup]: ...
+@overload
+def protocol(*, name: str | None = None, version: int = 0) -> ProtocolDecorator: ...
 ```
 
 It is `@monitor`'s twin, typed the way `@scorer` is, and it claims two things about the factory — each a claim the framework verifies against the code rather than a second vocabulary that could disagree with it, the distinction that got `@monitor(kind=)` and `@monitor(on=)` rejected:
 
-- **The returned callable returns `Decision | None`.** A protocol returning `Observation | None` is a monitor wearing the wrong decorator, and the checker says so before the decorator runs.
+- **The returned callable is annotated `-> Decision`, or `-> Decision | None` if it can abstain.** A protocol returning `Observation | None` is a monitor wearing the wrong decorator, and the checker says so before the decorator runs.
 - **It registers under `"protocol"`.** Same params capture, same `Step`-or-single-stage annotation rule as a monitor.
 
 Children are ordinary factory parameters, typed `Monitors`, `Protocols` or `Children`, and there may be none. That is what makes the nested key in [configuration](#configuration) legal: `monitors:` or `children:` under a factory is legal exactly when the factory has a parameter of that name, and a configuration error otherwise. An earlier draft required a leading positional `monitors` parameter, checked with `Concatenate`, so that the decorator could prove the factory composed. That proof is not wanted now that composing is not what a protocol is; a rule has no children to prove anything about.
@@ -822,13 +830,14 @@ Most of what `@protocol` and `@monitor` verify at decoration time, mypy and pyri
 
 | Claim | How it is checked statically |
 |------------------------|------------------------|
-| a monitor returns `Observation \| None` | `@monitor` is typed `Callable[P, Monitor] -> Callable[P, Monitor]`; an `async def` returning `Decision \| None` is not assignable to any member of `Monitor` |
+| a monitor returns `Observation \| None` | `@monitor` is typed `Callable[P, Monitor] -> Callable[P, Monitor]`, with an overload `Callable[P, MonitorGroup] -> Callable[P, MonitorGroup]` for a [group](#one-function-one-stage); an `async def` returning `Decision \| None` is not assignable to any member of `Monitor` |
+| a group is not called directly | `MonitorGroup` and `ProtocolGroup` have no `__call__`, so calling one is a type error |
 | a protocol returns `Decision \| None` | the same, with `Protocol` |
 | the inner function's second parameter is a stage type | `Callable` parameters are contravariant, so a function accepting `Step` matches the `Step` variant and one accepting `BeforeToolCall` matches that variant; an unannotated `step` matches nothing |
 | the declared kind matches the body | with the return annotated `Observation \| None`, a `return Decision(...)` inside is an ordinary type error — the strongest of the four, since it checks every return statement rather than the signature |
 | `threshold` takes monitors, `sequential` takes children | the parameter types; `threshold(human())` is a type error |
 
-What stays runtime-only is exactly what no type system would express: per-stage action legality (a generic `Decision[A]` was [rejected](#rejected-a-generic-parameterised-on-the-action-set) for schema reasons), whether a body went through the runner, and YAML configuration. Those live in [the boundary check](#the-boundary-check) and the log.
+What stays runtime-only is exactly what no type system would express: per-stage action legality (a generic `Decision[A]` was [rejected](#rejected-a-generic-parameterised-on-the-action-set) for schema reasons), whether a body went through the runner (the [call guard](#the-boundary-check)), and YAML configuration. Those live in [the boundary check](#the-boundary-check) and the log.
 
 One more rule is runtime-only for a different reason: that a monitor annotates exactly one payload type. A function accepting `Step` is, by parameter contravariance, a valid `Callable[[Context, BeforeToolCall], ...]`, so pyright accepts it as a `Monitor`; the rule is a statement about how monitors should be written, not a type-safety property, and `@monitor` enforces it when the factory is called. Making it static would mean parameterising `Monitor` by payload, which is not worth a type parameter on every factory to catch a mistake that already fails at configuration time.
 
@@ -859,7 +868,7 @@ async def run_children(
     """Both families in one task group. What sequential() and concurrent() use."""
 ```
 
-Each accepts one instance, a sequence or a mapping, and always returns a sequence, so one child and many are the same call. A single instance is named by its registry name, as a sequence entry is; a one-entry mapping names it explicitly. An earlier draft also had `run_monitor` and `run_protocol` for one child at a time; they were removed when a factory could return [several functions](#one-function-one-stage), since one child may then report more than once and a singular return type no longer fits it.
+Each accepts one instance, a sequence or a mapping, and always returns a sequence, so one child and many are the same call. A single instance is named by its registry name, as a sequence entry is; a one-entry mapping names it explicitly. An earlier draft also had `run_monitor` and `run_protocol` for one child at a time; they were removed when a factory could return [several functions as a group](#one-function-one-stage), since one child may then report more than once and a singular return type no longer fits it.
 
 Every form carries the per-child obligations:
 
@@ -940,7 +949,7 @@ def sequential(children: Monitor | Protocol | Children) -> Protocol:
     return run
 ```
 
-The functions of one [multi-function](#one-function-one-stage) protocol run in one call, so each sees the step as it was before any of their escalations is appended; they share state through the store, not through `step.escalations`.
+The functions of one [`ProtocolGroup`](#one-function-one-stage) run in one call, so each sees the step as it was before any of their escalations is appended; they share state through the store, not through `step.escalations`.
 
 Three properties fall out of writing it as ordinary code. A monitor in a `sequential` is recorded and falls through, since an observation cannot be "the first decision" — ordered composition is Decision-shaped in substance. An all-escalate `sequential` returns `continue` if anything participated, matching review's default and this document's rule; the [approval adapter](#a-protocol-layer-for-approval-too) keeps approval's fail-closed `reject` on its own path, so existing approval users see no change, and a `sequential` that wants fail-closed ends with a rejecting monitor, as approval lists end with `auto` today. And sequential dispatch stops being a violation of the independence rule, because the loop is a named, shipped protocol whose mode the transcript shows.
 
@@ -1017,10 +1026,10 @@ Two registry types make the contract mostly explicit, and the residue is small:
 
 - The structural claims — returns a decision, annotates a stage, takes typed children — are [statically checked](#static-checking).
 - Nothing above a [`decide_final()`](#authoritative-reports) decision runs, so nothing above it can weaken it, and each layer it passed is recorded as `bypassed`.
-- **Going through the runner is not preventable.** The factory holds the children and can call them as plain callables, bypassing naming, recording and the concurrency guarantee. What makes this tolerable is that a child invoked any other way produces no event: a protocol that decided with no child reports in the transcript is visible in the log, and a config-time check can flag it.
+- **Going through the runner is enforced at run time, not statically.** The factory holds the children and could call them as plain callables, bypassing naming, recording and the concurrency guarantee. The decorator wraps each configured function in a guard, and the runner marks the function it is invoking in a context variable, so a configured function called any other way while a sentinel is running raises `RuntimeError` naming `run_monitors`/`run_protocols`/`run_children`. Outside a run the guard is inert, so a unit test can still call a function directly. A group has no `__call__` at all.
 - "No `escalate` at the outermost layer" is not expressible in the type. Harmless in practice, since [all-escalate is already defined as `continue`](#composition).
 
-That is a genuine but narrow gap, and it is the same gap under one registry type or two: nothing about the types makes calling a child as a plain callable detectable except through the log.
+The type system still cannot tell a direct call from a runner call, so the guard is a run-time check, the same under one registry type or two.
 
 ### The extension surface {#the-extension-surface}
 
@@ -1112,7 +1121,13 @@ An earlier draft made `Monitor` a class with four overridable methods. Dropping 
 
 So no function watches two stages, and deliberately so. A concern spanning two stages is two functions. When they are independent, they are two monitors, listed twice. (A protocol annotating `Step` is one function registered at four stages, not a grouping of four functions — it sees whichever step arrives and decides about it.)
 
-When the two share state, they come from one factory. Accumulating across stages is the trajectory-score case this design argues for, and closure state is wrong for it, since the factory runs once per configuration and its functions are shared across samples. So a `@monitor` or `@protocol` factory may return a non-empty sequence of functions instead of one, and the sequence is one configured instance: one instance name, one `path`, one child context, and so one `store_as` namespace that every member shares. Each member still watches exactly one stage and is validated as a lone function would be; members are told apart by their `__name__`, recorded as `function` on `Reported` and `SentinelEvent`, and a duplicate within one factory is a configuration error when the factory is called. The instance accepts the union of its members' payload types. The runner treats it as one child and runs every member that accepts the step, in the order the factory returned them and one after another since they share a store, so one instance may contribute several reports at a step, which `Observations` and `Decisions` already accommodate as sequences. A member that returns `terminate` or calls `decide_final()` ends the instance's run, as it would for a lone protocol: the members after it do not run and are not recorded. This is the class with a method per stage that the first paragraph rejected, reached through functions, so the static scan and the per-function portability verdict still work. Two instances of one factory, and two samples, keep separate state as before.
+When the two share state, they come from one factory. Accumulating across stages is the trajectory-score case this design argues for, and closure state is wrong for it, since the factory runs once per configuration and its functions are shared across samples. So a `@monitor` factory may return a `MonitorGroup(before, after)` instead of one function, and a `@protocol` factory a `ProtocolGroup(...)`, and the group is one configured instance: one instance name, one `path`, one child context, and so one `store_as` namespace that every member shares. Each member still watches exactly one stage and is validated as a lone function would be, when the factory is called, since only the decorator knows the kind (a `MonitorGroup` from a `@protocol` factory, or the reverse, is a `TypeError`); members are told apart by their `__name__`, recorded as `function` on `Reported` and `SentinelEvent`, and the group's constructor rejects an empty group or a duplicate name. The instance accepts the union of its members' payload types. The runner treats it as one child and runs every member that accepts the step, in the order the factory returned them and one after another since they share a store, so one instance may contribute several reports at a step, which `Observations` and `Decisions` already accommodate as sequences. A member that returns `terminate` or calls `decide_final()` ends the instance's run, as it would for a lone protocol: the members after it do not run and are not recorded. This is the class with a method per stage that the first paragraph rejected, reached through functions, so the static scan and the per-function portability verdict still work. Two instances of one factory, and two samples, keep separate state as before.
+
+The group is an explicit type rather than a list. An earlier version accepted any sequence of functions, which typed as `Sequence[Monitor]` and so let a caller index it and call a member directly, and let a factory that meant to return one function return a list by accident. `MonitorGroup` and `ProtocolGroup` are final classes that hold their functions in order and have no `__call__`, so pyright rejects calling a group, `@monitor` on a factory returning a `MonitorGroup` is typed `Callable[P, MonitorGroup]` by overload, and the aliases (`Monitors`, `Protocols`, `Children`) and the shipped protocols' parameters name the groups beside the functions. A factory that returns a plain list or tuple is an error that says to return the group.
+
+### Decorator arguments {#decorator-arguments}
+
+Both decorators take an optional argument form, `@monitor(name=..., version=...)` and `@protocol(name=..., version=...)`, typed by overload so the bare and called forms check alike. `name` overrides the registered name, as `@solver(name=)` does. `version` is an `int`, default 0, stored in the registry info's metadata so a calibration can record which version of a monitor it measured, the same convention as Inspect Scout's scanners; bump it when a change alters the scores or decisions. `portable=` and `fail=` (see [Failure semantics](#failure-semantics)) are future arguments on this form.
 
 Two alternatives were considered and rejected:
 

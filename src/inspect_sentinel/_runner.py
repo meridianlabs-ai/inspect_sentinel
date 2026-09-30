@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 from collections.abc import (
     AsyncGenerator,
-    Awaitable,
     Callable,
     Iterable,
     Iterator,
@@ -26,12 +25,17 @@ from ._check import validate_decision_shape
 from ._context import Context, RunnerContext, validate_instance_name
 from ._final import Final, Origin
 from ._monitor import (
+    Child,
     Children,
     Group,
     Monitor,
+    MonitorGroup,
     Monitors,
     Protocol,
+    ProtocolGroup,
     Protocols,
+    SentinelFunction,
+    invoke,
     members,
     step_types,
 )
@@ -217,14 +221,14 @@ async def run_root(protocol: Protocol, context: Context, step: Step) -> Decision
 
 
 async def run_monitors(
-    monitors: Monitor | Monitors, context: Context, step: Step
+    monitors: Monitor | MonitorGroup | Monitors, context: Context, step: Step
 ) -> Observations:
     """Run monitors concurrently and collect their observations in configuration order.
 
     Derives each child's context under this layer's path and records every observation, including the ones the caller goes on to ignore. A monitor that abstained or does not watch this stage contributes nothing, so the result may be empty. An instance whose factory returned several functions contributes one observation per function that reported, in the order the factory returned them.
 
     Args:
-        monitors: One monitor, named by its registry name without the package prefix; a sequence of monitors, named the same way; or a mapping of instance names to monitors.
+        monitors: One monitor or `MonitorGroup`, named by its registry name without the package prefix; a sequence of them, named the same way; or a mapping of instance names to them.
         context: This layer's context.
         step: The step being examined.
     """
@@ -233,14 +237,14 @@ async def run_monitors(
 
 
 async def run_protocols(
-    protocols: Protocol | Protocols, context: Context, step: Step
+    protocols: Protocol | ProtocolGroup | Protocols, context: Context, step: Step
 ) -> Decisions:
     """Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns `terminate` or calls `decide_final()`.
 
     A `decide_final()` from any protocol at any depth below propagates out of this call, so the caller's own decision logic does not run.
 
     Args:
-        protocols: One protocol, a sequence of protocols, or a mapping of instance names to protocols, named as for `run_monitors`.
+        protocols: One protocol or `ProtocolGroup`, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.
         context: This layer's context.
         step: The step being examined.
     """
@@ -249,14 +253,14 @@ async def run_protocols(
 
 
 async def run_children(
-    children: Monitor | Protocol | Children, context: Context, step: Step
+    children: Child | Children, context: Context, step: Step
 ) -> Reports:
     """Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns `terminate` or calls `decide_final()`.
 
     A child cancelled this way is recorded through `Recorder.cancelled`; one that finishes without awaiting is recorded normally.
 
     Args:
-        children: One monitor or protocol, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.
+        children: One monitor, protocol or group, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.
         context: This layer's context.
         step: The step being examined.
     """
@@ -265,7 +269,7 @@ async def run_children(
 
 
 async def _run_named(
-    named: Sequence[tuple[str, Monitor | Protocol]], context: Context, step: Step
+    named: Sequence[tuple[str, Child]], context: Context, step: Step
 ) -> Reports:
     observations: list[tuple[int, Reported[Observation]]] = []
     decisions: list[tuple[int, Reported[Decision]]] = []
@@ -274,7 +278,7 @@ async def _run_named(
     async def run_one(
         index: int,
         name: str,
-        child: Monitor | Protocol,
+        child: Child,
         cancel: Callable[[], None],
     ) -> None:
         # a group's reports are kept as they arrive, so one cancelled part way
@@ -283,7 +287,7 @@ async def _run_named(
             observed: list[Reported[Observation]] = []
             try:
                 await _run_child(
-                    cast(Monitor, child),
+                    child,
                     "monitor",
                     Observation,
                     context,
@@ -297,7 +301,7 @@ async def _run_named(
             decided: list[Reported[Decision]] = []
             try:
                 await _run_child(
-                    cast(Protocol, child),
+                    child,
                     "protocol",
                     Decision,
                     context,
@@ -334,7 +338,7 @@ async def _run_named(
 
 
 async def _run_child(
-    child: Monitor | Protocol,
+    child: Child,
     kind: Literal["monitor", "protocol"],
     report_type: type[R],
     context: Context,
@@ -396,7 +400,7 @@ async def _run_child(
 
 
 async def _run_member(
-    invoke: Callable[[Context, Step], Awaitable[Report | None]],
+    function: SentinelFunction,
     kind: Literal["monitor", "protocol"],
     report_type: type[R],
     child_context: RunnerContext,
@@ -404,13 +408,12 @@ async def _run_member(
     child_name: str,
     grouped: bool,
 ) -> Reported[R] | None:
-    function = invoke.__name__
-    label = describe(child_name, function, grouped)
+    label = describe(child_name, function.__name__, grouped)
     report: Report | None = None
     finals: list[Final] = []
     failure: BaseException | None = None
     try:
-        report = await invoke(child_context, step)
+        report = await invoke(function, child_context, step)
     except Final as ex:
         finals = [ex]
     except BaseExceptionGroup as ex:
@@ -423,7 +426,9 @@ async def _run_member(
     if failure is not None:
         raise failure
     if finals:
-        raise _on_final(finals, kind, child_context, step, child_name, function, label)
+        raise _on_final(
+            finals, kind, child_context, step, child_name, function.__name__, label
+        )
     if report is not None and not isinstance(report, report_type):
         raise TypeError(
             f"{kind} {label} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
@@ -433,7 +438,10 @@ async def _run_member(
     if isinstance(report, Decision):
         _validate_shape(report, step, label)
     reported = Reported(
-        name=child_name, path=child_context.path, report=report, function=function
+        name=child_name,
+        path=child_context.path,
+        report=report,
+        function=function.__name__,
     )
     child_context.recorder.record(child_context, step, reported)
     return reported
@@ -503,18 +511,15 @@ def _check_child(
 
 
 def named_children(
-    children: Monitor
-    | Protocol
-    | Mapping[str, Monitor | Protocol]
-    | Iterable[Monitor | Protocol],
+    children: Child | Mapping[str, Child] | Iterable[Child],
     expected: Literal["monitor", "protocol"] | None,
-) -> list[tuple[str, Monitor | Protocol]]:
-    pairs: list[tuple[object, Monitor | Protocol]]
-    if callable(children):
+) -> list[tuple[str, Child]]:
+    pairs: list[tuple[object, Child]]
+    if callable(children) or isinstance(children, Group):
         pairs = [(None, children)]
         keyed = False
     elif isinstance(children, Mapping):
-        mapping = cast(Mapping[str, Monitor | Protocol], children)
+        mapping = cast(Mapping[str, Child], children)
         pairs = [(key, child) for key, child in mapping.items()]
         keyed = True
     elif isinstance(children, Sequence) and not isinstance(children, str):
@@ -522,9 +527,9 @@ def named_children(
         keyed = False
     else:
         raise TypeError(
-            "children must be a monitor or protocol, a Mapping or a Sequence; a set or an iterator has no configuration order"
+            "children must be a monitor, protocol or group, a Mapping or a Sequence; a set or an iterator has no configuration order"
         )
-    named: list[tuple[str, Monitor | Protocol]] = []
+    named: list[tuple[str, Child]] = []
     seen: set[str] = set()
     for given, child in pairs:
         info, _ = _check_child(child, expected)

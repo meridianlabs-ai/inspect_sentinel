@@ -7,8 +7,10 @@ from ._monitor import (
     Children,
     Group,
     Monitor,
+    MonitorGroup,
     Monitors,
     Protocol,
+    ProtocolGroup,
     members,
     protocol,
 )
@@ -25,7 +27,7 @@ from ._step import BeforeToolCall, Step
 
 
 @protocol
-def observe(monitors: Monitor | Monitors) -> Protocol:
+def observe(monitors: Monitor | MonitorGroup | Monitors) -> Protocol:
     """Record every monitor's observation and never act.
 
     What a bare monitor or a list of monitors resolves to, and how a benign score distribution is collected before anything is configured to act on it.
@@ -45,13 +47,15 @@ def observe(monitors: Monitor | Monitors) -> Protocol:
 
 
 @protocol
-def concurrent(children: Monitor | Protocol | Children) -> Protocol:
+def concurrent(
+    children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Children,
+) -> Protocol:
     """Run every child at once; the strictest decision wins.
 
-    What a list containing a protocol resolves to. Monitors are recorded in the transcript; protocols vote by `terminate > reject > modify > continue`, the first in configuration order winning a tie, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when another protocol also decided becomes a `reject` naming the modifier, since the others decided about the call as it stood; votes count by instance, so another function of the modifier's own instance contests it only by also modifying; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own, labelling a function of a multi-function instance `name.function`. A child that calls `decide_final()` ends the step and no vote is taken.
+    What a list containing a protocol resolves to. Monitors are recorded in the transcript; protocols vote by `terminate > reject > modify > continue`, the first in configuration order winning a tie, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when another protocol also decided becomes a `reject` naming the modifier, since the others decided about the call as it stood; votes count by instance, so another function of the modifier's own instance contests it only by also modifying; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own, labelling a function of a `ProtocolGroup` or `MonitorGroup` `name.function`. A child that calls `decide_final()` ends the step and no vote is taken.
 
     Args:
-        children: A monitor or protocol, or several, to run together.
+        children: A monitor, protocol or group, or several, to run together.
     """
     # so a misconfiguration fails here rather than at the first step
     named = named_children(children, None)
@@ -99,13 +103,15 @@ def concurrent(children: Monitor | Protocol | Children) -> Protocol:
 
 @protocol
 def threshold(
-    monitors: Monitor | Monitors, reject_at: float, terminate_at: float | None = None
+    monitors: Monitor | MonitorGroup | Monitors,
+    reject_at: float,
+    terminate_at: float | None = None,
 ) -> Protocol:
     """Act on a suspicion score: `reject` at or above one constant, `terminate` at or above another.
 
     A reject or terminate is explained for the log: it names the highest-scoring monitor (the first in configuration order on a tie) and carries that monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`. Neither sets `message`, so the agent gets the host's default "not approved" text and learns nothing about what the monitors saw.
 
-    The smallest protocol, and the one calibration feeds: the constants come from a benign score distribution, which is why they live here and not on a monitor. Every monitor, and every function of a monitor whose factory returned several, must watch `BeforeToolCall`, since that is the only stage a `reject` is legal at.
+    The smallest protocol, and the one calibration feeds: the constants come from a benign score distribution, which is why they live here and not on a monitor. Every monitor, and every function of a `MonitorGroup`, must watch `BeforeToolCall`, since that is the only stage a `reject` is legal at.
 
     Args:
         monitors: The monitor, or monitors, whose scores are thresholded; the highest wins.

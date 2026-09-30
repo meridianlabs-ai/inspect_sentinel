@@ -1,4 +1,4 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any, cast
 
 import anyio
@@ -12,8 +12,10 @@ from inspect_sentinel._final import Final, decide_final
 from inspect_sentinel._monitor import (
     Children,
     Monitor,
+    MonitorGroup,
     Monitors,
     Protocol,
+    ProtocolGroup,
     Protocols,
     monitor,
     protocol,
@@ -384,7 +386,7 @@ async def test_wrong_report_type_at_runtime_is_an_error() -> None:
     def factory() -> Any:
         return lies
 
-    wrong = monitor(cast(Any, factory))()
+    wrong = monitor(cast(Callable[[], Monitor], factory))()
     with pytest.raises(TypeError, match="must return Observation"):
         await run_monitors(wrong, runner_context(), before_step())
 
@@ -1372,7 +1374,7 @@ class Seen(StoreModel):
 
 
 @monitor
-def paired() -> Sequence[Monitor]:
+def paired() -> MonitorGroup:
     async def before(context: Context, step: BeforeToolCall) -> Observation | None:
         seen = context.store_as(Seen)
         seen.before += 1
@@ -1381,7 +1383,7 @@ def paired() -> Sequence[Monitor]:
     async def after(context: Context, step: AfterToolCall) -> Observation | None:
         return Observation.score(context.store_as(Seen).before / 10)
 
-    return [before, after]
+    return MonitorGroup(before, after)
 
 
 @pytest.mark.anyio
@@ -1415,7 +1417,7 @@ async def test_two_instances_of_a_group_keep_separate_state() -> None:
 @pytest.mark.anyio
 async def test_members_on_one_stage_report_in_factory_order() -> None:
     @monitor
-    def twins() -> Sequence[Monitor]:
+    def twins() -> MonitorGroup:
         async def second(context: Context, step: BeforeToolCall) -> Observation | None:
             await anyio.sleep(0)
             return Observation.score(0.2)
@@ -1423,7 +1425,7 @@ async def test_members_on_one_stage_report_in_factory_order() -> None:
         async def first(context: Context, step: BeforeToolCall) -> Observation | None:
             return Observation.score(0.1)
 
-        return [second, first]
+        return MonitorGroup(second, first)
 
     recorder = ListRecorder()
     reports = await run_children(
@@ -1443,7 +1445,7 @@ async def test_a_group_member_calling_final_ends_the_step() -> None:
     ran: list[str] = []
 
     @protocol
-    def gatekeeper() -> Sequence[Protocol]:
+    def gatekeeper() -> ProtocolGroup:
         async def screen(context: Context, step: BeforeToolCall) -> Decision | None:
             decide_final(Decision.reject("screened"))
 
@@ -1451,7 +1453,7 @@ async def test_a_group_member_calling_final_ends_the_step() -> None:
             ran.append("later")
             return Decision.proceed()
 
-        return [screen, later]
+        return ProtocolGroup(screen, later)
 
     recorder = ListRecorder()
     decision = await run_root(
@@ -1470,7 +1472,7 @@ async def test_a_cancelled_group_is_recorded_once() -> None:
     started = anyio.Event()
 
     @monitor
-    def quick_then_slow() -> Sequence[Monitor]:
+    def quick_then_slow() -> MonitorGroup:
         async def quick(context: Context, step: BeforeToolCall) -> Observation | None:
             return Observation.score(0.1)
 
@@ -1479,7 +1481,7 @@ async def test_a_cancelled_group_is_recorded_once() -> None:
             await anyio.sleep_forever()
             return None
 
-        return [quick, slow]
+        return MonitorGroup(quick, slow)
 
     @protocol
     def terminates() -> Protocol:
@@ -1507,17 +1509,17 @@ async def test_a_cancelled_group_is_recorded_once() -> None:
 @pytest.mark.anyio
 async def test_the_root_is_one_function() -> None:
     @protocol
-    def pair() -> Sequence[Protocol]:
+    def pair() -> ProtocolGroup:
         async def one(context: Context, step: Step) -> Decision | None:
             return None
 
         async def two(context: Context, step: Step) -> Decision | None:
             return None
 
-        return [one, two]
+        return ProtocolGroup(one, two)
 
     with pytest.raises(TypeError, match="root"):
-        await run_root(pair(), runner_context(), before_step())
+        await run_root(cast(Any, pair()), runner_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -1526,7 +1528,7 @@ async def test_a_members_terminate_stops_the_group() -> None:
     started = anyio.Event()
 
     @protocol
-    def stops() -> Sequence[Protocol]:
+    def stops() -> ProtocolGroup:
         async def stop(context: Context, step: BeforeToolCall) -> Decision | None:
             await started.wait()
             return Decision.terminate()
@@ -1535,7 +1537,7 @@ async def test_a_members_terminate_stops_the_group() -> None:
             ran.append("overrule")
             decide_final(Decision.reject("overruled"))
 
-        return [stop, overrule]
+        return ProtocolGroup(stop, overrule)
 
     @protocol
     def slow() -> Protocol:
@@ -1566,34 +1568,34 @@ async def test_a_members_terminate_stops_the_group() -> None:
 @pytest.mark.anyio
 async def test_a_group_members_error_names_its_function() -> None:
     @monitor
-    def bad_second() -> Sequence[Monitor]:
+    def bad_second() -> MonitorGroup:
         async def fine(context: Context, step: BeforeToolCall) -> Observation | None:
             return None
 
         async def wrong(context: Context, step: BeforeToolCall) -> Observation | None:
             return cast(Any, Decision.proceed())
 
-        return [fine, wrong]
+        return MonitorGroup(fine, wrong)
 
     @monitor
-    def meddles() -> Sequence[Monitor]:
+    def meddles() -> MonitorGroup:
         async def fine(context: Context, step: BeforeToolCall) -> Observation | None:
             return None
 
         async def ends(context: Context, step: BeforeToolCall) -> Observation | None:
             decide_final(Decision.reject())
 
-        return [fine, ends]
+        return MonitorGroup(fine, ends)
 
     @protocol
-    def ill_shaped() -> Sequence[Protocol]:
+    def ill_shaped() -> ProtocolGroup:
         async def fine(context: Context, step: AfterToolCall) -> Decision | None:
             return None
 
         async def rejects(context: Context, step: AfterToolCall) -> Decision | None:
             return Decision.reject()
 
-        return [fine, rejects]
+        return ProtocolGroup(fine, rejects)
 
     with pytest.raises(
         TypeError,
@@ -1617,7 +1619,7 @@ async def test_records_and_cancellations_name_the_factory_apart_from_the_instanc
     started = anyio.Event()
 
     @monitor
-    def quick_then_slow() -> Sequence[Monitor]:
+    def quick_then_slow() -> MonitorGroup:
         async def quick(context: Context, step: BeforeToolCall) -> Observation | None:
             return Observation.score(0.1)
 
@@ -1626,7 +1628,7 @@ async def test_records_and_cancellations_name_the_factory_apart_from_the_instanc
             await anyio.sleep_forever()
             return None
 
-        return [quick, slow]
+        return MonitorGroup(quick, slow)
 
     @protocol
     def terminates() -> Protocol:

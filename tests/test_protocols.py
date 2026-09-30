@@ -1,5 +1,5 @@
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
@@ -10,7 +10,9 @@ from inspect_sentinel._context import Context
 from inspect_sentinel._final import decide_final
 from inspect_sentinel._monitor import (
     Monitor,
+    MonitorGroup,
     Protocol,
+    ProtocolGroup,
     Protocols,
     monitor,
     protocol,
@@ -485,36 +487,36 @@ def test_a_shipped_protocol_needs_at_least_one_child(
 
 
 @protocol
-def rules() -> Sequence[Protocol]:
+def rules() -> ProtocolGroup:
     async def lenient(context: Context, step: BeforeToolCall) -> Decision | None:
         return Decision.proceed()
 
     async def strict(context: Context, step: BeforeToolCall) -> Decision | None:
         return Decision.reject("strict")
 
-    return [lenient, strict]
+    return ProtocolGroup(lenient, strict)
 
 
 @monitor
-def two_before(value: float = 0.7) -> Sequence[Monitor]:
+def two_before(value: float = 0.7) -> MonitorGroup:
     async def low(context: Context, step: BeforeToolCall) -> Observation | None:
         return Observation.score(0.1)
 
     async def high(context: Context, step: BeforeToolCall) -> Observation | None:
         return Observation.score(value)
 
-    return [low, high]
+    return MonitorGroup(low, high)
 
 
 @monitor
-def before_and_after() -> Sequence[Monitor]:
+def before_and_after() -> MonitorGroup:
     async def before(context: Context, step: BeforeToolCall) -> Observation | None:
         return Observation.score(0.1)
 
     async def after(context: Context, step: AfterToolCall) -> Observation | None:
         return Observation.score(1.0)
 
-    return [before, after]
+    return MonitorGroup(before, after)
 
 
 @pytest.mark.anyio
@@ -540,14 +542,14 @@ async def test_threshold_reads_every_member_of_a_group() -> None:
 
 def test_threshold_rejects_a_group_that_never_watches_a_tool_call() -> None:
     @monitor
-    def later() -> Sequence[Monitor]:
+    def later() -> MonitorGroup:
         async def one(context: Context, step: AfterToolCall) -> Observation | None:
             return None
 
         async def two(context: Context, step: AfterToolCall) -> Observation | None:
             return None
 
-        return [one, two]
+        return MonitorGroup(one, two)
 
     with pytest.raises(TypeError, match="later"):
         threshold([later()], reject_at=0.5)
@@ -560,11 +562,11 @@ def test_threshold_rejects_a_group_with_a_member_that_never_watches_a_tool_call(
         threshold([before_and_after()], reject_at=0.5)
 
 
-def _edits(first: Action, second: Action) -> Protocol:
+def _edits(first: Action, second: Action) -> ProtocolGroup:
     modified = ToolCall(id="c1", function="bash", arguments={"cmd": "echo hi"})
 
     @protocol
-    def edits() -> Sequence[Protocol]:
+    def edits() -> ProtocolGroup:
         async def rewrite(context: Context, step: BeforeToolCall) -> Decision | None:
             return Decision(
                 action=first, modified=modified if first == "modify" else None
@@ -575,7 +577,7 @@ def _edits(first: Action, second: Action) -> Protocol:
                 action=second, modified=modified if second == "modify" else None
             )
 
-        return [rewrite, audit]
+        return ProtocolGroup(rewrite, audit)
 
     return edits()
 

@@ -29,6 +29,8 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 ### protocol
 ### Monitor
 ### Protocol
+### MonitorGroup
+### ProtocolGroup
 ### Monitors
 ### Protocols
 ### Children
