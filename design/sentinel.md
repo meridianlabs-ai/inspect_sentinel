@@ -103,7 +103,7 @@ def no_curl() -> ControlProtocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         """A rule: a protocol with no monitors. Called before a tool call executes."""
         if step.call.function == "bash" and "curl" in step.call.arguments.get("cmd", ""):
-            return Decision.reject("network access is out of bounds")
+            return Decision.reject("uses curl", message="network access is out of bounds")
         return None
 
     return decide
@@ -416,6 +416,7 @@ Named constructors are still worth having, for common *valid* reports rather tha
 ``` python
 Decision.clear()                       # action="continue" — examined and cleared
 Decision.reject("why")                 # action="reject"
+Decision.reject("why", message="...")  # message is what the agent reads
 Decision.terminate("why")              # action="terminate"
 Decision.escalate()                    # action="escalate" — pass it on
 Observation.score(0.9)                 # suspicion=0.9

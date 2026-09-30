@@ -42,7 +42,7 @@ The smallest protocol is a rule with no monitors:
 def no_curl() -> ControlProtocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         if step.call.function == "bash" and "curl" in step.call.arguments.get("cmd", ""):
-            return Decision.reject("network access is out of bounds")
+            return Decision.reject("uses curl", message="network access is out of bounds")
         return None
 
     return decide
@@ -354,7 +354,8 @@ Named constructors for the common cases:
 Observation.score(0.9)                  # suspicion=0.9
 Observation.flag("definite match")      # suspicion=1.0
 Decision.clear()                        # action="continue"
-Decision.reject("why")                  # action="reject"
+Decision.reject("why")                  # action="reject"; the agent gets the host's default text
+Decision.reject("why", message="...")   # the agent reads message, never explanation
 Decision.terminate("why")
 Decision.escalate("why")
 ```

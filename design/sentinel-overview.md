@@ -23,7 +23,7 @@ There are two registerable types. A **monitor** observes: it returns an `Observa
 def no_curl() -> ControlProtocol:
     async def decide(context: Context, step: BeforeToolCall):
         if "curl" in str(step.call.arguments):
-            return Decision.reject("network access is not allowed")
+            return Decision.reject("uses curl", message="network access is not allowed")
         return None
 
     return decide
@@ -67,6 +67,8 @@ A protocol's `Decision` carries one of the following actions:
 | `reject`    | Reject the action, notifying the agent that it was rejected. |
 | `terminate` | End the sample                                               |
 | `escalate`  | Pass the decision to the next decider                        |
+
+A decision's `explanation` is for the log only; the agent never sees it, since an agent told why it was flagged can learn to evade. The one thing the agent reads is `message`, which only a `reject` may carry for now (`Decision.reject(explanation, message=...)`); a reject without one gets the host's default "not approved" text.
 
 A monitor never returns an action. It records an `Observation` for a protocol to act on (see [Protocols](#protocols) below), which keeps every threshold in the protocol where it can be calibrated, and makes every monitor dry-runnable and backtestable before anything acts on it.
 
