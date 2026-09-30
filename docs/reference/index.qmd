@@ -44,7 +44,7 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 ### run_monitors
 ### run_protocols
 ### run_children
-### final
+### decide_final
 ### Observations
 ### Decisions
 ### Reports
