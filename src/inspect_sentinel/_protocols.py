@@ -5,10 +5,10 @@ import math
 from ._context import Context
 from ._monitor import (
     Children,
-    ControlProtocol,
     Group,
     Monitor,
     Monitors,
+    Protocol,
     members,
     protocol,
 )
@@ -25,7 +25,7 @@ from ._step import BeforeToolCall, Step
 
 
 @protocol
-def observe(monitors: Monitor | Monitors) -> ControlProtocol:
+def observe(monitors: Monitor | Monitors) -> Protocol:
     """Record every monitor's observation and never act.
 
     What a bare monitor or a list of monitors resolves to, and how a benign score distribution is collected before anything is configured to act on it.
@@ -45,7 +45,7 @@ def observe(monitors: Monitor | Monitors) -> ControlProtocol:
 
 
 @protocol
-def concurrent(children: Monitor | ControlProtocol | Children) -> ControlProtocol:
+def concurrent(children: Monitor | Protocol | Children) -> Protocol:
     """Run every child at once; the strictest decision wins.
 
     What a list containing a protocol resolves to. Monitors are recorded in the transcript; protocols vote by `terminate > reject > modify > continue`, the first in configuration order winning a tie, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when another protocol also decided becomes a `reject` naming the modifier, since the others decided about the call as it stood; votes count by instance, so another function of the modifier's own instance contests it only by also modifying; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own, labelling a function of a multi-function instance `name.function`. A child that calls `decide_final()` ends the step and no vote is taken.
@@ -70,7 +70,7 @@ def concurrent(children: Monitor | ControlProtocol | Children) -> ControlProtoco
             return None
         strongest = reports.decisions.strongest()
         if strongest is None:
-            return Decision.clear()
+            return Decision.proceed()
         voters = deciding(reports.decisions)
         if len(voters) == 1:
             return strongest.report
@@ -100,7 +100,7 @@ def concurrent(children: Monitor | ControlProtocol | Children) -> ControlProtoco
 @protocol
 def threshold(
     monitors: Monitor | Monitors, reject_at: float, terminate_at: float | None = None
-) -> ControlProtocol:
+) -> Protocol:
     """Act on a suspicion score: `reject` at or above one constant, `terminate` at or above another.
 
     A reject or terminate is explained for the log: it names the highest-scoring monitor (the first in configuration order on a tie) and carries that monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`. Neither sets `message`, so the agent gets the host's default "not approved" text and learns nothing about what the monitors saw.
@@ -143,7 +143,7 @@ def threshold(
             return Decision.terminate(_explain(observations, score))
         if score >= reject_at:
             return Decision.reject(_explain(observations, score))
-        return Decision.clear()
+        return Decision.proceed()
 
     return decide
 

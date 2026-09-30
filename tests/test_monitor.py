@@ -14,8 +14,8 @@ from inspect_ai._util.registry import (
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._monitor import (
-    ControlProtocol,
     Monitor,
+    Protocol,
     monitor,
     protocol,
     step_types,
@@ -41,7 +41,7 @@ def after_monitor() -> Monitor:
 
 
 @protocol
-def any_stage_protocol() -> ControlProtocol:
+def any_stage_protocol() -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return None
 
@@ -49,7 +49,7 @@ def any_stage_protocol() -> ControlProtocol:
 
 
 @protocol
-def no_curl() -> ControlProtocol:
+def no_curl() -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         if "curl" in str(step.call.arguments):
             return Decision.reject("network access is not allowed")
@@ -62,7 +62,7 @@ def no_curl() -> ControlProtocol:
     "factory", [before_monitor, after_monitor, any_stage_protocol, no_curl]
 )
 def test_stage_annotated_functions_are_accepted(
-    factory: Callable[[], Monitor | ControlProtocol],
+    factory: Callable[[], Monitor | Protocol],
 ) -> None:
     assert inspect.iscoroutinefunction(factory())
 
@@ -99,7 +99,7 @@ def test_registry_object_is_created_by_name_with_params() -> None:
 
 
 def test_registry_create_is_not_a_construction_path_for_sentinels() -> None:
-    """registry_create instantiates only factories whose return annotation's class name equals the registry type; Monitor and ControlProtocol are union aliases with no name, so it hands back the factory. Construction from config goes through create_registry_object, which always instantiates."""
+    """registry_create instantiates only factories whose return annotation's class name equals the registry type; Monitor and Protocol are union aliases with no name, so it hands back the factory. Construction from config goes through create_registry_object, which always instantiates."""
     kind: RegistryType = "monitor"
     create = cast(Callable[..., Any], registry_create)
     assert create(kind, "before_monitor") is before_monitor
@@ -330,7 +330,7 @@ async def test_a_group_runs_only_through_the_runner() -> None:
 
 
 def test_a_monitor_and_a_protocol_cannot_share_a_name() -> None:
-    def factory() -> ControlProtocol:
+    def factory() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             return None
 

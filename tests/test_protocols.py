@@ -9,8 +9,8 @@ from inspect_ai.tool import ToolCall
 from inspect_sentinel._context import Context
 from inspect_sentinel._final import decide_final
 from inspect_sentinel._monitor import (
-    ControlProtocol,
     Monitor,
+    Protocol,
     Protocols,
     monitor,
     protocol,
@@ -48,9 +48,7 @@ def afterwards() -> Monitor:
 
 
 @protocol
-def says(
-    action: Action = "continue", explanation: str | None = None
-) -> ControlProtocol:
+def says(action: Action = "continue", explanation: str | None = None) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(action=action, explanation=explanation)
 
@@ -58,7 +56,7 @@ def says(
 
 
 @protocol
-def rewrites(explanation: str | None = None) -> ControlProtocol:
+def rewrites(explanation: str | None = None) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(
             action="modify",
@@ -70,16 +68,16 @@ def rewrites(explanation: str | None = None) -> ControlProtocol:
 
 
 @protocol
-def wrapper(child: ControlProtocol) -> ControlProtocol:
+def wrapper(child: Protocol) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         await run_protocols(child, context, step)
-        return Decision.clear()
+        return Decision.proceed()
 
     return decide
 
 
 async def _run(
-    instance: ControlProtocol, step: Step, recorder: ListRecorder
+    instance: Protocol, step: Step, recorder: ListRecorder
 ) -> Decision | None:
     decisions = await run_protocols(instance, runner_context(recorder=recorder), step)
     return decisions[0].report if decisions else None
@@ -177,12 +175,12 @@ async def test_concurrent_explains_a_contested_decision_by_its_voters(
 
 
 @protocol
-def panel(children: Protocols) -> ControlProtocol:
+def panel(children: Protocols) -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         votes = await run_protocols(children, context, step)
         rejects = sum(v.report.action == "reject" for v in votes)
         decide_final(
-            Decision.reject() if rejects * 2 > len(votes) else Decision.clear()
+            Decision.reject() if rejects * 2 > len(votes) else Decision.proceed()
         )
 
     return decide
@@ -385,7 +383,7 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
 )
 @pytest.mark.anyio
 async def test_a_shipped_protocol_takes_a_single_instance(
-    configure: Callable[[], ControlProtocol], expected: Action | None
+    configure: Callable[[], Protocol], expected: Action | None
 ) -> None:
     recorder = ListRecorder()
     decision = await _run(configure(), before_step(), recorder)
@@ -403,7 +401,7 @@ async def test_a_shipped_protocol_takes_a_single_instance(
     ],
 )
 def test_a_single_instance_is_validated_when_it_is_configured(
-    configure: Callable[[], ControlProtocol], error: type[Exception], match: str
+    configure: Callable[[], Protocol], error: type[Exception], match: str
 ) -> None:
     with pytest.raises(error, match=match):
         configure()
@@ -480,16 +478,16 @@ def test_threshold_rejects_a_monitor_that_never_watches_a_tool_call() -> None:
     ],
 )
 def test_a_shipped_protocol_needs_at_least_one_child(
-    configure: Callable[[], ControlProtocol],
+    configure: Callable[[], Protocol],
 ) -> None:
     with pytest.raises(ValueError, match="needs at least one child"):
         configure()
 
 
 @protocol
-def rules() -> Sequence[ControlProtocol]:
+def rules() -> Sequence[Protocol]:
     async def lenient(context: Context, step: BeforeToolCall) -> Decision | None:
-        return Decision.clear()
+        return Decision.proceed()
 
     async def strict(context: Context, step: BeforeToolCall) -> Decision | None:
         return Decision.reject("strict")
@@ -562,11 +560,11 @@ def test_threshold_rejects_a_group_with_a_member_that_never_watches_a_tool_call(
         threshold([before_and_after()], reject_at=0.5)
 
 
-def _edits(first: Action, second: Action) -> ControlProtocol:
+def _edits(first: Action, second: Action) -> Protocol:
     modified = ToolCall(id="c1", function="bash", arguments={"cmd": "echo hi"})
 
     @protocol
-    def edits() -> Sequence[ControlProtocol]:
+    def edits() -> Sequence[Protocol]:
         async def rewrite(context: Context, step: BeforeToolCall) -> Decision | None:
             return Decision(
                 action=first, modified=modified if first == "modify" else None

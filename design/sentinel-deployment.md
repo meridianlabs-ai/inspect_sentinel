@@ -77,7 +77,7 @@ So there is no `PortableAction` subset — the vocabulary crosses whole, and wha
 The single most useful structural decision: define a monitor as pure logic plus a small declared effect surface. Then the compilation and transport strategy becomes a deployment detail rather than a design constraint.
 
 ``` python
-class Host(Protocol):
+class Host(typing.Protocol):
     async def generate(
         self,
         input: str | list[ChatMessage],
@@ -102,7 +102,7 @@ class Host(Protocol):
     """End this session or agent out-of-band. False if unsupported."""
 
 
-class HostResponse(Protocol):
+class HostResponse(typing.Protocol):
     status: int
     headers: Mapping[str, str]
     def json(self) -> Any: ...
@@ -116,7 +116,7 @@ The same surface whether the host is Envoy via proxy-wasm, a Go runtime, or ordi
 
 Recording is not on the ABI. The runner records every report, cancellation, bypass and supersession through a separate `Recorder` that the host implements and authors never see (`sentinel-reference.md`, "Context"), so a protocol cannot skip recording by not calling it.
 
-A monitor reaches it as `context.host` (`sentinel.md`, "The context"), never by import. That is what keeps a monitor a pure function of its two arguments, and it is why the ABI is small enough to be worth specifying: everything a monitor can do to the outside world is enumerable from one Protocol.
+A monitor reaches it as `context.host` (`sentinel.md`, "The context"), never by import. That is what keeps a monitor a pure function of its two arguments, and it is why the ABI is small enough to be worth specifying: everything a monitor can do to the outside world is enumerable from one interface.
 
 ### Why `fetch` is a primitive, not an escape hatch
 
@@ -174,7 +174,7 @@ It could be — `fetch("model", ...)` — but keeping it distinct is better. Mod
 
 The split is one of types, `@monitor` and `@protocol`, but both are plain functions of `(context, step)`, and that matters here in one specific way. The portability verdict is per function, so a composition is exactly as portable as its least portable member — a leaf monitor calling `get_model()` disqualifies the protocol that wraps it, and a protocol reaching for task-scoped state disqualifies itself while leaving its leaves deployable. Both directions are visible to the same static check, which would not have been true had protocols been a separate kind of object with their own affordances.
 
-The two shipped compositions cross intact. `concurrent()` and `chain()` are ordinary code over the runner, and a chain's hand-off travels as data — `step.escalations` is a field on the payload, not a reference to a `ToolCallView` — so an ordered chain deserializes and runs in a proxy exactly as in-process. What changes is the last link: a `human()` in a proxy is an audit queue rather than a blocking prompt, which is the `audit`-travels-cleanly point below applied to a chain, and it means a proxy chain ending in a person degrades to "record, request review, and apply the chain's default" rather than waiting.
+The two shipped compositions cross intact. `concurrent()` and `sequential()` are ordinary code over the runner, and a `sequential`'s hand-off travels as data — `step.escalations` is a field on the payload, not a reference to a `ToolCallView` — so an ordered chain deserializes and runs in a proxy exactly as in-process. What changes is the last link: a `human()` in a proxy is an audit queue rather than a blocking prompt, which is the `audit`-travels-cleanly point below applied to a chain, and it means a proxy chain ending in a person degrades to "record, request review, and apply the chain's default" rather than waiting.
 
 Three notes:
 

@@ -29,7 +29,7 @@ def test_author_facing_names_are_exported() -> None:
         "Report",
         "Reported",
         "Children",
-        "ControlProtocol",
+        "Protocol",
         "Monitor",
         "Monitors",
         "Protocols",

@@ -31,24 +31,22 @@ Monitor: TypeAlias = (
     Callable[[Context, BeforeToolCall], Awaitable[Observation | None]]
     | Callable[[Context, AfterToolCall], Awaitable[Observation | None]]
 )
-"""A monitor: observes one kind of step and reports a suspicion score, or abstains."""
+"""A monitor: observes a step at one stage and reports a suspicion score, or abstains."""
 
-ControlProtocol: TypeAlias = (
+Protocol: TypeAlias = (
     Callable[[Context, Step], Awaitable[Decision | None]]
     | Callable[[Context, BeforeToolCall], Awaitable[Decision | None]]
     | Callable[[Context, AfterToolCall], Awaitable[Decision | None]]
 )
-"""A protocol: decides what happens at a step, or abstains. Annotating `Step` runs it at every stage."""
+"""A control protocol, not `typing.Protocol`: decides what happens at a step, or abstains. Annotating `Step` runs it at every stage."""
 
 Monitors: TypeAlias = Mapping[str, Monitor] | Sequence[Monitor]
 """Monitors handed to a protocol, named by mapping key or by registry name without its package prefix."""
 
-Protocols: TypeAlias = Mapping[str, ControlProtocol] | Sequence[ControlProtocol]
+Protocols: TypeAlias = Mapping[str, Protocol] | Sequence[Protocol]
 """Protocols handed to a protocol, named the same way."""
 
-Children: TypeAlias = (
-    Mapping[str, Monitor | ControlProtocol] | Sequence[Monitor | ControlProtocol]
-)
+Children: TypeAlias = Mapping[str, Monitor | Protocol] | Sequence[Monitor | Protocol]
 """Monitors and protocols together, for the compositions that record either."""
 
 P = ParamSpec("P")
@@ -80,7 +78,7 @@ class ProtocolGroup(Group):
         raise TypeError("a group of functions runs only through the runner")
 
 
-def members(sentinel: Monitor | ControlProtocol) -> tuple[Member, ...]:
+def members(sentinel: Monitor | Protocol) -> tuple[Member, ...]:
     if isinstance(sentinel, Group):
         return sentinel.members
     function = cast(Callable[[Context, Step], Awaitable[Report | None]], sentinel)
@@ -101,8 +99,8 @@ def monitor(
 
 
 def protocol(
-    factory: Callable[P, ControlProtocol | Sequence[ControlProtocol]],
-) -> Callable[P, ControlProtocol]:
+    factory: Callable[P, Protocol | Sequence[Protocol]],
+) -> Callable[P, Protocol]:
     """Register a protocol factory.
 
     Same contract as `@monitor`, with each returned function annotated to return `Decision | None`, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. As with `@monitor`, the factory may return a non-empty sequence of functions with distinct `__name__`s that form one instance; a function among them that returns `terminate` or calls `decide_final()` ends the instance's run, and those after it do not run and are not recorded. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
@@ -110,10 +108,10 @@ def protocol(
     Args:
         factory: A function returning a protocol, or a sequence of functions that form one.
     """
-    return cast(Callable[P, ControlProtocol], _register("protocol", factory, Decision))
+    return cast(Callable[P, Protocol], _register("protocol", factory, Decision))
 
 
-def step_types(sentinel: Monitor | ControlProtocol) -> frozenset[type[Any]]:
+def step_types(sentinel: Monitor | Protocol) -> frozenset[type[Any]]:
     """The step payload types a configured monitor or protocol accepts.
 
     Args:

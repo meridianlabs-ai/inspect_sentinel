@@ -4,7 +4,7 @@ Seven documents. **Start with [sentinel-overview.md](sentinel-overview.md)**, wh
 
 | | covers | status |
 |---|---|---|
-| [sentinel-overview.md](sentinel-overview.md) | **The short form.** Monitors and protocols, the four steps, actions, context, the shipped protocols, and one paragraph each on deployment and development. | Feedback draft |
+| [sentinel-overview.md](sentinel-overview.md) | **The short form.** Monitors and protocols, the four stages, actions, context, the shipped protocols, and one paragraph each on deployment and development. | Feedback draft |
 | [sentinel.md](sentinel.md) | **The full design.** Prior art, the payloads and context, what monitors and protocols return, the protocol layer (runner, compositions, boundary check, humans), registration, state, configuration, transcript, views, and the relationship to approval and review. Ends with the open questions. | Sketch; the Python is illustrative |
 | [sentinel-reference.md](sentinel-reference.md) | **The reference form** of sentinel.md: types, rules, and rationale sections, without the argument. | Tracks sentinel.md |
 | [sentinel-deployment.md](sentinel-deployment.md) | Running a sentinel **outside the eval process**, in a proxy on the wire: what a proxy can see, the host ABI, portability, and the sidecar and WASM execution modes. | Measured where marked, reasoned elsewhere |

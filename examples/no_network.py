@@ -11,8 +11,8 @@ from inspect_ai.tool import bash, python
 from inspect_sentinel import (
     BeforeToolCall,
     Context,
-    ControlProtocol,
     Decision,
+    Protocol,
     protocol,
 )
 
@@ -20,7 +20,7 @@ NETWORK_COMMANDS = ["curl", "wget", "pip install"]
 
 
 @protocol
-def no_network() -> ControlProtocol:
+def no_network() -> Protocol:
     """Reject `bash()` commands that use `curl`, `wget` or `pip install`."""
 
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
@@ -33,7 +33,7 @@ def no_network() -> ControlProtocol:
                     f"command uses {name}",
                     message=f"`{name}` needs the network, which this task does not allow.",
                 )
-        return Decision.clear()
+        return Decision.proceed()
 
     return decide
 

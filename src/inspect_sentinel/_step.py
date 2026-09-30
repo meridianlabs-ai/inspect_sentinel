@@ -26,13 +26,13 @@ class BeforeToolCall:
     """Rendering of the tool call and its context: custom when the tool registers a viewer, a default Python-call rendering otherwise."""
 
     input: list[ChatMessage]
-    """Exactly what the model was sent for the generate that produced the call."""
+    """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `context.input` is the sample's input, the assignment."""
 
     history: list[ChatMessage]
     """The scaffold's full conversation, pre-compaction turns included. In-process this is the scaffold's own list; monitors must not mutate it."""
 
     escalations: tuple[Reported[Decision], ...] = ()
-    """Earlier links' escalations, when this step is inside an ordered chain."""
+    """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
 
 @dataclass(frozen=True)
@@ -58,13 +58,13 @@ class AfterToolCall:
     """Rendering of the tool call and its context: custom when the tool registers a viewer, a default Python-call rendering otherwise."""
 
     input: list[ChatMessage]
-    """Exactly what the model was sent for the generate that produced the call."""
+    """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `context.input` is the sample's input, the assignment."""
 
     history: list[ChatMessage]
     """The scaffold's full conversation, pre-compaction turns included. In-process this is the scaffold's own list; monitors must not mutate it."""
 
     escalations: tuple[Reported[Decision], ...] = ()
-    """Earlier links' escalations, when this step is inside an ordered chain."""
+    """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
 
 Step: TypeAlias = BeforeToolCall | AfterToolCall

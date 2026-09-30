@@ -4,7 +4,7 @@
 
 Inspect Sentinel is a package for defining, developing, and deploying sentinels: functions that watch agents and intervene in their execution. Key design elements include:
 
-1.  A single interface that encompasses monitoring tool calls and model generations, with execution either before or after steps.
+1.  A single interface that encompasses monitoring tool calls and model generations, with execution either before or after model generations and tool calls.
 2.  A division between monitors, which observe and report a suspicion score, and protocols, which decide on an action similar to the current Inspect tool call approval interface (e.g. continue, modify, reject, escalate, terminate). A protocol with no monitors is a simple rule.
 3.  Support for layering control protocols (thresholds, audit budgets, resampling, defer to trusted, human review, etc.) on top of monitors.
 4.  Core interfaces decoupled from the Inspect runtime so that monitors can be deployed elsewhere (e.g. in network proxies).
@@ -20,7 +20,7 @@ There are two registerable types. A **monitor** observes: it returns an `Observa
 
 ``` python
 @protocol
-def no_curl() -> ControlProtocol:
+def no_curl() -> Protocol:
     async def decide(context: Context, step: BeforeToolCall):
         if "curl" in str(step.call.arguments):
             return Decision.reject("uses curl", message="network access is not allowed")
@@ -43,9 +43,9 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
 Task(sentinel=threshold(suspicion_monitor(), reject_at=0.8))
 ```
 
-Both run before the tool call executes (the `step` they take is `BeforeToolCall`). There are four different steps that a monitor or protocol could choose to target:
+Both run before the tool call executes (the `step` they take is `BeforeToolCall`). There are four stages, the step types a monitor or protocol could choose to target:
 
-| Step | Fires |
+| Stage | Fires |
 |------------------------------------|------------------------------------|
 | `BeforeGenerate` | Before each generate, before the cache lookup |
 | `AfterGenerate` | After each generate, before the output reaches the agent |
@@ -131,7 +131,7 @@ Built-in protocols cover the common compositions and basic control scenarios:
 | Protocol | Description |
 |------------------------|------------------------------------------------|
 | `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `continue`). What a list containing a protocol resolves to. Use for independent guards that must all be satisfied. |
-| `chain()` | Runs children in order until one decides; first non-`escalate` wins, and escalations are handed to the next link so a human at the end sees who asked and why. Use for a cheap rule ahead of an expensive judge. |
+| `sequential()` | Runs children in order until one decides; first non-`escalate` wins, and escalations are handed to the next link so a human at the end sees who asked and why. Use for a cheap rule ahead of an expensive judge. |
 | `observe()` | Records every observation and acts on none. What a bare monitor resolves to, and how a benign score distribution gets collected. |
 | `threshold()` | Acts on a score: `reject` above one constant, `terminate` above another. The smallest protocol, and the one calibration feeds. |
 | `defer_to_trusted()` | Above a threshold, substitutes a trusted model's action for the untrusted one's. Defaults to the `trusted` model role. |
@@ -149,7 +149,7 @@ def threshold(
     monitors: Monitor | Monitors,
     reject_at: float,
     terminate_at: float | None = None,
-) -> ControlProtocol:
+) -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         score = observations.max_suspicion()
@@ -159,7 +159,7 @@ def threshold(
             return Decision.terminate(explain(observations, score))
         if score >= reject_at:
             return Decision.reject(explain(observations, score))
-        return Decision.clear()
+        return Decision.proceed()
 
     return decide
 ```
@@ -170,9 +170,9 @@ Sentinels can be developed, refined, and deployed within Inspect AI, and for man
 
 ### Proxy Steps
 
-A proxy sits on one HTTP exchange: a request and a response. It never sees a tool execute, because tools run client-side after the response is delivered. So two of the four steps are exact, and the tool steps are projections:
+A proxy sits on one HTTP exchange: a request and a response. It never sees a tool execute, because tools run client-side after the response is delivered. So two of the four stages are exact, and the tool stages are projections:
 
-| Step | In a proxy | Fidelity |
+| Stage | In a proxy | Fidelity |
 |------------------------|------------------------|------------------------|
 | `BeforeGenerate` | The request body | Full |
 | `AfterGenerate` | The response body | Full |

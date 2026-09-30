@@ -41,7 +41,7 @@ class Observation(BaseModel):
 
     @classmethod
     def score(cls, suspicion: Suspicion, explanation: str | None = None) -> Observation:
-        """An observation with the given suspicion."""
+        """An observation that sets `suspicion` to the given score."""
         return cls(suspicion=suspicion, explanation=explanation)
 
     @classmethod
@@ -72,8 +72,8 @@ class Decision(BaseModel):
     """Author-supplied structured context, recorded verbatim."""
 
     @classmethod
-    def clear(cls, explanation: str | None = None) -> Decision:
-        """Let the step proceed unchanged."""
+    def proceed(cls, explanation: str | None = None) -> Decision:
+        """Let the step proceed unchanged: a decision with action `continue`."""
         return cls(action="continue", explanation=explanation)
 
     @classmethod

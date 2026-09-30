@@ -18,9 +18,9 @@ from inspect_sentinel._integration import (
     sentinel_from_config,
 )
 from inspect_sentinel._monitor import (
-    ControlProtocol,
     Monitor,
     Monitors,
+    Protocol,
     monitor,
     protocol,
 )
@@ -50,7 +50,7 @@ def cfg_pair() -> list[Monitor]:
 
 
 @protocol
-def cfg_bundle(**groups: Monitors) -> ControlProtocol:
+def cfg_bundle(**groups: Monitors) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return None
 
@@ -58,7 +58,7 @@ def cfg_bundle(**groups: Monitors) -> ControlProtocol:
 
 
 @protocol
-def cfg_fields(name: Monitors, params: Monitors | None = None) -> ControlProtocol:
+def cfg_fields(name: Monitors, params: Monitors | None = None) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return None
 
@@ -66,7 +66,7 @@ def cfg_fields(name: Monitors, params: Monitors | None = None) -> ControlProtoco
 
 
 @protocol
-def cfg_rule(reason: str = "no") -> ControlProtocol:
+def cfg_rule(reason: str = "no") -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         return Decision.reject(reason)
 
@@ -451,7 +451,7 @@ def scratch_registry(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.usefixtures("scratch_registry")
 def test_an_exact_name_wins_over_the_package_fallback() -> None:
     @protocol
-    def observe(monitors: Monitors) -> ControlProtocol:
+    def observe(monitors: Monitors) -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             return None
 

@@ -27,7 +27,7 @@ def test_observation_flag_is_full_suspicion() -> None:
 @pytest.mark.parametrize(
     ("make", "action"),
     [
-        (Decision.clear, "continue"),
+        (Decision.proceed, "continue"),
         (Decision.reject, "reject"),
         (Decision.terminate, "terminate"),
         (Decision.escalate, "escalate"),
