@@ -41,6 +41,14 @@ def test_decision_constructors_set_action(
     assert decision.explanation == "because"
     assert decision.audit is False
     assert decision.modified is None
+    assert decision.message is None
+
+
+def test_a_reject_can_tell_the_agent_why() -> None:
+    decision = Decision.reject("matched curl", message="Network access is blocked.")
+    assert decision.action == "reject"
+    assert decision.explanation == "matched curl"
+    assert decision.message == "Network access is blocked."
 
 
 def test_reports_round_trip_through_json() -> None:

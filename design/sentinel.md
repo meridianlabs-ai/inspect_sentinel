@@ -358,7 +358,10 @@ class Decision(BaseModel):
     """Replacement for the step's subject, for a 'modify' decision."""
 
     explanation: str | None = Field(default=None)
-    """Why. Operator-facing by default; see 'Two audiences' below."""
+    """Why, for the log. The agent never sees it; see 'Two audiences' below."""
+
+    message: str | None = Field(default=None)
+    """Text the agent reads when the step is rejected. The agent sees nothing else from a decision."""
 
     metadata: dict[str, Any] | None = Field(default=None)
 
@@ -500,9 +503,9 @@ A protocol that has the last word calls `final(decision)`, and the step ends the
 
 #### Two audiences
 
-Claude Code hooks separate `additionalContext` (the model sees it) from `systemMessage` (the operator sees it, the model does not). We should too, and the reason is security rather than tidiness: **telling an agent why it was flagged teaches it to evade.** `explanation` should be operator-facing by default, with a separate, explicit field for anything the model is meant to read.
+Claude Code hooks separate `additionalContext` (the model sees it) from `systemMessage` (the operator sees it, the model does not). We do too, and the reason is security rather than tidiness: **telling an agent why it was flagged teaches it to evade.** `explanation` is log-only: the agent never sees it, so it can carry the full reasoning. `message` is the one field the agent reads, set explicitly with `Decision.reject(explanation, message=...)`; a reject without one gets the host's default "not approved" text.
 
-That separate field is also the soft intervention we otherwise lack — a way to say "continue, but the model should know X" without rejecting anything.
+`message` is legal only on a `reject` for now, and the shape check rejects it on any other action. The same field would give us the soft intervention we otherwise lack — a way to say "continue, but the model should know X" without rejecting anything — but that needs a way to deliver text to the agent while the step proceeds, which does not exist yet.
 
 #### One vocabulary across stages
 

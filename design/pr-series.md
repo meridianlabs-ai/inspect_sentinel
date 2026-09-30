@@ -86,9 +86,10 @@ class Decision(BaseModel):
     action: Action
     audit: bool = False
     modified: ToolCall | None = None                    # ChatMessageAssistant joins with AfterGenerate
-    explanation: str | None = None
+    explanation: str | None = None                      # log-only; the agent never sees it
+    message: str | None = None                          # what the agent reads; reject only, for now
     metadata: dict[str, Any] | None = None
-    @classmethod clear / reject / terminate / escalate
+    @classmethod clear / reject(explanation, *, message) / terminate / escalate
 
 Report = Observation | Decision
 

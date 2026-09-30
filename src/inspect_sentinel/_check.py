@@ -7,7 +7,7 @@ from ._step import AfterToolCall, Step
 def validate_decision_shape(decision: Decision, step: Step) -> None:
     """Check a decision for the deterministic protocol bugs no type can express, raising `ValueError` on one.
 
-    The action must be legal for the stage (`reject` and `modify` are not legal after a tool call), `modified` must be set exactly when the action is `modify`, and a `modify` may rewrite only the call's arguments: its `id` and `function` must match the step's call.
+    The action must be legal for the stage (`reject` and `modify` are not legal after a tool call), `modified` must be set exactly when the action is `modify`, a `modify` may rewrite only the call's arguments (its `id` and `function` must match the step's call), and `message` may be set only on a `reject`.
 
     Args:
         decision: The decision a layer returned.
@@ -30,4 +30,9 @@ def validate_decision_shape(decision: Decision, step: Step) -> None:
             "A `modify` may change only the call's arguments; "
             f"got id {modified.id!r} and function {modified.function!r} "
             f"for call {step.call.id!r} to {step.call.function!r}."
+        )
+    if decision.message is not None and decision.action != "reject":
+        raise ValueError(
+            f"`message` may be set only on a `reject`; got action {decision.action!r}. "
+            "Telling the agent something while the step proceeds needs a way to deliver it, which does not exist yet."
         )

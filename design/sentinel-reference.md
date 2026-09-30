@@ -316,7 +316,10 @@ class Decision(BaseModel):
     """Replacement for the step's subject. Set if and only if action == "modify"."""
 
     explanation: str | None = Field(default=None)
-    """Why. Operator-facing. The model does not see it."""
+    """Why, for the log. The agent never sees it."""
+
+    message: str | None = Field(default=None)
+    """Text the agent reads when the step is rejected. Set only on a reject, for now."""
 
     metadata: dict[str, Any] | None = Field(default=None)
 
@@ -342,7 +345,7 @@ Rules:
 - **Prefer structured suspicion.** `{"goal_alignment": 0.1, "sabotage": 0.8}` lets a protocol threshold per dimension and lets independent monitors score separate dimensions. A scalar is accepted.
 - **A detector reports `1.0`.** `Observation.flag(explanation)` is a monitor's way of saying "this is definitely it" without holding a threshold; `threshold(detector(), reject_at=1.0)` acts on it.
 - **Set `audit=True` to request human review.** It is independent of the action: you can continue-and-audit or reject-and-audit. A parent protocol owning a budget may decline.
-- **Write `explanation` for the operator.** The model does not see it. If the agent learns why it was flagged, it can learn to avoid being flagged. A separate field, not yet named, carries text the model is meant to read. That field also lets a protocol continue while giving the model information.
+- **Write `explanation` for the operator.** It is log-only; the agent never sees it. If the agent learns why it was flagged, it can learn to avoid being flagged. Text the agent is meant to read goes in `message`, `Decision.reject(explanation, message=...)`, which is legal only on a reject for now; a reject without one gets the host's default "not approved" text. Continuing while telling the agent something needs a delivery mechanism that does not exist yet.
 - **Call `final(decision)` only for a decision no layer above may weaken**, in practice one a person made. It ends the step: siblings still in flight are cancelled, every layer above is recorded as bypassed, and the decision is the outcome. `human()` calls it by default. The framework cannot verify a human was involved, so the claim is visible in the log and in code review, as `portable=False` is.
 
 Named constructors for the common cases:
