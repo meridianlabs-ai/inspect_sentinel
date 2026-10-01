@@ -20,7 +20,7 @@ How a protocol makes a decision that no layer above it may weaken, and how a per
 - `examples/nested.py`, walked through
 - Two final decisions at once (superseded)
 - `escalate`, and what happens when it reaches the top
-- Panels: a person as one vote with `human(final=False)`
+- Panels: a person as one vote beside other protocols
 - Notifications and remote decisions, e.g. Slack (planned)
 
 ## Humans
@@ -37,8 +37,8 @@ Task(..., sentinel=sequential([network_rule(), human(stages=["tool_call"])]))
 
 The person chooses from `choices`: by default approve, reject or terminate before a call, and approve or terminate after it. Before a call you can also offer `"modify"`, to edit the call's arguments. A reason the person types when rejecting is what the agent is told, and is recorded as the decision's explanation.
 
-The answer ends the step through `decide_final()`, so no layer above can weaken it. Pass `final=False` to make the person's answer an ordinary decision, one vote for a panel protocol to weigh.
+The answer is an ordinary decision. At the end of a `sequential()` it decides for the chain, as any link's decision does, and the layers above vote on it as usual. Beside other protocols in a `concurrent()` group, which is what a list or mapping passed to `Task(sentinel=)` becomes, the person is one vote: another protocol's `reject` outranks the person's `approve`, and the person's `reject` or `terminate` wins over a weaker vote.
 
-A `human()` beside other protocols in a `concurrent()` group, which is what a list or mapping passed to `Task(sentinel=)` becomes, is a configuration error: the person would be asked about every call while the others decide in parallel. Use `sequential()` instead. Monitors beside it are fine, since they only record.
+A `human()` in a `concurrent()` group asks about every call it is reached on. To ask only about what the rules escalate, put it at the end of a `sequential()`.
 
 The person is asked through the host's `ask_human()`, which shows the step with Inspect's approval surfaces (the approval panel, the console, or an ACP client). The Inspect integration of `ask_human()` is not released yet.

@@ -465,7 +465,7 @@ Examples of each:
 | `no_curl` | protocol (a rule) | `action="reject"` |
 | `rm -rf /` guard | protocol (a rule) | `action="reject"` |
 | Strip `--force` from a call | protocol (a rule) | `action="modify", modified=...` |
-| A person | protocol (`human()`) | whatever they say, through `decide_final()` |
+| A person | protocol (`human()`) | whatever they say |
 
 Note that `Observation` keeps the shape [Progressive disclosure](#progressive-disclosure-through-defaults-not-through-the-return-type) already argued for: `Suspicion` is the flexible value, `Observation` the fixed wrapper — exactly `Score` and `Value`.
 
@@ -505,7 +505,7 @@ An earlier draft called this the first concrete consumer of per-task state. It i
 
 #### Final decisions {#authoritative-reports}
 
-[Child decisions are advisory](#child-decisions-are-advisory): whatever wraps a protocol may honour or ignore what it decided. One class of decision is not: when a person has looked at a call and rejected it, no threshold, budget or aggregation above them gets to turn that into `continue`. The doc first carried that as a prose rule, then as a `binding` field the runner enforced as a floor. It is now control flow:
+[Child decisions are advisory](#child-decisions-are-advisory): whatever wraps a protocol may honour or ignore what it decided. One class of decision is not: a decision its author means as the last word, which no threshold, budget or aggregation above it gets to turn into `continue`. The doc first carried that as a prose rule, then as a `binding` field the runner enforced as a floor. It is now control flow:
 
 ``` python
 def decide_final(decision: Decision) -> NoReturn:
@@ -514,7 +514,7 @@ def decide_final(decision: Decision) -> NoReturn:
 
 A protocol that has the last word calls `decide_final(decision)`, and the step ends there. Nothing above the calling protocol runs: each layer's `await run_protocols(...)` or `await run_children(...)` never returns, so its decision logic never sees the decision and cannot weaken it. Siblings still in flight are cancelled and recorded as cancelled, as they are for `terminate`, and the decision is the step's outcome. The runner still [checks its shape](#the-boundary-check), records it as the decision of the protocol that called `decide_final()`, and records each layer it passed as `bypassed` (see [Transcript](#transcript)). The dispatcher invokes the resolved root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `decide_final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`.
 
-`human()` calls it by default, and `human(final=False)` returns an ordinary advisory decision, which is how a person becomes one vote among several (see [Humans in the loop](#humans-in-the-loop)). Nothing stops an LLM-backed protocol from calling `decide_final()`, and nothing should — the framework cannot verify that a human was involved, only that the author claimed the last word — but the claim is visible in the transcript and in code review, which is the same discipline `portable=False` relies on.
+No shipped protocol calls it: `human()` returns the person's answer as an ordinary decision (see [Humans in the loop](#humans-in-the-loop)). Any protocol may call `decide_final()` — the framework cannot verify the claim to the last word, only that the author made it — but the claim is visible in the transcript and in code review, which is the same discipline `portable=False` relies on.
 
 #### Two audiences
 
@@ -596,7 +596,7 @@ That split came out of [Prior art](#prior-art) and is the main architectural con
 
 **"Protocol" is a registry type, and deciding is what puts something in it.** A protocol is any registered function that returns a `Decision`. Most consult monitors — `threshold` reads their scores — or compose other protocols — `sequential` and `concurrent` — and those are combinators, the shape Inspect already uses everywhere it composes: `chain(*solvers) -> Solver`, `multi_scorer(scorers, reducer) -> Scorer`, `policy_approver(policies) -> Approver`. But a protocol may have no children at all: `human()` asks a person, `no_curl()` matches a string. Those are rules, and they are protocols because they decide, not because they compose. See [A protocol may have no children](#a-protocol-may-have-no-children) and [The `@protocol` decorator](#the-protocol-marker).
 
-The layering below is therefore mostly about *what code does*. The structural claims are typed; the behavioural one — that a protocol invokes its children through [the runner](#the-runner) — is recorded where it cannot be enforced, and that nothing weakens a person's decision is [control flow](#authoritative-reports) rather than a check. [What the collapse costs](#what-the-collapse-costs) keeps the honest residue.
+The layering below is therefore mostly about *what code does*. The structural claims are typed; the behavioural one — that a protocol invokes its children through [the runner](#the-runner) — is recorded where it cannot be enforced, and that nothing weakens a final decision is [control flow](#authoritative-reports) rather than a check. [What the collapse costs](#what-the-collapse-costs) keeps the honest residue.
 
 Applying the split shrinks the monitor surface rather than growing it. Every control-literature action turns out to live above the monitor:
 
@@ -643,7 +643,7 @@ Within a wrapping protocol this is forced rather than chosen. `concurrent` combi
 
 The distinction that makes this coherent is **declared versus inferred**. [A bare monitor records only](#observe-only-is-the-default) because acting on it would mean acting on a number the author never thresholded. A rule's action was *declared*: someone who writes `Decision.reject(...)` is not surprised when a call is rejected, any more than an approver author is surprised today, so a rule at the top level acts.
 
-One rule then covers the bimodality: **a wrapping protocol may override advisory decisions, never a final one.** A human's rejection is final and stays so — a threshold overriding a human would be a safety regression. An earlier draft left this as a rule about *what a protocol should do*, and a later one as a `binding` field the runner clamped to; it is now [`decide_final()`](#authoritative-reports), which ends the step before any wrapping protocol decides.
+One rule then covers the bimodality: **a wrapping protocol may override advisory decisions, never a final one.** An earlier draft left this as a rule about *what a protocol should do*, and a later one as a `binding` field the runner clamped to; it is now [`decide_final()`](#authoritative-reports), which ends the step before any wrapping protocol decides.
 
 ### A bare monitor records only {#observe-only-is-the-default}
 
@@ -1019,7 +1019,7 @@ def concurrent(children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Chi
 
 That settles the `modify` question this document previously left open: concurrent children cannot see each other's rewrites, so a `modify` when another child decided anything but `escalate` is a rejection naming the modifier, keeping the modifier's `audit`, `metadata` and explanation. Votes count by instance, so another function of the modifier's own [multi-function](#one-function-one-stage) instance contests its `modify` only by modifying too, and the explanation labels each such function's vote `name.function`. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own. Re-approving modified arguments is more machinery than the decision is worth for now, and #5423 reached the same answer independently. The name pairs with `sequential`: both say how the children run and leave the decision rule to the docs. `strictest` and `all_of` were the alternatives; the first named only the recommendation half of the reduction (observations aggregate by max, not strictness) and the second named what the configuration means rather than its shape.
 
-**Concurrent is the default, and ordered is one explicit word.** The argument for making ordered the default is that many people will want a chain, which is true. The argument against is that ordered-by-default silences monitors, and silencing is a safety failure while concurrency's cost is latency and tokens. A default should fail safe, and changing one later is a silent semantic change for everyone. So a list with a protocol in it is `concurrent`, and ordered composition is `sequential(...)`. The mistake the wrong default would produce most often — a `human()` in a concurrent group, prompting on every call — will be caught at configuration time with a message that names `sequential()`, once `human()` exists.
+**Concurrent is the default, and ordered is one explicit word.** The argument for making ordered the default is that many people will want a chain, which is true. The argument against is that ordered-by-default silences monitors, and silencing is a safety failure while concurrency's cost is latency and tokens. A default should fail safe, and changing one later is a silent semantic change for everyone. So a list with a protocol in it is `concurrent`, and ordered composition is `sequential(...)`. The mistake the wrong default would produce most often — a `human()` in a concurrent group, prompting on every call — is not an error, since asking about every call can be intended; the docs recommend `sequential()` for asking only on escalation.
 
 ### The boundary check {#the-boundary-check}
 
@@ -1035,7 +1035,7 @@ A `decide_final()` decision is shape-checked when it is made. The decision is re
 
 **A decision no layer above may weaken is [`decide_final()`](#authoritative-reports).** It replaces an earlier design in which a `binding` flag on the decision set a floor: the runner compared each layer's return with its binding children's, clamped a weaker one up, and kept the protocol's own decision on the record as `overrode`.
 
-Control flow rather than a value-level rule, because a rule about decision values requires every layer to carry or compare the property — inherit the flag, preserve it through `concurrent`'s rewrite of a contested `modify`, break ties toward it, reconcile two binding `modify`s — and each patch to that design leaked wherever a middle layer built a new decision. Control flow cannot be dropped by a middle layer, because the middle layer's code does not run. It reuses the cancellation `terminate` already has, so there is no new concurrency machinery, and it settles conflict the way `terminate` does: the first `decide_final()` to reach a layer wins and the rest are recorded, as with two `terminate`s. Ordering several authorities is a `sequential`, or a panel that collects advisory votes and calls `decide_final()` itself (see [Humans in the loop](#humans-in-the-loop)).
+Control flow rather than a value-level rule, because a rule about decision values requires every layer to carry or compare the property — inherit the flag, preserve it through `concurrent`'s rewrite of a contested `modify`, break ties toward it, reconcile two binding `modify`s — and each patch to that design leaked wherever a middle layer built a new decision. Control flow cannot be dropped by a middle layer, because the middle layer's code does not run. It reuses the cancellation `terminate` already has, so there is no new concurrency machinery, and it settles conflict the way `terminate` does: the first `decide_final()` to reach a layer wins and the rest are recorded, as with two `terminate`s. Ordering several authorities is a `sequential`, or a panel that collects advisory votes and calls `decide_final()` itself.
 
 ### Humans in the loop
 
@@ -1043,31 +1043,18 @@ Control flow rather than a value-level rule, because a rule about decision value
 
 ``` python
 human(stages=["tool_call"])                                    # before every call it is reached at
-human(stages=["tool_call", "tool_result"], choices=[...], final=True)
+human(stages=["tool_call", "tool_result"], choices=[...])
 ```
 
 - **`stages` is required**: `"tool_call"` (before a call) and/or `"tool_result"` (after it), the names `SentinelEvent.stage` records. Leaving it out, an empty list, or an unknown or not-yet-supported stage (`"model_input"`, `"model_output"`) is a configuration error when the factory is called. The factory returns one function per chosen stage, a `ProtocolGroup` when both, so the one-stage-per-function rule holds.
 - **It asks whenever it is reached** at a stage it watches. Inside a `sequential`, being reached means every earlier link watching that stage escalated, so the person sees escalations; on its own, `human(stages=["tool_call"])` asks about every call, like inspect's human approver. There is no escalation filter and no warning when nothing before it watches a stage: that can be intended.
 - **Choices** use inspect's approval words, since the surfaces present those. Before a call the default is `approve`, `reject`, `terminate`, and `modify` may be offered; after a call it is `approve`, `terminate`, and asking for `reject` or `modify` there is a configuration error, since the call has already run. `approve` maps to `continue`, `reject` to `reject`, `terminate` to `terminate`, `modify` to a `modify` carrying the person's replacement call, which the shape check holds to the call's `id` and `function`.
 - **The person's typed reason on a reject is the decision's `message`**, so the agent reads it, and its `explanation`, for the log. A terminate's reason is its `explanation`.
-- **The answer ends the step through [`decide_final()`](#authoritative-reports)** by default, so nothing above it runs. Human surfaces already queue requests, so two `sequential`s that both end in a person prompt one after the other; the first answer ends the step and the other prompt is cancelled.
+- **The answer is an ordinary decision.** Inside a `sequential` it ends that chain, as any link's decision does; above the chain the usual vote applies, so beside other protocols in a `concurrent()` the person is one vote: a peer's `reject` outranks the person's `approve`, and the person's `reject` or `terminate` is not weakened, since the strongest decision wins. Human surfaces already queue requests, so two `sequential`s that both end in a person prompt one after the other and both answers vote; a `terminate` cancels the other prompt, as it cancels any sibling.
 
 It reaches the person through `Host.ask_human(step, choices) -> HumanAnswer`. The host is handed the step itself and renders it by its type, so the interface is the same for every stage: before a call the call, its view, the conversation and `step.escalations` (who escalated and why); after a call the same plus the result the model is about to receive. `HumanAnswer` holds the chosen `decision`, the person's typed `reason`, and `modified`, the replacement call for a tool-stage modify. The host notifies the person and marks the sample as awaiting a person while it waits, and raises a clear error for a stage it cannot render. inspect_ai renders the two tool stages with the existing surfaces (ACP, the approval panel, the console); a later generate-stage `human()` needs a new rendering, not a new interface ([open question](#open-questions) 14). A proxy implements the same method, e.g. as a review queue.
 
-`human(final=False)` returns the answer as an ordinary advisory decision instead, which makes a person one vote in a panel. The panel then has the last word itself:
-
-``` python
-@protocol
-def panel(children: Protocols) -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
-        votes = await run_protocols(children, context, step)
-        rejects = sum(v.report.action == "reject" for v in votes)
-        decide_final(Decision.reject() if rejects * 2 > len(votes) else Decision.proceed())
-
-    return decide
-```
-
-It is the one protocol whose placement the framework second-guesses: a `human()` beside other protocols in a `concurrent()`, including the root `concurrent` a top-level list or mapping resolves to, is a configuration error naming `sequential()`, since the person would be asked about every call while the others decide in parallel. The check sees through a `concurrent` that holds a `human()` and through a factory that returns one, but not through `sequential`. Monitors beside it are allowed, since they do not decide, and so is a lone `human()`, as the root or as a `concurrent`'s only protocol.
+A `human()` in a `concurrent()`, including the root a top-level list or mapping resolves to, is allowed. It asks about every call it is reached on, which may be what the user wants, for the same reason there is no warning when nothing before it watches a stage. To ask only on escalation, put it at the end of a `sequential()`.
 
 ### What the split does not enforce {#what-the-collapse-costs}
 
@@ -1456,13 +1443,13 @@ A protocol is recorded exactly as a monitor is, so a nested configuration emits 
 
 ```
 factory="internet_attempt",             path="attempt/internet_attempt",  kind="decision",  status="reported",  action="escalate"
-factory="inspect_sentinel/sequential",  path="attempt",                   kind="decision",  status="bypassed"
 factory="sandbox_escape",               path="escape",                    kind="decision",  status="reported",  action="continue"
-factory="inspect_sentinel/concurrent",  path="",                          kind="decision",  status="bypassed"
 factory="inspect_sentinel/human",       path="attempt/human",             kind="decision",  status="reported",  action="reject"
+factory="inspect_sentinel/sequential",  path="attempt",                   kind="decision",  status="reported",  action="reject"
+factory="inspect_sentinel/concurrent",  path="",                          kind="decision",  status="reported",  action="reject"
 ```
 
-The person's `reject` went through `decide_final()`, so the `sequential` and the top-level `concurrent` above it are `bypassed`, and the `reject` itself is recorded last, at the root, when it takes effect. Without a final decision the last line is the summary event #5423 wanted: the top-level `concurrent` records the combined decision at `path=""`. Every layer's decision is recorded, the root's included; a configuration that is a single rule logs one event per step, since the rule is the root; when more than one child decided, the layer's explanation lists each child's decision after the winner's own.
+The person's `reject` ends the `sequential` at `attempt`, and the top-level `concurrent` takes it as the strongest vote; its decision at `path=""` is the summary event #5423 wanted. A `decide_final()` decision is instead recorded last, at the root, when it takes effect, after a `bypassed` event for each layer above it. Every layer's decision is recorded, the root's included; a configuration that is a single rule logs one event per step, since the rule is the root; when more than one child decided, the layer's explanation lists each child's decision after the winner's own.
 
 An earlier draft added a `strategy: str` here and on `Decision`, to record whether a `modify` came from a deferral, a resample or a trusted edit. It was removed: **the layer's identity already is the strategy.** A protocol named `defer_to_trusted` returning `modify` has said what it did, and the aggregate query that justified the field — how often did this protocol defer — is `factory == "inspect_sentinel/defer_to_trusted" and action == "modify"`. Worse, on `Decision` it was a field every rule carried and never set.
 
@@ -1819,6 +1806,6 @@ ordered composition should be the default (no — see [Two compositions](#two-co
 20.  **Should `sequential` and `concurrent` accept monitors at all?** They do here: a monitor in either is recorded and falls through, which is what gives a mixed top-level list a meaning. The alternative is `Protocols` only, with monitors reachable solely through a score-reading protocol; stricter, and it would make `Task(sentinel=[no_curl(), suspicion_monitor()])` a type error rather than a recorded-but-inert monitor.
 21.  **What is the umbrella called?** Settled: `sentinel`, for the feature, `Task(sentinel=)`, the package and the event, with `monitor` kept for the scorer and `protocol` for the decider as the control literature and ControlArena use them. `Task(monitor=)` held protocols and rules and never a bare monitor, and reviewers read it as "the monitor plus the protocol". Renaming the scorer instead (`observer`) would have broken the literature's pair; `ranger`, `warden` and `oversight` were the runners-up for the umbrella.
 22.  **Where does `conversation` come from, and is `history` eager?** The id wants minting by the loop that owns the messages, which is `react`, the generate loop and each bridge in-process, and the proxy's session key outside; in-process the dispatcher takes the current agent span's id (the sample uuid outside any agent span), and whether `AgentState` should carry it instead is open. `history` on every payload is a reference to the scaffold's list in-process, but replay and a proxy must materialise it per step, which is O(n) per step over a long trajectory unless the runner hands out a shared, append-only view.
-23.  **Is `decide_final()` the right design at all?** Any protocol at any depth, third-party code inside `observe()` or `threshold()` included, can call it and bypass every layer above, while this design presents child decisions as advisory to the parent. The options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism.
+23.  **Is `decide_final()` the right design at all?** Any protocol at any depth, third-party code inside `observe()` or `threshold()` included, can call it and bypass every layer above, while this design presents child decisions as advisory to the parent. The options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism. `human()` no longer uses it, which weakens the case for keeping it.
 24.  **What should an `escalate` that reaches the root mean?** Today it proceeds as `continue` would, is recorded as the root's decision, and the host warns once per eval. The alternatives are rejecting it (fail-closed, as approval does when every approver escalates) or a setting with a chosen default. Rejecting turns every unsure rule into a blocked call.
 25.  **How do `review=` and tool approvers migrate?** Three parts are open. Is `review=` deprecated in favour of after-call protocols, as [Relationship to approval and review](#relationship-to-approval-and-review) proposes? How does `approval=` coexist with `sentinel=`? The ordering is already written down: approval and then the sentinel before a call, review and then the sentinel after. Can an existing approver run as a protocol through an `as_protocol(approver)` adapter, so that it composes with monitors? Tracked in `pr-series.md`, Deferred.
