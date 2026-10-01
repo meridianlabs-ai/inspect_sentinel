@@ -19,7 +19,7 @@ from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import Action, Decision, Observation
 from inspect_sentinel._runner import run_root
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
-from inspect_sentinel._types import Children, Monitor, Protocol, ProtocolGroup
+from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup
 from tests._fakes import FakeHost, ListRecorder, after_step, before_step, runner_context
 
 
@@ -239,7 +239,7 @@ async def test_after_a_call_the_person_sees_the_result() -> None:
 )
 @pytest.mark.anyio
 async def test_a_human_beside_others_in_concurrent_asks_every_call(
-    spec: Children,
+    spec: Sentinels,
 ) -> None:
     decision, host, _ = await _root(spec, HumanAnswer("reject"))
     assert len(host.asked) == 1
