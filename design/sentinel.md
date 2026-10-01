@@ -1067,7 +1067,7 @@ def panel(children: Protocols) -> Protocol:
     return decide
 ```
 
-It is the one protocol whose placement the framework second-guesses: a `human()` directly beside other children of a `concurrent()`, including the root `concurrent` a top-level list or mapping resolves to, is a configuration error naming `sequential()`, since the person would be asked about every call while the others decide in parallel. A lone `human()`, as the root or as a `concurrent`'s only child, is not: nothing runs beside it.
+It is the one protocol whose placement the framework second-guesses: a `human()` beside other protocols in a `concurrent()`, including the root `concurrent` a top-level list or mapping resolves to, is a configuration error naming `sequential()`, since the person would be asked about every call while the others decide in parallel. The check sees through a `concurrent` that holds a `human()` and through a factory that returns one, but not through `sequential`. Monitors beside it are allowed, since they do not decide, and so is a lone `human()`, as the root or as a `concurrent`'s only protocol.
 
 ### What the split does not enforce {#what-the-collapse-costs}
 

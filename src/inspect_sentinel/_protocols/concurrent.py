@@ -9,6 +9,7 @@ from .._runner import run_children
 from .._step import Step
 from .._types import Group, Protocol, Sentinels
 from .._validate import named_children
+from .human import asks_human, mark_asks_human
 
 
 @protocol
@@ -17,7 +18,7 @@ def concurrent(
 ) -> Protocol:
     """Run every child at once; the strictest decision wins.
 
-    What a list containing a protocol resolves to. Monitors are recorded in the transcript; protocols vote by `terminate > reject > modify > escalate > continue`, the first in configuration order winning a tie, so a peer's `continue` does not override an `escalate` and the layer escalates when that is the strongest vote. A `modify` when another protocol also decided anything but `escalate` becomes a `reject` naming the modifier, since the others decided about the call as it stood; votes count by instance, so another function of the modifier's own instance contests it only by also modifying; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided and not all of them continued, the layer's explanation lists each one's decision after the winner's own, labelling a function of a `ProtocolGroup` or `MonitorGroup` `name.function`. A child that calls `decide_final()` ends the step and no vote is taken. A `human()` beside other children is a configuration error naming `sequential()`.
+    What a list containing a protocol resolves to. Monitors are recorded in the transcript; protocols vote by `terminate > reject > modify > escalate > continue`, the first in configuration order winning a tie, so a peer's `continue` does not override an `escalate` and the layer escalates when that is the strongest vote. A `modify` when another protocol also decided anything but `escalate` becomes a `reject` naming the modifier, since the others decided about the call as it stood; votes count by instance, so another function of the modifier's own instance contests it only by also modifying; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided and not all of them continued, the layer's explanation lists each one's decision after the winner's own, labelling a function of a `ProtocolGroup` or `MonitorGroup` `name.function`. A child that calls `decide_final()` ends the step and no vote is taken. A `human()` beside other protocols, directly or through a `concurrent` that holds it, is a configuration error naming `sequential()`; monitors beside it are allowed, since they do not decide.
 
     Args:
         children: A monitor, protocol or group, or several, to run together.
@@ -26,12 +27,12 @@ def concurrent(
     named = named_children(children, None)
     if not named:
         raise ValueError("concurrent needs at least one child.")
-    if len(named) > 1:
-        for name, child in named:
-            if registry_info(child).name == "inspect_sentinel/human":
-                raise ValueError(
-                    f"human() {name!r} is beside other children of a concurrent group, where the person is asked about every call while the others decide in parallel. Put it at the end of a sequential() so it is asked only when the links before it escalate."
-                )
+    protocols = [(n, c) for n, c in named if registry_info(c).type == "protocol"]
+    for name, child in protocols:
+        if asks_human(child) and len(protocols) > 1:
+            raise ValueError(
+                f"human() {name!r} is beside other protocols in a concurrent group, where the person is asked about every call while the others decide in parallel. Put it at the end of a sequential() so it is asked only when the links before it escalate."
+            )
     grouped = {name for name, child in named if isinstance(child, Group)}
 
     def label(reported: Reported[Decision]) -> str:
@@ -69,4 +70,6 @@ def concurrent(
         update["explanation"] = f"{own} ({summary})" if own else summary
         return strongest.report.model_copy(update=update)
 
+    if any(asks_human(c) for _, c in protocols):
+        mark_asks_human(run)
     return run

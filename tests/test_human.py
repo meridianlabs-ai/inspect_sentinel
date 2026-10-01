@@ -8,7 +8,7 @@ from inspect_ai.tool import ToolCall
 
 from inspect_sentinel import HumanAnswer, human, sequential
 from inspect_sentinel._context import Context
-from inspect_sentinel._decorators import protocol, step_types
+from inspect_sentinel._decorators import monitor, protocol, step_types
 from inspect_sentinel._integration import (
     Sentinels,
     config_from_sentinel,
@@ -16,11 +16,24 @@ from inspect_sentinel._integration import (
     sentinel_from_config,
 )
 from inspect_sentinel._protocols import concurrent
-from inspect_sentinel._report import Action, Decision
+from inspect_sentinel._report import Action, Decision, Observation
 from inspect_sentinel._runner import run_root
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
-from inspect_sentinel._types import Children, Protocol, ProtocolGroup
+from inspect_sentinel._types import Children, Monitor, Protocol, ProtocolGroup
 from tests._fakes import FakeHost, ListRecorder, after_step, before_step, runner_context
+
+
+@protocol
+def wrapped_human() -> Protocol | ProtocolGroup:
+    return human(stages=["tool_call"])
+
+
+@monitor
+def hum_score() -> Monitor:
+    async def score(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation(suspicion=0.1)
+
+    return score
 
 
 @protocol
@@ -116,6 +129,7 @@ MODIFIED = ToolCall(id="c1", function="bash", arguments={"cmd": "ls -a"})
             Decision.reject("use the staging host", message="use the staging host"),
         ),
         (HumanAnswer("reject"), Decision.reject()),
+        (HumanAnswer("reject", reason=""), Decision.reject()),
         (
             HumanAnswer("terminate", reason="exfiltration"),
             Decision.terminate("exfiltration"),
@@ -225,6 +239,8 @@ async def test_after_a_call_the_person_sees_the_result() -> None:
     [
         [hum_rule(), human(stages=["tool_call"])],
         {"rule": hum_rule(), "person": human(stages=["tool_call"])},
+        [concurrent([human(stages=["tool_call"])]), hum_rule()],
+        [wrapped_human(), hum_rule()],
     ],
 )
 def test_a_human_beside_others_in_concurrent_is_a_configuration_error(
@@ -240,6 +256,10 @@ def test_a_human_in_a_chain_or_alone_is_fine() -> None:
     resolve_sentinel(sequential([hum_rule(), human(stages=["tool_call"])]))
     resolve_sentinel(human(stages=["tool_call"]))
     resolve_sentinel(human(stages=["tool_call", "tool_result"]))
+    resolve_sentinel([hum_score(), human(stages=["tool_call"])])
+    resolve_sentinel(
+        [sequential([hum_rule(), human(stages=["tool_call"])]), hum_rule()]
+    )
 
 
 def test_human_is_registered_under_the_package_name() -> None:

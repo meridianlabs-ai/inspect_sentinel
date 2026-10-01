@@ -723,7 +723,7 @@ An `escalate` that reaches the root has nobody to hand it to: the host proceeds 
 
 Rules:
 
-- **Use `sequential()` when there is a person at the end.** A `human()` beside other children of a `concurrent()`, including the root a top-level list or mapping resolves to, is a configuration error naming `sequential()`: it would prompt on every call while the others decide in parallel.
+- **Use `sequential()` when there is a person at the end.** A `human()` beside other protocols in a `concurrent()`, including the root a top-level list or mapping resolves to, is a configuration error naming `sequential()`: it would prompt on every call while the others decide in parallel. Monitors beside it are allowed.
 - **Do not expect ordered composition by default.** Ordered-by-default silences children: if A approves, B never runs, and B might have terminated. That is the defect #5423 reported against approval. Concurrent fails safe; its cost is latency and tokens.
 - **`step.escalations` never crosses layers.** A link's `escalate` goes to the next link in its own `sequential`. A `sequential` whose every deciding link escalated returns the last escalate, passing it up; one where only monitors participated returns `continue`, and one where nothing participated abstains.
 - **An uncovered call continues in a `sequential`.** This matches review. The approval adapter keeps approval's `reject` for an uncovered call on its own path. A `sequential` that wants fail-closed ends with a rejecting rule.

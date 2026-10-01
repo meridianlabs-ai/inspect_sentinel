@@ -13,6 +13,17 @@ _LEGAL = {
     "tool_call": ("approve", "reject", "terminate", "modify"),
     "tool_result": ("approve", "terminate"),
 }
+_ASKS_HUMAN = "__inspect_sentinel_asks_human__"
+
+
+def asks_human(child: object) -> bool:
+    return getattr(child, _ASKS_HUMAN, False)
+
+
+def mark_asks_human(child: object) -> None:
+    setattr(child, _ASKS_HUMAN, True)
+
+
 _DEFAULTS = {
     "tool_call": ("approve", "reject", "terminate"),
     "tool_result": ("approve", "terminate"),
@@ -65,9 +76,13 @@ def human(
         "tool_call": tool_call,
         "tool_result": tool_result,
     }
-    if len(stages) == 1:
-        return functions[stages[0]]
-    return ProtocolGroup(*(functions[stage] for stage in stages))
+    instance: Protocol | ProtocolGroup = (
+        functions[stages[0]]
+        if len(stages) == 1
+        else ProtocolGroup(*(functions[stage] for stage in stages))
+    )
+    mark_asks_human(instance)
+    return instance
 
 
 def _choices(stage: str, choices: Sequence[str] | None) -> tuple[str, ...]:
@@ -98,7 +113,7 @@ def _decision(answer: HumanAnswer, choices: tuple[str, ...]) -> Decision:
         raise ValueError(
             f"The host answered {answer.decision!r} with a modified call; only a 'modify' carries one."
         )
-    reason = answer.reason
+    reason = answer.reason or None
     match answer.decision:
         case "approve":
             return Decision.proceed()

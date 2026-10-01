@@ -39,6 +39,6 @@ The person chooses from `choices`: by default approve, reject or terminate befor
 
 The answer ends the step through `decide_final()`, so no layer above can weaken it. Pass `final=False` to make the person's answer an ordinary decision, one vote for a panel protocol to weigh.
 
-A `human()` beside other protocols in a `concurrent()` group, which is what a list or mapping passed to `Task(sentinel=)` becomes, is a configuration error: the person would be asked about every call while the others decide in parallel. Use `sequential()` instead.
+A `human()` beside other protocols in a `concurrent()` group, which is what a list or mapping passed to `Task(sentinel=)` becomes, is a configuration error: the person would be asked about every call while the others decide in parallel. Use `sequential()` instead. Monitors beside it are fine, since they only record.
 
 The person is asked through the host's `ask_human()`, which shows the step with Inspect's approval surfaces (the approval panel, the console, or an ACP client). The Inspect integration of `ask_human()` is not released yet.
