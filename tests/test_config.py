@@ -78,14 +78,6 @@ def cfg_bundle(**groups: Monitors) -> Protocol:
 
 
 @protocol
-def cfg_fields(name: Monitors, params: Monitors | None = None) -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
-        return None
-
-    return decide
-
-
-@protocol
 def cfg_rule(reason: str = "no") -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         return Decision.reject(reason)
@@ -404,15 +396,6 @@ ROUND_TRIPS: list[Any] = [
             "slow": {"s": {"name": "cfg_suspicion", "params": {"model": "m"}}},
         }
     ],
-    [
-        {
-            "name": "cfg_fields",
-            "params": {
-                "name": [{"type": "monitor", "name": "cfg_suspicion", "params": {}}],
-                "params": {"p": {"type": "monitor", "name": "cfg_pair", "params": {}}},
-            },
-        }
-    ],
 ]
 
 
@@ -457,7 +440,6 @@ async def test_sentinel_to_config_to_sentinel_is_equivalent() -> None:
         ),
         "pair": cfg_pair(),
         "bundle": cfg_bundle(fast=[cfg_suspicion()]),
-        "fields": cfg_fields([cfg_suspicion()], params={"p": cfg_pair()}),
     }
     rebuilt = sentinel_from_config(config_from_sentinel(original))
     assert _identity(rebuilt) == _identity(original)
@@ -632,6 +614,33 @@ def test_a_matching_version_does_not_warn(caplog: pytest.LogCaptureFixture) -> N
 def test_a_version_must_be_an_integer() -> None:
     with pytest.raises(ValueError, match=r"sentinel\[0\]\.version must be an integer"):
         sentinel_from_config(cast(Any, [{"name": "cfg_versioned", "version": "2"}]))
+
+
+def test_meta_is_not_written() -> None:
+    config = config_from_sentinel([cfg_versioned(), cfg_bundle(fast=[cfg_suspicion()])])
+    assert "meta" not in config.model_dump_json()
+
+
+def test_meta_is_ignored_when_building() -> None:
+    raw = [
+        {
+            "name": "cfg_bundle",
+            "meta": {"added": ["later"]},
+            "fast": [{"name": "cfg_versioned", "version": 2, "meta": {"x": 1}}],
+        }
+    ]
+    expected = SentinelConfig.model_validate(
+        [
+            {
+                "name": "cfg_bundle",
+                "params": {},
+                "fast": [{"name": "cfg_versioned", "params": {}, "version": 2}],
+            }
+        ]
+    )
+    assert config_from_sentinel(sentinel_from_config(raw)) == expected
+    validated = SentinelConfig.model_validate(raw)
+    assert config_from_sentinel(sentinel_from_config(validated)) == expected
 
 
 def test_nested_entries_carry_their_own_versions() -> None:

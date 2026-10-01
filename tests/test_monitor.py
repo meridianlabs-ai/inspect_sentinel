@@ -455,6 +455,45 @@ def test_decorator_arguments_set_the_name_and_version() -> None:
     assert step_types(group) == frozenset({BeforeToolCall, AfterToolCall})
 
 
+@pytest.mark.parametrize("version", [True, "1", 1.0, None])
+def test_a_version_must_be_an_integer(version: object) -> None:
+    with pytest.raises(TypeError, match="odd_version: version must be an integer"):
+
+        @monitor(version=cast(int, version))
+        def odd_version() -> Monitor: ...
+
+
+def test_a_version_must_not_be_negative() -> None:
+    with pytest.raises(ValueError, match="negative_version: version must be 0 or more"):
+
+        @protocol(version=-1)
+        def negative_version() -> Protocol: ...
+
+
+@pytest.mark.parametrize("param", ["name", "params", "version", "meta"])
+def test_a_parameter_cannot_be_named_for_an_entry_key(param: str) -> None:
+    def factory() -> Monitor: ...
+
+    keyword = inspect.Parameter(param, inspect.Parameter.KEYWORD_ONLY, default=None)
+    factory.__signature__ = inspect.Signature([keyword])
+    with pytest.raises(
+        TypeError, match=f"keyed_{param} cannot have a parameter named '{param}'"
+    ):
+        monitor(name=f"keyed_{param}")(factory)
+    assert registry_lookup("monitor", f"keyed_{param}") is None
+
+
+def test_variadic_parameters_may_use_an_entry_key() -> None:
+    @protocol
+    def variadic_keys(*name: object, **params: object) -> Protocol:
+        async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+            return None
+
+        return decide
+
+    assert registry_lookup("protocol", "variadic_keys") is variadic_keys
+
+
 @pytest.mark.anyio
 async def test_a_configured_function_keeps_its_identity() -> None:
     check = cast(Callable[..., Any], configured_monitor())

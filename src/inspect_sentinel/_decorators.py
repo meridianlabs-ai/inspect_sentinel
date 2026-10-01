@@ -46,6 +46,7 @@ _STEP_TYPES = frozenset(get_args(Step))
 # and registry metadata would need a name<->class mapping
 STEP_TYPES_ATTR = "__sentinel_step_types__"
 VERSION = "version"
+ENTRY_FIELDS = ("name", "params", VERSION, "meta")
 
 
 class _Outside:
@@ -129,6 +130,10 @@ def monitor(
         factory: A function returning a monitor, or a `MonitorGroup`.
         name: The registered name, in place of the factory's `__name__`.
         version: The monitor's version, recorded in its registry metadata so a calibration can say which version it measured; bump it when a change alters the scores. Defaults to 0.
+
+    Raises:
+        TypeError: If `version` is not an integer, or a factory parameter is named `name`, `params`, `version` or `meta`, the keys of a configuration entry.
+        ValueError: If `version` is negative.
     """
     if factory is not None:
         return cast(
@@ -169,6 +174,10 @@ def protocol(
         factory: A function returning a protocol, or a `ProtocolGroup`.
         name: The registered name, in place of the factory's `__name__`.
         version: The protocol's version, recorded in its registry metadata; bump it when a change alters its decisions. Defaults to 0.
+
+    Raises:
+        TypeError: If `version` is not an integer, or a factory parameter is named `name`, `params`, `version` or `meta`, the keys of a configuration entry.
+        ValueError: If `version` is negative.
     """
     if factory is not None:
         return cast(
@@ -210,10 +219,27 @@ def _register(
     factory: Callable[P, object],
     report_type: type[Report],
     name: str | None,
-    version: int,
+    version: object,
 ) -> Callable[P, Any]:
     registered_name = registry_name(factory, name or factory.__name__)
-    params = list(inspect.signature(factory).parameters.keys())
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise TypeError(
+            f"{registered_name}: version must be an integer, not {version!r}."
+        )
+    if version < 0:
+        raise ValueError(
+            f"{registered_name}: version must be 0 or more, not {version}."
+        )
+    signature = inspect.signature(factory).parameters
+    for param in signature.values():
+        if param.name in ENTRY_FIELDS and param.kind not in (
+            param.VAR_POSITIONAL,
+            param.VAR_KEYWORD,
+        ):
+            raise TypeError(
+                f"{registered_name} cannot have a parameter named {param.name!r}, since a configuration entry uses {', '.join(repr(f) for f in ENTRY_FIELDS)} as its own keys; rename it."
+            )
+    params = list(signature.keys())
     info = RegistryInfo(
         type=kind,
         name=registered_name,

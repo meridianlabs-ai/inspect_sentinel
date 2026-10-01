@@ -24,13 +24,12 @@ from inspect_ai.log import SentinelConfig, SentinelEntry
 from inspect_ai.util import resource
 
 from ._context import validate_instance_name
-from ._decorators import VERSION
+from ._decorators import ENTRY_FIELDS, VERSION
 from ._types import Sentinel, Sentinels
 
 logger = logging.getLogger(__name__)
 
 PACKAGE = "inspect_sentinel"
-ENTRY_FIELDS = frozenset({"name", "params", VERSION})
 
 _warned_versions: set[tuple[str, int, int]] = set()
 
@@ -46,7 +45,7 @@ def sentinel_from_config(
 ) -> Sentinels:
     """Build the monitors and protocols a configuration describes.
 
-    Each entry is constructed through the registry with its `params` and its nested entries, which are built first. An entry whose recorded `version` differs from the installed factory's is built anyway, with a warning naming both versions. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved; pass it to `resolve_sentinel`.
+    Each entry is constructed through the registry with its `params` and its nested entries, which are built first. An entry whose recorded `version` differs from the installed factory's is built anyway, with a warning naming both versions; its `meta` is ignored. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved; pass it to `resolve_sentinel`.
 
     Args:
         config: A YAML or JSON file whose only key is `sentinel`, a registered monitor or protocol name, or the configuration itself: one entry, a list of entries, or a mapping of instance names to entries.
