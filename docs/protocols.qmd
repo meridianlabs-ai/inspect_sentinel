@@ -1,0 +1,27 @@
+---
+title: "Protocols and Rules"
+description: "Writing protocols, which decide what happens at a step, and rules, which are protocols with no monitors."
+---
+
+::: {.callout-warning}
+## Outline
+This page is an outline: a summary and the sections planned for it, not yet the documentation. See [Getting Started](index.qmd) for a worked example.
+:::
+
+## Overview
+
+How to write a protocol: a `@protocol` factory returning a function that returns a `Decision`. Covers rules (protocols with no children), the five actions and where each is legal, what the agent is told (`message`) versus what the log records (`explanation`), modifying a tool call, and protocols that consult monitors or other protocols through the runner.
+
+## Planned Sections
+
+- The `@protocol` decorator
+- Rules: a protocol with no children
+- Actions: `continue`, `reject`, `modify`, `terminate`, `escalate`, and which stages allow each
+- `Decision.reject(explanation, message=...)`: the log versus the agent
+- Modifying a call with `dataclasses.replace(step.call, arguments=...)`
+- Requesting human review with `audit=True` (recorded; nothing acts on it yet)
+- Consulting children: `run_monitors()`, `run_protocols()`, `run_children()`, and the `Observations`, `Decisions` and `Reports` they return
+- Taking children as a parameter, and naming them
+- The boundary check: shape errors raised before a decision takes effect
+- Running at every stage with `Step`
+- Shipping protocols in a package

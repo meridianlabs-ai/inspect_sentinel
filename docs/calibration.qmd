@@ -1,0 +1,24 @@
+---
+title: "Calibration"
+description: "Developing, validating and calibrating monitors over transcripts with Inspect Scout."
+---
+
+::: {.callout-warning}
+## Outline
+This page is an outline: a summary and the sections planned for it, not yet the documentation. The feature it describes is planned and not yet built. See [Getting Started](index.qmd) for a worked example.
+:::
+
+## Overview
+
+How to measure a monitor before anything acts on it, by replaying it over transcripts with Inspect Scout. Covers running a monitor as a Scout scanner, labelling steps to build a validation set, precision and recall, turning a benign score distribution into a threshold, and versioning monitors so a calibration records what it measured.
+
+## Planned Sections
+
+- The development loop: record, replay, label, validate, calibrate
+- Recording a benign distribution with `observe()` (available now)
+- A monitor as a Scout scanner, `as_scanner()` (planned)
+- Validation sets: labelling steps in Scout View; step ids
+- Precision, recall and F1 over the validation set
+- `calibrate()`: thresholds from a benign distribution, per dimension (planned)
+- Versioning a monitor with `@monitor(version=...)`
+- Transcripts from other sources: proxies, coding agents

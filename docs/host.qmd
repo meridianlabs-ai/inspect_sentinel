@@ -1,0 +1,24 @@
+---
+title: "The Host and Model Roles"
+description: "Model calls from monitors and protocols through context.host, and the monitor and trusted model roles."
+---
+
+::: {.callout-warning}
+## Outline
+This page is an outline: a summary and the sections planned for it, not yet the documentation. See [Getting Started](index.qmd) for a worked example.
+:::
+
+## Overview
+
+How a monitor or protocol calls a model. Covers `context.host.generate()` and why it is used instead of `get_model()`, the `model=` and `role=` convention for LLM monitors, the `monitor` model role and its fallback, how monitor usage is recorded and kept off the agent's limits, and structured output. Outbound HTTP through `fetch` is planned.
+
+## Planned Sections
+
+- `context.host.generate()`: prompts, messages, tools and `GenerateConfig`
+- `model=` and `role=` on an LLM monitor's factory
+- The `monitor` role: `--model-role monitor=...` and `Task(model_roles=...)`, and the fallback to the agent's model
+- The `trusted` role for `defer_to_trusted()` and `resample()` (planned)
+- Structured output with `ResponseSchema`
+- Usage: monitor calls recorded separately and not charged to the agent's limits
+- Treating agent text as untrusted in prompts
+- Other effects: `fetch` (planned), and calling inspect_ai APIs directly at the cost of portability
