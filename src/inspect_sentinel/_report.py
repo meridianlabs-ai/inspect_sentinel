@@ -2,18 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any, Generic, Literal, TypeAlias, TypeVar
+from typing import Any, Generic, TypeAlias, TypeVar
 
+from inspect_ai.event import SentinelAction, SentinelSuspicion
 from inspect_ai.scorer import Reference
 from inspect_ai.tool import ToolCall
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, Field
 
-Suspicion: TypeAlias = (
-    FiniteFloat | Annotated[dict[str, FiniteFloat], Field(min_length=1)]
-)
+Suspicion: TypeAlias = SentinelSuspicion
 """How suspicious a step is: one finite score, or a non-empty dict scoring several dimensions independently."""
 
-Action: TypeAlias = Literal["continue", "modify", "reject", "terminate", "escalate"]
+Action: TypeAlias = SentinelAction
 """What a protocol can decide about the step it examined."""
 
 PRECEDENCE: dict[Action, int] = {

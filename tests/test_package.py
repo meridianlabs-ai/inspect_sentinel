@@ -95,3 +95,13 @@ def test_integration_module_exports_the_dispatcher_surface() -> None:
         "step_types",
         "run_root",
     }
+
+
+def test_wire_and_config_types_come_from_inspect_ai() -> None:
+    from inspect_ai.event import SentinelAction, SentinelSuspicion
+    from inspect_ai.log import SentinelConfig, SentinelEntry
+
+    assert inspect_sentinel.Action is SentinelAction
+    assert inspect_sentinel.Suspicion is SentinelSuspicion
+    assert inspect_sentinel._integration.SentinelConfig is SentinelConfig
+    assert inspect_sentinel._integration.SentinelEntry is SentinelEntry
