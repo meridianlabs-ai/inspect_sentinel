@@ -46,7 +46,7 @@ dependencies = [
 Documentation = "https://meridianlabs-ai.github.io/inspect_sentinel/"
 
 [project.entry-points.inspect_ai]
-inspect_sentinel = "inspect_sentinel._registry"
+inspect_sentinel = "inspect_sentinel._entrypoint"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

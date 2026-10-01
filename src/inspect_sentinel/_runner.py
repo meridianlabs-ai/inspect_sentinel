@@ -1,30 +1,22 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import (
-    AsyncGenerator,
-    Callable,
-    Iterable,
-    Iterator,
-    Mapping,
-    Sequence,
-)
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from typing import Any, Generic, Literal, NamedTuple, TypeVar, cast, overload
+from typing import Literal, NamedTuple, TypeVar, cast
 
 import anyio
 from anyio.abc import TaskGroup
-from inspect_ai._util.registry import (
-    RegistryInfo,
-    registry_info,
-    registry_unqualified_name,
-)
+from inspect_ai._util.registry import registry_info, registry_unqualified_name
 
-from ._check import validate_decision_shape
 from ._context import Context, RunnerContext, validate_instance_name
+from ._decorators import invoke, members
 from ._final import Final, Origin
-from ._monitor import (
+from ._report import Decision, Observation, Report, Reported
+from ._results import Decisions, Observations, Reports
+from ._step import Step
+from ._types import (
     Child,
     Children,
     Group,
@@ -35,84 +27,11 @@ from ._monitor import (
     ProtocolGroup,
     Protocols,
     SentinelFunction,
-    invoke,
-    members,
-    step_types,
 )
-from ._report import (
-    PRECEDENCE,
-    Decision,
-    Observation,
-    R_co,
-    Report,
-    Reported,
-)
-from ._step import Step
+from ._validate import check_child, named_children, validate_shape
 
 if sys.version_info < (3, 11):
     from exceptiongroup import BaseExceptionGroup
-
-
-class _ReportSequence(Sequence[Reported[R_co]], Generic[R_co]):
-    def __init__(self, items: Iterable[Reported[R_co]] = ()) -> None:
-        self._items = tuple(items)
-
-    @overload
-    def __getitem__(self, index: int) -> Reported[R_co]: ...
-    @overload
-    def __getitem__(self, index: slice) -> Sequence[Reported[R_co]]: ...
-    def __getitem__(
-        self, index: int | slice
-    ) -> Reported[R_co] | Sequence[Reported[R_co]]:
-        return self._items[index]
-
-    def __len__(self) -> int:
-        return len(self._items)
-
-    def __iter__(self) -> Iterator[Reported[R_co]]:
-        return iter(self._items)
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return self._items == cast("_ReportSequence[R_co]", other)._items
-
-    def __repr__(self) -> str:
-        return f"{type(self).__name__}({list(self._items)!r})"
-
-
-def peak_suspicion(observation: Observation) -> float:
-    suspicion = observation.suspicion
-    return max(suspicion.values()) if isinstance(suspicion, dict) else suspicion
-
-
-class Observations(_ReportSequence[Observation]):
-    """What a layer's monitors reported, in configuration order."""
-
-    def max_suspicion(self) -> float | None:
-        """The highest suspicion reported, taking the highest dimension of a structured score; `None` if nobody observed."""
-        scores = [peak_suspicion(o.report) for o in self._items]
-        return max(scores) if scores else None
-
-
-class Decisions(_ReportSequence[Decision]):
-    """What a layer's protocols decided, in configuration order."""
-
-    def strongest(self) -> Reported[Decision] | None:
-        """The strongest decision by `terminate > reject > modify > escalate > continue`, the first in configuration order on a tie; `None` if nobody decided."""
-        if not self._items:
-            return None
-        return max(self._items, key=lambda d: PRECEDENCE[d.report.action])
-
-
-class Reports(NamedTuple):
-    """Both families of report from one layer, unpackable as `observations, decisions = await run_children(...)`."""
-
-    observations: Observations
-    """From the layer's monitors."""
-
-    decisions: Decisions
-    """From the layer's protocols."""
 
 
 R = TypeVar("R", bound=Report)
@@ -354,7 +273,7 @@ async def _run_child(
         raise TypeError(
             "The runner needs the RunnerContext the dispatcher provided; a Context constructed elsewhere cannot record reports."
         )
-    info, _ = _check_child(child, kind)
+    info, _ = check_child(child, kind)
     if root:
         if context.path != "":
             raise ValueError(
@@ -438,7 +357,7 @@ async def _run_member(
     if report is None:
         return None
     if isinstance(report, Decision):
-        _validate_shape(report, step, label)
+        validate_shape(report, step, label)
     reported = Reported(
         name=child_name,
         path=child_context.path,
@@ -469,7 +388,7 @@ def _on_final(
     claimed = [ex for ex in finals if ex.origin is not None]
     for ex in unclaimed:
         try:
-            _validate_shape(ex.decision, step, label)
+            validate_shape(ex.decision, step, label)
         except ValueError:
             _supersede(claimed)
             raise
@@ -491,57 +410,3 @@ def _on_final(
 
 def describe(name: str, function: str, grouped: bool) -> str:
     return f"{name!r} (function {function!r})" if grouped else repr(name)
-
-
-def _validate_shape(decision: Decision, step: Step, label: str) -> None:
-    try:
-        validate_decision_shape(decision, step)
-    except ValueError as ex:
-        raise ValueError(f"protocol {label}: {ex}") from ex
-
-
-def _check_child(
-    child: object, expected: Literal["monitor", "protocol"] | None
-) -> tuple[RegistryInfo, frozenset[type[Any]]]:
-    accepted = step_types(
-        cast(Any, child)
-    )  # rejects factories and undecorated functions
-    info = registry_info(child)
-    if expected is not None and info.type != expected:
-        raise TypeError(f"Expected a {expected}, got the {info.type} {info.name!r}.")
-    return info, accepted
-
-
-def named_children(
-    children: Child | Mapping[str, Child] | Iterable[Child],
-    expected: Literal["monitor", "protocol"] | None,
-) -> list[tuple[str, Child]]:
-    pairs: list[tuple[object, Child]]
-    if callable(children) or isinstance(children, Group):
-        pairs = [(None, children)]
-        keyed = False
-    elif isinstance(children, Mapping):
-        mapping = cast(Mapping[str, Child], children)
-        pairs = [(key, child) for key, child in mapping.items()]
-        keyed = True
-    elif isinstance(children, Sequence) and not isinstance(children, str):
-        pairs = [(None, child) for child in children]
-        keyed = False
-    else:
-        raise TypeError(
-            "children must be a monitor, protocol or group, a Mapping or a Sequence; a set or an iterator has no configuration order"
-        )
-    named: list[tuple[str, Child]] = []
-    seen: set[str] = set()
-    for given, child in pairs:
-        info, _ = _check_child(child, expected)
-        name = validate_instance_name(
-            given if keyed else registry_unqualified_name(info)
-        )
-        if name in seen:
-            raise ValueError(
-                f"Duplicate instance name {name!r} in one layer. Give the children distinct names with a mapping."
-            )
-        seen.add(name)
-        named.append((name, child))
-    return named

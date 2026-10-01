@@ -13,19 +13,24 @@ from inspect_ai._util.registry import (
 )
 
 from inspect_sentinel._context import Context
-from inspect_sentinel._monitor import (
-    Monitor,
-    MonitorGroup,
-    Protocol,
-    ProtocolGroup,
+from inspect_sentinel._decorators import (
     monitor,
     protocol,
     step_types,
 )
 from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import Decision, Observation
-from inspect_sentinel._runner import run_monitors, run_root
+from inspect_sentinel._runner import (
+    run_monitors,
+    run_root,
+)
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
+from inspect_sentinel._types import (
+    Monitor,
+    MonitorGroup,
+    Protocol,
+    ProtocolGroup,
+)
 from tests._fakes import before_step, runner_context
 
 
