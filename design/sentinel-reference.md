@@ -817,7 +817,7 @@ The top-level protocol emits its own `SentinelEvent` only when more than one chi
 
 At configuration time the framework names monitors that nothing acts on:
 
-> `suspicion_monitor` is a monitor and nothing is configured to act on it. Wrap it in a protocol such as `threshold()` to act on its scores, or `observe()` to say that recording is intended.
+> Nothing is configured to act on these monitors: suspicion_monitor. Wrap them in a protocol such as `threshold()` to act, or `observe()` to say that recording is intended.
 
 ### Shipped protocols
 
