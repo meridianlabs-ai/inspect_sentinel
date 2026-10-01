@@ -111,6 +111,8 @@ class HostResponse(typing.Protocol):
     def text(self) -> str: ...
 ```
 
+Only `generate` is built; `fetch`, `get`/`put` and `terminate` are planned.
+
 `model` and `role` are separate so a role name is never read as a model name; passing both is an error the host raises. With neither, the host uses the `monitor` role and, if that role is not configured, falls back to the agent's model with a warning once per eval naming the role to set. `defer_to_trusted` and `resample` will ask for a separate `trusted` role.
 
 `generate` returns a `ModelOutput` rather than a string because the protocols that substitute an action (`defer_to_trusted`, `resample`) regenerate with the agent's tools and need the whole response; a text-prompt monitor reads `.completion`. Generating as the agent's own model is, in a proxy, a re-issued upstream request.
@@ -177,7 +179,7 @@ It could be — `fetch("model", ...)` — but keeping it distinct is better. Mod
 
 The split is one of types, `@monitor` and `@protocol`, but both are plain functions of `(context, step)`, and that matters here in one specific way. The portability verdict is per function, so a composition is exactly as portable as its least portable member — a leaf monitor calling `get_model()` disqualifies the protocol that wraps it, and a protocol reaching for task-scoped state disqualifies itself while leaving its leaves deployable. Both directions are visible to the same static check, which would not have been true had protocols been a separate kind of object with their own affordances.
 
-The two shipped compositions cross intact. `concurrent()` and `sequential()` are ordinary code over the runner, and a `sequential`'s hand-off travels as data — `step.escalations` is a field on the payload, not a reference to a `ToolCallView` — so an ordered chain deserializes and runs in a proxy exactly as in-process. What changes is the last link: a `human()` in a proxy is an audit queue rather than a blocking prompt, which is the `audit`-travels-cleanly point below applied to a chain, and it means a proxy chain ending in a person degrades to "record, request review, and apply the chain's default" rather than waiting.
+The two compositions cross intact. `concurrent()` and `sequential()` (designed, not yet built) are ordinary code over the runner, and a `sequential`'s hand-off travels as data — `step.escalations` is a field on the payload, not a reference to a `ToolCallView` — so a `sequential` deserializes and runs in a proxy exactly as in-process. What changes is the last link: a `human()` in a proxy is an audit queue rather than a blocking prompt, which is the `audit`-travels-cleanly point below applied to a `sequential`, and it means a proxy `sequential` ending in a person degrades to "record, request review, and apply its default" rather than waiting.
 
 Three notes:
 

@@ -11,9 +11,9 @@ The minimal surface that lets `inspect_ai` connect: the types a dispatcher const
 - **Surface only.** Sentinel ships types and functions; `inspect_ai` wiring comes after. Verified by unit tests with fake `Host` and `Recorder`.
 - **Real registration.** `@monitor` and `@protocol` register under `"monitor"` and `"protocol"`, added to `inspect_ai`'s `RegistryType` by PR 0 ([inspect_ai#5514](https://github.com/UKGovernmentBEIS/inspect_ai/pull/5514), branch `feature/sentinel`). Sentinel's `inspect-ai` git ref points at that branch until it merges.
 - **Tool stages only.** `BeforeToolCall` and `AfterToolCall` with the design's full fields; `Step` is their union. The generate stages arrive with the generate-side dispatcher. The schema may change freely until there are users.
-- **Recording is the runner's, through a separate interface.** `Host` is the author-facing ABI (`generate` only for now). `Recorder` has four methods: `record`, called by the runner for every participating child; `cancelled`, called for a child cancelled before it reported; `bypassed`, called for a protocol a descendant's `decide_final()` ended the step past; and `superseded`, called for a `decide_final()` decision that lost a race to another in the same layer or was outranked by an exception there. This departs from `sentinel-deployment.md`, whose `Host` ABI carries `record`; that doc is to be updated.
+- **Recording is the runner's, through a separate interface.** `Host` is the author-facing ABI (`generate` only for now). `Recorder` has four methods: `record`, called by the runner for every participating child; `cancelled`, called for a child cancelled before it reported; `bypassed`, called for a protocol a descendant's `decide_final()` ended the step past; and `superseded`, called for a `decide_final()` decision that lost a race to another in the same layer or was outranked by an exception there. This departs from the earlier `sentinel-deployment.md`, whose `Host` ABI carried `record`; that doc now says recording is not on the ABI.
 - **Two context types.** `Context` is what authors see. `RunnerContext(Context)` adds `recorder` and `child()`; the dispatcher builds it, `dataclasses.replace` preserves it down the layers, and the runner raises `TypeError` if handed a bare `Context`.
-- **Author surface vs integration surface.** `__init__` exports only what an author writes against, including `Reported` and `Report`, since `step.escalations` and the runner's results are typed with them. `inspect_sentinel/_integration.py` re-exports what the dispatcher needs (`RunnerContext`, `Recorder`, `validate_instance_name`, `step_types`, `resolve_sentinel`, `Sentinels`, `run_root`); `inspect_ai` imports from that module only, so refactors have one file to keep stable.
+- **Author surface vs integration surface.** `__init__` exports only what an author writes against, including `Reported` and `Report`, since `step.escalations` and the runner's results are typed with them. `inspect_sentinel/_integration.py` re-exports what the dispatcher needs (`RunnerContext`, `Recorder`, `validate_instance_name`, `step_types`, `resolve_sentinel`, `Sentinels`, `run_root`, and since S6 `sentinel_from_config` and `config_from_sentinel`); `inspect_ai` imports from that module only, so refactors have one file to keep stable.
 - **Shipped protocols:** `observe`, `concurrent`, `threshold`. `sequential` and `human` are follow-ups.
 
 ## Layout
@@ -34,7 +34,7 @@ src/inspect_sentinel/
                     named_children
   _final.py         decide_final, Final
   _protocols/       observe, concurrent, threshold, one module each
-  _resolve.py       resolve_sentinel
+  _resolve.py       resolve_sentinel, Sentinels
   _config.py        sentinel_from_config, config_from_sentinel
   _integration.py   the contract inspect_ai imports
   _entrypoint.py    inspect_ai entry point; imports _protocols so they register
@@ -191,7 +191,7 @@ Implemented: the shape is `SentinelConfig`, a pydantic `RootModel` over a list o
 
 ## Design sync
 
-The canonical docs on inspect_ai's `design/monitor` branch were synced with this series on 2026-09-28 (inspect_ai 12f555a65): `decide_final()`, the runner-side `Recorder`, `Context.path`, `RunnerContext`, the plural-only runner, and multi-function factories. The copies in `design/` match them; edit both together.
+Decided with the user 2026-10-01: these documents in `design/` are canonical. They were drafted on inspect_ai's `design/monitor` branch and kept in sync with it by hand until then; that branch has a final sync and a note pointing here, and is no longer updated. Edit only the copies in this repository.
 
 ## S7: the factory name for the log
 
@@ -261,7 +261,7 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 
 - **A lone protocol is the root, unwrapped.** `resolve_sentinel` returns a single `Protocol` as the root itself, so `Task(sentinel=threshold(suspicion(), ...))` records `threshold` at the empty path and its monitor at `suspicion`. A list or mapping still resolves to `concurrent(...)`, and monitors alone to `observe(...)` with the warning. A lone `ProtocolGroup` is wrapped in `concurrent`: the root returns the step's one outcome, `run_root` runs one function, and combining several functions' decisions is `concurrent`'s job. The root records its own decision at the empty path, as every layer does. Configuration follows: `SentinelConfig` accepts one entry, `config_from_sentinel` records a lone instance as one entry, and `sentinel_from_config` builds one entry, or a bare registered name, as a lone instance, so a retry records the same paths. A mapping is one entry when its `name` is a string and a mapping of instance names when every value is an entry; anything else is an error naming the layer.
 - **`escalate` outranks `continue`.** The precedence is `terminate > reject > modify > escalate > continue`, in `PRECEDENCE`, `Decisions.strongest()` and `concurrent`. A peer's `continue` cannot override an `escalate`, a stronger decision still wins, and a layer whose strongest decision is `escalate` returns `escalate`, its explanation listing the votes when several decided. An `escalate` does not contest a `modify`. `sequential`, when it lands, returns the last escalate when every deciding link escalated, so it passes up the same way.
-- **A top-level escalate proceeds.** When the root's decision is `escalate`, nobody is left to hand it to: the inspect_ai dispatcher proceeds as for `continue`, the escalate stays recorded as the root's decision, and the host warns once per eval that `sequential(..., human())` sends escalations to a person. `run_root` returns the escalate; the host decides what an unresolved escalate means.
+- **A top-level escalate proceeds.** When the root's decision is `escalate`, nobody is left to hand it to: the inspect_ai dispatcher proceeds as for `continue`, the escalate stays recorded as the root's decision, and the host warns once per eval that `sequential([..., human()])` sends escalations to a person. `run_root` returns the escalate; the host decides what an unresolved escalate means.
 - **Runners stay three.** `run_children` runs anything; `run_monitors` and `run_protocols` are typed shortcuts whose parameter and return types catch misuse. Docs only.
 
 ## Shared types

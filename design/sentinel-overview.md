@@ -21,7 +21,7 @@ There are two registerable types. A **monitor** observes: it returns an `Observa
 ``` python
 @protocol
 def no_curl() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall):
+    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         if "curl" in str(step.call.arguments):
             return Decision.reject("uses curl", message="network access is not allowed")
         return None
@@ -34,7 +34,7 @@ And here is a monitor that scores each tool call, wrapped in the `threshold()` p
 ``` python
 @monitor
 def suspicion_monitor(model: str | None = None) -> Monitor:
-    async def check(context: Context, step: BeforeToolCall):
+    async def check(context: Context, step: BeforeToolCall) -> Observation:
         ...
         return Observation.score(score, explanation)
 
@@ -43,7 +43,7 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
 Task(sentinel=threshold(suspicion_monitor(), reject_at=0.8))
 ```
 
-Both run before the tool call executes (the `step` they take is `BeforeToolCall`). There are four stages, the step types a monitor or protocol could choose to target:
+Both run before the tool call executes (the `step` they take is `BeforeToolCall`). There are four stages, the step types a monitor or protocol could choose to target; the two tool stages are built, and the generate stages are designed but not yet built:
 
 | Stage | Fires |
 |------------------------------------|------------------------------------|
@@ -77,25 +77,31 @@ A monitor never returns an action. It records an `Observation` for a protocol to
 In addition to the data associated with a tool call or generation, monitors and protocols are passed a `Context` that includes task and sample information, a place to store state, and an interface to the sentinel host (which could either be Inspect AI or a proxy server):
 
 ``` python
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Context:
     task: str | None
     """Task name, or the deployed agent's identifier."""
 
     task_description: str | None
-    """What agents in this setting are asked to do."""
+    """What agents in this setting are asked to do. None until inspect_ai has `Task(description=)`."""
 
     sample_id: str | int | None
     """Dataset sample identifier."""
 
+    epoch: int | None
+    """Epoch of the sample, when the task runs several."""
+
     sample_description: str | None
-    """What is distinctive about this instance."""
+    """What is distinctive about this instance. None until inspect_ai has `Sample(description=)`."""
 
     input: str | list[ChatMessage]
-    """The prompt this agent was given."""
+    """The sample's input: the assignment the agent was given."""
 
     metadata: dict[str, Any]
     """Task metadata merged with sample metadata."""
+
+    path: str
+    """Instance path, e.g. `attempt/internet_attempt`. Empty at the top layer."""
 
     store: Store
     """The whole sample store, not namespaced."""
@@ -110,10 +116,10 @@ class Context:
 
     # -- effects
     host: Host
-    """Interface to host for inference, logging, etc."""
+    """Interface to the host; inference only for now, `fetch` planned."""
 
     target: Target | None = None
-    """The expected answer (opt-in; absent by default)."""
+    """The expected answer (opt-in, not built yet; always None for now)."""
 ```
 
 ## Protocols {#protocols}
@@ -126,11 +132,11 @@ A protocol decides what happens at a step. It may consult monitors, other protoc
 - **Control actions**: accept, audit, defer to a trusted model, trusted edit, resample. These are things a protocol does with a score, not values a monitor can return.
 - **Pipeline stages** such as paraphrasing agent output before monitors see it, or injecting honeypot inputs to catch a colluding monitor.
 
-Built-in protocols cover the common compositions and basic control scenarios:
+Built-in protocols cover the common compositions and basic control scenarios. `concurrent()`, `observe()` and `threshold()` ship today; the other three are designed but not yet built:
 
 | Protocol | Description |
 |------------------------|------------------------------------------------|
-| `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `continue`). What a list containing a protocol resolves to. Use for independent guards that must all be satisfied. |
+| `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `escalate` \> `continue`). What a list containing a protocol resolves to. Use for independent guards that must all be satisfied. |
 | `sequential()` | Runs children in order until one decides; first non-`escalate` wins, and escalations are handed to the next link so a human at the end sees who asked and why. Use for a cheap rule ahead of an expensive judge. |
 | `observe()` | Records every observation and acts on none. What a bare monitor resolves to, and how a benign score distribution gets collected. |
 | `threshold()` | Acts on scores: `reject` at or above one threshold, `terminate` at or above another, each one number or a mapping per dimension (`{"audit.sabotage": 0.6, "*": 0.9}`). The smallest protocol, and the one calibration feeds. |
@@ -188,9 +194,9 @@ The goal is to enable two deployment modes for proxy servers:
 1.  Sidecar (a Python service beside the proxy); or
 2.  Embedded (CPython compiled to WASM inside the proxy)
 
-Both modes depend on sentinels being lightweight. `inspect_sentinel` depends only on `inspect_core`, a new package holding the wire types (`ChatMessage`, `ModelOutput`, `ToolCall`, `ToolInfo`) and the registry primitives, so that a monitor author, a proxy, or a WASM build never pulls in the full Inspect framework.
+Both modes depend on sentinels being lightweight. `inspect_sentinel` is to depend only on `inspect_core`, a new package holding the wire types (`ChatMessage`, `ModelOutput`, `ToolCall`, `ToolInfo`) and the registry primitives, so that a monitor author, a proxy, or a WASM build never pulls in the full Inspect framework. Today it depends on `inspect_ai`.
 
-Even if you are deploying sentinels inside Inspect AI to start with, the API will verify that your code will travel well to a proxy without Inspect dependencies. Note that you can opt out of this checking with `@monitor(portable=False)`.
+Even if you are deploying sentinels inside Inspect AI to start with, the API will verify that your code will travel well to a proxy without Inspect dependencies, and `@monitor(portable=False)` will opt out of this checking. Neither is built yet.
 
 ## Development
 
