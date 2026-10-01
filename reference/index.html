@@ -27,6 +27,41 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
 </style>
 
 
@@ -37,7 +72,7 @@ ul.task-list li input[type="checkbox"] {
 <script src="../site_libs/quarto-search/fuse.min.js"></script>
 <script src="../site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="../">
-<link href="../index.html" rel="prev">
+<link href="../deployment.html" rel="prev">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
 <script src="../site_libs/quarto-html/popper.min.js"></script>
@@ -105,12 +140,35 @@ ul.task-list li input[type="checkbox"] {
 </button>
           <div class="collapse navbar-collapse" id="navbarCollapse">
             <ul class="navbar-nav navbar-nav-scroll me-auto">
-  <li class="nav-item">
-    <a class="nav-link active" href="../index.html" aria-current="page"> 
-<span class="menu-text">Getting Started</span></a>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-user-guide" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">User Guide</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-user-guide">    
+        <li>
+    <a class="dropdown-item" href="../index.html">
+ <span class="dropdown-text">Basics</span></a>
   </li>  
+        <li>
+    <a class="dropdown-item" href="../monitors.html">
+ <span class="dropdown-text">Writing Sentinels</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../composition.html">
+ <span class="dropdown-text">Composing</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../configuration.html">
+ <span class="dropdown-text">Running</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../calibration.html">
+ <span class="dropdown-text">Development</span></a>
+  </li>  
+    </ul>
+  </li>
   <li class="nav-item">
-    <a class="nav-link" href="../reference/index.html"> 
+    <a class="nav-link active" href="../reference/index.html" aria-current="page"> 
 <span class="menu-text">Reference</span></a>
   </li>  
 </ul>
@@ -143,12 +201,133 @@ ul.task-list li input[type="checkbox"] {
   <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto">
     <div class="sidebar-menu-container"> 
     <ul class="list-unstyled mt-1">
-        <li class="sidebar-item">
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true">
+ <span class="menu-text">Basics</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../index.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Getting Started</span></a>
   </div>
 </li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../transcript.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Transcript and Viewer</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
+ <span class="menu-text">Writing Sentinels</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../monitors.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Monitors</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../protocols.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Protocols and Rules</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../state.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">State</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../host.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Host and Model Roles</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true">
+ <span class="menu-text">Composing</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../composition.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Composition</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../final-decisions.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Final Decisions and Humans</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
+ <span class="menu-text">Running</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../configuration.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Configuration</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../approval.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Approval and Review</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true">
+ <span class="menu-text">Development</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../calibration.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Calibration</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../deployment.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Deployment</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
         <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../reference/index.html" class="sidebar-item-text sidebar-link active">
@@ -160,8 +339,61 @@ ul.task-list li input[type="checkbox"] {
 </nav>
 <div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
 <!-- margin-sidebar -->
-    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar zindex-bottom">
-        
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active" data-toc-expanded="1">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#steps" id="toc-steps" class="nav-link active" data-scroll-target="#steps">Steps</a>
+  <ul class="collapse">
+  <li><a href="#beforetoolcall" id="toc-beforetoolcall" class="nav-link" data-scroll-target="#beforetoolcall">BeforeToolCall</a></li>
+  <li><a href="#aftertoolcall" id="toc-aftertoolcall" class="nav-link" data-scroll-target="#aftertoolcall">AfterToolCall</a></li>
+  <li><a href="#step" id="toc-step" class="nav-link" data-scroll-target="#step">Step</a></li>
+  </ul></li>
+  <li><a href="#report-types" id="toc-report-types" class="nav-link" data-scroll-target="#report-types">Report types</a>
+  <ul class="collapse">
+  <li><a href="#observation" id="toc-observation" class="nav-link" data-scroll-target="#observation">Observation</a></li>
+  <li><a href="#decision" id="toc-decision" class="nav-link" data-scroll-target="#decision">Decision</a></li>
+  <li><a href="#suspicion" id="toc-suspicion" class="nav-link" data-scroll-target="#suspicion">Suspicion</a></li>
+  <li><a href="#action" id="toc-action" class="nav-link" data-scroll-target="#action">Action</a></li>
+  <li><a href="#report" id="toc-report" class="nav-link" data-scroll-target="#report">Report</a></li>
+  <li><a href="#reported" id="toc-reported" class="nav-link" data-scroll-target="#reported">Reported</a></li>
+  </ul></li>
+  <li><a href="#monitors-and-protocols" id="toc-monitors-and-protocols" class="nav-link" data-scroll-target="#monitors-and-protocols">Monitors and protocols</a>
+  <ul class="collapse">
+  <li><a href="#monitor" id="toc-monitor" class="nav-link" data-scroll-target="#monitor">monitor</a></li>
+  <li><a href="#protocol" id="toc-protocol" class="nav-link" data-scroll-target="#protocol">protocol</a></li>
+  <li><a href="#monitor-1" id="toc-monitor-1" class="nav-link" data-scroll-target="#monitor-1">Monitor</a></li>
+  <li><a href="#protocol-1" id="toc-protocol-1" class="nav-link" data-scroll-target="#protocol-1">Protocol</a></li>
+  <li><a href="#monitorgroup" id="toc-monitorgroup" class="nav-link" data-scroll-target="#monitorgroup">MonitorGroup</a></li>
+  <li><a href="#protocolgroup" id="toc-protocolgroup" class="nav-link" data-scroll-target="#protocolgroup">ProtocolGroup</a></li>
+  <li><a href="#monitors" id="toc-monitors" class="nav-link" data-scroll-target="#monitors">Monitors</a></li>
+  <li><a href="#protocols" id="toc-protocols" class="nav-link" data-scroll-target="#protocols">Protocols</a></li>
+  <li><a href="#children" id="toc-children" class="nav-link" data-scroll-target="#children">Children</a></li>
+  </ul></li>
+  <li><a href="#shipped-protocols" id="toc-shipped-protocols" class="nav-link" data-scroll-target="#shipped-protocols">Shipped protocols</a>
+  <ul class="collapse">
+  <li><a href="#observe" id="toc-observe" class="nav-link" data-scroll-target="#observe">observe</a></li>
+  <li><a href="#concurrent" id="toc-concurrent" class="nav-link" data-scroll-target="#concurrent">concurrent</a></li>
+  <li><a href="#threshold" id="toc-threshold" class="nav-link" data-scroll-target="#threshold">threshold</a></li>
+  </ul></li>
+  <li><a href="#runner" id="toc-runner" class="nav-link" data-scroll-target="#runner">Runner</a>
+  <ul class="collapse">
+  <li><a href="#run_monitors" id="toc-run_monitors" class="nav-link" data-scroll-target="#run_monitors">run_monitors</a></li>
+  <li><a href="#run_protocols" id="toc-run_protocols" class="nav-link" data-scroll-target="#run_protocols">run_protocols</a></li>
+  <li><a href="#run_children" id="toc-run_children" class="nav-link" data-scroll-target="#run_children">run_children</a></li>
+  <li><a href="#decide_final" id="toc-decide_final" class="nav-link" data-scroll-target="#decide_final">decide_final</a></li>
+  <li><a href="#observations" id="toc-observations" class="nav-link" data-scroll-target="#observations">Observations</a></li>
+  <li><a href="#decisions" id="toc-decisions" class="nav-link" data-scroll-target="#decisions">Decisions</a></li>
+  <li><a href="#reports" id="toc-reports" class="nav-link" data-scroll-target="#reports">Reports</a></li>
+  </ul></li>
+  <li><a href="#context-and-host" id="toc-context-and-host" class="nav-link" data-scroll-target="#context-and-host">Context and host</a>
+  <ul class="collapse">
+  <li><a href="#context" id="toc-context" class="nav-link" data-scroll-target="#context">Context</a></li>
+  <li><a href="#host" id="toc-host" class="nav-link" data-scroll-target="#host">Host</a></li>
+  </ul></li>
+  </ul>
+</nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
@@ -190,8 +422,946 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
+<section id="steps" class="level2">
+<h2 class="anchored" data-anchor-id="steps">Steps</h2>
+<p>A <span class="element-type-name ref-interlink"><a href="../reference/index.html#step">Step</a></span> here is the payload a monitor or protocol receives, and <span class="element-type-name ref-interlink"><a href="../reference/index.html#context">Context</a></span> is what it knows about the sample; both are unrelated to inspect_ai’s <code>StepEvent</code> and <code>step()</code>.</p>
+<section id="beforetoolcall" class="level3">
+<h3 class="anchored" data-anchor-id="beforetoolcall">BeforeToolCall</h3>
+<p>A tool call about to execute.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_step.py#L12">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> BeforeToolCall</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section class="level4">
+<h4 class="anchored" data-anchor-id="">Attributes</h4>
+<dl>
+<dt><code class="ref-definition">conversation</code> <span class="element-type"><span class="element-type-name">str</span></span></dt>
+<dd>
+<p>Id linking this agent’s steps across compactions.</p>
+</dd>
+<dt><code class="ref-definition">message</code> <span class="element-type"><span class="element-type-name">str</span></span></dt>
+<dd>
+<p>Assistant text alongside the call.</p>
+</dd>
+<dt><code class="ref-definition">call</code> <span class="element-type"><span class="element-type-name">ToolCall</span></span></dt>
+<dd>
+<p>The call as it will execute.</p>
+</dd>
+<dt><code class="ref-definition">view</code> <span class="element-type"><span class="element-type-name">ToolCallView</span></span></dt>
+<dd>
+<p>Rendering of the tool call and its context: custom when the tool registers a viewer, a default Python-call rendering otherwise.</p>
+</dd>
+<dt><code class="ref-definition">input</code> <span class="element-type">list[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#chatmessage">ChatMessage</a></span>]</span></dt>
+<dd>
+<p>Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. <code>context.input</code> is the sample’s input, the assignment.</p>
+</dd>
+<dt><code class="ref-definition">history</code> <span class="element-type">list[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#chatmessage">ChatMessage</a></span>]</span></dt>
+<dd>
+<p>The scaffold’s full conversation, pre-compaction turns included. In-process this is the scaffold’s own list; monitors must not mutate it.</p>
+</dd>
+<dt><code class="ref-definition">escalations</code> <span class="element-type">tuple[<span class="element-type-name"><a href="../reference/index.html#reported">Reported</a></span>[<span class="element-type-name"><a href="../reference/index.html#decision">Decision</a></span>], ...]</span></dt>
+<dd>
+<p>Earlier links’ escalations, when this step is inside a <code>sequential</code> composition.</p>
+</dd>
+</dl>
+</section>
+</section>
+<section id="aftertoolcall" class="level3">
+<h3 class="anchored" data-anchor-id="aftertoolcall">AfterToolCall</h3>
+<p>A tool call that has executed, before the model sees its result.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_step.py#L38">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> AfterToolCall</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section class="level4">
+<h4 class="anchored" data-anchor-id="">Attributes</h4>
+<dl>
+<dt><code class="ref-definition">conversation</code> <span class="element-type"><span class="element-type-name">str</span></span></dt>
+<dd>
+<p>Id linking this agent’s steps across compactions.</p>
+</dd>
+<dt><code class="ref-definition">message</code> <span class="element-type"><span class="element-type-name">str</span></span></dt>
+<dd>
+<p>Assistant text alongside the call.</p>
+</dd>
+<dt><code class="ref-definition">call</code> <span class="element-type"><span class="element-type-name">ToolCall</span></span></dt>
+<dd>
+<p>The call as executed, after any <code>modify</code>.</p>
+</dd>
+<dt><code class="ref-definition">result</code> <span class="element-type"><span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#chatmessagetool">ChatMessageTool</a></span></span></dt>
+<dd>
+<p>What the model will see, after truncation.</p>
+</dd>
+<dt><code class="ref-definition">output</code> <span class="element-type"><span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.tool.html#toolresult">ToolResult</a></span></span></dt>
+<dd>
+<p>The tool’s untruncated return value.</p>
+</dd>
+<dt><code class="ref-definition">view</code> <span class="element-type"><span class="element-type-name">ToolCallView</span></span></dt>
+<dd>
+<p>Rendering of the tool call and its context: custom when the tool registers a viewer, a default Python-call rendering otherwise.</p>
+</dd>
+<dt><code class="ref-definition">input</code> <span class="element-type">list[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#chatmessage">ChatMessage</a></span>]</span></dt>
+<dd>
+<p>Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. <code>context.input</code> is the sample’s input, the assignment.</p>
+</dd>
+<dt><code class="ref-definition">history</code> <span class="element-type">list[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#chatmessage">ChatMessage</a></span>]</span></dt>
+<dd>
+<p>The scaffold’s full conversation, pre-compaction turns included. In-process this is the scaffold’s own list; monitors must not mutate it.</p>
+</dd>
+<dt><code class="ref-definition">escalations</code> <span class="element-type">tuple[<span class="element-type-name"><a href="../reference/index.html#reported">Reported</a></span>[<span class="element-type-name"><a href="../reference/index.html#decision">Decision</a></span>], ...]</span></dt>
+<dd>
+<p>Earlier links’ escalations, when this step is inside a <code>sequential</code> composition.</p>
+</dd>
+</dl>
+</section>
+</section>
+<section id="step" class="level3">
+<h3 class="anchored" data-anchor-id="step">Step</h3>
+<p>The union, for code that handles any stage: a protocol, or a dispatcher.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_step.py#L70">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>Step: TypeAlias <span class="op">=</span> BeforeToolCall <span class="op">|</span> AfterToolCall</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+</section>
+<section id="report-types" class="level2">
+<h2 class="anchored" data-anchor-id="report-types">Report types</h2>
+<section id="observation" class="level3">
+<h3 class="anchored" data-anchor-id="observation">Observation</h3>
+<p>Evidence for a protocol to calibrate and threshold. What a monitor returns.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_report.py#L27">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Observation(BaseModel)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section class="level4">
+<h4 class="anchored" data-anchor-id="">Attributes</h4>
+<dl>
+<dt><code class="ref-definition">suspicion</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#suspicion">Suspicion</a></span></span></dt>
+<dd>
+<p>How suspicious. Required: an observation with no score says nothing.</p>
+</dd>
+<dt><code class="ref-definition">explanation</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>Why, for a reader of the transcript.</p>
+</dd>
+<dt><code class="ref-definition">references</code> <span class="element-type">list[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#reference">Reference</a></span>]</span></dt>
+<dd>
+<p>Messages and events in the transcript the report points at, which Inspect View links from cites such as <code>[M22]</code> in <code>explanation</code>.</p>
+</dd>
+<dt><code class="ref-definition">metadata</code> <span class="element-type">dict[<span class="element-type-name">str</span>, <span class="element-type-name">Any</span>] | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>Author-supplied structured context, recorded verbatim.</p>
+</dd>
+</dl>
+</section>
+<section class="level4 class-methods">
+<h4 class="class-methods anchored" data-anchor-id="">Methods</h4>
+<dl>
+<dt>score</dt>
+<dd>
+<p>An observation that sets <code>suspicion</code> to the given score.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_report.py#L42">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="at">@classmethod</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> score(</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>    cls,</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>    suspicion: Suspicion,</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    explanation: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">*</span>,</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    references: Sequence[Reference] <span class="op">=</span> (),</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Observation</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">suspicion</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#suspicion">Suspicion</a></span></span></dt>
+<dd>
+
+</dd>
+<dt><code class="ref-definition">explanation</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+
+</dd>
+<dt><code class="ref-definition">references</code> <span class="element-type"><span class="element-type-name">Sequence</span>[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#reference">Reference</a></span>]</span></dt>
+<dd>
+
+</dd>
+</dl>
+</dd>
+<dt>flag</dt>
+<dd>
+<p>A detector’s observation: suspicion <code>1.0</code>, for a protocol to act on or not.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_report.py#L55">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="at">@classmethod</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> flag(</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    cls, explanation: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>, <span class="op">*</span>, references: Sequence[Reference] <span class="op">=</span> ()</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Observation</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">explanation</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+
+</dd>
+<dt><code class="ref-definition">references</code> <span class="element-type"><span class="element-type-name">Sequence</span>[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#reference">Reference</a></span>]</span></dt>
+<dd>
+
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</section>
+<section id="decision" class="level3">
+<h3 class="anchored" data-anchor-id="decision">Decision</h3>
+<p>What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to <span class="element-type-name ref-interlink"><a href="../reference/index.html#decide_final">decide_final()</a></span>.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_report.py#L63">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Decision(BaseModel)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section class="level4">
+<h4 class="anchored" data-anchor-id="">Attributes</h4>
+<dl>
+<dt><code class="ref-definition">action</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#action">Action</a></span></span></dt>
+<dd>
+<p>What should happen at this step. Required.</p>
+</dd>
+<dt><code class="ref-definition">audit</code> <span class="element-type"><span class="element-type-name">bool</span></span></dt>
+<dd>
+<p>Request that oversight budget be spent on this step. Recorded for offline analysis and shown in the viewer as a flag; nothing acts on it yet.</p>
+</dd>
+<dt><code class="ref-definition">modified</code> <span class="element-type"><span class="element-type-name">ToolCall</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>Replacement for the step’s subject, for a <code>modify</code> decision.</p>
+</dd>
+<dt><code class="ref-definition">explanation</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>Why, for the log. The agent never sees it.</p>
+</dd>
+<dt><code class="ref-definition">references</code> <span class="element-type">list[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#reference">Reference</a></span>]</span></dt>
+<dd>
+<p>Messages and events in the transcript the report points at, which Inspect View links from cites such as <code>[M22]</code> in <code>explanation</code>.</p>
+</dd>
+<dt><code class="ref-definition">message</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>Text the agent reads when the step is rejected. The agent sees nothing else from a decision.</p>
+</dd>
+<dt><code class="ref-definition">metadata</code> <span class="element-type">dict[<span class="element-type-name">str</span>, <span class="element-type-name">Any</span>] | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>Author-supplied structured context, recorded verbatim.</p>
+</dd>
+</dl>
+</section>
+<section class="level4 class-methods">
+<h4 class="class-methods anchored" data-anchor-id="">Methods</h4>
+<dl>
+<dt>proceed</dt>
+<dd>
+<p>Let the step proceed unchanged: a decision with action <code>continue</code>.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_report.py#L87">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="at">@classmethod</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> proceed(</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    cls, explanation: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>, <span class="op">*</span>, references: Sequence[Reference] <span class="op">=</span> ()</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Decision</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">explanation</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+
+</dd>
+<dt><code class="ref-definition">references</code> <span class="element-type"><span class="element-type-name">Sequence</span>[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#reference">Reference</a></span>]</span></dt>
+<dd>
+
+</dd>
+</dl>
+</dd>
+<dt>reject</dt>
+<dd>
+<p>Reject the step, telling the agent it was rejected: with <code>message</code> if given, else with the host’s default text.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_report.py#L96">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="at">@classmethod</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> reject(</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    cls,</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    explanation: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">*</span>,</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    message: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    references: Sequence[Reference] <span class="op">=</span> (),</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Decision</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">explanation</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+
+</dd>
+<dt><code class="ref-definition">message</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+
+</dd>
+<dt><code class="ref-definition">references</code> <span class="element-type"><span class="element-type-name">Sequence</span>[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#reference">Reference</a></span>]</span></dt>
+<dd>
+
+</dd>
+</dl>
+</dd>
+<dt>terminate</dt>
+<dd>
+<p>End the sample.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_report.py#L112">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="at">@classmethod</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> terminate(</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    cls, explanation: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>, <span class="op">*</span>, references: Sequence[Reference] <span class="op">=</span> ()</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Decision</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">explanation</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+
+</dd>
+<dt><code class="ref-definition">references</code> <span class="element-type"><span class="element-type-name">Sequence</span>[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#reference">Reference</a></span>]</span></dt>
+<dd>
+
+</dd>
+</dl>
+</dd>
+<dt>escalate</dt>
+<dd>
+<p>Decline to decide and pass the step to the next decider.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_report.py#L121">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="at">@classmethod</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> escalate(</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    cls, explanation: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>, <span class="op">*</span>, references: Sequence[Reference] <span class="op">=</span> ()</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Decision</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">explanation</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+
+</dd>
+<dt><code class="ref-definition">references</code> <span class="element-type"><span class="element-type-name">Sequence</span>[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#reference">Reference</a></span>]</span></dt>
+<dd>
+
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</section>
+<section id="suspicion" class="level3">
+<h3 class="anchored" data-anchor-id="suspicion">Suspicion</h3>
+<p>How suspicious a step is: one finite score, or a non-empty dict scoring several dimensions independently.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_report.py#L12">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>Suspicion: TypeAlias <span class="op">=</span> SentinelSuspicion</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="action" class="level3">
+<h3 class="anchored" data-anchor-id="action">Action</h3>
+<p>What a protocol can decide about the step it examined.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_report.py#L15">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>Action: TypeAlias <span class="op">=</span> SentinelAction</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="report" class="level3">
+<h3 class="anchored" data-anchor-id="report">Report</h3>
+<p>What the transcript records.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_report.py#L131">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb14"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>Report: TypeAlias <span class="op">=</span> Observation <span class="op">|</span> Decision</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="reported" class="level3">
+<h3 class="anchored" data-anchor-id="reported">Reported</h3>
+<p>A report with the identity of the configured instance that produced it.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_report.py#L137">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb15"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Reported(Generic[R_co])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section class="level4">
+<h4 class="anchored" data-anchor-id="">Attributes</h4>
+<dl>
+<dt><code class="ref-definition">name</code> <span class="element-type"><span class="element-type-name">str</span></span></dt>
+<dd>
+<p>Instance name: the mapping key, or the registry name without its package prefix.</p>
+</dd>
+<dt><code class="ref-definition">path</code> <span class="element-type"><span class="element-type-name">str</span></span></dt>
+<dd>
+<p>Instance path, e.g.&nbsp;<code>attempt/internet_attempt</code>.</p>
+</dd>
+<dt><code class="ref-definition">report</code> <span class="element-type">R_co</span></dt>
+<dd>
+<p>The observation or decision this instance produced.</p>
+</dd>
+<dt><code class="ref-definition">function</code> <span class="element-type"><span class="element-type-name">str</span></span></dt>
+<dd>
+<p>The <code>__name__</code> of the function that produced the report, which tells apart the functions of an instance whose factory returned several.</p>
+</dd>
+</dl>
+</section>
+</section>
+</section>
+<section id="monitors-and-protocols" class="level2">
+<h2 class="anchored" data-anchor-id="monitors-and-protocols">Monitors and protocols</h2>
+<p><span class="element-type-name ref-interlink"><a href="../reference/index.html#protocol">Protocol</a></span> is a control protocol, not <code>typing.Protocol</code>.</p>
+<section id="monitor" class="level3">
+<h3 class="anchored" data-anchor-id="monitor">monitor</h3>
+<p>Register a monitor factory.</p>
+<p>Use as <code>@monitor</code>, or as <code>@monitor(name=..., version=...)</code>. The factory returns a function that must be <code>async</code>, take <code>(context, step)</code>, annotate <code>step</code> with exactly one stage payload, and be annotated <code>-&gt; Observation</code>, or <code>-&gt; Observation | None</code> if it can abstain. These are checked when the factory is called. Each function watches one stage; to watch several, return a <span class="element-type-name ref-interlink"><a href="../reference/index.html#monitorgroup">MonitorGroup</a></span> of functions, which together are one configured instance. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided <code>terminate</code>.</p>
+<p>A configured function runs only through the runners while a sentinel is running: a protocol that calls one directly from its body raises <code>RuntimeError</code>, and must call it through <code>run_monitors</code> or <code>run_children</code> instead. Outside a run, as in a unit test, a direct call works.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_decorators.py#L111">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb16"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> monitor(</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>    factory: Callable[P, Monitor <span class="op">|</span> MonitorGroup] <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">/</span>,</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">*</span>,</span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>    name: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>    version: <span class="bu">int</span> <span class="op">=</span> <span class="dv">0</span>,</span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Callable[P, Monitor <span class="op">|</span> MonitorGroup] <span class="op">|</span> _MonitorDecorator</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">factory</code> <span class="element-type"><span class="element-type-name">Callable</span>[<span class="element-type-name">P</span>, <span class="element-type-name"><a href="../reference/index.html#monitor">Monitor</a></span> | <span class="element-type-name"><a href="../reference/index.html#monitorgroup">MonitorGroup</a></span>] | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>A function returning a monitor, or a <span class="element-type-name ref-interlink"><a href="../reference/index.html#monitorgroup">MonitorGroup</a></span>.</p>
+</dd>
+<dt><code class="ref-definition">name</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>The registered name, in place of the factory’s <code>__name__</code>.</p>
+</dd>
+<dt><code class="ref-definition">version</code> <span class="element-type"><span class="element-type-name">int</span></span></dt>
+<dd>
+<p>The monitor’s version, recorded in its registry metadata so a calibration can say which version it measured; bump it when a change alters the scores. Defaults to 0.</p>
+</dd>
+</dl>
+</section>
+<section id="protocol" class="level3">
+<h3 class="anchored" data-anchor-id="protocol">protocol</h3>
+<p>Register a protocol factory.</p>
+<p>Same contract as <code>@monitor</code>, with each returned function annotated <code>-&gt; Decision</code>, or <code>-&gt; Decision | None</code> if it can abstain, and <code>step</code> may also be annotated <span class="element-type-name ref-interlink"><a href="../reference/index.html#step">Step</a></span> for a protocol that runs at every stage, such as a composition that only forwards the step to its children. To configure several functions as one instance, return a <span class="element-type-name ref-interlink"><a href="../reference/index.html#protocolgroup">ProtocolGroup</a></span>; a function among them that returns <code>terminate</code> or calls <span class="element-type-name ref-interlink"><a href="../reference/index.html#decide_final">decide_final()</a></span> ends the instance’s run, and those after it do not run and are not recorded. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided <code>terminate</code>.</p>
+<p>As with <code>@monitor</code>, a configured function called directly from another protocol’s body during a run raises <code>RuntimeError</code>; call it through <code>run_protocols</code> or <code>run_children</code>.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_decorators.py#L147">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb17"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> protocol(</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    factory: Callable[P, Protocol <span class="op">|</span> ProtocolGroup] <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">/</span>,</span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">*</span>,</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>    name: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>    version: <span class="bu">int</span> <span class="op">=</span> <span class="dv">0</span>,</span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Callable[P, Protocol <span class="op">|</span> ProtocolGroup] <span class="op">|</span> _ProtocolDecorator</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">factory</code> <span class="element-type"><span class="element-type-name">Callable</span>[<span class="element-type-name">P</span>, <span class="element-type-name"><a href="../reference/index.html#protocol">Protocol</a></span> | <span class="element-type-name"><a href="../reference/index.html#protocolgroup">ProtocolGroup</a></span>] | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>A function returning a protocol, or a <span class="element-type-name ref-interlink"><a href="../reference/index.html#protocolgroup">ProtocolGroup</a></span>.</p>
+</dd>
+<dt><code class="ref-definition">name</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>The registered name, in place of the factory’s <code>__name__</code>.</p>
+</dd>
+<dt><code class="ref-definition">version</code> <span class="element-type"><span class="element-type-name">int</span></span></dt>
+<dd>
+<p>The protocol’s version, recorded in its registry metadata; bump it when a change alters its decisions. Defaults to 0.</p>
+</dd>
+</dl>
+</section>
+<section id="monitor-1" class="level3">
+<h3 class="anchored" data-anchor-id="monitor-1">Monitor</h3>
+<p>A monitor: observes a step at one stage and reports a suspicion score, or abstains.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_types.py#L10">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb18"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a>Monitor: TypeAlias <span class="op">=</span> (</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>    Callable[[Context, BeforeToolCall], Awaitable[Observation <span class="op">|</span> <span class="va">None</span>]]</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">|</span> Callable[[Context, AfterToolCall], Awaitable[Observation <span class="op">|</span> <span class="va">None</span>]]</span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="protocol-1" class="level3">
+<h3 class="anchored" data-anchor-id="protocol-1">Protocol</h3>
+<p>A control protocol, not <code>typing.Protocol</code>: decides what happens at a step, or abstains. Annotating <span class="element-type-name ref-interlink"><a href="../reference/index.html#step">Step</a></span> runs it at every stage.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_types.py#L16">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb19"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>Protocol: TypeAlias <span class="op">=</span> (</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>    Callable[[Context, Step], Awaitable[Decision <span class="op">|</span> <span class="va">None</span>]]</span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">|</span> Callable[[Context, BeforeToolCall], Awaitable[Decision <span class="op">|</span> <span class="va">None</span>]]</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">|</span> Callable[[Context, AfterToolCall], Awaitable[Decision <span class="op">|</span> <span class="va">None</span>]]</span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="monitorgroup" class="level3">
+<h3 class="anchored" data-anchor-id="monitorgroup">MonitorGroup</h3>
+<p>Several monitor functions that form one monitor instance.</p>
+<p>Return one from a <code>@monitor</code> factory in place of a single function. Together the functions are one configured instance, sharing its name, path and <code>store_as</code> namespace; each runs, in the order given, at the stage it watches, sequentially since they share one store, and each report records which <code>function</code> made it. A group is not callable: hand it to a protocol, which runs it through <code>run_monitors</code> or <code>run_children</code>.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_types.py#L47">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb20"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="at">@final</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> MonitorGroup(Group)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section class="level4">
+<h4 class="anchored" data-anchor-id="">Attributes</h4>
+<dl>
+<dt><code class="ref-definition">functions</code> <span class="element-type">tuple[<span class="element-type-name"><a href="../reference/index.html#monitor">Monitor</a></span>, ...]</span></dt>
+<dd>
+<p>The member functions, in the order they run.</p>
+</dd>
+</dl>
+</section>
+<section class="level4 class-methods">
+<h4 class="class-methods anchored" data-anchor-id="">Methods</h4>
+<dl>
+<dt>__init__</dt>
+<dd>
+<p>Group monitor functions into one instance.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_types.py#L54">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, <span class="op">*</span>functions: Monitor) <span class="op">-&gt;</span> <span class="va">None</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">*functions</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#monitor">Monitor</a></span></span></dt>
+<dd>
+<p>At least one monitor function, each with a distinct <code>__name__</code>.</p>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</section>
+<section id="protocolgroup" class="level3">
+<h3 class="anchored" data-anchor-id="protocolgroup">ProtocolGroup</h3>
+<p>Several protocol functions that form one protocol instance.</p>
+<p>Return one from a <code>@protocol</code> factory in place of a single function. As with <span class="element-type-name ref-interlink"><a href="../reference/index.html#monitorgroup">MonitorGroup</a></span>, the functions share one name, path and <code>store_as</code> namespace and run in the order given at the stages they accept; a function that returns <code>terminate</code> or calls <span class="element-type-name ref-interlink"><a href="../reference/index.html#decide_final">decide_final()</a></span> ends the instance’s run, and those after it do not run and are not recorded. A group is not callable: hand it to a protocol, which runs it through <code>run_protocols</code> or <code>run_children</code>.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_types.py#L71">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb22"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="at">@final</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> ProtocolGroup(Group)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section class="level4">
+<h4 class="anchored" data-anchor-id="">Attributes</h4>
+<dl>
+<dt><code class="ref-definition">functions</code> <span class="element-type">tuple[<span class="element-type-name"><a href="../reference/index.html#protocol">Protocol</a></span>, ...]</span></dt>
+<dd>
+<p>The member functions, in the order they run.</p>
+</dd>
+</dl>
+</section>
+<section class="level4 class-methods">
+<h4 class="class-methods anchored" data-anchor-id="">Methods</h4>
+<dl>
+<dt>__init__</dt>
+<dd>
+<p>Group protocol functions into one instance.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_types.py#L78">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, <span class="op">*</span>functions: Protocol) <span class="op">-&gt;</span> <span class="va">None</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">*functions</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#protocol">Protocol</a></span></span></dt>
+<dd>
+<p>At least one protocol function, each with a distinct <code>__name__</code>.</p>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</section>
+<section id="monitors" class="level3">
+<h3 class="anchored" data-anchor-id="monitors">Monitors</h3>
+<p>Monitors handed to a protocol, named by mapping key or by registry name without its package prefix.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_types.py#L95">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb24"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>Monitors: TypeAlias <span class="op">=</span> (</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>    Mapping[<span class="bu">str</span>, Monitor <span class="op">|</span> MonitorGroup] <span class="op">|</span> Sequence[Monitor <span class="op">|</span> MonitorGroup]</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="protocols" class="level3">
+<h3 class="anchored" data-anchor-id="protocols">Protocols</h3>
+<p>Protocols handed to a protocol, named the same way.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_types.py#L100">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb25"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>Protocols: TypeAlias <span class="op">=</span> (</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    Mapping[<span class="bu">str</span>, Protocol <span class="op">|</span> ProtocolGroup] <span class="op">|</span> Sequence[Protocol <span class="op">|</span> ProtocolGroup]</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="children" class="level3">
+<h3 class="anchored" data-anchor-id="children">Children</h3>
+<p>Monitors and protocols together, for the compositions that record either.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_types.py#L107">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb26"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>Children: TypeAlias <span class="op">=</span> Mapping[<span class="bu">str</span>, Child] <span class="op">|</span> Sequence[Child]</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+</section>
+<section id="shipped-protocols" class="level2">
+<h2 class="anchored" data-anchor-id="shipped-protocols">Shipped protocols</h2>
+<section id="observe" class="level3">
+<h3 class="anchored" data-anchor-id="observe">observe</h3>
+<p>Record every monitor’s observation and never act.</p>
+<p>What a bare monitor or a list of monitors resolves to, and how a benign score distribution is collected before anything is configured to act on it.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_protocols/observe.py#L12">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb27"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="at">@protocol</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> observe(monitors: Monitor <span class="op">|</span> MonitorGroup <span class="op">|</span> Monitors) <span class="op">-&gt;</span> Protocol</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">monitors</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#monitor">Monitor</a></span> | <span class="element-type-name"><a href="../reference/index.html#monitorgroup">MonitorGroup</a></span> | <span class="element-type-name"><a href="../reference/index.html#monitors">Monitors</a></span></span></dt>
+<dd>
+<p>The monitor, or monitors, to run at every step they watch.</p>
+</dd>
+</dl>
+</section>
+<section id="concurrent" class="level3">
+<h3 class="anchored" data-anchor-id="concurrent">concurrent</h3>
+<p>Run every child at once; the strictest decision wins.</p>
+<p>What a list containing a protocol resolves to. Monitors are recorded in the transcript; protocols vote by <code>terminate &gt; reject &gt; modify &gt; escalate &gt; continue</code>, the first in configuration order winning a tie, so a peer’s <code>continue</code> does not override an <code>escalate</code> and the layer escalates when that is the strongest vote. A <code>modify</code> when another protocol also decided anything but <code>escalate</code> becomes a <code>reject</code> naming the modifier, since the others decided about the call as it stood; votes count by instance, so another function of the modifier’s own instance contests it only by also modifying; the rejection carries the modifier’s <code>audit</code> and <code>metadata</code>, and its explanation leads with the modifier’s. When more than one protocol decided, the layer’s explanation lists each one’s decision after the winner’s own, labelling a function of a <span class="element-type-name ref-interlink"><a href="../reference/index.html#protocolgroup">ProtocolGroup</a></span> or <span class="element-type-name ref-interlink"><a href="../reference/index.html#monitorgroup">MonitorGroup</a></span> <code>name.function</code>. A child that calls <span class="element-type-name ref-interlink"><a href="../reference/index.html#decide_final">decide_final()</a></span> ends the step and no vote is taken.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_protocols/concurrent.py#L12">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb28"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="at">@protocol</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> concurrent(</span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>    children: Monitor <span class="op">|</span> MonitorGroup <span class="op">|</span> Protocol <span class="op">|</span> ProtocolGroup <span class="op">|</span> Children,</span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Protocol</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">children</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#monitor">Monitor</a></span> | <span class="element-type-name"><a href="../reference/index.html#monitorgroup">MonitorGroup</a></span> | <span class="element-type-name"><a href="../reference/index.html#protocol">Protocol</a></span> | <span class="element-type-name"><a href="../reference/index.html#protocolgroup">ProtocolGroup</a></span> | <span class="element-type-name"><a href="../reference/index.html#children">Children</a></span></span></dt>
+<dd>
+<p>A monitor, protocol or group, or several, to run together.</p>
+</dd>
+</dl>
+</section>
+<section id="threshold" class="level3">
+<h3 class="anchored" data-anchor-id="threshold">threshold</h3>
+<p>Act on suspicion scores: <code>reject</code> when any score reaches its reject threshold, <code>terminate</code> when any reaches its terminate threshold.</p>
+<p>A threshold is one number for every score, or a mapping that sets one per dimension. In a mapping, <code>"&lt;monitor&gt;.&lt;dimension&gt;"</code> applies to one dimension of one monitor (the monitor’s instance name, as in <code>Reported.name</code>), a bare <code>"&lt;dimension&gt;"</code> applies to that dimension from every monitor, a monitor reporting a single number is keyed by its instance name, and <code>"*"</code> applies to anything unlisted. The most specific key wins: qualified, then bare, then <code>"*"</code>. A score no key covers never triggers. A number is shorthand for <code>{"*": number}</code>. A dimension name containing <code>.</code> must be qualified.</p>
+<p>Terminate is checked first. A reject or terminate is explained for the log: it names the highest-scoring score that crossed (the first in configuration order on a tie) and carries its monitor’s explanation and references, e.g.&nbsp;<code>suspicion 0.95 from audit: posts credentials to an external host</code> when the threshold came from <code>"*"</code> or the score is a single number, and <code>sabotage 0.72 ≥ 0.60 from audit: edits the tests</code> when it came from the dimension’s own key. Neither sets <code>message</code>, so the agent gets the host’s default “not approved” text and learns nothing about what the monitors saw.</p>
+<p>The smallest protocol, and the one calibration feeds: the constants come from a benign score distribution, which is why they live here and not on a monitor. Every monitor, and every function of a <span class="element-type-name ref-interlink"><a href="../reference/index.html#monitorgroup">MonitorGroup</a></span>, must watch <span class="element-type-name ref-interlink"><a href="../reference/index.html#beforetoolcall">BeforeToolCall</a></span>, since that is the only stage a <code>reject</code> is legal at.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_protocols/threshold.py#L17">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb29"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="at">@protocol</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> threshold(</span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>    monitors: Monitor <span class="op">|</span> MonitorGroup <span class="op">|</span> Monitors,</span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>    reject_at: <span class="bu">float</span> <span class="op">|</span> Mapping[<span class="bu">str</span>, <span class="bu">float</span>],</span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>    terminate_at: <span class="bu">float</span> <span class="op">|</span> Mapping[<span class="bu">str</span>, <span class="bu">float</span>] <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Protocol</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">monitors</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#monitor">Monitor</a></span> | <span class="element-type-name"><a href="../reference/index.html#monitorgroup">MonitorGroup</a></span> | <span class="element-type-name"><a href="../reference/index.html#monitors">Monitors</a></span></span></dt>
+<dd>
+<p>The monitor, or monitors, whose scores are thresholded.</p>
+</dd>
+<dt><code class="ref-definition">reject_at</code> <span class="element-type"><span class="element-type-name">float</span> | <span class="element-type-name">Mapping</span>[<span class="element-type-name">str</span>, <span class="element-type-name">float</span>]</span></dt>
+<dd>
+<p>Suspicion at or above which the call is rejected: one number, or a mapping by dimension.</p>
+</dd>
+<dt><code class="ref-definition">terminate_at</code> <span class="element-type"><span class="element-type-name">float</span> | <span class="element-type-name">Mapping</span>[<span class="element-type-name">str</span>, <span class="element-type-name">float</span>] | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>Suspicion at or above which the sample is ended, in the same form; <code>None</code> never terminates. Where it and <code>reject_at</code> both cover a score, it must be above <code>reject_at</code>.</p>
+</dd>
+</dl>
+</section>
+</section>
+<section id="runner" class="level2">
+<h2 class="anchored" data-anchor-id="runner">Runner</h2>
+<section id="run_monitors" class="level3">
+<h3 class="anchored" data-anchor-id="run_monitors">run_monitors</h3>
+<p>Run monitors concurrently and collect their observations in configuration order.</p>
+<p>A typed shortcut for <code>run_children</code> over monitors only: its parameter rejects a protocol and its return type is the observations alone.</p>
+<p>Derives each child’s context under this layer’s path and records every observation, including the ones the caller goes on to ignore. A monitor that abstained or does not watch this stage contributes nothing, so the result may be empty. An instance whose factory returned several functions contributes one observation per function that reported, in the order the factory returned them.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_runner.py#L142">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb30"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> run_monitors(</span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>    monitors: Monitor <span class="op">|</span> MonitorGroup <span class="op">|</span> Monitors, context: Context, step: Step</span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Observations</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">monitors</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#monitor">Monitor</a></span> | <span class="element-type-name"><a href="../reference/index.html#monitorgroup">MonitorGroup</a></span> | <span class="element-type-name"><a href="../reference/index.html#monitors">Monitors</a></span></span></dt>
+<dd>
+<p>One monitor or <span class="element-type-name ref-interlink"><a href="../reference/index.html#monitorgroup">MonitorGroup</a></span>, named by its registry name without the package prefix; a sequence of them, named the same way; or a mapping of instance names to them.</p>
+</dd>
+<dt><code class="ref-definition">context</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#context">Context</a></span></span></dt>
+<dd>
+<p>This layer’s context.</p>
+</dd>
+<dt><code class="ref-definition">step</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#step">Step</a></span></span></dt>
+<dd>
+<p>The step being examined.</p>
+</dd>
+</dl>
+</section>
+<section id="run_protocols" class="level3">
+<h3 class="anchored" data-anchor-id="run_protocols">run_protocols</h3>
+<p>Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns <code>terminate</code> or calls <span class="element-type-name ref-interlink"><a href="../reference/index.html#decide_final">decide_final()</a></span>.</p>
+<p>A typed shortcut for <code>run_children</code> over protocols only: its parameter rejects a monitor and its return type is the decisions alone. A <span class="element-type-name ref-interlink"><a href="../reference/index.html#decide_final">decide_final()</a></span> from any protocol at any depth below propagates out of this call, so the caller’s own decision logic does not run.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_runner.py#L160">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb31"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> run_protocols(</span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>    protocols: Protocol <span class="op">|</span> ProtocolGroup <span class="op">|</span> Protocols, context: Context, step: Step</span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Decisions</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">protocols</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#protocol">Protocol</a></span> | <span class="element-type-name"><a href="../reference/index.html#protocolgroup">ProtocolGroup</a></span> | <span class="element-type-name"><a href="../reference/index.html#protocols">Protocols</a></span></span></dt>
+<dd>
+<p>One protocol or <span class="element-type-name ref-interlink"><a href="../reference/index.html#protocolgroup">ProtocolGroup</a></span>, a sequence of them, or a mapping of instance names to them, named as for <code>run_monitors</code>.</p>
+</dd>
+<dt><code class="ref-definition">context</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#context">Context</a></span></span></dt>
+<dd>
+<p>This layer’s context.</p>
+</dd>
+<dt><code class="ref-definition">step</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#step">Step</a></span></span></dt>
+<dd>
+<p>The step being examined.</p>
+</dd>
+</dl>
+</section>
+<section id="run_children" class="level3">
+<h3 class="anchored" data-anchor-id="run_children">run_children</h3>
+<p>Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns <code>terminate</code> or calls <span class="element-type-name ref-interlink"><a href="../reference/index.html#decide_final">decide_final()</a></span>.</p>
+<p>Runs any mix of children; <code>run_monitors</code> and <code>run_protocols</code> are typed shortcuts for one family. A child cancelled this way is recorded through <code>Recorder.cancelled</code>; one that finishes without awaiting is recorded normally.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_runner.py#L176">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb32"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> run_children(</span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>    children: Child <span class="op">|</span> Children, context: Context, step: Step</span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Reports</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">children</code> <span class="element-type"><span class="element-type-name">Child</span> | <span class="element-type-name"><a href="../reference/index.html#children">Children</a></span></span></dt>
+<dd>
+<p>One monitor, protocol or group, a sequence of them, or a mapping of instance names to them, named as for <code>run_monitors</code>.</p>
+</dd>
+<dt><code class="ref-definition">context</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#context">Context</a></span></span></dt>
+<dd>
+<p>This layer’s context.</p>
+</dd>
+<dt><code class="ref-definition">step</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#step">Step</a></span></span></dt>
+<dd>
+<p>The step being examined.</p>
+</dd>
+</dl>
+</section>
+<section id="decide_final" class="level3">
+<h3 class="anchored" data-anchor-id="decide_final">decide_final</h3>
+<p>End the step with this decision.</p>
+<p>Nothing above the calling protocol runs; siblings still in flight are cancelled and recorded as such. First call wins if two race.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_final.py#L25">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb33"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> decide_final(decision: Decision) <span class="op">-&gt;</span> NoReturn</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">decision</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#decision">Decision</a></span></span></dt>
+<dd>
+<p>The outcome for this step.</p>
+</dd>
+</dl>
+</section>
+<section id="observations" class="level3">
+<h3 class="anchored" data-anchor-id="observations">Observations</h3>
+<p>What a layer’s monitors reported, in configuration order.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_results.py#L42">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb34"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Observations(_ReportSequence[Observation])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section class="level4 class-methods">
+<h4 class="class-methods anchored" data-anchor-id="">Methods</h4>
+<dl>
+<dt>max_suspicion</dt>
+<dd>
+<p>The highest suspicion reported, taking the highest dimension of a structured score; <code>None</code> if nobody observed.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_results.py#L45">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb35"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> max_suspicion(<span class="va">self</span>) <span class="op">-&gt;</span> <span class="bu">float</span> <span class="op">|</span> <span class="va">None</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div>
+
+</div>
+</dd>
+</dl>
+</section>
+</section>
+<section id="decisions" class="level3">
+<h3 class="anchored" data-anchor-id="decisions">Decisions</h3>
+<p>What a layer’s protocols decided, in configuration order.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_results.py#L51">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb36"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Decisions(_ReportSequence[Decision])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section class="level4 class-methods">
+<h4 class="class-methods anchored" data-anchor-id="">Methods</h4>
+<dl>
+<dt>strongest</dt>
+<dd>
+<p>The strongest decision by <code>terminate &gt; reject &gt; modify &gt; escalate &gt; continue</code>, the first in configuration order on a tie; <code>None</code> if nobody decided.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_results.py#L54">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb37"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> strongest(<span class="va">self</span>) <span class="op">-&gt;</span> Reported[Decision] <span class="op">|</span> <span class="va">None</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div>
+
+</div>
+</dd>
+</dl>
+</section>
+</section>
+<section id="reports" class="level3">
+<h3 class="anchored" data-anchor-id="reports">Reports</h3>
+<p>Both families of report from one layer, unpackable as <code>observations, decisions = await run_children(...)</code>.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_results.py#L61">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb38"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Reports(NamedTuple)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section class="level4">
+<h4 class="anchored" data-anchor-id="">Attributes</h4>
+<dl>
+<dt><code class="ref-definition">observations</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#observations">Observations</a></span></span></dt>
+<dd>
+<p>From the layer’s monitors.</p>
+</dd>
+<dt><code class="ref-definition">decisions</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#decisions">Decisions</a></span></span></dt>
+<dd>
+<p>From the layer’s protocols.</p>
+</dd>
+</dl>
+</section>
+</section>
+</section>
+<section id="context-and-host" class="level2">
+<h2 class="anchored" data-anchor-id="context-and-host">Context and host</h2>
+<section id="context" class="level3">
+<h3 class="anchored" data-anchor-id="context">Context</h3>
+<p>What a monitor or protocol is given. Constant for a sample; nothing in it came from the agent.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_context.py#L105">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb39"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>, kw_only<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Context</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section class="level4">
+<h4 class="anchored" data-anchor-id="">Attributes</h4>
+<dl>
+<dt><code class="ref-definition">task</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>Task name, or the deployed agent’s identifier.</p>
+</dd>
+<dt><code class="ref-definition">task_description</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>What agents in this setting are asked to do. None until inspect_ai has <code>Task(description=)</code>.</p>
+</dd>
+<dt><code class="ref-definition">sample_id</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">int</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>Dataset sample identifier.</p>
+</dd>
+<dt><code class="ref-definition">epoch</code> <span class="element-type"><span class="element-type-name">int</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>Epoch of the sample, when the task runs several.</p>
+</dd>
+<dt><code class="ref-definition">sample_description</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>What is distinctive about this instance. None until inspect_ai has <code>Sample(description=)</code>.</p>
+</dd>
+<dt><code class="ref-definition">input</code> <span class="element-type"><span class="element-type-name">str</span> | list[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#chatmessage">ChatMessage</a></span>]</span></dt>
+<dd>
+<p>The sample’s input: the assignment the agent was given. Judge a step against <code>step.input</code>, which is exactly what the model was sent; use this for what the agent was asked to do.</p>
+</dd>
+<dt><code class="ref-definition">metadata</code> <span class="element-type">dict[<span class="element-type-name">str</span>, <span class="element-type-name">Any</span>]</span></dt>
+<dd>
+<p>Task metadata merged with sample metadata.</p>
+</dd>
+<dt><code class="ref-definition">path</code> <span class="element-type"><span class="element-type-name">str</span></span></dt>
+<dd>
+<p>Instance path, e.g.&nbsp;<code>attempt/internet_attempt</code>. Empty at the top layer.</p>
+</dd>
+<dt><code class="ref-definition">store</code> <span class="element-type"><span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.util.html#store">Store</a></span></span></dt>
+<dd>
+<p>The whole sample store, the agent’s state included; not namespaced. Use <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.util.html#store_as">store_as()</a></span> for this instance’s own state.</p>
+</dd>
+<dt><code class="ref-definition">host</code> <span class="element-type"><span class="element-type-name"><a href="../reference/index.html#host">Host</a></span></span></dt>
+<dd>
+<p>Inference through the host’s models. See <span class="element-type-name ref-interlink"><a href="../reference/index.html#host">Host</a></span>.</p>
+</dd>
+<dt><code class="ref-definition">target</code> <span class="element-type"><span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#target">Target</a></span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>The expected answer. None until monitors and protocols can opt in with <code>target=True</code>.</p>
+</dd>
+</dl>
+</section>
+<section class="level4 class-methods">
+<h4 class="class-methods anchored" data-anchor-id="">Methods</h4>
+<dl>
+<dt>store_as</dt>
+<dd>
+<p>Typed view of this instance’s state, namespaced by <code>path</code>.</p>
+<p>Renaming the instance (its mapping key) or wrapping it in another layer changes <code>path</code>, so its state moves with it.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_context.py#L142">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb40"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> store_as(<span class="va">self</span>, model_cls: <span class="bu">type</span>[SMT]) <span class="op">-&gt;</span> SMT</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">model_cls</code> <span class="element-type">type[<span class="element-type-name">SMT</span>]</span></dt>
+<dd>
+<p>The <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.util.html#storemodel">StoreModel</a></span> subclass to read and write through.</p>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</section>
+<section id="host" class="level3">
+<h3 class="anchored" data-anchor-id="host">Host</h3>
+<p>What a monitor or protocol may do to the outside world. Author-facing.</p>
+<p>Inference is the only effect for now. Outbound HTTP through named endpoints (<code>fetch</code>) is planned. Meanwhile a monitor running in-process may call inspect_ai APIs directly, such as <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.util.html#sandbox">sandbox()</a></span> or <code>logging</code>, at the cost of portability to a proxy, which a future <code>portable=False</code> will declare.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_context.py#L18">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb41"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Host(TypingProtocol)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section class="level4 class-methods">
+<h4 class="class-methods anchored" data-anchor-id="">Methods</h4>
+<dl>
+<dt>generate</dt>
+<dd>
+<p>Generate with a model the host resolves.</p>
+<p>With neither <code>model</code> nor <code>role</code>, the host uses the <code>monitor</code> role. If that role is not configured, it falls back to the agent’s model and logs a warning once per eval naming the role to set.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/e906d6842ba211473357bf866f97fad8b20b3fb6/src/inspect_sentinel/_context.py#L24">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb42"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> generate(</span>
+<span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a>    <span class="va">self</span>,</span>
+<span id="cb42-3"><a href="#cb42-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">input</span>: <span class="bu">str</span> <span class="op">|</span> <span class="bu">list</span>[ChatMessage],</span>
+<span id="cb42-4"><a href="#cb42-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">*</span>,</span>
+<span id="cb42-5"><a href="#cb42-5" aria-hidden="true" tabindex="-1"></a>    model: <span class="bu">str</span> <span class="op">|</span> Model <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
+<span id="cb42-6"><a href="#cb42-6" aria-hidden="true" tabindex="-1"></a>    role: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
+<span id="cb42-7"><a href="#cb42-7" aria-hidden="true" tabindex="-1"></a>    tools: <span class="bu">list</span>[ToolInfo] <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
+<span id="cb42-8"><a href="#cb42-8" aria-hidden="true" tabindex="-1"></a>    config: GenerateConfig <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
+<span id="cb42-9"><a href="#cb42-9" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> ModelOutput</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">input</code> <span class="element-type"><span class="element-type-name">str</span> | list[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#chatmessage">ChatMessage</a></span>]</span></dt>
+<dd>
+<p>A prompt string or a list of chat messages.</p>
+</dd>
+<dt><code class="ref-definition">model</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#model">Model</a></span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>A model name or instance. Not with <code>role</code>.</p>
+</dd>
+<dt><code class="ref-definition">role</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>A model role, e.g.&nbsp;<code>trusted</code>. Not with <code>model</code>.</p>
+</dd>
+<dt><code class="ref-definition">tools</code> <span class="element-type">list[<span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.tool.html#toolinfo">ToolInfo</a></span>] | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>Tool definitions to offer the model.</p>
+</dd>
+<dt><code class="ref-definition">config</code> <span class="element-type"><span class="element-type-name"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#generateconfig">GenerateConfig</a></span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>Generation configuration.</p>
+</dd>
+</dl>
+</dd>
+</dl>
 
 
+</section>
+</section>
+</section>
 
 </main> <!-- /main -->
 <div id="copy-page-btn" class="btn-group" style="display:none;">
@@ -708,8 +1878,8 @@ document.addEventListener("DOMContentLoaded", function () {
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="../index.html" class="pagination-link" aria-label="Getting Started">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Getting Started</span>
+      <a href="../deployment.html" class="pagination-link" aria-label="Deployment">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Deployment</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">

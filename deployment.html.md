@@ -1,0 +1,18 @@
+# Deployment – Inspect Sentinel
+
+> **WARNING: WarningOutline**
+>
+> This page is an outline: a summary and the sections planned for it, not yet the documentation. The feature it describes is planned and not yet built. See [Getting Started](./index.html.md) for a worked example.
+
+## Overview
+
+How the same monitor runs outside an Inspect eval: for agents that run their own tool loop, and in a proxy in front of a model API, where the agent cannot bypass it. Covers what each stage sees there, what carries over from an eval and what does not, and writing monitors that travel.
+
+## Planned Sections
+
+- Bridged agents (`claude_code`, `codex`): sentinel checks on their tool calls (planned)
+- A proxy in front of a model API: sidecar and embedded modes (planned)
+- What each stage sees under a proxy, and what is lost
+- Portable monitors: `context.host`, `context.store_as()`, light imports, `portable=False` (planned)
+- `terminate` and `reject` under a proxy
+- `inspect_core`: the wire types without the rest of Inspect (planned)

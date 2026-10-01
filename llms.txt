@@ -3,9 +3,32 @@
 > Monitors and control protocols that watch agents and intervene in their execution.
 
 
-## Getting Started
+## Basics
 
-- [Getting Started](https://meridianlabs-ai.github.io/inspect_sentinel/index.html.md): Monitors and control protocols that watch agents and intervene in their execution.
+- [Getting Started](https://meridianlabs-ai.github.io/inspect_sentinel/index.html.md): Watch an agent's tool calls with a rule and an LLM monitor, combine them, and read the results in the log viewer.
+- [Transcript and Viewer](https://meridianlabs-ai.github.io/inspect_sentinel/transcript.html.md): What a sentinel records in the transcript, how the log viewer shows it, and reading it in code.
+
+## Writing Sentinels
+
+- [Monitors](https://meridianlabs-ai.github.io/inspect_sentinel/monitors.html.md): Writing monitors: functions that observe a step and report a suspicion score.
+- [Protocols and Rules](https://meridianlabs-ai.github.io/inspect_sentinel/protocols.html.md): Writing protocols, which decide what happens at a step, and rules, which are protocols with no monitors.
+- [State](https://meridianlabs-ai.github.io/inspect_sentinel/state.html.md): Keeping per-sample state across steps with context.store_as().
+- [Host and Model Roles](https://meridianlabs-ai.github.io/inspect_sentinel/host.html.md): Model calls from monitors and protocols through context.host, and the monitor and trusted model roles.
+
+## Composing
+
+- [Composition](https://meridianlabs-ai.github.io/inspect_sentinel/composition.html.md): Combining monitors and protocols: concurrent(), threshold(), observe(), and the planned sequential().
+- [Final Decisions and Humans](https://meridianlabs-ai.github.io/inspect_sentinel/final-decisions.html.md): decide_final() for decisions nothing above may weaken, and the planned human() for people in the loop.
+
+## Running
+
+- [Configuration](https://meridianlabs-ai.github.io/inspect_sentinel/configuration.html.md): Configuring a sentinel from Python, YAML or JSON files, and the command line, and how it is recorded for eval_retry().
+- [Approval and Review](https://meridianlabs-ai.github.io/inspect_sentinel/approval.html.md): How sentinels relate to Inspect's tool approval and review, and the order they run in.
+
+## Development
+
+- [Calibration](https://meridianlabs-ai.github.io/inspect_sentinel/calibration.html.md): Developing, validating and calibrating monitors over transcripts with Inspect Scout.
+- [Deployment](https://meridianlabs-ai.github.io/inspect_sentinel/deployment.html.md): Running sentinels outside an eval: bridged agents and a network proxy in front of a model API.
 
 ## Reference
 

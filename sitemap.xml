@@ -1,11 +1,55 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/reference/index.html</loc>
-    <lastmod>2026-09-21T20:54:30.199Z</lastmod>
+    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/protocols.html</loc>
+    <lastmod>2026-10-01T14:12:26.303Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/composition.html</loc>
+    <lastmod>2026-10-01T14:12:26.302Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/deployment.html</loc>
+    <lastmod>2026-10-01T14:12:26.302Z</lastmod>
   </url>
   <url>
     <loc>https://meridianlabs-ai.github.io/inspect_sentinel/index.html</loc>
-    <lastmod>2026-09-21T23:45:19.201Z</lastmod>
+    <lastmod>2026-10-01T14:12:26.303Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/monitors.html</loc>
+    <lastmod>2026-10-01T14:12:26.303Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/approval.html</loc>
+    <lastmod>2026-10-01T14:12:26.302Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/final-decisions.html</loc>
+    <lastmod>2026-10-01T14:12:26.303Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/configuration.html</loc>
+    <lastmod>2026-10-01T14:12:26.302Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/transcript.html</loc>
+    <lastmod>2026-10-01T14:12:26.304Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/host.html</loc>
+    <lastmod>2026-10-01T14:12:26.303Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/calibration.html</loc>
+    <lastmod>2026-10-01T14:12:26.302Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/state.html</loc>
+    <lastmod>2026-10-01T14:12:26.304Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_sentinel/reference/index.html</loc>
+    <lastmod>2026-10-01T14:12:26.304Z</lastmod>
   </url>
 </urlset>

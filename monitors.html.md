@@ -1,0 +1,23 @@
+# Monitors – Inspect Sentinel
+
+> **WARNING: WarningOutline**
+>
+> This page is an outline: a summary and the sections planned for it, not yet the documentation. See [Getting Started](./index.html.md) for a worked example.
+
+## Overview
+
+How to write a monitor: a `@monitor` factory returning a function that takes a [Context](./reference/index.html.md#context) and a step and returns an [Observation](./reference/index.html.md#observation), or `None` to abstain. Covers the stages a monitor can watch and what each step carries, scalar and structured suspicion, writing explanations and references, when to write a monitor rather than a protocol, and grouping several functions into one monitor that shares state.
+
+## Planned Sections
+
+- The `@monitor` decorator and factories (parameters, `name=`, `version=`)
+- Stages: [BeforeToolCall](./reference/index.html.md#beforetoolcall) and [AfterToolCall](./reference/index.html.md#aftertoolcall); `BeforeGenerate` and `AfterGenerate` (planned)
+- What a step carries: `call`, `message`, `view`, `result`, `input` and `history`
+- Context: what the agent was asked to do, and why it is trusted where `step` is not
+- [Observation](./reference/index.html.md#observation): [score()](https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#score), `flag()`, structured suspicion (`{"sabotage": 0.8, ...}`), `references`
+- Abstaining with `None`
+- Monitor or protocol? Keeping thresholds out of monitors
+- Several functions in one monitor: [MonitorGroup](./reference/index.html.md#monitorgroup)
+- Prompting an LLM monitor safely: separating instructions from evidence; prompt helpers such as `monitor_prompt()` (planned)
+- Failures: what happens when a monitor raises; `fail="open"` (planned)
+- Testing a monitor
