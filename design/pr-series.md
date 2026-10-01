@@ -257,12 +257,27 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 - **A top-level escalate proceeds.** When the root's decision is `escalate`, nobody is left to hand it to: the inspect_ai dispatcher proceeds as for `continue`, the escalate stays recorded as the root's decision, and the host warns once per eval that `sequential(..., human())` sends escalations to a person. `run_root` returns the escalate; the host decides what an unresolved escalate means.
 - **Runners stay three.** `run_children` runs anything; `run_monitors` and `run_protocols` are typed shortcuts whose parameter and return types catch misuse. Docs only.
 
+## Shared types
+
+Decided with the user 2026-09-30, before the first release, so nothing is kept for compatibility:
+
+- `Action` and `Suspicion` are defined once, in inspect_ai, as `SentinelAction` and `SentinelSuspicion` exported from `inspect_ai.event` beside `SentinelEvent`. inspect_sentinel re-exports them under its own names, `Action` and `Suspicion`, with the same validation. inspect_ai's drift test that compared the two copies is gone.
+- `SentinelEntry` and `SentinelConfig` move into inspect_ai (`inspect_ai._sentinel._config`, exported from `inspect_ai.log`), with the parsing of one entry, a list or a mapping. `EvalConfig.sentinel` is typed `SentinelConfig | None`, and logs load without inspect_sentinel. `_config.py` and `_integration.py` import them from there; `sentinel_from_config` and `config_from_sentinel` stay in inspect_sentinel.
+- `SentinelEvent.kind` is split in two. `kind` is the report family (`observation` or `decision`), and `status` says what happened to the report (`reported`, `cancelled`, `bypassed` or `superseded`). A `cancelled` event's kind comes from the registry type of the layer's factory. A `bypassed` event is always a decision, and only a decision can be `superseded`.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands.
 
 - **Revisit `decide_final()`: is it the right design at all?** Raised in review: any protocol at any depth, including third-party code inside `observe()` or `threshold()`, can call it and bypass every layer above, while the design sells child decisions as advisory to the parent. Options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism. `sentinel.md` open question 23.
 - **Revisit an `escalate` that reaches the top with nobody to hand it to.** Today it proceeds, is recorded as the root's decision, and the host warns once per eval. The alternatives are rejecting it (fail-closed, as inspect's approval does when every approver escalates) or a configurable setting with a chosen default. The trade-off: rejecting turns every unsure rule into a blocked call. `sentinel.md` open question 24.
+- **Migrating `review=` and tool approvers. This is the largest open question in how sentinels relate to inspect_ai.** Three questions are open, and the ordering is settled:
+  - **Is `review=` deprecated in favour of after-call protocols?** The design's position ([Relationship to approval and review](sentinel.md#relationship-to-approval-and-review)) is that a childless `AfterToolCall` protocol subsumes `Reviewer`. Deprecating `@reviewer` and retiring `review/` waits on protocols having users.
+  - **How do `approval=` and `sentinel=` coexist on one task?** Both stay for now.
+  - **Settled: the ordering.** inspect_ai documents it in `docs/review.qmd`, "Approval, Review and Sentinels". Before a call, approval runs and then the sentinel, so a rejected call never reaches the sentinel and a modified one reaches it modified. After a call, review runs and then the sentinel.
+  - **Can existing tool approvers run as protocols?** The proposal is an `as_protocol(approver)` adapter, so that approval users can compose approvers with monitors. It would map `approve` to `continue`, the approval's `explanation` to the decision's `message` (what the agent is told), and `reject`, `escalate`, `terminate` and `modify` to the action of the same name.
+
+  `sentinel.md` open question 25.
 - **Generate stages** (`BeforeGenerate`, `AfterGenerate`), and with them the design of what a generate-stage `modify` may replace.
 - **`Decision.modify(step, arguments=...)`**, a constructor that keeps the call's id and function by construction. Waits for the generate stages, since the constructor's shape depends on what a generate-stage modify replaces. Until then, authors write `Decision(action="modify", modified=replace(step.call, arguments={...}))`, and the shape check rejects a changed id or function.
 - **`sequential()` and `human()`**, shipped together: the case that needs both is a rule that escalates to a person, who ends the step with `decide_final()`.
