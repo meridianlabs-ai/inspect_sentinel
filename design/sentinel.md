@@ -4,7 +4,7 @@ Exploratory design for two new registry types, `@monitor` and `@protocol`: one a
 
 *Sentinel* is the umbrella: the name of the feature, and of one configured tree — a protocol with its monitors — as passed to `Task(sentinel=)` and recorded as a `SentinelEvent`. Inside it, *monitor* and *protocol* keep their AI-control-literature senses, which are also ControlArena's: the monitor is a scorer, the protocol decides. An earlier draft used "monitor" for both the umbrella (`Task(monitor=)`) and the scorer, and reviewers read the umbrella as "the monitor plus the protocol"; renaming the umbrella rather than the scorer keeps the literature's pair intact.
 
-Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe`, `concurrent`, `sequential` and `threshold` are implemented in `inspect_sentinel` and its inspect_ai integration. The generate stages, `human`, `defer_to_trusted`, `resample`, the view helpers, the failure policy and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those is illustrative.
+Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe`, `concurrent`, `sequential`, `threshold` and `human` are implemented in `inspect_sentinel` and its inspect_ai integration (`Host.ask_human` in inspect_ai follows). The generate stages, `defer_to_trusted`, `resample`, the view helpers, the failure policy and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those is illustrative.
 
 **Related design documents.** This one defines the protocol. `sentinel-deployment.md` covers running a sentinel outside the eval process — in a proxy on the wire — and the constraints that places on the protocol. `sentinel-development.md` covers measuring and calibrating a monitor before it acts, by replaying it over transcripts as an Inspect Scout scanner. `inspect-core.md` covers extracting the wire types into a package light enough for a monitor author (or another language) to depend on.
 
@@ -514,7 +514,7 @@ def decide_final(decision: Decision) -> NoReturn:
 
 A protocol that has the last word calls `decide_final(decision)`, and the step ends there. Nothing above the calling protocol runs: each layer's `await run_protocols(...)` or `await run_children(...)` never returns, so its decision logic never sees the decision and cannot weaken it. Siblings still in flight are cancelled and recorded as cancelled, as they are for `terminate`, and the decision is the step's outcome. The runner still [checks its shape](#the-boundary-check), records it as the decision of the protocol that called `decide_final()`, and records each layer it passed as `bypassed` (see [Transcript](#transcript)). The dispatcher invokes the resolved root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `decide_final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`.
 
-`human()` will call it by default, and `human(final=False)` returns an ordinary advisory decision, which is how a person becomes one vote among several (see [Humans in the loop](#humans-in-the-loop)). Nothing stops an LLM-backed protocol from calling `decide_final()`, and nothing should — the framework cannot verify that a human was involved, only that the author claimed the last word — but the claim is visible in the transcript and in code review, which is the same discipline `portable=False` relies on.
+`human()` calls it by default, and `human(final=False)` returns an ordinary advisory decision, which is how a person becomes one vote among several (see [Humans in the loop](#humans-in-the-loop)). Nothing stops an LLM-backed protocol from calling `decide_final()`, and nothing should — the framework cannot verify that a human was involved, only that the author claimed the last word — but the claim is visible in the transcript and in code review, which is the same discipline `portable=False` relies on.
 
 #### Two audiences
 
@@ -1039,7 +1039,20 @@ Control flow rather than a value-level rule, because a rule about decision value
 
 ### Humans in the loop
 
-#5423's chains end in a person, and the first draft had nowhere to put one: humans were `@approver`s, and approvers lived in `Task(approval=)`. A `human()` protocol closes that; it is designed, not yet built. It has no children, is `BeforeToolCall` (and in principle any stage the human surfaces can render), prompts through the existing human approval surfaces, renders `step.escalations` above the call so the person sees who asked and why, and by default passes the person's answer to [`decide_final()`](#authoritative-reports), so nothing above it runs. Human surfaces already queue requests, so two `sequential`s that both end in a person prompt one after the other; the first answer ends the step and the other prompt is cancelled.
+#5423's chains end in a person, and the first draft had nowhere to put one: humans were `@approver`s, and approvers lived in `Task(approval=)`. A `human()` protocol closes that. It has no children and asks a person through the host:
+
+``` python
+human(stages=["tool_call"])                                    # before every call it is reached at
+human(stages=["tool_call", "tool_result"], choices=[...], final=True)
+```
+
+- **`stages` is required**: `"tool_call"` (before a call) and/or `"tool_result"` (after it), the names `SentinelEvent.stage` records. Leaving it out, an empty list, or an unknown or not-yet-supported stage (`"model_input"`, `"model_output"`) is a configuration error when the factory is called. The factory returns one function per chosen stage, a `ProtocolGroup` when both, so the one-stage-per-function rule holds.
+- **It asks whenever it is reached** at a stage it watches. Inside a `sequential`, being reached means every earlier link watching that stage escalated, so the person sees escalations; on its own, `human(stages=["tool_call"])` asks about every call, like inspect's human approver. There is no escalation filter and no warning when nothing before it watches a stage: that can be intended.
+- **Choices** use inspect's approval words, since the surfaces present those. Before a call the default is `approve`, `reject`, `terminate`, and `modify` may be offered; after a call it is `approve`, `terminate`, and asking for `reject` or `modify` there is a configuration error, since the call has already run. `approve` maps to `continue`, `reject` to `reject`, `terminate` to `terminate`, `modify` to a `modify` carrying the person's replacement call, which the shape check holds to the call's `id` and `function`.
+- **The person's typed reason on a reject is the decision's `message`**, so the agent reads it, and its `explanation`, for the log. A terminate's reason is its `explanation`.
+- **The answer ends the step through [`decide_final()`](#authoritative-reports)** by default, so nothing above it runs. Human surfaces already queue requests, so two `sequential`s that both end in a person prompt one after the other; the first answer ends the step and the other prompt is cancelled.
+
+It reaches the person through `Host.ask_human(step, choices) -> HumanAnswer`. The host is handed the step itself and renders it by its type, so the interface is the same for every stage: before a call the call, its view, the conversation and `step.escalations` (who escalated and why); after a call the same plus the result the model is about to receive. `HumanAnswer` holds the chosen `decision`, the person's typed `reason`, and `modified`, the replacement call for a tool-stage modify. The host notifies the person and marks the sample as awaiting a person while it waits, and raises a clear error for a stage it cannot render. inspect_ai renders the two tool stages with the existing surfaces (ACP, the approval panel, the console); a later generate-stage `human()` needs a new rendering, not a new interface ([open question](#open-questions) 14). A proxy implements the same method, e.g. as a review queue.
 
 `human(final=False)` returns the answer as an ordinary advisory decision instead, which makes a person one vote in a panel. The panel then has the last word itself:
 
@@ -1054,7 +1067,7 @@ def panel(children: Protocols) -> Protocol:
     return decide
 ```
 
-It is the one protocol whose placement the framework second-guesses: a `human()` inside a concurrent group is almost never intended, and the config-time check will say so and suggest `sequential()`.
+It is the one protocol whose placement the framework second-guesses: a `human()` directly beside other children of a `concurrent()`, including the root `concurrent` a top-level list or mapping resolves to, is a configuration error naming `sequential()`, since the person would be asked about every call while the others decide in parallel. A lone `human()`, as the root or as a `concurrent`'s only child, is not: nothing runs beside it.
 
 ### What the split does not enforce {#what-the-collapse-costs}
 
@@ -1287,7 +1300,7 @@ Task(sentinel=[no_curl(), no_rm_rf()])                      # two rules; concurr
 Task(sentinel=suspicion_monitor())                          # a monitor; records only
 Task(sentinel=threshold(suspicion_monitor(), reject_at=0.8))
 Task(sentinel={
-    "attempt": sequential([internet_attempt(), human()]),   # a rule that escalates; the human takes its escalations
+    "attempt": sequential([internet_attempt(), human(stages=["tool_call"])]),   # a rule that escalates; the human takes its escalations
     "escape": sandbox_escape(),                               # a rule; runs on every call regardless
 })
 ```
@@ -1318,6 +1331,8 @@ sentinel:
     children:
       - name: internet_attempt
       - name: human
+        params:
+          stages: [tool_call]
   escape:
     name: sandbox_escape
 ```
@@ -1795,7 +1810,7 @@ ordered composition should be the default (no — see [Two compositions](#two-co
 11.  **Can a monitor produce a `Score`?** Yes, without touching scoring: `as_scorer(as_scanner(monitor, unit="transcript"))` in `sentinel-development.md`. The transcript-grain adapter reduces per-step reports to one value and Scout's existing `as_scorer` turns that into an Inspect scorer, with flagged steps as `scanner_references`.
 12.  **Does `AfterToolCall` get a bridged-agent fallback?** [Bridged agents are the in-process proxy case](#bridged-agents-are-the-proxy-case), so three of the four stages map onto the bridge once its hook lands. Whether the lossy fourth — reconstructing a result from the *next* request — is worth building, or whether `AfterToolCall` should simply decline to fire and say why, is open.
 13.  **Does `Task` / `Sample` grow a `description` field?** A public API change for a general-purpose affordance monitors happen to need first. If not, monitor context comes from `metadata` by convention and is correspondingly undiscoverable.
-14.  **Which stages can `human()` serve?** `BeforeToolCall` is what the existing human surfaces render. A human at `AfterGenerate` — approve the assistant message before the agent acts on it — is plausible and would need a new rendering; `BeforeGenerate` is hard to make meaningful to a person.
+14.  **Which stages can `human()` serve?** The tool stages: `BeforeToolCall`, and `AfterToolCall` with the result shown. `Host.ask_human` takes the step itself, so another stage needs only a new rendering, not a new interface. A human at `AfterGenerate` — approve the assistant message before the agent acts on it — is plausible and would need a new rendering; `BeforeGenerate` is hard to make meaningful to a person.
 15.  **Failure tolerance across many samples.** [Failing loud](#failure-semantics) is settled for the single-sample case. What is open is whether a monitor that fails on 3 samples in 500 should fail the eval, and whether that reuses `fail_on_error`'s existing shape (`True` / `False` / a proportion / a count) or needs a monitor-specific knob.
 16.  **Should reading an eval-only surface be recorded?** `target` is opt-in and logged so a reader can tell whether a monitor's performance is achievable in deployment. `step.output` and `step.view` raise the same question and get no such treatment; a declared view was one answer and was judged heavier than the problem. A lighter one is for `briefing_as_str` and `step_as_str` to take the eval-only surfaces as explicit flags, which puts the choice in the call for a reviewer to see.
 17.  **Default history window in `monitor_prompt`.** Full history is safe and matches what approvers get today; `new_since_last_report` is the incremental shape this design argues for elsewhere. A default is hard to change later, so this wants deciding before v1.

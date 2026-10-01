@@ -26,6 +26,7 @@ def test_author_facing_names_are_exported() -> None:
         "Action",
         "Context",
         "Host",
+        "HumanAnswer",
         "Report",
         "Reported",
         "Sentinel",
@@ -47,6 +48,7 @@ def test_author_facing_names_are_exported() -> None:
         "observe",
         "concurrent",
         "sequential",
+        "human",
         "threshold",
         "decide_final",
     }

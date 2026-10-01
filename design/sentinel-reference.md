@@ -2,7 +2,7 @@
 
 A sentinel is what a task runs to watch an agent: a protocol with its monitors, configured with `Task(sentinel=)`. A monitor is a function that watches an agent while it runs and reports what it sees. It attaches to one of four stages, the points in the agent loop before a model call, after a model call, before a tool call, and after a tool call. At every stage it receives the same context object and keeps its state in the same place. A monitor observes: it returns an `Observation` or nothing, and can never act. A protocol decides: it returns a `Decision`, optionally after consulting monitors and other protocols. A protocol with no children is a rule.
 
-Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe`, `concurrent`, `sequential` and `threshold` are implemented. The generate stages, `human`, `defer_to_trusted`, `resample`, the view helpers, the failure policy and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
+Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe`, `concurrent`, `sequential`, `threshold` and `human` are implemented (`Host.ask_human` in inspect_ai follows). The generate stages, `defer_to_trusted`, `resample`, the view helpers, the failure policy and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
 
 Related documents:
 
@@ -85,7 +85,7 @@ The pieces:
 | `run_monitors`, `run_protocols`, `run_children` | The runner. The only way a protocol invokes a child. Names, records, and (once implemented) applies the failure policy. |
 | `concurrent`, `sequential` | The two compositions: concurrent (every child runs, strongest decision wins) and ordered (first non-`escalate` decides). |
 | `threshold`, `observe`, `defer_to_trusted`, `resample` | The shipped protocols that turn monitors' scores into decisions. `defer_to_trusted` and `resample` are not built yet. |
-| `human` | A rule that asks a person through the human approval surfaces. Its decisions are final by default. Not built yet. |
+| `human` | A rule that asks a person through `Host.ask_human`, which the host renders with its human approval surfaces. Its decisions are final by default. |
 | `decide_final` | Ends the step with a decision. Nothing above the calling protocol runs. |
 | `SentinelEvent` | Transcript record of every report, keyed by instance path. |
 
@@ -723,7 +723,7 @@ An `escalate` that reaches the root has nobody to hand it to: the host proceeds 
 
 Rules:
 
-- **Use `sequential()` when there is a person at the end.** A `human()` in a concurrent group prompts on every call. Once `human()` exists, the framework will warn at configuration time and suggest `sequential()`.
+- **Use `sequential()` when there is a person at the end.** A `human()` beside other children of a `concurrent()`, including the root a top-level list or mapping resolves to, is a configuration error naming `sequential()`: it would prompt on every call while the others decide in parallel.
 - **Do not expect ordered composition by default.** Ordered-by-default silences children: if A approves, B never runs, and B might have terminated. That is the defect #5423 reported against approval. Concurrent fails safe; its cost is latency and tokens.
 - **`step.escalations` never crosses layers.** A link's `escalate` goes to the next link in its own `sequential`. A `sequential` whose every deciding link escalated returns the last escalate, passing it up; one where only monitors participated returns `continue`, and one where nothing participated abstains.
 - **An uncovered call continues in a `sequential`.** This matches review. The approval adapter keeps approval's `reject` for an uncovered call on its own path. A `sequential` that wants fail-closed ends with a rejecting rule.
@@ -761,7 +761,28 @@ def sequential(children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Chi
 
 ### Humans
 
-`human()` is a rule (a protocol with no children) for `BeforeToolCall`, designed but not yet built. It prompts through the existing human approval surfaces, renders `step.escalations` above the call, and by default passes the person's answer to `decide_final()`. Human surfaces queue requests, so two `sequential`s that both end in a person prompt one after the other; the first answer ends the step and the other prompt is cancelled.
+`human(stages, choices=None, final=True)` is a rule (a protocol with no children) that asks a person whenever it is reached at a stage it watches:
+
+- `stages` is required: `"tool_call"` and/or `"tool_result"`. Leaving it out, an empty list, or an unknown or unsupported stage (`"model_input"`, `"model_output"`) is a configuration error when the factory is called. One function per chosen stage, a `ProtocolGroup` when both.
+- No escalation filter: inside a `sequential` it is reached only when every earlier link watching the stage escalated; alone, `human(stages=["tool_call"])` asks about every call.
+- `choices` use inspect's approval words. Default before a call `approve`, `reject`, `terminate` (`modify` may be offered); after a call `approve`, `terminate`, and `reject` or `modify` there is a configuration error.
+- The answer maps `approve` to `continue`, `reject` to `reject` with the person's reason as both `message` and `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
+- By default the decision goes through `decide_final()`. Human surfaces queue requests, so two `sequential`s that both end in a person prompt one after the other; the first answer ends the step and the other prompt is cancelled.
+
+It asks through the host:
+
+```python
+@dataclass(frozen=True)
+class HumanAnswer:
+    decision: str                   # one of the choices offered
+    reason: str | None = None       # the person's typed reason
+    modified: ToolCall | None = None  # the replacement call for a tool-stage modify
+
+class Host(Protocol):
+    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
+```
+
+The host is handed the step and renders it by its type: the call, its view, the conversation and `step.escalations`, plus the result after a call. It notifies the person, marks the sample as awaiting a person, and raises a clear error for a stage it cannot render. inspect_ai renders the tool stages with its human approval surfaces; a proxy implements the same method, e.g. as a review queue.
 
 `human(final=False)` returns an advisory decision instead, making a person one vote in a panel:
 
@@ -916,7 +937,7 @@ inspect eval task.py --sentinel sentinel.yaml
 Task(sentinel=no_curl())
 Task(sentinel=[no_curl(), no_rm_rf()])
 Task(sentinel={
-    "attempt": sequential([internet_attempt(), human()]),   # a rule that escalates, then a person
+    "attempt": sequential([internet_attempt(), human(stages=["tool_call"])]),   # a rule that escalates, then a person
     "escape": sandbox_escape(),                               # a rule; runs on every call regardless
 })
 ```
@@ -947,6 +968,8 @@ sentinel:
     children:
       - name: internet_attempt
       - name: human
+        params:
+          stages: [tool_call]
   escape:
     name: sandbox_escape
 ```
@@ -1371,7 +1394,7 @@ What keeps the simple case simple:
 11. **Can a monitor produce a `Score`?** Yes: `as_scorer(as_scanner(monitor, unit="transcript"))`, in `sentinel-development.md`. Scoring is untouched.
 12. **Does `AfterToolCall` get a bridged-agent fallback?** Reconstructing a result from the next request, or declining to fire and saying why.
 13. **Does `Task` / `Sample` grow a `description` field?** A public API change for a general-purpose field monitors need first. If not, the assignment comes from `metadata` by convention and is undiscoverable.
-14. **Which stages can `human()` serve?** `BeforeToolCall` is what the human surfaces render today. `AfterGenerate` is plausible and needs a new rendering. `BeforeGenerate` is hard to make meaningful to a person.
+14. **Which stages can `human()` serve?** The two tool stages; `Host.ask_human` takes the step, so another stage needs only a new rendering. `AfterGenerate` is plausible and needs a new rendering. `BeforeGenerate` is hard to make meaningful to a person.
 15. **Failure tolerance across many samples.** Whether a monitor failing on 3 of 500 samples should fail the eval, and whether that reuses `fail_on_error`'s shape (`True` / `False` / proportion / count) or needs its own knob.
 16. **Should reading an eval-only surface be recorded?** `target` is opt-in and logged. `step.output` and `step.view` raise the same validity question and get no such treatment. A declared view was judged heavier than the problem; explicit flags on `step_as_str` are the lighter option.
 17. **Default history window in `monitor_prompt`.** Full history is safe; `new_since_last_report` is the incremental shape the design argues for elsewhere.

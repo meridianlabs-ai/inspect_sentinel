@@ -87,6 +87,8 @@ class Host(typing.Protocol):
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput: ...
+    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
+    """Ask a person about the step, rendered by its type; a proxy might use a review queue."""
     async def fetch(
         self,
         endpoint: str,                      # a NAME, not a URL — see below

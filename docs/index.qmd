@@ -349,7 +349,7 @@ The token usage for the `monitor` role is reported separately from the agent's i
 - [Composition](composition.qmd): `concurrent()`, `sequential()`, `threshold()` and `observe()`.
 - [State](state.qmd): keeping state across a sample's steps with `context.store_as()`.
 - [The Host and Model Roles](host.qmd): model calls from monitors and protocols.
-- [Final Decisions and Humans](final-decisions.qmd): `decide_final()` and the planned `human()`.
+- [Final Decisions and Humans](final-decisions.qmd): `decide_final()` and `human()`.
 - [Configuration](configuration.qmd): sentinels from Python, YAML files and the command line.
 - [Transcript and Viewer](transcript.qmd): what is recorded and how to read it.
 - [Approval and Review](approval.qmd): how sentinels relate to Inspect's tool approval and review.

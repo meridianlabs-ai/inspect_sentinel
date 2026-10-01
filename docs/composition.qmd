@@ -25,7 +25,7 @@ How several monitors and protocols combine into one sentinel. Covers what a list
 
 ## Sequential
 
-`sequential()` runs its children one at a time, in order. The first child that decides anything but `escalate` decides for the chain, and the children after it do not run. Use it for a cheap rule ahead of an expensive judge, or (once `human()` ships) a person at the end who is asked only what the rules could not settle.
+`sequential()` runs its children one at a time, in order. The first child that decides anything but `escalate` decides for the chain, and the children after it do not run. Use it for a cheap rule ahead of an expensive judge, or a person at the end, a [`human()`](final-decisions.qmd#humans), who is asked only what the rules could not settle.
 
 ```python
 from inspect_sentinel import sequential
