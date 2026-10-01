@@ -8,8 +8,27 @@ from inspect_ai.tool import ToolCall
 from inspect_ai.util import StoreModel
 
 from inspect_sentinel._context import Context
+from inspect_sentinel._decorators import (
+    monitor,
+    protocol,
+)
 from inspect_sentinel._final import Final, decide_final
-from inspect_sentinel._monitor import (
+from inspect_sentinel._protocols import concurrent
+from inspect_sentinel._report import Action, Decision, Observation, Reported
+from inspect_sentinel._resolve import resolve_sentinel
+from inspect_sentinel._results import (
+    Decisions,
+    Observations,
+    Reports,
+)
+from inspect_sentinel._runner import (
+    run_children,
+    run_monitors,
+    run_protocols,
+    run_root,
+)
+from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
+from inspect_sentinel._types import (
     Children,
     Monitor,
     MonitorGroup,
@@ -17,22 +36,7 @@ from inspect_sentinel._monitor import (
     Protocol,
     ProtocolGroup,
     Protocols,
-    monitor,
-    protocol,
 )
-from inspect_sentinel._protocols import concurrent
-from inspect_sentinel._report import Action, Decision, Observation, Reported
-from inspect_sentinel._resolve import resolve_sentinel
-from inspect_sentinel._runner import (
-    Decisions,
-    Observations,
-    Reports,
-    run_children,
-    run_monitors,
-    run_protocols,
-    run_root,
-)
-from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
 

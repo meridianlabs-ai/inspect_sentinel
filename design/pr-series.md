@@ -21,19 +21,26 @@ The minimal surface that lets `inspect_ai` connect: the types a dispatcher const
 ```
 src/inspect_sentinel/
   __init__.py       author-facing exports
-  _step.py          BeforeToolCall, AfterToolCall, Step, Stage
+  _step.py          BeforeToolCall, AfterToolCall, Step
   _report.py        Suspicion, Action, Observation, Decision, Report, Reported
   _context.py       Host, Recorder, Context, RunnerContext
-  _monitor.py       Monitor, Protocol, Monitors, Protocols, Children, @monitor, @protocol
-  _runner.py        Observations, Decisions, run_monitors, run_protocols,
-                    run_children
-  _check.py         validate_decision_shape
-  _final.py         final, Final
-  _protocols.py     observe, concurrent, threshold
+  _types.py         Monitor, Protocol, Monitors, Protocols, Children,
+                    MonitorGroup, ProtocolGroup
+  _decorators.py    @monitor, @protocol, registration, signature validation,
+                    the direct-call guard, step_types
+  _results.py       Observations, Decisions, Reports
+  _runner.py        run_monitors, run_protocols, run_children, run_root
+  _validate.py      run-time checks: validate_decision_shape, per-child checks,
+                    named_children
+  _final.py         decide_final, Final
+  _protocols/       observe, concurrent, threshold, one module each
   _resolve.py       resolve_sentinel
-  _integration.py   dispatcher-facing re-exports
-  _registry.py      inspect_ai entry point; imports _protocols so they register
+  _config.py        sentinel_from_config, config_from_sentinel
+  _integration.py   the contract inspect_ai imports
+  _entrypoint.py    inspect_ai entry point; imports _protocols so they register
 ```
+
+The layout as of [Module layout](#module-layout); the PR sections below name the modules as they were when each landed.
 
 ## PR 1: types
 
@@ -262,14 +269,31 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 Decided with the user 2026-09-30, before the first release, so nothing is kept for compatibility:
 
 - `Action` and `Suspicion` are defined once, in inspect_ai, as `SentinelAction` and `SentinelSuspicion` exported from `inspect_ai.event` beside `SentinelEvent`. inspect_sentinel re-exports them under its own names, `Action` and `Suspicion`, with the same validation. inspect_ai's drift test that compared the two copies is gone.
-- `SentinelEntry` and `SentinelConfig` move into inspect_ai (`inspect_ai._sentinel._config`, exported from `inspect_ai.log`), with the parsing of one entry, a list or a mapping. `EvalConfig.sentinel` is typed `SentinelConfig | None`, and logs load without inspect_sentinel. `_config.py` and `_integration.py` import them from there; `sentinel_from_config` and `config_from_sentinel` stay in inspect_sentinel.
+- `SentinelEntry` and `SentinelConfig` move into inspect_ai (`inspect_ai._sentinel._config`, exported from `inspect_ai.log`), with the parsing of one entry, a list or a mapping. `EvalConfig.sentinel` is typed `SentinelConfig | None`, and logs load without inspect_sentinel. `_config.py` imports them from there; `sentinel_from_config` and `config_from_sentinel` stay in inspect_sentinel.
 - `SentinelEvent.kind` is split in two. `kind` is the report family (`observation` or `decision`), and `status` says what happened to the report (`reported`, `cancelled`, `bypassed` or `superseded`). A `cancelled` event's kind comes from the registry type of the layer's factory. A `bypassed` event is always a decision, and only a decision can be `superseded`.
+
+## Module layout
+
+Restructured 2026-09-30, as a pure move and rename with no change in behaviour beyond the two noted:
+
+| Before | After |
+|---|---|
+| `_monitor.py` | `_types.py` (callable aliases, groups) and `_decorators.py` (decorators, registration, signature validation, the direct-call guard, `members`, `step_types`) |
+| `_registry.py` | `_entrypoint.py`, and the `pyproject.toml` entry point with it |
+| `_check.py`, the runner's `_check_child`, `named_children` | `_validate.py` |
+| `_runner.py` | `_results.py` (`Observations`, `Decisions`, `Reports`, `peak_suspicion`) and `_runner.py` (execution, exception-group handling) |
+| `_protocols.py` | `_protocols/` with `observe.py`, `concurrent.py`, `threshold.py` |
+
+- The rule that a monitor and a protocol cannot share a name asks inspect_ai's `registry_has`, which does not load entry points, in place of a module-level map of registered kinds.
+- The bare-monitor warning is one line naming every monitor nothing acts on, rather than one line per monitor.
+- `_integration.py` says in its docstring that it is the contract inspect_ai depends on and changes in step with it. It no longer re-exports `SentinelConfig` and `SentinelEntry`; inspect_ai imports them from `inspect_ai.log`.
+- Stage types stay an attribute on each configured instance rather than moving to registry metadata: per-member stages live in groups, and registry metadata would need a name-to-class mapping.
 
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands.
 
-- **Revisit `decide_final()`: is it the right design at all?** Raised in review: any protocol at any depth, including third-party code inside `observe()` or `threshold()`, can call it and bypass every layer above, while the design sells child decisions as advisory to the parent. Options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism. `sentinel.md` open question 23.
+- **Revisit `decide_final()`: is it the right design at all?** Raised in review: any protocol at any depth, including third-party code inside `observe()` or `threshold()`, can call it and bypass every layer above, while the design sells child decisions as advisory to the parent. Options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism. `sentinel.md` open question 23. Simplifying the runner's origin-threading and its superseded and bypassed bookkeeping is part of the outcome.
 - **Revisit an `escalate` that reaches the top with nobody to hand it to.** Today it proceeds, is recorded as the root's decision, and the host warns once per eval. The alternatives are rejecting it (fail-closed, as inspect's approval does when every approver escalates) or a configurable setting with a chosen default. The trade-off: rejecting turns every unsure rule into a blocked call. `sentinel.md` open question 24.
 - **Migrating `review=` and tool approvers. This is the largest open question in how sentinels relate to inspect_ai.** Three questions are open, and the ordering is settled:
   - **Is `review=` deprecated in favour of after-call protocols?** The design's position ([Relationship to approval and review](sentinel.md#relationship-to-approval-and-review)) is that a childless `AfterToolCall` protocol subsumes `Reviewer`. Deprecating `@reviewer` and retiring `review/` waits on protocols having users.
@@ -278,6 +302,9 @@ Agreed work that waits for something else. Each entry says what unblocks it. Kee
   - **Can existing tool approvers run as protocols?** The proposal is an `as_protocol(approver)` adapter, so that approval users can compose approvers with monitors. It would map `approve` to `continue`, the approval's `explanation` to the decision's `message` (what the agent is told), and `reject`, `escalate`, `terminate` and `modify` to the action of the same name.
 
   `sentinel.md` open question 25.
+- **Record `step.input` instead of rebuilding it.** The dispatcher scans the transcript to rebuild what the model was sent. Instead, record each generate's input when it finishes, keyed by its assistant message id, scoped to the sample and bounded, and fall back to a scan only for a message no inspect generate produced.
+- **Bridged agents.** A sentinel does not yet run for a bridged agent's tool calls ([workstreams.md](workstreams.md), workstream 5). With that hook, verify that handoff and bridged agents open agent spans consistently, so conversation ids link as designed, with tests.
+- **The duplicate-key config loader, for `approval=` and `review=` too.** Move sentinel's YAML/JSON loader that rejects duplicate keys into inspect_ai `_util`, and adopt it for `approval=` and `review=` configs. That changes behaviour for those users, so it is its own PR to inspect_ai's `main`.
 - **Generate stages** (`BeforeGenerate`, `AfterGenerate`), and with them the design of what a generate-stage `modify` may replace.
 - **`Decision.modify(step, arguments=...)`**, a constructor that keeps the call's id and function by construction. Waits for the generate stages, since the constructor's shape depends on what a generate-stage modify replaces. Until then, authors write `Decision(action="modify", modified=replace(step.call, arguments={...}))`, and the shape check rejects a changed id or function.
 - **`sequential()` and `human()`**, shipped together: the case that needs both is a rule that escalates to a person, who ends the step with `decide_final()`.

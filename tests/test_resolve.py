@@ -6,18 +6,23 @@ import pytest
 from inspect_ai._util.registry import registry_info
 
 from inspect_sentinel._context import Context
-from inspect_sentinel._monitor import (
-    Monitor,
-    Protocol,
-    ProtocolGroup,
+from inspect_sentinel._decorators import (
     monitor,
     protocol,
 )
 from inspect_sentinel._protocols import concurrent, observe, threshold
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._resolve import Sentinels, resolve_sentinel
-from inspect_sentinel._runner import run_protocols, run_root
+from inspect_sentinel._runner import (
+    run_protocols,
+    run_root,
+)
 from inspect_sentinel._step import BeforeToolCall, Step
+from inspect_sentinel._types import (
+    Monitor,
+    Protocol,
+    ProtocolGroup,
+)
 from tests._fakes import ListRecorder, before_step, runner_context
 
 
@@ -79,18 +84,16 @@ def test_anything_containing_a_protocol_resolves_to_concurrent() -> None:
 def test_a_monitor_nothing_acts_on_warns(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="inspect_sentinel._resolve"):
         resolve_sentinel(noisy())
-    assert len(caplog.records) == 1
-    assert "nothing is configured to act on it" in caplog.text
-    assert "noisy" in caplog.text
+    assert [record.getMessage() for record in caplog.records] == [
+        "Nothing is configured to act on these monitors: noisy. Wrap them in a protocol such as threshold() to act, or observe() to say that recording is intended."
+    ]
 
 
 def test_every_unwatched_monitor_is_named(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="inspect_sentinel._resolve"):
         resolve_sentinel([noisy(), quieter()])
-    assert {record.getMessage().split(" ")[0] for record in caplog.records} == {
-        "noisy",
-        "quieter",
-    }
+    assert len(caplog.records) == 1
+    assert "these monitors: noisy, quieter." in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -198,7 +201,5 @@ def test_each_configured_instance_is_named_in_the_warning(
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="inspect_sentinel._resolve"):
         resolve_sentinel({"first": noisy(), "second": noisy()})
-    assert {record.getMessage().split(" ")[0] for record in caplog.records} == {
-        "first",
-        "second",
-    }
+    assert len(caplog.records) == 1
+    assert "these monitors: first, second." in caplog.text

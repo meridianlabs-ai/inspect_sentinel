@@ -1,9 +1,9 @@
 import pytest
 from inspect_ai.tool import ToolCall
 
-from inspect_sentinel._check import validate_decision_shape
 from inspect_sentinel._final import Final, decide_final
 from inspect_sentinel._report import Action, Decision
+from inspect_sentinel._validate import validate_decision_shape
 from tests._fakes import after_step, before_step
 
 

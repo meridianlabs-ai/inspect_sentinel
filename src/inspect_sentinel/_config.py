@@ -22,8 +22,8 @@ from inspect_ai.log import SentinelConfig, SentinelEntry
 from inspect_ai.util import resource
 
 from ._context import validate_instance_name
-from ._monitor import Child, Children
 from ._resolve import Sentinels
+from ._types import Child, Children
 
 PACKAGE = "inspect_sentinel"
 ENTRY_FIELDS = frozenset({"name", "params"})

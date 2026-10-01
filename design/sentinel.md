@@ -650,7 +650,9 @@ There is no corresponding question for a rule. A protocol at the top level acts,
 
 One config-time check remains, and it is the only one:
 
-> `suspicion_monitor` is a monitor and nothing is configured to act on it — wrap it in a protocol such as `threshold()` to act, or `observe()` to say that recording is intended.
+> Nothing is configured to act on these monitors: suspicion_monitor. Wrap them in a protocol such as `threshold()` to act, or `observe()` to say that recording is intended.
+
+One warning names every such monitor in the configuration.
 
 An earlier draft needed three such warnings — a decision-returning monitor under `observe()`, a score nobody reads, and a list where half acts and half records — because a monitor could return a decision and the configuration could not show which entries would. The split removes the case rather than the warnings: the decorator says which entries decide, and the remaining message is about a real "safety mechanism with no consumer" state, which AGENTS.md's "invalid state" rule asks to be named rather than silently accepted.
 

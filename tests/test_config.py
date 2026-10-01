@@ -7,30 +7,32 @@ import pytest
 import yaml
 from inspect_ai._util import registry
 from inspect_ai._util.registry import registry_info, registry_params
+from inspect_ai.log import SentinelConfig
 from pydantic import ValidationError
 
 from inspect_sentinel._context import Context
+from inspect_sentinel._decorators import (
+    monitor,
+    protocol,
+)
 from inspect_sentinel._integration import (
-    SentinelConfig,
     Sentinels,
     config_from_sentinel,
     resolve_sentinel,
     run_root,
     sentinel_from_config,
 )
-from inspect_sentinel._monitor import (
+from inspect_sentinel._protocols import concurrent, threshold
+from inspect_sentinel._report import Decision, Observation
+from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
+from inspect_sentinel._types import (
     Child,
     Children,
     Monitor,
     MonitorGroup,
     Monitors,
     Protocol,
-    monitor,
-    protocol,
 )
-from inspect_sentinel._protocols import concurrent, threshold
-from inspect_sentinel._report import Decision, Observation
-from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
 

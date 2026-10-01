@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable
 from contextvars import ContextVar
 from functools import wraps
 from typing import (
     Any,
     NamedTuple,
     ParamSpec,
-    TypeAlias,
     cast,
-    final,
     get_args,
     get_type_hints,
     overload,
@@ -22,6 +20,7 @@ from inspect_ai._util.registry import (
     RegistryType,
     is_registry_object,
     registry_add,
+    registry_has,
     registry_info,
     registry_name,
     registry_tag,
@@ -29,116 +28,24 @@ from inspect_ai._util.registry import (
 
 from ._context import Context
 from ._report import Decision, Observation, Report
-from ._step import AfterToolCall, BeforeToolCall, Step
-
-Monitor: TypeAlias = (
-    Callable[[Context, BeforeToolCall], Awaitable[Observation | None]]
-    | Callable[[Context, AfterToolCall], Awaitable[Observation | None]]
+from ._step import Step
+from ._types import (
+    Child,
+    Group,
+    Monitor,
+    MonitorGroup,
+    Protocol,
+    ProtocolGroup,
+    SentinelFunction,
 )
-"""A monitor: observes a step at one stage and reports a suspicion score, or abstains."""
-
-Protocol: TypeAlias = (
-    Callable[[Context, Step], Awaitable[Decision | None]]
-    | Callable[[Context, BeforeToolCall], Awaitable[Decision | None]]
-    | Callable[[Context, AfterToolCall], Awaitable[Decision | None]]
-)
-"""A control protocol, not `typing.Protocol`: decides what happens at a step, or abstains. Annotating `Step` runs it at every stage."""
-
-SentinelFunction: TypeAlias = Callable[[Context, Step], Awaitable[Report | None]]
-
-
-class Group:
-    def __init__(
-        self, functions: tuple[Callable[..., Awaitable[Report | None]], ...]
-    ) -> None:
-        if not functions:
-            raise ValueError(f"{type(self).__name__} needs at least one function.")
-        seen: set[str] = set()
-        for function in functions:
-            name = getattr(function, "__name__", repr(function))
-            if name in seen:
-                raise ValueError(
-                    f"Duplicate function name {name!r} in one {type(self).__name__}; the functions of an instance are told apart by name, so give each a distinct one."
-                )
-            seen.add(name)
-        self._functions = functions
-
-    @property
-    def functions(self) -> tuple[Callable[..., Awaitable[Report | None]], ...]:
-        return self._functions
-
-
-@final
-class MonitorGroup(Group):
-    """Several monitor functions that form one monitor instance.
-
-    Return one from a `@monitor` factory in place of a single function. Together the functions are one configured instance, sharing its name, path and `store_as` namespace; each runs, in the order given, at the stage it watches, sequentially since they share one store, and each report records which `function` made it. A group is not callable: hand it to a protocol, which runs it through `run_monitors` or `run_children`.
-    """
-
-    def __init__(self, *functions: Monitor) -> None:
-        """Group monitor functions into one instance.
-
-        Args:
-            *functions: At least one monitor function, each with a distinct `__name__`.
-
-        Raises:
-            ValueError: If there are no functions or two share a `__name__`.
-        """
-        super().__init__(functions)
-
-    @property
-    def functions(self) -> tuple[Monitor, ...]:
-        """The member functions, in the order they run."""
-        return cast(tuple[Monitor, ...], self._functions)
-
-
-@final
-class ProtocolGroup(Group):
-    """Several protocol functions that form one protocol instance.
-
-    Return one from a `@protocol` factory in place of a single function. As with `MonitorGroup`, the functions share one name, path and `store_as` namespace and run in the order given at the stages they accept; a function that returns `terminate` or calls `decide_final()` ends the instance's run, and those after it do not run and are not recorded. A group is not callable: hand it to a protocol, which runs it through `run_protocols` or `run_children`.
-    """
-
-    def __init__(self, *functions: Protocol) -> None:
-        """Group protocol functions into one instance.
-
-        Args:
-            *functions: At least one protocol function, each with a distinct `__name__`.
-
-        Raises:
-            ValueError: If there are no functions or two share a `__name__`.
-        """
-        super().__init__(functions)
-
-    @property
-    def functions(self) -> tuple[Protocol, ...]:
-        """The member functions, in the order they run."""
-        return cast(tuple[Protocol, ...], self._functions)
-
-
-Monitors: TypeAlias = (
-    Mapping[str, Monitor | MonitorGroup] | Sequence[Monitor | MonitorGroup]
-)
-"""Monitors handed to a protocol, named by mapping key or by registry name without its package prefix."""
-
-Protocols: TypeAlias = (
-    Mapping[str, Protocol | ProtocolGroup] | Sequence[Protocol | ProtocolGroup]
-)
-"""Protocols handed to a protocol, named the same way."""
-
-Child: TypeAlias = Monitor | MonitorGroup | Protocol | ProtocolGroup
-
-Children: TypeAlias = Mapping[str, Child] | Sequence[Child]
-"""Monitors and protocols together, for the compositions that record either."""
 
 P = ParamSpec("P")
 
 _STEP_TYPES = frozenset(get_args(Step))
+# an attribute rather than registry metadata: per-member stages live in groups,
+# and registry metadata would need a name<->class mapping
 STEP_TYPES_ATTR = "__sentinel_step_types__"
 VERSION = "version"
-
-# configuration finds a factory by name alone, so the name must be one kind
-_registered_kinds: dict[str, RegistryType] = {}
 
 
 class _Outside:
@@ -304,10 +211,11 @@ def _register(
         name=registered_name,
         metadata={"params": params, VERSION: version},
     )
-    registered = _registered_kinds.setdefault(registered_name, kind)
-    if registered != kind:
+    # configuration finds a factory by name alone, so the name must be one kind
+    other: RegistryType = "protocol" if kind == "monitor" else "monitor"
+    if registry_has(other, registered_name):
         raise ValueError(
-            f"{registered_name!r} is already registered as a {registered}; a monitor and a protocol cannot share a name."
+            f"{registered_name!r} is already registered as a {other}; a monitor and a protocol cannot share a name."
         )
     group_type = MonitorGroup if kind == "monitor" else ProtocolGroup
 
@@ -344,7 +252,9 @@ def _register(
 
 
 def _configure(function: object, kind: RegistryType, report_type: type[Report]) -> Any:
-    accepted = _validate(cast(Callable[..., Any], function), kind, report_type)
+    accepted = _validate_signature(
+        cast(Callable[..., Any], function), kind, report_type
+    )
     guarded = _guard(cast(SentinelFunction, function))
     setattr(guarded, STEP_TYPES_ATTR, accepted)
     return guarded
@@ -369,7 +279,7 @@ def _guard(function: SentinelFunction) -> SentinelFunction:
     return guarded
 
 
-def _validate(
+def _validate_signature(
     instance: Callable[..., Any],
     kind: RegistryType,
     report_type: type[Report],

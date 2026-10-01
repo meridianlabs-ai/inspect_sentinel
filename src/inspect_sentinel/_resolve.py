@@ -5,7 +5,8 @@ from typing import TypeAlias, cast
 
 from inspect_ai._util.registry import is_registry_object, registry_info
 
-from ._monitor import (
+from ._protocols import concurrent, observe
+from ._types import (
     Child,
     Children,
     Group,
@@ -15,8 +16,7 @@ from ._monitor import (
     Protocol,
     ProtocolGroup,
 )
-from ._protocols import concurrent, observe
-from ._runner import named_children
+from ._validate import named_children
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +47,8 @@ def resolve_sentinel(spec: Sentinels) -> Protocol:
         return cast(Protocol, spec)
     if any(registry_info(child).type == "protocol" for _, child in named):
         return concurrent(children)
-    for name, _ in named:
-        logger.warning(
-            "%s is a monitor and nothing is configured to act on it; wrap it in a protocol such as threshold() to act, or observe() to say that recording is intended.",
-            name,
-        )
+    logger.warning(
+        "Nothing is configured to act on these monitors: %s. Wrap them in a protocol such as threshold() to act, or observe() to say that recording is intended.",
+        ", ".join(name for name, _ in named),
+    )
     return observe(cast(Monitors, children))
