@@ -9,9 +9,47 @@ inspect-docs:
   module: inspect_sentinel
   repo: meridianlabs-ai/inspect_sentinel
   org: Meridian Labs
+  navbar:
+    left:
+      - text: User Guide
+        menu:
+          - text: Basics
+            href: index.qmd
+          - text: Writing Sentinels
+            href: monitors.qmd
+          - text: Composing
+            href: composition.qmd
+          - text: Running
+            href: configuration.qmd
+          - text: Development
+            href: calibration.qmd
+      - text: Reference
+        href: reference/index.qmd
   navigation:
-    - text: Getting Started
-      href: index.qmd
+    - text: Basics
+      contents:
+        - text: Getting Started
+          href: index.qmd
+        - href: transcript.qmd
+    - text: Writing Sentinels
+      contents:
+        - href: monitors.qmd
+        - href: protocols.qmd
+        - href: state.qmd
+        - text: Host and Model Roles
+          href: host.qmd
+    - text: Composing
+      contents:
+        - href: composition.qmd
+        - href: final-decisions.qmd
+    - text: Running
+      contents:
+        - href: configuration.qmd
+        - href: approval.qmd
+    - text: Development
+      contents:
+        - href: calibration.qmd
+        - href: deployment.qmd
   sidebar: unified
   external_refs:
     inspect_ai: https://inspect.aisi.org.uk
