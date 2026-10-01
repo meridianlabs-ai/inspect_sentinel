@@ -14,6 +14,7 @@ from inspect_ai._util.registry import (
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import (
+    check_stages,
     monitor,
     protocol,
     step_types,
@@ -247,6 +248,64 @@ def test_monitor_annotating_step_is_rejected_at_configuration() -> None:
     wrong = monitor(cast(Callable[[], Monitor], factory))
     with pytest.raises(TypeError, match="one stage"):
         wrong()
+
+
+class _StageA:
+    pass
+
+
+class _StageB:
+    pass
+
+
+class _StageC:
+    pass
+
+
+_STAGES: frozenset[type[Any]] = frozenset({_StageA, _StageB, _StageC})
+
+
+@pytest.mark.parametrize(
+    ("kind", "declared"),
+    [
+        ("monitor", {_StageA}),
+        ("protocol", {_StageA}),
+        ("protocol", {_StageA, _StageB, _StageC}),
+    ],
+)
+def test_one_stage_or_every_stage_is_accepted(
+    kind: RegistryType, declared: set[type[Any]]
+) -> None:
+    check_stages(kind, "fn", frozenset(declared), _STAGES)
+
+
+@pytest.mark.parametrize(
+    ("kind", "declared", "message"),
+    [
+        ("monitor", {_StageA, _StageB, _StageC}, "A monitor watches one stage"),
+        ("monitor", {_StageA, _StageB}, "A monitor watches one stage"),
+        ("protocol", {_StageA, _StageB}, "ProtocolGroup with one function per stage"),
+        ("protocol", {_StageA, _StageB}, "annotate step as `Step`"),
+    ],
+)
+def test_partial_stage_union_is_rejected(
+    kind: RegistryType, declared: set[type[Any]], message: str
+) -> None:
+    with pytest.raises(TypeError, match=message):
+        check_stages(kind, "fn", frozenset(declared), _STAGES)
+
+
+def test_protocol_annotating_every_stage_explicitly_is_step() -> None:
+    @protocol
+    def explicit() -> Protocol:
+        async def decide(
+            context: Context, step: BeforeToolCall | AfterToolCall
+        ) -> Decision | None:
+            return None
+
+        return decide
+
+    assert step_types(explicit()) == step_types(any_stage_protocol())
 
 
 def test_step_types_are_recorded_on_the_instance() -> None:

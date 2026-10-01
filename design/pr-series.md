@@ -289,6 +289,10 @@ Restructured 2026-09-30, as a pure move and rename with no change in behaviour b
 - `_integration.py` says in its docstring that it is the contract inspect_ai depends on and changes in step with it. It no longer re-exports `SentinelConfig` and `SentinelEntry`; inspect_ai imports them from `inspect_ai.log`.
 - Stage types stay an attribute on each configured instance rather than moving to registry metadata: per-member stages live in groups, and registry metadata would need a name-to-class mapping.
 
+## One stage per function
+
+Decided 2026-10-01. Each function a `@monitor` or `@protocol` factory returns handles exactly one stage, so no function dispatches on the payload type. A monitor annotates one payload class, as before. A protocol annotates one payload class, or `Step` when it is stage-agnostic and only forwards the step (`concurrent`, `observe`). Any other union is rejected when the factory is called, with an error naming a `MonitorGroup`/`ProtocolGroup` with one function per stage, or `Step`. Since `Step` is a union, a union of every stage written out equals it and is accepted; the check compares the annotated set against all stages and rejects a proper subset with more than one member.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands.

@@ -105,7 +105,7 @@ def suspicion_monitor(model: str | Model | None = None, dimensions: list[str] | 
 Rules:
 
 - **Decorate a factory, not the monitor itself.** The factory's parameters become registry params, recorded in the log and settable from config. This is how `@approver`, `@scorer`, `@solver`, and `@tool` work.
-- **Annotate `step` with exactly one payload type.** That annotation is the stage declaration. There is no `on=` or `stage=` argument. Import the payload type at runtime, not under `TYPE_CHECKING`, or the framework cannot resolve it. The error tells you this:
+- **Annotate `step` with exactly one payload type.** That annotation is the stage declaration. A protocol may instead annotate `Step` to run at every stage when it only forwards the step; a union of some stages but not all is an error that says to return a `ProtocolGroup` with one function per stage, or to annotate `Step`. A union of every stage written out is `Step`. There is no `on=` or `stage=` argument. Import the payload type at runtime, not under `TYPE_CHECKING`, or the framework cannot resolve it. The error tells you this:
 
   > `suspicion_monitor`: could not resolve the annotation `BeforeToolCall` on parameter `step`. Import it at runtime rather than under `TYPE_CHECKING`.
 
