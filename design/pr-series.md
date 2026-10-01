@@ -11,9 +11,9 @@ The minimal surface that lets `inspect_ai` connect: the types a dispatcher const
 - **Surface only.** Sentinel ships types and functions; `inspect_ai` wiring comes after. Verified by unit tests with fake `Host` and `Recorder`.
 - **Real registration.** `@monitor` and `@protocol` register under `"monitor"` and `"protocol"`, added to `inspect_ai`'s `RegistryType` by PR 0 ([inspect_ai#5514](https://github.com/UKGovernmentBEIS/inspect_ai/pull/5514), branch `feature/sentinel`). Sentinel's `inspect-ai` git ref points at that branch until it merges.
 - **Tool stages only.** `BeforeToolCall` and `AfterToolCall` with the design's full fields; `Step` is their union. The generate stages arrive with the generate-side dispatcher. The schema may change freely until there are users.
-- **Recording is the runner's, through a separate interface.** `Host` is the author-facing ABI (`generate` only for now). `Recorder` has four methods: `record`, called by the runner for every participating child; `cancelled`, called for a child cancelled before it reported; `bypassed`, called for a protocol a descendant's `decide_final()` ended the step past; and `superseded`, called for a `decide_final()` decision that lost a race to another in the same layer or was outranked by an exception there. This departs from `sentinel-deployment.md`, whose `Host` ABI carries `record`; that doc is to be updated.
+- **Recording is the runner's, through a separate interface.** `Host` is the author-facing ABI (`generate` only for now). `Recorder` has four methods: `record`, called by the runner for every participating child; `cancelled`, called for a child cancelled before it reported; `bypassed`, called for a protocol a descendant's `decide_final()` ended the step past; and `superseded`, called for a `decide_final()` decision that lost a race to another in the same layer or was outranked by an exception there. This departs from the earlier `sentinel-deployment.md`, whose `Host` ABI carried `record`; that doc now says recording is not on the ABI.
 - **Two context types.** `Context` is what authors see. `RunnerContext(Context)` adds `recorder` and `child()`; the dispatcher builds it, `dataclasses.replace` preserves it down the layers, and the runner raises `TypeError` if handed a bare `Context`.
-- **Author surface vs integration surface.** `__init__` exports only what an author writes against, including `Reported` and `Report`, since `step.escalations` and the runner's results are typed with them. `inspect_sentinel/_integration.py` re-exports what the dispatcher needs (`RunnerContext`, `Recorder`, `validate_instance_name`, `step_types`, `resolve_sentinel`, `Sentinels`, `run_root`); `inspect_ai` imports from that module only, so refactors have one file to keep stable.
+- **Author surface vs integration surface.** `__init__` exports only what an author writes against, including `Reported` and `Report`, since `step.escalations` and the runner's results are typed with them. `inspect_sentinel/_integration.py` re-exports what the dispatcher needs (`RunnerContext`, `Recorder`, `validate_instance_name`, `step_types`, `resolve_sentinel`, `Sentinels`, `run_root`, and since S6 `sentinel_from_config` and `config_from_sentinel`); `inspect_ai` imports from that module only, so refactors have one file to keep stable.
 - **Shipped protocols:** `observe`, `concurrent`, `threshold`. `sequential` and `human` are follow-ups.
 
 ## Layout
@@ -34,7 +34,7 @@ src/inspect_sentinel/
                     named_children
   _final.py         decide_final, Final
   _protocols/       observe, concurrent, threshold, one module each
-  _resolve.py       resolve_sentinel
+  _resolve.py       resolve_sentinel, Sentinels
   _config.py        sentinel_from_config, config_from_sentinel
   _integration.py   the contract inspect_ai imports
   _entrypoint.py    inspect_ai entry point; imports _protocols so they register
