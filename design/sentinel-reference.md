@@ -707,7 +707,7 @@ Shape checks raise. Each is a deterministic bug in a protocol, not agent input, 
 
 The dispatcher invokes the resolved root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `decide_final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`. A lone protocol is the root itself; a list, a mapping or a lone `ProtocolGroup` is wrapped in `concurrent`, and monitors alone in `observe`.
 
-An `escalate` that reaches the root has nobody to hand it to: the host proceeds as for `continue`, the escalate stays recorded as the root's decision, and the host warns once per eval that `sequential(..., human())` sends escalations to a person. This is the current behaviour and is under review (see [Open questions](#open-questions) item 24); rejecting instead would fail closed, as approval does when every approver escalates, but would turn every unsure rule into a blocked call.
+An `escalate` that reaches the root has nobody to hand it to: the host proceeds as for `continue`, the escalate stays recorded as the root's decision, and the host warns once per eval that `sequential([..., human()])` sends escalations to a person. This is the current behaviour and is under review (see [Open questions](#open-questions) item 24); rejecting instead would fail closed, as approval does when every approver escalates, but would turn every unsure rule into a blocked call.
 
 ### Two compositions
 
