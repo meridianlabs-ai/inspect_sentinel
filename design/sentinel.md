@@ -770,7 +770,7 @@ This is `resample` with one draw on a different model and no candidate loop. The
 Three things follow for the rest of the design:
 
 - **`AfterGenerate` carries the request.** `tools`, `tool_choice` and `config` join `input`, so a protocol regenerates with exactly what the agent was given.
-- **`Host.generate` is a real generate.** Messages or a string in, `ModelOutput` out, with `model`, `role`, `tools` and `config`. `model` is always a model (a name or a `Model`) and `role` always a role, so a role name can never be mistaken for a model name; passing both is an error the host raises. With neither, the host uses the `monitor` role, falling back to the agent's model with a warning, once per eval, naming the role to set. Under a proxy, generating as the agent's model is a re-issued upstream request. `sentinel-deployment.md` carries the signature.
+- **`Host.generate` is a real generate.** Messages or a string in, `ModelOutput` out, with `model`, `role`, `tools` and `config`. `model` is always a model (a name or a `Model`) and `role` always a role, so a role name can never be mistaken for a model name. As with inspect's `get_model(model=, role=)`, a configured role wins, then `model`, then the agent's model with a warning, once per eval, naming the role to set; with neither, the role is `monitor`. Under a proxy, generating as the agent's model is a re-issued upstream request. `sentinel-deployment.md` carries the signature.
 - **Protocol inference has its own usage bucket.** `resample` spends up to `n` times the agent's tokens on the agent's model. It is recorded under a `protocol` bucket in `ModelUsage`, separate from both agent and monitor usage and not charged to the agent's limits, because the protocol chose to spend it. See open question 8.
 
 Both are `AfterGenerate`-only, and their signatures say so rather than annotating `Step`.
@@ -1552,7 +1552,7 @@ def suspicion_monitor(model: str | Model | None = None, role: str = "monitor") -
             messages_as_str=messages_as_str,
         )
         output = await context.host.generate(
-            prompt, model=model, role=None if model is not None else role
+            prompt, model=model, role=role
         )
         score, explanation = parse_score(output.completion)
         return Observation(

@@ -203,6 +203,22 @@ async def test_concurrent_explains_a_contested_decision_by_its_voters(
     assert decision is not None and decision.explanation == expected
 
 
+@pytest.mark.parametrize(
+    ("children", "expected"),
+    [
+        ({"a": says("continue"), "b": says("continue")}, None),
+        ({"a": says("continue", "looks fine"), "b": says("continue")}, "looks fine"),
+    ],
+)
+@pytest.mark.anyio
+async def test_concurrent_lists_no_votes_when_all_continue(
+    children: Protocols, expected: str | None
+) -> None:
+    decision = await _run(concurrent(children), before_step(), ListRecorder())
+    assert decision is not None and decision.action == "continue"
+    assert decision.explanation == expected
+
+
 @protocol
 def panel(children: Protocols) -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:

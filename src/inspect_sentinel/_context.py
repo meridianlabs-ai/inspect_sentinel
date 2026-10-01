@@ -32,17 +32,14 @@ class Host(TypingProtocol):
     ) -> ModelOutput:
         """Generate with a model the host resolves.
 
-        With neither `model` nor `role`, the host uses the `monitor` role. If that role is not configured, it falls back to the agent's model and logs a warning once per eval naming the role to set.
+        The host resolves the model as inspect's `get_model(model=, role=)` does: `role`'s model if that role is configured for the task or eval, otherwise `model`, otherwise the agent's model, with a warning once per eval naming the role to set. With neither `model` nor `role`, the role is `monitor`.
 
         Args:
             input: A prompt string or a list of chat messages.
-            model: A model name or instance. Not with `role`.
-            role: A model role, e.g. `trusted`. Not with `model`.
+            model: A model name or instance, used when `role` is not configured.
+            role: A model role, e.g. `trusted`. Defaults to `monitor` when `model` is None.
             tools: Tool definitions to offer the model.
             config: Generation configuration.
-
-        Raises:
-            ValueError: Both `model` and `role` were given.
         """
         ...
 
@@ -138,6 +135,13 @@ class Context:
 
     target: Target | None = None
     """The expected answer. None until monitors and protocols can opt in with `target=True`."""
+
+    @property
+    def input_text(self) -> str:
+        """The sample's `input` as one string: `input` itself if a string, else its messages' text joined with newlines."""
+        if isinstance(self.input, str):
+            return self.input
+        return "\n".join(message.text for message in self.input)
 
     def store_as(self, model_cls: type[SMT]) -> SMT:
         """Typed view of this instance's state, namespaced by `path`.

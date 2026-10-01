@@ -293,6 +293,15 @@ Restructured 2026-09-30, as a pure move and rename with no change in behaviour b
 
 Decided 2026-10-01. Each function a `@monitor` or `@protocol` factory returns handles exactly one stage, so no function dispatches on the payload type. A monitor annotates one payload class, as before. A protocol annotates one payload class, or `Step` when it is stage-agnostic and only forwards the step (`concurrent`, `observe`). Any other union is rejected when the factory is called, with an error naming a `MonitorGroup`/`ProtocolGroup` with one function per stage, or `Step`. Since `Step` is a union, a union of every stage written out equals it and is accepted; the check compares the annotated set against all stages and rejects a proper subset with more than one member.
 
+## API friction fixes
+
+Decided with the user 2026-10-01, before the first release, so nothing is kept for compatibility:
+
+- `Host.generate` resolves `model` and `role` as inspect's `get_model(model=, role=)` does instead of raising when both are given: the role's model if that role is configured for the task or eval, otherwise `model`, otherwise the agent's model with the one-time warning. With neither, the role is `monitor`. An LLM monitor's factory takes `model=None, role="monitor"` and passes both straight through.
+- `Context.input_text` is the sample input as one string: `input` itself if a string, else its messages' text joined with newlines.
+- The examples pass a single instance where they mean one, `threshold(suspicion(), reject_at=0.8)`, rather than a one-element list.
+- `concurrent` lists the votes in its explanation only when they are not all `continue`; an all-continue layer keeps the winner's own explanation, if any.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands.
@@ -317,7 +326,9 @@ Agreed work that waits for something else. Each entry says what unblocks it. Kee
 - **Monitor model calls tied to their row**: today they are listed together at the end of the sentinel block, because a `ModelEvent` records no instance path. Needs a span per instance inside the sentinel span, or the model event ids on the `SentinelEvent`.
 - **`compaction_summary(step)`**, a helper returning the latest compaction summary text. Waits on inspect_ai making the `"summary"` message metadata key a documented constant, and must handle a summary merged into the task prompt.
 - **`react` overflow recovery rewriting history**: when a call overflows the context window, `react` replaces `state.messages` with the compacted list, so `step.history` loses the folded turns. To raise with inspect_ai.
-- **`defer_to_trusted`, `resample`, views and rendering helpers, and `fetch`/`terminate` on `Host`**: designed, not yet built.
+- **`defer_to_trusted`, `resample`, and `fetch`/`terminate` on `Host`**: designed, not yet built.
+- **Views and prompt helpers** (`monitor_prompt` and the view helpers): designed, not yet built. Add with them a structured-verdict helper, since today a structured verdict takes a pydantic model, a `GenerateConfig` with `ResponseSchema` and `json_schema`, `model_validate_json` and `Observation.score`; and helpers for escaping untrusted agent text and laying out a trusted/untrusted prompt, which `examples/llm_suspicion.py` writes by hand.
+- **A default tool filter**, so monitors and protocols skip tools they are not written for, such as `react`'s `submit()` and handoff or agent tools, with a way to override it (e.g. `tools=` on the decorators or in `Task(sentinel=)` configuration). Review already skips handoffs.
 - **`Task(description=)` and `Sample(description=)` in inspect_ai**, so `Context.task_description` and `Context.sample_description` fill. Held off by the user. Until then both are always None in an eval.
 - **The `target` opt-in**: `@monitor(target=True)` and `@protocol(target=True)`, the runner passing `Context.target` only to instances that declared it, and the registry recording that they did, so the log shows which monitors used the answer. Performance with the answer is not achievable in deployment, sandbagging detection legitimately needs it, and a monitor that reads `target` is not portable to a proxy. Until then `target` is always None.
 - **`store_as(scope="task")`**: per-task state across samples, documented in the design (`sentinel.md`, "Per-task") but not built. Needs a design for concurrency and checkpointing first.
