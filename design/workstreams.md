@@ -43,7 +43,7 @@ Lives in inspect_ai's model path and sentinel's step types. Best after inspect_c
 
 **Design:** [sentinel.md](sentinel.md), "Humans in the loop" and the ordered composition.
 
-The case they serve: a rule that escalates to a person, who ends the step with `decide_final()`. `human()` reuses inspect's human approval surfaces (the approval panel, ACP and the console) and shows the escalations that led to it. `sequential()` is the ordered composition (formerly `chain`), passing escalations from one link to the next.
+The case they serve: a rule that escalates to a person, who ends the step with `decide_final()`. `human()` reuses inspect's human approval surfaces (the approval panel, ACP and the console) and shows the escalations that led to it. Like the human approver, it calls inspect's `notify()` (Apprise, so Slack, email and the rest) before prompting, so the person learns a decision is waiting. `sequential()` is the ordered composition (formerly `chain`), passing escalations from one link to the next.
 
 Moderate in size, but it touches runner semantics (escalation hand-off, `decide_final()`, cancellation), so it needs close review.
 
@@ -51,7 +51,7 @@ Moderate in size, but it touches runner semantics (escalation hand-off, `decide_
 
 **Design:** [sentinel-deployment.md](sentinel-deployment.md).
 
-First step: the before-call hook in `bridge_generate`, next to `apply_bridge_tool_approval`, so bridged agents get sentinel checks on their tool calls. The proxy deployment (a sentinel at the network boundary, the host ABI, sidecar and WASM modes) is a later, larger project.
+**Known gap today:** a sentinel never runs for a bridged agent's tool calls; only tool calls that go through `execute_tools` are checked. First step: the before-call hook in `bridge_generate`, next to `apply_bridge_tool_approval`, so bridged agents get sentinel checks on their tool calls. The proxy deployment (a sentinel at the network boundary, the host ABI, sidecar and WASM modes) is a later, larger project.
 
 ## 6. Shipped protocols and helpers
 
@@ -68,3 +68,9 @@ Many small, independent tasks, good for onboarding:
 Support approvers in inspect modelled on the auto modes of Claude Code and Codex, in which a model decides whether each tool call may run without asking a person. Scope to establish first: how each auto mode decides (its inputs, policy and outputs) and what of that can be reproduced or reused. Then offer it in Inspect both as an `@approver`, for `Task(approval=)` users, and as a sentinel protocol, so it composes with monitors and `threshold`.
 
 Open questions: which model judges by default, and how its policy is configured; whether the result is a binary allow/deny or a score that `threshold` calibrates; how it maps to approval's vocabulary (`approve`) and sentinel's (`continue`); and, where an existing product's prompt or policy is reused, whether its terms allow that.
+
+## 8. Remote human surfaces
+
+Let a person decide from outside the eval process, Slack first: a message with the call, the escalations and approve/reject buttons, and the answer flowing back to the waiting sample. Inspect's human surfaces today (the panel, ACP and the console) all assume someone at the eval's terminal or client; long-running and remote evals have nobody there. `notify()` already covers telling someone a decision is waiting (workstream 4); this is answering it.
+
+Open questions: how the reply reaches the sample (a callback endpoint, polling, a relay service); how long a sample waits and what happens when nobody answers (proceed, reject, or the escalate default from pr-series.md "Deferred"); who may answer and how that is authenticated and recorded in the log; and whether the same surface serves inspect's existing human approver as well as `human()`.
