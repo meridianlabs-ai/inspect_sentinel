@@ -2,6 +2,7 @@ from dataclasses import replace
 from typing import Any, cast
 
 import pytest
+from inspect_ai.model import ChatMessage, ChatMessageSystem, ChatMessageUser
 from inspect_ai.util import StoreModel
 from pydantic import ValidationError
 
@@ -43,6 +44,25 @@ def test_child_shares_store_host_and_recorder() -> None:
     assert child.store is parent.store
     assert child.host is parent.host
     assert child.recorder is parent.recorder
+
+
+@pytest.mark.parametrize(
+    ("input", "expected"),
+    [
+        ("list the files", "list the files"),
+        (
+            [
+                ChatMessageSystem(content="be careful"),
+                ChatMessageUser(content="list the files"),
+            ],
+            "be careful\nlist the files",
+        ),
+    ],
+)
+def test_input_text_joins_the_messages(
+    input: str | list[ChatMessage], expected: str
+) -> None:
+    assert replace(runner_context(), input=input).input_text == expected
 
 
 def test_target_is_absent_by_default() -> None:

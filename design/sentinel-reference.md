@@ -471,7 +471,7 @@ There is no `monitor_store_as()` or `monitor_host()` global. Helpers take what t
 
 Rules:
 
-- **Call `context.host.generate()` for inference, never `get_model()`.** It takes a prompt string or a message list, with optional `model` (a name or a `Model`), `role` (a model role), `tools` and `config`, and returns a `ModelOutput`. Passing both `model` and `role` is an error the host raises. With neither, the host uses the `monitor` role; if that role is not configured it falls back to the agent's model and logs a warning once per eval naming the role to set. It records monitor inference separately from the agent's. The `portable=True` check bans `get_model()`.
+- **Call `context.host.generate()` for inference, never `get_model()`.** It takes a prompt string or a message list, with optional `model` (a name or a `Model`), `role` (a model role), `tools` and `config`, and returns a `ModelOutput`. The host resolves them as inspect's `get_model(model=, role=)` does: the role's model if that role is configured, otherwise `model`, otherwise the agent's model with a warning once per eval naming the role to set. With neither, the role is `monitor`. It records monitor inference separately from the agent's. The `portable=True` check bans `get_model()`.
 - **Expose `model=` and `role=` on an LLM monitor's factory** and pass them through, with `role` defaulting to `"monitor"`, so a task can point it elsewhere without editing it.
 - **Monitor inference is not charged to the agent's limits.** Approvers get the same exemption today via `suspend_token_limit()` and `suspend_turn_limit()`. Monitor usage is separable from agent usage in `ModelUsage`.
 - **Treat model completions, tool arguments, and tool output as untrusted.** The monitor's output decides whether the sample stops, so a successful injection against the monitor can stop a sample or prevent it from being stopped. `monitor_prompt` delivers evidence in a delimited, clearly-untrusted envelope by default; see [View](#view).
@@ -529,7 +529,7 @@ def suspicion_monitor(model: str | Model | None = None, role: str = "monitor") -
             messages_as_str=messages_as_str,
         )
         output = await context.host.generate(
-            prompt, model=model, role=None if model is not None else role
+            prompt, model=model, role=role
         )
         score, explanation = parse_score(output.completion)
         return Observation(suspicion=score, explanation=explanation,

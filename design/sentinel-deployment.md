@@ -82,7 +82,7 @@ class Host(typing.Protocol):
         self,
         input: str | list[ChatMessage],
         *,
-        model: str | Model | None = None,  # a model name or instance; not with role
+        model: str | Model | None = None,  # a model name or instance; used when role is not configured
         role: str | None = None,           # a model role; neither means "monitor"
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
@@ -113,7 +113,7 @@ class HostResponse(typing.Protocol):
 
 Only `generate` is built; `fetch`, `get`/`put` and `terminate` are planned.
 
-`model` and `role` are separate so a role name is never read as a model name; passing both is an error the host raises. With neither, the host uses the `monitor` role and, if that role is not configured, falls back to the agent's model with a warning once per eval naming the role to set. `defer_to_trusted` and `resample` will ask for a separate `trusted` role.
+`model` and `role` are separate so a role name is never read as a model name; as with inspect's `get_model(model=, role=)`, a configured role wins, then `model`, then the agent's model with a warning once per eval naming the role to set. With neither, the role is `monitor`. `defer_to_trusted` and `resample` will ask for a separate `trusted` role.
 
 `generate` returns a `ModelOutput` rather than a string because the protocols that substitute an action (`defer_to_trusted`, `resample`) regenerate with the agent's tools and need the whole response; a text-prompt monitor reads `.completion`. Generating as the agent's own model is, in a proxy, a re-issued upstream request.
 
