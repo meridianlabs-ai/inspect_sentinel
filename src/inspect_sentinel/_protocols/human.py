@@ -84,7 +84,7 @@ def _choices(stage: str, choices: Sequence[str] | None) -> tuple[str, ...]:
 
 
 def _decision(answer: HumanAnswer, choices: tuple[str, ...]) -> Decision:
-    if answer.decision not in choices:
+    if answer.decision not in choices and answer.decision != "terminate":
         raise ValueError(
             f"The host answered {answer.decision!r}, which is not one of the choices offered: {list(choices)!r}."
         )

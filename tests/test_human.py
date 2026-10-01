@@ -160,6 +160,23 @@ async def test_an_answer_the_person_was_not_offered_is_an_error(
 
 
 @pytest.mark.anyio
+async def test_a_host_may_end_the_prompt_with_terminate() -> None:
+    decision, _, _ = await _root(
+        human(stages=["tool_call"], choices=["approve"]),
+        HumanAnswer("terminate", reason="dismissed"),
+    )
+    assert decision == Decision.terminate("dismissed")
+
+
+@pytest.mark.anyio
+async def test_an_unoffered_reject_is_still_an_error() -> None:
+    with pytest.raises(ValueError, match="'reject'.*not one of"):
+        await _root(
+            human(stages=["tool_call"], choices=["approve"]), HumanAnswer("reject")
+        )
+
+
+@pytest.mark.anyio
 async def test_the_answer_ends_only_its_chain() -> None:
     tree = concurrent(
         {

@@ -21,10 +21,10 @@ class HumanAnswer:
     """What a person answered when `Host.ask_human` asked them about a step."""
 
     decision: str
-    """The choice the person picked, one of the `choices` they were offered: `approve`, `reject`, `terminate` or `modify`."""
+    """The choice the person picked, one of the `choices` they were offered (`approve`, `reject`, `terminate` or `modify`), or `terminate` when the person ended the prompt without one of them."""
 
     reason: str | None = None
-    """The reason the person typed, if any."""
+    """The reason the surface gives for the answer, if any: the person's typed reason, or fixed text such as "Human operator rejected the tool call."."""
 
     modified: ToolCall | None = None
     """The replacement call, when the person chose `modify` at a tool stage."""
@@ -61,7 +61,7 @@ class Host(TypingProtocol):
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
         """Ask a person to decide about a step, and wait for the answer.
 
-        The host is handed the step itself and renders it by its type: before a tool call the call, its view, the conversation and `step.escalations` (who escalated and why); after a call the same with the result the model is about to receive. A host raises a clear error for a stage it cannot render. It notifies the person and marks the sample as awaiting a person while it waits. `human()` calls this; most protocols never need to.
+        The host is handed the step itself and renders it by its type: before a tool call the call, its view, the conversation and `step.escalations` (who escalated and why); after a call the same with the result the model is about to receive. A host raises a clear error for a stage it cannot render. When the person ends the prompt without one of the `choices`, the host answers `terminate`, offered or not, so the step fails closed. It notifies the person and marks the sample as awaiting a person while it waits. `human()` calls this; most protocols never need to.
 
         Args:
             step: The step to decide about.
