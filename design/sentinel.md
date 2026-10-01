@@ -966,6 +966,8 @@ def sequential(children: Monitor | Protocol | Children) -> Protocol:
                     escalations.append(reported)
                 else:
                     return reported.report
+        if escalations:
+            return escalations[-1].report         # nobody decided; pass it up
         return Decision.proceed() if participated else None
 
     return run
@@ -973,7 +975,7 @@ def sequential(children: Monitor | Protocol | Children) -> Protocol:
 
 The functions of one [`ProtocolGroup`](#one-function-one-stage) run in one call, so each sees the step as it was before any of their escalations is appended; they share state through the store, not through `step.escalations`.
 
-Three properties fall out of writing it as ordinary code. A monitor in a `sequential` is recorded and falls through, since an observation cannot be "the first decision" — ordered composition is Decision-shaped in substance. An all-escalate `sequential` returns `continue` if anything participated, matching review's default and this document's rule; the [approval adapter](#a-protocol-layer-for-approval-too) keeps approval's fail-closed `reject` on its own path, so existing approval users see no change, and a `sequential` that wants fail-closed ends with a rejecting monitor, as approval lists end with `auto` today. And sequential dispatch stops being a violation of the independence rule, because the loop is a named, shipped protocol whose mode the transcript shows.
+Three properties fall out of writing it as ordinary code. A monitor in a `sequential` is recorded and falls through, since an observation cannot be "the first decision" — ordered composition is Decision-shaped in substance. A `sequential` whose every deciding link escalated returns the last escalate, so it passes up to the layer above as concurrent's does, and the host [proceeds and warns](#composition) if it reaches the root; one where only monitors participated returns `continue`. The [approval adapter](#a-protocol-layer-for-approval-too) keeps approval's fail-closed `reject` on its own path, so existing approval users see no change, and a `sequential` that wants fail-closed ends with a rejecting monitor, as approval lists end with `auto` today. And sequential dispatch stops being a violation of the independence rule, because the loop is a named, shipped protocol whose mode the transcript shows.
 
 **`concurrent()`** is the concurrent composition, and it is also what the top of a configuration resolves to (see [Configuration](#configuration)):
 
@@ -982,18 +984,17 @@ Three properties fall out of writing it as ordinary code. A monitor in a `sequen
 def concurrent(children: Monitor | Protocol | Children) -> Protocol:
     async def run(context: Context, step: Step) -> Decision | None:
         reports = await run_children(children, context, step)
-        if not reports.decisions:
-            return None                       # monitors only
-        strongest = reports.decisions.strongest()  # escalations do not count
+        voters = reports.decisions
+        strongest = voters.strongest()
         if strongest is None:
-            return Decision.proceed()         # every protocol escalated
-        voters = deciding(reports.decisions)
+            return None                       # monitors only
         if len(voters) == 1:
             return strongest.report
         own = strongest.report.explanation
         update: dict[str, object] = {}
-        if strongest.report.action == "modify":    # others decided about the call as it stood
-            rewrite = f"{strongest.name} modified the call but {len(voters) - 1} other vote(s) also decided"
+        contesting = [d for d in voters if d is not strongest and d.report.action != "escalate"]
+        if strongest.report.action == "modify" and contesting:    # others decided about the call as it stood
+            rewrite = f"{strongest.name} modified the call but {len(contesting)} other vote(s) also decided"
             own = f"{rewrite}: {own}" if own else rewrite
             update = {"action": "reject", "modified": None}
         summary = "; ".join(f"{d.name}: {d.report.action}" for d in voters)
@@ -1003,7 +1004,7 @@ def concurrent(children: Monitor | Protocol | Children) -> Protocol:
     return run
 ```
 
-That settles the `modify` question this document previously left open: concurrent children cannot see each other's rewrites, so a `modify` when more than one child decided is a rejection naming the modifier, keeping the modifier's `audit`, `metadata` and explanation. Votes count by instance, so another function of the modifier's own [multi-function](#one-function-one-stage) instance contests its `modify` only by modifying too, and the explanation labels each such function's vote `name.function`. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own. Re-approving modified arguments is more machinery than the decision is worth for now, and #5423 reached the same answer independently. The name pairs with `sequential`: both say how the children run and leave the decision rule to the docs. `strictest` and `all_of` were the alternatives; the first named only the recommendation half of the reduction (observations aggregate by max, not strictness) and the second named what the configuration means rather than its shape.
+That settles the `modify` question this document previously left open: concurrent children cannot see each other's rewrites, so a `modify` when another child decided anything but `escalate` is a rejection naming the modifier, keeping the modifier's `audit`, `metadata` and explanation. Votes count by instance, so another function of the modifier's own [multi-function](#one-function-one-stage) instance contests its `modify` only by modifying too, and the explanation labels each such function's vote `name.function`. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own. Re-approving modified arguments is more machinery than the decision is worth for now, and #5423 reached the same answer independently. The name pairs with `sequential`: both say how the children run and leave the decision rule to the docs. `strictest` and `all_of` were the alternatives; the first named only the recommendation half of the reduction (observations aggregate by max, not strictness) and the second named what the configuration means rather than its shape.
 
 **Concurrent is the default, and ordered is one explicit word.** The argument for making ordered the default is that many people will want a chain, which is true. The argument against is that ordered-by-default silences monitors, and silencing is a safety failure while concurrency's cost is latency and tokens. A default should fail safe, and changing one later is a silent semantic change for everyone. So a list with a protocol in it is `concurrent`, and a chain is `chain(...)`. The mistake the wrong default would produce most often — a `human()` in a concurrent group, prompting on every call — is caught at configuration time with a message that names `sequential()`.
 
@@ -1049,7 +1050,7 @@ Two registry types make the contract mostly explicit, and the residue is small:
 - The structural claims — returns a decision, annotates a stage, takes typed children — are [statically checked](#static-checking).
 - Nothing above a [`decide_final()`](#authoritative-reports) decision runs, so nothing above it can weaken it, and each layer it passed is recorded as `bypassed`.
 - **Going through the runner is enforced at run time, not statically.** The factory holds the children and could call them as plain callables, bypassing naming, recording and the concurrency guarantee. The decorator wraps each configured function in a guard, and the runner marks the function it is invoking in a context variable, so a configured function called any other way while a sentinel is running raises `RuntimeError` naming `run_monitors`/`run_protocols`/`run_children`. Outside a run the guard is inert, so a unit test can still call a function directly. A group has no `__call__` at all.
-- "No `escalate` at the outermost layer" is not expressible in the type. Harmless in practice, since [all-escalate is already defined as `continue`](#composition).
+- "No `escalate` at the outermost layer" is not expressible in the type. The host [proceeds and warns](#composition) when one reaches the root.
 
 The type system still cannot tell a direct call from a runner call, so the guard is a run-time check, the same under one registry type or two.
 
@@ -1262,9 +1263,10 @@ inspect eval task.py --sentinel sentinel.yaml
 | `Task(sentinel=)` given | Compiles to |
 |------------------------|------------------------|
 | a monitor, or a list or mapping of monitors only | `observe(...)` — recorded, never acted on |
-| a protocol, or any list or mapping containing one | `concurrent(...)` — protocols vote, monitors are recorded |
+| a protocol | itself — the protocol is the root |
+| a `ProtocolGroup`, or any list or mapping containing a protocol | `concurrent(...)` — protocols vote, monitors are recorded |
 
-A single protocol is `concurrent` of one, and a single monitor `observe` of one, so `Task(sentinel=p)` and `Task(sentinel=[p])` record the same paths. The dispatcher invokes the root itself, so the top-level children's paths are bare (`p`, not `concurrent/p`), and a root with one participating child emits no event of its own, so the single-rule log is exactly what a lone approver's is today.
+A lone protocol is the root, unwrapped, so `Task(sentinel=threshold(suspicion(), reject_at=0.8))` records `threshold` at the empty path and its monitor at `suspicion`. A lone `ProtocolGroup` is wrapped in `concurrent`, since the root returns the step's one outcome and combining several functions' decisions is `concurrent`'s job; a lone monitor is `observe` of one. `Task(sentinel=[p])` is a list, so it resolves to `concurrent([p])` and records `p` at `p` and `concurrent` at the empty path. The dispatcher invokes the root itself, so the root's children's paths are bare (`p`, not `concurrent/p`), and the root records its own decision at the empty path like any layer. A single-rule configuration therefore logs one event per step, the rule's, at the root.
 
 ``` python
 Task(sentinel=no_curl())                                    # a rule; acts
@@ -1285,6 +1287,13 @@ The flat case in YAML is a list, like approval; registry lookup searches both ty
 sentinel:
   - name: no_curl
   - name: no_rm_rf
+```
+
+One entry is a lone instance, the root itself, as `Task(sentinel=no_curl())` is; a mapping is one entry when its `name` is a string, and a mapping of instance names otherwise:
+
+``` yaml
+sentinel:
+  name: no_curl
 ```
 
 Named instances are a mapping, and a protocol with children nests them under the key that names its parameter:
@@ -1347,7 +1356,7 @@ Composition is the protocol's job: it collects reports from every configured chi
 
 **Aggregating suspicion.** `Observation`s from several monitors have to combine before thresholding. Max is the obvious default; per-dimension max is the right shape when scores are structured, since dimensions are meant to be independent (see [Prior art](#prior-art)). Weighted combinations and requiring agreement across monitors are protocol policy, not framework behavior.
 
-**Aggregating decisions.** Across `Decision`s, the strongest wins: `terminate` \> `reject` \> `modify` \> `continue`. `escalate` means "I decline to decide", and all-escalate is `continue`. One `Action` ordering covers all four stages, so this is a single comparison function rather than one per stage — it is `Decisions.strongest()`. Claude Code hooks land the same way — all hooks run in parallel, any `deny` blocks. `terminate` additionally cancels siblings still running, since nothing can outrank it.
+**Aggregating decisions.** Across `Decision`s, the strongest wins: `terminate` \> `reject` \> `modify` \> `escalate` \> `continue`. `escalate` means "I decline to decide; someone above should", so a peer's `continue` cannot override it, while anything stronger still wins, and a layer whose strongest decision is `escalate` escalates. At the root there is nobody to hand an `escalate` to. The host proceeds as for `continue`, records the escalate as the root's decision and warns once per eval that `sequential(..., human())` sends escalations to a person. That is the current behaviour and is under review (see [Open questions](#open-questions) item 24): rejecting instead fails closed, as approval does when every approver escalates, at the cost of turning every unsure rule into a blocked call. One `Action` ordering covers all four stages, so this is a single comparison function rather than one per stage — it is `Decisions.strongest()`. Claude Code hooks land the same way — all hooks run in parallel, any `deny` blocks. `terminate` additionally cancels siblings still running, since nothing can outrank it.
 
 **A final decision is not a vote**: a protocol may combine advisory decisions however it likes, but a child that calls [`decide_final()`](#authoritative-reports) ends the step before the protocol combines anything.
 
@@ -1417,7 +1426,7 @@ name="concurrent",        path="",                          kind="bypassed"
 name="human",             path="attempt/human",             kind="decision",  decision="reject"
 ```
 
-The person's `reject` went through `decide_final()`, so the `sequential` and the top-level `concurrent` above it are `bypassed`, and the `reject` itself is recorded last, at the root, when it takes effect. Without a final decision the last line is the summary event #5423 wanted: the top-level `concurrent` records the combined decision at `path=""`. Every layer's decision is recorded, the root's included, so a configuration with a single rule logs two events per step, the rule's and the root's; when more than one child decided, the layer's explanation lists each child's decision after the winner's own.
+The person's `reject` went through `decide_final()`, so the `sequential` and the top-level `concurrent` above it are `bypassed`, and the `reject` itself is recorded last, at the root, when it takes effect. Without a final decision the last line is the summary event #5423 wanted: the top-level `concurrent` records the combined decision at `path=""`. Every layer's decision is recorded, the root's included; a configuration that is a single rule logs one event per step, since the rule is the root; when more than one child decided, the layer's explanation lists each child's decision after the winner's own.
 
 An earlier draft added a `strategy: str` here and on `Decision`, to record whether a `modify` came from a deferral, a resample or a trusted edit. It was removed: **the layer's identity already is the strategy.** A protocol named `defer_to_trusted` returning `modify` has said what it did, and the aggregate query that justified the field — how often did this protocol defer — is `monitor == "defer_to_trusted" and decision == "modify"`. Worse, on `Decision` it was a field every rule carried and never set.
 
@@ -1675,8 +1684,8 @@ That proposal will not land as written; the group has agreed to build on sentine
 |------------------------|------------------------|
 | independent chains that all run | the default composition is concurrent; nothing is silenced |
 | per-monitor events, not one wrapper event | one `SentinelEvent` per participating child, from the runner |
-| a framework severity order | `terminate > reject > modify > continue`, in `Decisions.strongest()` |
-| an ordered chain inside each group, with `escalate` staying within it | `sequential()`; escalations never cross layers |
+| a framework severity order | `terminate > reject > modify > escalate > continue`, in `Decisions.strongest()` |
+| an ordered chain inside each group, with `escalate` staying within it | `sequential()`; `step.escalations` stays within one `sequential`, and a layer that ends on `escalate` passes it up as its own decision |
 | a human at the end of a chain who sees who escalated and why | `human()`, reading `step.escalations` |
 | named chains, and the name in the log | instance names from the mapping; `SentinelEvent.path` |
 | a summary event when several chains participated | the top-level `concurrent` layer's own event |
@@ -1774,3 +1783,5 @@ ordered composition should be the default (no — see [Two compositions](#two-co
 20.  **Should `sequential` and `concurrent` accept monitors at all?** They do here: a monitor in either is recorded and falls through, which is what gives a mixed top-level list a meaning. The alternative is `Protocols` only, with monitors reachable solely through a score-reading protocol; stricter, and it would make `Task(sentinel=[no_curl(), suspicion_monitor()])` a type error rather than a recorded-but-inert monitor.
 21.  **What is the umbrella called?** Settled: `sentinel`, for the feature, `Task(sentinel=)`, the package and the event, with `monitor` kept for the scorer and `protocol` for the decider as the control literature and ControlArena use them. `Task(monitor=)` held protocols and rules and never a bare monitor, and reviewers read it as "the monitor plus the protocol". Renaming the scorer instead (`observer`) would have broken the literature's pair; `ranger`, `warden` and `oversight` were the runners-up for the umbrella.
 22.  **Where does `conversation` come from, and is `history` eager?** The id wants minting by the loop that owns the messages, which is `react`, the generate loop and each bridge in-process, and the proxy's session key outside; whether `AgentState` should carry it, or the runner derive it from the agent span, is open. `history` on every payload is a reference to the scaffold's list in-process, but replay and a proxy must materialise it per step, which is O(n) per step over a long trajectory unless the runner hands out a shared, append-only view.
+23.  **Is `decide_final()` the right design at all?** Any protocol at any depth, third-party code inside `observe()` or `threshold()` included, can call it and bypass every layer above, while this design presents child decisions as advisory to the parent. The options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism.
+24.  **What should an `escalate` that reaches the root mean?** Today it proceeds as `continue` would, is recorded as the root's decision, and the host warns once per eval. The alternatives are rejecting it (fail-closed, as approval does when every approver escalates) or a setting with a chosen default. Rejecting turns every unsure rule into a blocked call.

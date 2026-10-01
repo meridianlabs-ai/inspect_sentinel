@@ -7,6 +7,7 @@ import pytest
 import yaml
 from inspect_ai._util import registry
 from inspect_ai._util.registry import registry_info, registry_params
+from pydantic import ValidationError
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._integration import (
@@ -18,6 +19,8 @@ from inspect_sentinel._integration import (
     sentinel_from_config,
 )
 from inspect_sentinel._monitor import (
+    Child,
+    Children,
     Monitor,
     MonitorGroup,
     Monitors,
@@ -29,6 +32,21 @@ from inspect_sentinel._protocols import concurrent, threshold
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from tests._fakes import ListRecorder, after_step, before_step, runner_context
+
+
+def _listed(built: Child | Children) -> list[Child]:
+    assert isinstance(built, list)
+    return cast(list[Child], built)
+
+
+def _mapped(built: Child | Children) -> dict[str, Child]:
+    assert isinstance(built, dict)
+    return cast(dict[str, Child], built)
+
+
+def _only(built: Child | Children) -> Child:
+    [child] = _listed(built)
+    return child
 
 
 @monitor
@@ -75,13 +93,14 @@ def cfg_rule(reason: str = "no") -> Protocol:
 
 
 def test_a_list_builds_each_entry_through_the_registry() -> None:
-    built = sentinel_from_config(
-        [
-            {"name": "cfg_suspicion", "params": {"model": "openai/gpt-4o-mini"}},
-            {"name": "cfg_rule"},
-        ]
+    built = _listed(
+        sentinel_from_config(
+            [
+                {"name": "cfg_suspicion", "params": {"model": "openai/gpt-4o-mini"}},
+                {"name": "cfg_rule"},
+            ]
+        )
     )
-    assert isinstance(built, list)
     assert [registry_info(child).name for child in built] == [
         "cfg_suspicion",
         "cfg_rule",
@@ -90,28 +109,29 @@ def test_a_list_builds_each_entry_through_the_registry() -> None:
 
 
 def test_a_mapping_keeps_its_instance_names() -> None:
-    built = sentinel_from_config({"first": {"name": "cfg_rule"}})
-    assert isinstance(built, dict)
+    built = _mapped(sentinel_from_config({"first": {"name": "cfg_rule"}}))
     assert list(built) == ["first"]
     assert registry_info(built["first"]).type == "protocol"
 
 
 def test_bare_names_find_the_shipped_protocols() -> None:
-    [built] = sentinel_from_config(
-        [
-            {
-                "name": "threshold",
-                "params": {"reject_at": 0.8},
-                "monitors": [{"name": "cfg_suspicion"}],
-            }
-        ]
+    built = _only(
+        sentinel_from_config(
+            [
+                {
+                    "name": "threshold",
+                    "params": {"reject_at": 0.8},
+                    "monitors": [{"name": "cfg_suspicion"}],
+                }
+            ]
+        )
     )
     assert registry_info(built).name == "inspect_sentinel/threshold"
     assert registry_params(built)["reject_at"] == 0.8
 
 
 def test_a_group_instance_is_built_like_any_other() -> None:
-    [built] = sentinel_from_config([{"name": "cfg_pair"}])
+    built = _only(sentinel_from_config([{"name": "cfg_pair"}]))
     assert registry_info(built).name == "cfg_pair"
 
 
@@ -152,7 +172,7 @@ def test_a_parsed_config_model_is_accepted() -> None:
             }
         ]
     )
-    [built] = sentinel_from_config(config)
+    built = _only(sentinel_from_config(config))
     assert registry_info(built).name == "inspect_sentinel/threshold"
 
 
@@ -161,14 +181,57 @@ def test_a_file_holds_the_config_under_sentinel(tmp_path: Path, suffix: str) -> 
     content = {"sentinel": {"escape": {"name": "cfg_rule"}}}
     file = tmp_path / f"sentinel{suffix}"
     file.write_text(json.dumps(content) if suffix == ".json" else yaml.dump(content))
-    built = sentinel_from_config(str(file))
-    assert isinstance(built, dict)
+    built = _mapped(sentinel_from_config(str(file)))
     assert registry_info(built["escape"]).name == "cfg_rule"
 
 
-def test_a_bare_registered_name_is_a_list_of_one() -> None:
-    [built] = sentinel_from_config("cfg_suspicion")
+def test_a_bare_registered_name_is_a_lone_instance() -> None:
+    built = sentinel_from_config("cfg_suspicion")
     assert registry_info(built).name == "cfg_suspicion"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"name": "cfg_rule", "params": {"reason": "stop"}},
+        SentinelConfig.model_validate(
+            {"name": "cfg_rule", "params": {"reason": "stop"}}
+        ),
+    ],
+)
+def test_an_entry_with_a_string_name_is_a_lone_instance(raw: Any) -> None:
+    built = sentinel_from_config(raw)
+    assert registry_info(built).name == "cfg_rule"
+    assert registry_params(built) == {"reason": "stop"}
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"name": {"name": "cfg_rule"}},
+        {"name": {"name": "cfg_rule"}, "b": {"name": "cfg_rule"}},
+    ],
+)
+def test_an_instance_named_name_is_still_a_mapping(raw: Any) -> None:
+    assert isinstance(SentinelConfig.model_validate(raw).root, dict)
+    built = _mapped(sentinel_from_config(raw))
+    assert set(built) == set(raw)
+
+
+@pytest.mark.parametrize(
+    "raw, where",
+    [
+        ({"a": "cfg_rule"}, ()),
+        ({"name": 3}, ()),
+        ([{"name": "concurrent", "children": {"a": 1}}], ("list", 0, "children")),
+    ],
+)
+def test_a_layer_that_is_neither_an_entry_nor_a_mapping_of_entries_is_an_error(
+    raw: Any, where: tuple[str | int, ...]
+) -> None:
+    with pytest.raises(ValidationError, match="string 'name'") as info:
+        SentinelConfig.model_validate(raw)
+    assert info.value.errors()[0]["loc"] == where
 
 
 INVALID: list[tuple[Any, type[Exception], str]] = [
@@ -286,6 +349,12 @@ def test_a_file_must_hold_only_a_sentinel_key(tmp_path: Path, content: Any) -> N
 
 
 ROUND_TRIPS: list[Any] = [
+    {"name": "cfg_rule", "params": {"reason": "stop"}},
+    {
+        "name": "threshold",
+        "params": {"reject_at": 0.5},
+        "monitors": [{"name": "cfg_suspicion", "params": {}}],
+    },
     [{"name": "cfg_suspicion", "params": {"model": "openai/gpt-4o-mini"}}],
     [{"name": "cfg_pair"}, {"name": "cfg_rule", "params": {"reason": "stop"}}],
     [
@@ -405,9 +474,23 @@ def test_package_names_are_recorded_bare_and_others_in_full() -> None:
     ]
 
 
-def test_a_lone_instance_is_recorded_as_a_list_of_one() -> None:
-    assert config_from_sentinel(cfg_rule()) == SentinelConfig.model_validate(
-        [{"name": "cfg_rule"}]
+def test_a_lone_instance_is_recorded_as_a_lone_entry() -> None:
+    assert config_from_sentinel(cfg_rule("stop")) == SentinelConfig.model_validate(
+        {"name": "cfg_rule", "params": {"reason": "stop"}}
+    )
+
+
+@pytest.mark.anyio
+async def test_a_lone_protocol_records_the_same_paths_once_rebuilt() -> None:
+    original = threshold(cfg_suspicion(), reject_at=0.5)
+    rebuilt = sentinel_from_config(config_from_sentinel(original))
+    assert (
+        await _paths(rebuilt)
+        == await _paths(original)
+        == [
+            ("", "decide"),
+            ("cfg_suspicion", "check"),
+        ]
     )
 
 
@@ -451,7 +534,7 @@ def test_a_repeated_key_in_a_file_is_an_error(
 def test_tab_indented_json_is_read(tmp_path: Path) -> None:
     file = tmp_path / "sentinel.json"
     file.write_text('{\n\t"sentinel": [\n\t\t{"name": "cfg_rule"}\n\t]\n}\n')
-    [built] = sentinel_from_config(str(file))
+    built = _only(sentinel_from_config(str(file)))
     assert registry_info(built).name == "cfg_rule"
 
 
@@ -480,7 +563,7 @@ def test_an_exact_name_wins_over_the_package_fallback() -> None:
         {"name": "observe", "monitors": [{"name": "cfg_suspicion"}]},
         {"name": "inspect_sentinel/observe", "monitors": [{"name": "cfg_suspicion"}]},
     ]
-    built = sentinel_from_config(config)
+    built = _listed(sentinel_from_config(config))
     assert [registry_info(child).name for child in built] == [
         "observe",
         "inspect_sentinel/observe",

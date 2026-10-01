@@ -6,11 +6,17 @@ import pytest
 from inspect_ai._util.registry import registry_info
 
 from inspect_sentinel._context import Context
-from inspect_sentinel._monitor import Monitor, Protocol, monitor, protocol
+from inspect_sentinel._monitor import (
+    Monitor,
+    Protocol,
+    ProtocolGroup,
+    monitor,
+    protocol,
+)
 from inspect_sentinel._protocols import concurrent, observe, threshold
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._resolve import Sentinels, resolve_sentinel
-from inspect_sentinel._runner import run_protocols
+from inspect_sentinel._runner import run_protocols, run_root
 from inspect_sentinel._step import BeforeToolCall, Step
 from tests._fakes import ListRecorder, before_step, runner_context
 
@@ -37,6 +43,17 @@ def blocks() -> Protocol:
         return Decision.reject("no")
 
     return decide
+
+
+@protocol
+def pair() -> ProtocolGroup:
+    async def one(context: Context, step: Step) -> Decision | None:
+        return Decision.proceed()
+
+    async def two(context: Context, step: Step) -> Decision | None:
+        return Decision.reject("no")
+
+    return ProtocolGroup(one, two)
 
 
 def test_monitors_only_resolve_to_observe() -> None:
@@ -79,9 +96,12 @@ def test_every_unwatched_monitor_is_named(caplog: pytest.LogCaptureFixture) -> N
 @pytest.mark.parametrize(
     "instance", [blocks(), concurrent([blocks()]), observe([noisy()])]
 )
-def test_a_lone_protocol_is_wrapped_in_concurrent(instance: Protocol) -> None:
-    resolved = resolve_sentinel(instance)
-    assert resolved is not instance
+def test_a_lone_protocol_is_the_root(instance: Protocol) -> None:
+    assert resolve_sentinel(instance) is instance
+
+
+def test_a_lone_protocol_group_is_wrapped_in_concurrent() -> None:
+    resolved = resolve_sentinel(pair())
     assert registry_info(resolved).name == "inspect_sentinel/concurrent"
 
 
@@ -94,24 +114,26 @@ def test_observe_written_explicitly_does_not_warn(
 
 
 @pytest.mark.parametrize(
-    "specs",
+    ("spec", "expected"),
     [
-        (lambda: blocks(), lambda: [blocks()]),
-        (lambda: noisy(), lambda: [noisy()]),
+        (
+            lambda: threshold(noisy(), reject_at=0.5),
+            [("noisy", "noisy"), ("threshold", "")],
+        ),
+        (lambda: [blocks()], [("blocks", "blocks"), ("concurrent", "")]),
+        (lambda: noisy(), [("noisy", "noisy")]),
+        (lambda: [noisy()], [("noisy", "noisy")]),
     ],
 )
 @pytest.mark.anyio
-async def test_a_lone_child_and_a_list_of_one_record_the_same_paths(
-    specs: tuple[Callable[[], Sentinels], Callable[[], Sentinels]],
+async def test_the_root_records_at_the_empty_path_and_its_children_bare(
+    spec: Callable[[], Sentinels], expected: list[tuple[str, str]]
 ) -> None:
-    paths: list[list[str]] = []
-    for spec in specs:
-        recorder = ListRecorder()
-        await run_protocols(
-            resolve_sentinel(spec()), runner_context(recorder=recorder), before_step()
-        )
-        paths.append([r.reported.path for r in recorder.records])
-    assert paths[0] == paths[1]
+    recorder = ListRecorder()
+    await run_root(
+        resolve_sentinel(spec()), runner_context(recorder=recorder), before_step()
+    )
+    assert [(r.reported.name, r.reported.path) for r in recorder.records] == expected
 
 
 def test_a_protocol_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
@@ -143,9 +165,10 @@ def test_duplicate_names_are_a_configuration_error() -> None:
         resolve_sentinel([noisy(), noisy()])
 
 
-def test_an_uncalled_factory_is_a_configuration_error() -> None:
+@pytest.mark.parametrize("factory", [noisy, blocks])
+def test_an_uncalled_factory_is_a_configuration_error(factory: Any) -> None:
     with pytest.raises(TypeError, match="call it"):
-        resolve_sentinel(cast(Any, noisy))
+        resolve_sentinel(factory)
 
 
 @pytest.mark.parametrize("empty", [[], {}])

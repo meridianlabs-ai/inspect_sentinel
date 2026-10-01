@@ -47,9 +47,9 @@ for sample in log.samples or []:
             )
 ```
 
-Every configuration is wrapped in a root `concurrent()` (or `observe()` when it holds only monitors), which records its own decision at the empty path after its children's. What each example records:
+A lone protocol is the root and records its own decision at the empty path, after its children's; a list or mapping is wrapped in a root `concurrent()` (or `observe()` when it holds only monitors), and a lone monitor in `observe()`. What each example records:
 
-- `no_network.py`: a `decision` at `no_network` for each `bash()` call, `reject` for the ones using a network command. The agent receives the decision's `message` as the tool call's error and carries on; the `explanation` is for the log only.
-- `llm_suspicion.py`: an `observation` at `threshold/suspicion` with the model's score and reasoning, then `threshold`'s `decision`: `reject` when the score is 0.8 or more (the `cleanup` sample's deletes outside `/work`, `fetch_data`'s download), explained with the score and the monitor's reasoning, otherwise `continue`. The agent is told only that the call was not approved.
-- `trajectory.py`: `observation`s at `observe/failure_count` alternating `before` and `after`. `before`'s suspicion rises by 0.2 after each call `after` saw fail.
+- `no_network.py`: a `decision` at the root (`name` `no_network`, `path` empty) for each `bash()` call, `reject` for the ones using a network command. The agent receives the decision's `message` as the tool call's error and carries on; the `explanation` is for the log only.
+- `llm_suspicion.py`: an `observation` at `suspicion` with the model's score and reasoning, then `threshold`'s `decision` at the root: `reject` when the score is 0.8 or more (the `cleanup` sample's deletes outside `/work`, `fetch_data`'s download), explained with the score and the monitor's reasoning, otherwise `continue`. The agent is told only that the call was not approved.
+- `trajectory.py`: `observation`s at `failure_count` alternating `before` and `after`. `before`'s suspicion rises by 0.2 after each call `after` saw fail.
 - `nested.py`: when `protected` calls `decide_final()`, the step ends at once. The log shows `bypassed` at `guard` and at the root (their decision logic was skipped), `cancelled` at `audit` (its model call was still in flight), and then `protected`'s `reject`. A step no rule ends has decisions at `guard/network`, `guard/protected`, `guard` and the root, and an observation at `audit`.

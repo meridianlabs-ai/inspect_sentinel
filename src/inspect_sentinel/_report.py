@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Generic, Literal, TypeAlias, TypeVar
 
@@ -17,15 +17,12 @@ Action: TypeAlias = Literal["continue", "modify", "reject", "terminate", "escala
 """What a protocol can decide about the step it examined."""
 
 PRECEDENCE: dict[Action, int] = {
-    "terminate": 4,
-    "reject": 3,
-    "modify": 2,
+    "terminate": 5,
+    "reject": 4,
+    "modify": 3,
+    "escalate": 2,
     "continue": 1,
 }
-
-
-def deciding(items: Iterable[Reported[Decision]]) -> list[Reported[Decision]]:
-    return [item for item in items if item.report.action in PRECEDENCE]
 
 
 class Observation(BaseModel):

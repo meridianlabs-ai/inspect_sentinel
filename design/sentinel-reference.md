@@ -347,7 +347,7 @@ Rules:
 - **Return `None` to abstain.** A bare `return` from an early exit does this. This document says "abstain" for this case so it is not confused with a `suspicion` field that is `None`.
 - **Set only the fields you need.** Every field except the required one has a default. A monitor sets `suspicion` and nothing else.
 - **`continue` means the protocol examined the step and found nothing wrong.** An `Observation` has no `action` field, so a monitor never says it.
-- **`escalate` means the protocol is not deciding.** The next decider in the `sequential` takes over. If every link escalates, the outcome is `continue`.
+- **`escalate` means the protocol is not deciding.** The next decider in the `sequential` takes over. In a `concurrent`, it outranks `continue`, so a peer's `continue` cannot override it. A layer that ends on `escalate` passes it up as its own decision, and at the root the host proceeds and warns (see [The boundary check](#the-boundary-check)).
 - **Prefer structured suspicion.** `{"goal_alignment": 0.1, "sabotage": 0.8}` lets a protocol threshold per dimension and lets independent monitors score separate dimensions. A scalar is accepted.
 - **A detector reports `1.0`.** `Observation.flag(explanation)` is a monitor's way of saying "this is definitely it" without holding a threshold; `threshold(detector(), reject_at=1.0)` acts on it.
 - **Set `audit=True` to request human review.** It is independent of the action: you can continue-and-audit or reject-and-audit. A parent protocol owning a budget may decline. For now it is recorded for offline analysis and shown in the viewer as a flag; nothing acts on it yet.
@@ -699,7 +699,9 @@ Shape checks raise. Each is a deterministic bug in a protocol, not agent input, 
 
 `decide_final()` is the mechanism for a decision no layer above may weaken. It replaces an earlier design in which a `binding` flag set a floor that the runner clamped each layer's return up to, recording the override. A value-level rule requires every layer to carry or compare the property, and each patch to it leaked where a middle layer built a new decision; control flow cannot be dropped by a middle layer, because that layer's code does not run. It reuses `terminate`'s cancellation, and the first `decide_final()` wins, as with two `terminate`s. Ordering several authorities is a `sequential`, or a panel that collects advisory votes and calls `decide_final()` itself; see [Humans](#humans).
 
-The dispatcher invokes the resolved root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `decide_final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`.
+The dispatcher invokes the resolved root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `decide_final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`. A lone protocol is the root itself; a list, a mapping or a lone `ProtocolGroup` is wrapped in `concurrent`, and monitors alone in `observe`.
+
+An `escalate` that reaches the root has nobody to hand it to: the host proceeds as for `continue`, the escalate stays recorded as the root's decision, and the host warns once per eval that `sequential(..., human())` sends escalations to a person. This is the current behaviour and is under review (see [Open questions](#open-questions) item 22); rejecting instead would fail closed, as approval does when every approver escalates, but would turn every unsure rule into a blocked call.
 
 ### Two compositions
 
@@ -708,7 +710,7 @@ The dispatcher invokes the resolved root through `run_root`, which treats it as 
 | Runs | every child, concurrently | children in order, until one decides |
 | Decides | strongest decision | first non-`escalate` |
 | monitor children | recorded; the observations are available to a parent | recorded; fall through |
-| `escalate` | does not count; all-escalate is `continue` | handed to the next link in `step.escalations`; all-escalate is `continue` |
+| `escalate` | outranks `continue`, below `modify`; all-escalate is `escalate` | handed to the next link in `step.escalations`; all-escalate is `escalate` |
 | `modify` | honoured only if it was the only decision; otherwise `reject` naming the modifier | honoured; only one link decides |
 | `terminate` | cancels the other children | ends the loop |
 | Use for | independent guards that must all be satisfied | a cheap rule ahead of an expensive judge; a human at the end |
@@ -719,7 +721,7 @@ Rules:
 
 - **Use `sequential()` when there is a person at the end.** A `human()` in a concurrent group prompts on every call. The framework warns at configuration time and suggests `sequential()`.
 - **Do not expect ordered composition by default.** Ordered-by-default silences children: if A approves, B never runs, and B might have terminated. That is the defect #5423 reported against approval. Concurrent fails safe; its cost is latency and tokens.
-- **Escalations never cross layers.** A link's `escalate` goes to the next link in its own `sequential`. A `sequential` whose last link escalates returns `continue` if any link participated, else abstains.
+- **`step.escalations` never crosses layers.** A link's `escalate` goes to the next link in its own `sequential`. A `sequential` whose every deciding link escalated returns the last escalate, passing it up; one where only monitors participated returns `continue`, and one where nothing participated abstains.
 - **An uncovered call continues in a `sequential`.** This matches review. The approval adapter keeps approval's `reject` for an uncovered call on its own path. A `sequential` that wants fail-closed ends with a rejecting rule.
 
 `sequential()` as ordinary code over the runner:
@@ -742,6 +744,8 @@ def sequential(children: Monitor | Protocol | Children) -> Protocol:
                     escalations.append(reported)
                 else:
                     return reported.report
+        if escalations:
+            return escalations[-1].report   # nobody decided; pass it up
         return Decision.proceed() if participated else None
 
     return run
@@ -788,7 +792,7 @@ These rules describe the concurrent composition, which `concurrent()` implements
 - **Every child configured for a stage runs.** No child is skipped because another already formed a view. `sequential()` is the explicit exception.
 - **Every report is recorded,** including the ones that lost.
 - **Aggregate suspicion by max.** Per-dimension max when scores are structured. Weighted combinations and requiring agreement are protocol policy.
-- **Aggregate decisions by strength:** `terminate` > `reject` > `modify` > `continue`. `escalate` does not count, so `Decisions.strongest()` returns `None` both when no protocol decided and when every one escalated; the protocol tells them apart by whether `decisions` is empty, and maps all-escalate to `continue`. One ordering covers all four stages.
+- **Aggregate decisions by strength:** `terminate` > `reject` > `modify` > `escalate` > `continue`. A peer's `continue` cannot override an `escalate`, and when `escalate` is the strongest decision the layer escalates. `Decisions.strongest()` returns `None` only when no protocol decided. An `escalate` does not contest a `modify`. One ordering covers all four stages.
 - **`terminate` and `decide_final()` cancel siblings.** Nothing outranks `terminate` and the sample is ending; `decide_final()` has ended the step. `run_protocols` and `run_children` do this, and a cancelled child is recorded as cancelled rather than left indistinguishable from one that abstained.
 - **Child decisions are advisory to the parent.** A parent protocol may honour or override them, and the log records both; see [Transcript](#transcript).
 - **A final decision is not a vote.** A child that calls `decide_final()` ends the step before any protocol above it combines anything, and each layer above is recorded as bypassed.
@@ -897,7 +901,7 @@ eval(sentinel=...)
 inspect eval task.py --sentinel sentinel.yaml
 ```
 
-`Task(sentinel=)` takes one monitor or protocol, a list, or a mapping of instance names to either. Monitors alone resolve to `observe(...)`; anything containing a protocol resolves to `concurrent(...)`.
+`Task(sentinel=)` takes one monitor or protocol, a list, or a mapping of instance names to either. A lone protocol is the root itself, so `threshold(suspicion(), reject_at=0.8)` records `threshold` at the empty path and its monitor at `suspicion`. A lone `ProtocolGroup`, or a list or mapping containing a protocol, resolves to `concurrent(...)`, since combining several decisions is `concurrent`'s job; monitors alone resolve to `observe(...)`. In configuration, a single entry is the YAML form of a lone instance.
 
 ```python
 Task(sentinel=no_curl())
@@ -916,6 +920,13 @@ Flat list in YAML, like approval:
 sentinel:
   - name: no_curl
   - name: no_rm_rf
+```
+
+One entry, which is a lone instance and so the root itself:
+
+```yaml
+sentinel:
+  name: no_curl
 ```
 
 Named, as a mapping:
@@ -954,7 +965,8 @@ Rules:
 - **Names are found in both registry types.** A monitor and a protocol cannot share a name. A bare name that matches nothing exactly is tried in `inspect_sentinel`.
 - **A key may not repeat.** A repeated key in a file is an error, not the last one winning.
 - **Errors name the entry.** For example `sentinel.attempt.children[1]`.
-- **The log records the inverse.** `config_from_sentinel` writes each instance's registry name and params, with nested monitors and protocols as nested entries; `sentinel_from_config` rebuilds them for retry.
+- **A mapping is one entry when its `name` is a string.** It is a mapping of instance names when every value is an entry, so an instance named `name` still configures a mapping; anything else is an error naming the layer.
+- **The log records the inverse.** `config_from_sentinel` writes each instance's registry name and params, with nested monitors and protocols as nested entries, and a lone instance as one entry; `sentinel_from_config` rebuilds them for retry, so a retry records the same paths.
 
 ## Failures
 
@@ -1077,7 +1089,7 @@ Issue #5423 proposed that `approval` and `review` accept a dict of named policy 
 |---|---|
 | independent chains that all run | concurrent is the default composition |
 | per-monitor events | one `SentinelEvent` per participating child, from the runner |
-| a framework severity order | `terminate > reject > modify > continue` in `Decisions.strongest()` |
+| a framework severity order | `terminate > reject > modify > escalate > continue` in `Decisions.strongest()` |
 | an ordered chain inside each group; `escalate` stays inside it | `sequential()`; escalations never cross layers |
 | a human at the end who sees who escalated and why | `human()`, reading `step.escalations` |
 | named chains, and the name in the log | mapping keys as instance names; `SentinelEvent.path` |
@@ -1352,3 +1364,5 @@ What keeps the simple case simple:
 18. **Is the rendered prompt part of the recorded decision?** `host.generate` records a `ModelEvent`, so it is in the log already. Whether replay should check its rendering against the recorded one is open.
 19. **`ControlProtocol` or `Protocol`?** Settled: `Protocol`, pairing with `@protocol` as `Tool` pairs with `@tool`. The collision with `typing.Protocol` is accepted: a monitor author's file rarely defines structural types, the package imports typing's under an alias, and the docs say "a control protocol, not `typing.Protocol`" on first use.
 20. **Should `sequential` and `concurrent` accept monitors at all?** They do here, recorded and falling through, so that a mixed top-level list has a meaning and a `sequential` can carry a scorer beside its rules. The alternative is protocols only, with `observe()` as the way to record a monitor.
+21. **Is `decide_final()` the right design at all?** Any protocol at any depth, third-party code inside `observe()` or `threshold()` included, can call it and bypass every layer above, while this design presents child decisions as advisory to the parent. The options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism.
+22. **What should an `escalate` that reaches the root mean?** Today it proceeds as `continue` would, is recorded as the root's decision, and the host warns once per eval. The alternatives are rejecting it (fail-closed, as approval does when every approver escalates) or a setting with a chosen default. Rejecting turns every unsure rule into a blocked call.

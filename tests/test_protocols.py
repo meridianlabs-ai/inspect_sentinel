@@ -111,13 +111,25 @@ async def test_concurrent_over_monitors_only_does_not_decide() -> None:
 
 
 @pytest.mark.anyio
-async def test_concurrent_reads_all_escalate_as_continue() -> None:
+async def test_concurrent_passes_all_escalate_up() -> None:
     decision = await _run(
-        concurrent({"a": says("escalate"), "b": says("escalate")}),
+        concurrent({"a": says("escalate", "unsure"), "b": says("escalate")}),
         before_step(),
         ListRecorder(),
     )
-    assert decision is not None and decision.action == "continue"
+    assert decision is not None and decision.action == "escalate"
+    assert decision.explanation == "unsure (a: escalate; b: escalate)"
+
+
+@pytest.mark.anyio
+async def test_nested_concurrent_passes_escalate_up() -> None:
+    inner = concurrent({"unsure": says("escalate"), "fine": says("continue")})
+    decision = await _run(
+        concurrent({"inner": inner, "approver": says("continue")}),
+        before_step(),
+        ListRecorder(),
+    )
+    assert decision is not None and decision.action == "escalate"
 
 
 @pytest.mark.parametrize(
@@ -125,7 +137,9 @@ async def test_concurrent_reads_all_escalate_as_continue() -> None:
     [
         (["continue", "reject"], "reject"),
         (["reject", "terminate"], "terminate"),
-        (["escalate", "continue"], "continue"),
+        (["escalate", "continue"], "escalate"),
+        (["continue", "escalate"], "escalate"),
+        (["escalate", "reject"], "reject"),
     ],
 )
 @pytest.mark.anyio
@@ -166,7 +180,14 @@ async def test_concurrent_turns_a_contested_modify_into_a_reject() -> None:
             "too risky (a: continue; b: reject)",
         ),
         ({"a": says("continue"), "b": says("reject")}, "a: continue; b: reject"),
-        ({"a": says("reject", "alone"), "b": says("escalate")}, "alone"),
+        (
+            {"a": says("reject", "sure"), "b": says("escalate")},
+            "sure (a: reject; b: escalate)",
+        ),
+        (
+            {"a": says("continue"), "b": says("escalate", "ask a person")},
+            "ask a person (a: continue; b: escalate)",
+        ),
     ],
 )
 @pytest.mark.anyio
