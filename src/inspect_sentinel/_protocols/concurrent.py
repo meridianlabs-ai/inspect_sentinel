@@ -5,13 +5,13 @@ from .._decorators import protocol
 from .._report import Decision, Reported
 from .._runner import run_children
 from .._step import Step
-from .._types import Children, Group, Monitor, MonitorGroup, Protocol, ProtocolGroup
+from .._types import Group, Protocol, Sentinels
 from .._validate import named_children
 
 
 @protocol
 def concurrent(
-    children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Children,
+    children: Sentinels,
 ) -> Protocol:
     """Run every child at once; the strictest decision wins.
 

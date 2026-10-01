@@ -30,12 +30,12 @@ from ._context import Context
 from ._report import Decision, Observation, Report
 from ._step import Step
 from ._types import (
-    Child,
     Group,
     Monitor,
     MonitorGroup,
     Protocol,
     ProtocolGroup,
+    Sentinel,
     SentinelFunction,
 )
 
@@ -74,7 +74,7 @@ class Member(NamedTuple):
     accepted: frozenset[type[Any]]
 
 
-def members(sentinel: Child) -> tuple[Member, ...]:
+def members(sentinel: Sentinel) -> tuple[Member, ...]:
     functions: tuple[object, ...] = (
         sentinel.functions if isinstance(sentinel, Group) else (sentinel,)
     )
@@ -174,7 +174,7 @@ def protocol(
     return cast(_ProtocolDecorator, decorate)
 
 
-def step_types(sentinel: Child) -> frozenset[type[Any]]:
+def step_types(sentinel: Sentinel) -> frozenset[type[Any]]:
     """The step payload types a configured monitor or protocol accepts.
 
     Args:
@@ -242,7 +242,7 @@ def _register(
             )
         else:
             instance = _configure(returned, kind, report_type)
-            accepted = step_types(cast(Child, instance))
+            accepted = step_types(cast(Sentinel, instance))
         setattr(instance, STEP_TYPES_ATTR, accepted)
         registry_tag(factory, instance, info.model_copy(deep=True), *args, **kwargs)
         return instance

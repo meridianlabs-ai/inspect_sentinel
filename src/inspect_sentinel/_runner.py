@@ -17,8 +17,6 @@ from ._report import Decision, Observation, Report, Reported
 from ._results import Decisions, Observations, Reports
 from ._step import Step
 from ._types import (
-    Child,
-    Children,
     Group,
     Monitor,
     MonitorGroup,
@@ -26,7 +24,9 @@ from ._types import (
     Protocol,
     ProtocolGroup,
     Protocols,
+    Sentinel,
     SentinelFunction,
+    Sentinels,
 )
 from ._validate import check_child, named_children, validate_shape
 
@@ -173,9 +173,7 @@ async def run_protocols(
     return (await _run_named(named, context, step)).decisions
 
 
-async def run_children(
-    children: Child | Children, context: Context, step: Step
-) -> Reports:
+async def run_children(children: Sentinels, context: Context, step: Step) -> Reports:
     """Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns `terminate` or calls `decide_final()`.
 
     Runs any mix of children; `run_monitors` and `run_protocols` are typed shortcuts for one family. A child cancelled this way is recorded through `Recorder.cancelled`; one that finishes without awaiting is recorded normally.
@@ -190,7 +188,7 @@ async def run_children(
 
 
 async def _run_named(
-    named: Sequence[tuple[str, Child]], context: Context, step: Step
+    named: Sequence[tuple[str, Sentinel]], context: Context, step: Step
 ) -> Reports:
     observations: list[tuple[int, Reported[Observation]]] = []
     decisions: list[tuple[int, Reported[Decision]]] = []
@@ -199,7 +197,7 @@ async def _run_named(
     async def run_one(
         index: int,
         name: str,
-        child: Child,
+        child: Sentinel,
         cancel: Callable[[], None],
     ) -> None:
         # a group's reports are kept as they arrive, so one cancelled part way
@@ -259,7 +257,7 @@ async def _run_named(
 
 
 async def _run_child(
-    child: Child,
+    child: Sentinel,
     kind: Literal["monitor", "protocol"],
     report_type: type[R],
     context: Context,

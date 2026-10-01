@@ -33,7 +33,8 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 ### ProtocolGroup
 ### Monitors
 ### Protocols
-### Children
+### Sentinel
+### Sentinels
 
 ## Shipped protocols
 

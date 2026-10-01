@@ -602,10 +602,8 @@ Protocol: TypeAlias = (
 
 Monitors: TypeAlias = Mapping[str, Monitor | MonitorGroup] | Sequence[Monitor | MonitorGroup]
 Protocols: TypeAlias = Mapping[str, Protocol | ProtocolGroup] | Sequence[Protocol | ProtocolGroup]
-Children: TypeAlias = (
-    Mapping[str, Monitor | MonitorGroup | Protocol | ProtocolGroup]
-    | Sequence[Monitor | MonitorGroup | Protocol | ProtocolGroup]
-)
+Sentinel: TypeAlias = Monitor | MonitorGroup | Protocol | ProtocolGroup
+Sentinels: TypeAlias = Sentinel | Mapping[str, Sentinel] | Sequence[Sentinel]
 
 @overload
 def protocol(factory: Callable[P, Protocol], /) -> Callable[P, Protocol]: ...
@@ -652,7 +650,7 @@ async def run_protocols(
 
 
 async def run_children(
-    children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Children,
+    children: Sentinels,
     context: Context,
     step: Step,
 ) -> Reports:
@@ -1200,7 +1198,7 @@ With children, a protocol is a combinator. Inspect already implements this shape
 
 What separate registry types buy: `registry_create`, YAML, and the log say which of the two things ran; `threshold(human())` is a type error; the top-level table has two rows; and a reader never has to ask whether a given function can act.
 
-What it costs: one more registry type, and the composition helpers accept a union (`Children`) where a single type would have done. Nested YAML is unchanged; `Task(solver=chain(...))` already has this shape, approval config already nests, and only a tree can express nested pipeline stages.
+What it costs: one more registry type, and the composition helpers accept a union (`Sentinels`) where a single type would have done. Nested YAML is unchanged; `Task(solver=chain(...))` already has this shape, approval config already nests, and only a tree can express nested pipeline stages.
 
 ### Why `@protocol` is a decorator and not a constructor
 

@@ -22,8 +22,7 @@ from inspect_ai.log import SentinelConfig, SentinelEntry
 from inspect_ai.util import resource
 
 from ._context import validate_instance_name
-from ._resolve import Sentinels
-from ._types import Child, Children
+from ._types import Sentinel, Sentinels
 
 PACKAGE = "inspect_sentinel"
 ENTRY_FIELDS = frozenset({"name", "params"})
@@ -37,7 +36,7 @@ class _Factory(NamedTuple):
 
 def sentinel_from_config(
     config: str | SentinelConfig | Sequence[Mapping[str, Any]] | Mapping[str, Any],
-) -> Child | Children:
+) -> Sentinels:
     """Build the monitors and protocols a configuration describes.
 
     Each entry is constructed through the registry with its `params` and its nested entries, which are built first. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved; pass it to `resolve_sentinel`.
@@ -56,7 +55,7 @@ def sentinel_from_config(
     return _build_layer(config, "sentinel")
 
 
-def _from_string(config: str) -> Child | Children:
+def _from_string(config: str) -> Sentinels:
     path = local_path(config)
     if exists(path):
         return _build_layer(_read_file(path), "sentinel")
@@ -133,12 +132,12 @@ def _unique_keys(value: object, file: str, path: str) -> object:
     return value
 
 
-def _build_layer(layer: object, path: str) -> Child | Children:
+def _build_layer(layer: object, path: str) -> Sentinels:
     if isinstance(layer, Mapping):
         entries = cast(Mapping[object, object], layer)
         if isinstance(entries.get("name"), str):
             return _build_entry(entries, path)
-        built: dict[str, Child] = {}
+        built: dict[str, Sentinel] = {}
         for key, entry in entries.items():
             try:
                 name = validate_instance_name(key)
@@ -154,7 +153,7 @@ def _build_layer(layer: object, path: str) -> Child | Children:
     )
 
 
-def _build_entry(entry: object, path: str) -> Child:
+def _build_entry(entry: object, path: str) -> Sentinel:
     if not isinstance(entry, Mapping):
         raise ValueError(f"{path} must be a mapping with a 'name', not {entry!r}.")
     fields = cast(Mapping[str, object], entry)
@@ -186,7 +185,7 @@ def _build_entry(entry: object, path: str) -> Child:
     except (TypeError, ValueError) as ex:
         error = TypeError if isinstance(ex, TypeError) else ValueError
         raise error(f"{path}: {ex}") from ex
-    return cast(Child, instance)
+    return cast(Sentinel, instance)
 
 
 def _find(name: str, path: str) -> _Factory:

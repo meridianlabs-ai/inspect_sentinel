@@ -8,8 +8,9 @@ The dispatcher invokes the resolved root through `run_root`, which records the r
 from ._config import config_from_sentinel, sentinel_from_config
 from ._context import Recorder, RunnerContext, validate_instance_name
 from ._decorators import step_types
-from ._resolve import Sentinels, resolve_sentinel
+from ._resolve import resolve_sentinel
 from ._runner import run_root
+from ._types import Sentinels
 
 __all__ = [
     "Recorder",

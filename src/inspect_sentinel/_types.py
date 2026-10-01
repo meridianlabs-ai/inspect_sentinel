@@ -102,7 +102,8 @@ Protocols: TypeAlias = (
 )
 """Protocols handed to a protocol, named the same way."""
 
-Child: TypeAlias = Monitor | MonitorGroup | Protocol | ProtocolGroup
+Sentinel: TypeAlias = Monitor | MonitorGroup | Protocol | ProtocolGroup
+"""A monitor or protocol, or a group of either."""
 
-Children: TypeAlias = Mapping[str, Child] | Sequence[Child]
-"""Monitors and protocols together, for the compositions that record either."""
+Sentinels: TypeAlias = Sentinel | Mapping[str, Sentinel] | Sequence[Sentinel]
+"""What `Task(sentinel=)` and the compositions accept: one sentinel, or a sequence or mapping of them, named by mapping key or by registry name without its package prefix."""

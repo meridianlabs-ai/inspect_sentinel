@@ -17,7 +17,7 @@ from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import Action, Decision, Observation
 from inspect_sentinel._runner import run_root
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
-from inspect_sentinel._types import Children, Monitor, Protocol, ProtocolGroup
+from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup, Sentinels
 from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
 # what each link saw in step.escalations, by instance name
@@ -196,7 +196,7 @@ async def test_a_link_at_its_own_stage_decides() -> None:
 )
 @pytest.mark.anyio
 async def test_what_a_chain_returns_when_no_link_decides(
-    children: Children, expected: tuple[Action, str | None] | None
+    children: Sentinels, expected: tuple[Action, str | None] | None
 ) -> None:
     decision, _, _ = await _root(sequential(children))
     if expected is None:
@@ -265,7 +265,7 @@ async def test_decide_final_from_a_link_bypasses_the_layers_above() -> None:
 
 
 @pytest.mark.parametrize("children", [[], {}])
-def test_an_empty_chain_is_a_configuration_error(children: Children) -> None:
+def test_an_empty_chain_is_a_configuration_error(children: Sentinels) -> None:
     with pytest.raises(ValueError, match="sequential needs at least one child"):
         sequential(children)
 

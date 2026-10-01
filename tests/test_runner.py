@@ -29,13 +29,13 @@ from inspect_sentinel._runner import (
 )
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import (
-    Children,
     Monitor,
     MonitorGroup,
     Monitors,
     Protocol,
     ProtocolGroup,
     Protocols,
+    Sentinels,
 )
 from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
@@ -1352,7 +1352,7 @@ async def test_run_protocols_takes_one_many_or_named(
 )
 @pytest.mark.anyio
 async def test_run_children_takes_one_many_or_named(
-    configure: Callable[[], Monitor | Protocol | Children],
+    configure: Callable[[], Sentinels],
     expected: tuple[list[str], list[str]],
 ) -> None:
     reports = await run_children(configure(), runner_context(), before_step())

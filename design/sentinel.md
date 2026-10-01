@@ -822,10 +822,8 @@ Protocols nest. A budget-owning protocol can wrap a paraphrasing protocol wrappi
 ``` python
 Monitors: TypeAlias = Mapping[str, Monitor | MonitorGroup] | Sequence[Monitor | MonitorGroup]
 Protocols: TypeAlias = Mapping[str, Protocol | ProtocolGroup] | Sequence[Protocol | ProtocolGroup]
-Children: TypeAlias = (
-    Mapping[str, Monitor | MonitorGroup | Protocol | ProtocolGroup]
-    | Sequence[Monitor | MonitorGroup | Protocol | ProtocolGroup]
-)
+Sentinel: TypeAlias = Monitor | MonitorGroup | Protocol | ProtocolGroup
+Sentinels: TypeAlias = Sentinel | Mapping[str, Sentinel] | Sequence[Sentinel]
 
 Protocol: TypeAlias = (
     Callable[[Context, Step], Awaitable[Decision | None]]
@@ -849,7 +847,7 @@ It is `@monitor`'s twin, typed the way `@scorer` is, and it claims two things ab
 - **The returned callable is annotated `-> Decision`, or `-> Decision | None` if it can abstain.** A protocol returning `Observation | None` is a monitor wearing the wrong decorator, and the checker says so before the decorator runs.
 - **It registers under `"protocol"`.** Same params capture, same `Step`-or-single-stage annotation rule as a monitor.
 
-Children are ordinary factory parameters, typed `Monitors`, `Protocols` or `Children`, and there may be none. That is what makes the nested key in [configuration](#configuration) legal: `monitors:` or `children:` under a factory is legal exactly when the factory has a parameter of that name, and a configuration error otherwise. An earlier draft required a leading positional `monitors` parameter, checked with `Concatenate`, so that the decorator could prove the factory composed. That proof is not wanted now that composing is not what a protocol is; a rule has no children to prove anything about.
+Children are ordinary factory parameters, typed `Monitors`, `Protocols` or `Sentinels`, and there may be none. That is what makes the nested key in [configuration](#configuration) legal: `monitors:` or `children:` under a factory is legal exactly when the factory has a parameter of that name, and a configuration error otherwise. An earlier draft required a leading positional `monitors` parameter, checked with `Concatenate`, so that the decorator could prove the factory composed. That proof is not wanted now that composing is not what a protocol is; a rule has no children to prove anything about.
 
 What the decorator deliberately does *not* do is invoke the children or own the fan-out. A draft of this design tried that — `protocol(monitors, decide=...)` with the framework calling the runner and the author supplying only the reduction — and it was strictly less expressive than writing the body: it had to grow a `transform=` parameter just to recover paraphrasing, and it could not express `sequential` at all, because its decision is made *between* links rather than after them. The factory still holds the children either way, so the enforcement it appeared to buy was illusory. The body of a protocol is ordinary code that calls [the runner](#the-runner).
 
@@ -896,7 +894,7 @@ async def run_protocols(
 
 
 async def run_children(
-    children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Children,
+    children: Sentinels,
     context: Context,
     step: Step,
 ) -> Reports:
@@ -1161,7 +1159,7 @@ So no function watches two stages, and deliberately so. A concern spanning two s
 
 When the two share state, they come from one factory. Accumulating across stages is the trajectory-score case this design argues for, and closure state is wrong for it, since the factory runs once per configuration and its functions are shared across samples. So a `@monitor` factory may return a `MonitorGroup(before, after)` instead of one function, and a `@protocol` factory a `ProtocolGroup(...)`, and the group is one configured instance: one instance name, one `path`, one child context, and so one `store_as` namespace that every member shares. Each member still watches exactly one stage and is validated as a lone function would be, when the factory is called, since only the decorator knows the kind (a `MonitorGroup` from a `@protocol` factory, or the reverse, is a `TypeError`); members are told apart by their `__name__`, recorded as `function` on `Reported` and `SentinelEvent`, and the group's constructor rejects an empty group or a duplicate name. The instance accepts the union of its members' payload types. The runner treats it as one child and runs every member that accepts the step, in the order the factory returned them and one after another since they share a store, so one instance may contribute several reports at a step, which `Observations` and `Decisions` already accommodate as sequences. A member that returns `terminate` or calls `decide_final()` ends the instance's run, as it would for a lone protocol: the members after it do not run and are not recorded. This is the class with a method per stage that the first paragraph rejected, reached through functions, so the static scan and the per-function portability verdict still work. Two instances of one factory, and two samples, keep separate state as before.
 
-The group is an explicit type rather than a list. An earlier version accepted any sequence of functions, which typed as `Sequence[Monitor]` and so let a caller index it and call a member directly, and let a factory that meant to return one function return a list by accident. `MonitorGroup` and `ProtocolGroup` are final classes that hold their functions in order and have no `__call__`, so pyright rejects calling a group, `@monitor` on a factory returning a `MonitorGroup` is typed `Callable[P, MonitorGroup]` by overload, and the aliases (`Monitors`, `Protocols`, `Children`) and the shipped protocols' parameters name the groups beside the functions. A factory that returns a plain list or tuple is an error that says to return the group.
+The group is an explicit type rather than a list. An earlier version accepted any sequence of functions, which typed as `Sequence[Monitor]` and so let a caller index it and call a member directly, and let a factory that meant to return one function return a list by accident. `MonitorGroup` and `ProtocolGroup` are final classes that hold their functions in order and have no `__call__`, so pyright rejects calling a group, `@monitor` on a factory returning a `MonitorGroup` is typed `Callable[P, MonitorGroup]` by overload, and the aliases (`Monitors`, `Protocols`, `Sentinels`) and the shipped protocols' parameters name the groups beside the functions. A factory that returns a plain list or tuple is an error that says to return the group.
 
 ### Decorator arguments {#decorator-arguments}
 

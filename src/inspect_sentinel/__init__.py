@@ -12,13 +12,14 @@ from ._results import Decisions, Observations, Reports
 from ._runner import run_children, run_monitors, run_protocols
 from ._step import AfterToolCall, BeforeToolCall, Step
 from ._types import (
-    Children,
     Monitor,
     MonitorGroup,
     Monitors,
     Protocol,
     ProtocolGroup,
     Protocols,
+    Sentinel,
+    Sentinels,
 )
 
 try:
@@ -31,7 +32,6 @@ __all__ = [
     "Action",
     "AfterToolCall",
     "BeforeToolCall",
-    "Children",
     "Context",
     "Decision",
     "Decisions",
@@ -47,6 +47,8 @@ __all__ = [
     "Report",
     "Reported",
     "Reports",
+    "Sentinel",
+    "Sentinels",
     "Step",
     "Suspicion",
     "concurrent",

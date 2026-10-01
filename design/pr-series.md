@@ -24,7 +24,7 @@ src/inspect_sentinel/
   _step.py          BeforeToolCall, AfterToolCall, Step
   _report.py        Suspicion, Action, Observation, Decision, Report, Reported
   _context.py       Host, Recorder, Context, RunnerContext
-  _types.py         Monitor, Protocol, Monitors, Protocols, Children,
+  _types.py         Monitor, Protocol, Monitors, Protocols, Sentinel, Sentinels,
                     MonitorGroup, ProtocolGroup
   _decorators.py    @monitor, @protocol, registration, signature validation,
                     the direct-call guard, step_types
@@ -34,7 +34,7 @@ src/inspect_sentinel/
                     named_children
   _final.py         decide_final, Final
   _protocols/       observe, concurrent, threshold, one module each
-  _resolve.py       resolve_sentinel, Sentinels
+  _resolve.py       resolve_sentinel
   _config.py        sentinel_from_config, config_from_sentinel
   _integration.py   the contract inspect_ai imports
   _entrypoint.py    inspect_ai entry point; imports _protocols so they register
@@ -230,7 +230,7 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 
 Decided with the user 2026-09-30, before the first release, so nothing is kept for compatibility:
 
-- A multi-function factory returns `MonitorGroup(before, after)` or `ProtocolGroup(a, b)`, both exported, instead of a list. They are final classes holding the functions in order with no `__call__`, so pyright rejects calling a group; construction checks that there is at least one function and that `__name__`s are distinct, and the decorator's `_register` still validates each member (stage, return annotation, kind), since it knows the kind: a `MonitorGroup` from `@protocol`, or the reverse, is a `TypeError`, and so is a plain list or tuple, with a message saying to return the group. `@monitor` is overloaded so a factory returning `Monitor` gives `Callable[P, Monitor]` and one returning `MonitorGroup` gives `Callable[P, MonitorGroup]`; `@protocol` likewise. `Monitors`, `Protocols`, `Children`, `Sentinels`, the runners' parameters and the shipped protocols' parameters name the groups beside the functions. Runtime behaviour is unchanged.
+- A multi-function factory returns `MonitorGroup(before, after)` or `ProtocolGroup(a, b)`, both exported, instead of a list. They are final classes holding the functions in order with no `__call__`, so pyright rejects calling a group; construction checks that there is at least one function and that `__name__`s are distinct, and the decorator's `_register` still validates each member (stage, return annotation, kind), since it knows the kind: a `MonitorGroup` from `@protocol`, or the reverse, is a `TypeError`, and so is a plain list or tuple, with a message saying to return the group. `@monitor` is overloaded so a factory returning `Monitor` gives `Callable[P, Monitor]` and one returning `MonitorGroup` gives `Callable[P, MonitorGroup]`; `@protocol` likewise. `Monitors`, `Protocols`, `Sentinels`, the runners' parameters and the shipped protocols' parameters name the groups beside the functions. Runtime behaviour is unchanged.
 - `@monitor(name=..., version=...)` and `@protocol(name=..., version=...)` beside the bare form, with typed overloads. `name` overrides the registered name as `@solver(name=)` does; `version` is an `int`, default 0 as for Inspect Scout's scanners, stored under `version` in the registry info's metadata for calibration to record. `portable=` and `fail=` are future arguments on this form.
 - A configured function called directly while a runner is invoking a sentinel raises `RuntimeError` ("call children through run_monitors/run_protocols/run_children"). The decorator wraps each inner function in a guard with `functools.wraps`, so `__name__`, `__wrapped__`, the signature and the annotations are preserved; the runner sets a context variable to the function it is about to invoke, and the guard sets it to `None` for the body, so a direct call from inside a body fails and a call through the runner (which sets it again, in its own task) passes. The variable defaults to "no run", so a direct call outside any run, as in a unit test, works.
 - The docs say "annotate `-> Observation`, or `-> Observation | None` if it can abstain" (and the same for `Decision`), since both annotations are accepted.
@@ -304,7 +304,7 @@ Decided with the user 2026-10-01, before the first release, so nothing is kept f
 
 ## sequential()
 
-Shipped 2026-10-01, the first of the `sequential()` and `human()` series. `sequential(children)` takes what `concurrent` takes, annotates `Step`, and runs each child through `run_children` with a one-entry mapping, so each link is recorded under its own name and a link that does not watch the stage is not invoked. The first decision other than `escalate` is returned and later links do not run; an `escalate` is appended to `step.escalations` for the next link. The list starts empty for each run of the chain, so escalations do not cross layers. Monitors are recorded and fall through. All-escalate returns the last escalate, monitors only `continue`, nothing participating `None`. An empty children list is a `ValueError` when the factory is called; YAML nests the links under `children:`. The check that a `human()` directly under `concurrent` is an error is not stubbed: with no `human()` it would be dead code, so it lands with `human()`.
+Shipped 2026-10-01, the first of the `sequential()` and `human()` series. `sequential(children)` takes what `concurrent` takes, annotates `Step`, and runs each child through `run_children` with a one-entry mapping, so each link is recorded under its own name and a link that does not watch the stage is not invoked. The first decision other than `escalate` is returned and later links do not run; an `escalate` is appended to `step.escalations` for the next link. The list starts empty for each run of the chain, so escalations do not cross layers. Monitors are recorded and fall through. All-escalate returns the last escalate, monitors only `continue`, nothing participating `None`. An empty children list is a `ValueError` when the factory is called; YAML nests the links under `children:`. With it, decided with the user 2026-10-01, `Child` and `Children` are replaced by `Sentinel` (a monitor, protocol or group) and `Sentinels` (one sentinel, or a sequence or mapping of them), both exported; `Sentinels` is what `Task(sentinel=)`, `concurrent`, `sequential` and `run_children` take. The check that a `human()` directly under `concurrent` is an error is not stubbed: with no `human()` it would be dead code, so it lands with `human()`.
 
 ## Deferred
 

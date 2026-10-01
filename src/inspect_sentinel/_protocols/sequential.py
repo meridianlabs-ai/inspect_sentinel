@@ -7,13 +7,13 @@ from .._decorators import protocol
 from .._report import Decision, Reported
 from .._runner import run_children
 from .._step import Step
-from .._types import Children, Monitor, MonitorGroup, Protocol, ProtocolGroup
+from .._types import Protocol, Sentinels
 from .._validate import named_children
 
 
 @protocol
 def sequential(
-    children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Children,
+    children: Sentinels,
 ) -> Protocol:
     """Run children one at a time, in order; the first that decides anything but `escalate` decides, and later children do not run.
 
