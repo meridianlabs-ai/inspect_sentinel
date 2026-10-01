@@ -2,6 +2,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import pytest
+from inspect_ai.scorer import Reference
 from inspect_ai.tool import ToolCall, ToolCallContent
 from pydantic import ValidationError
 
@@ -100,3 +101,33 @@ def test_observation_rejects_empty_suspicion_dimensions() -> None:
 def test_observation_rejects_non_finite_suspicion(bad: object) -> None:
     with pytest.raises(ValidationError):
         Observation.model_validate({"suspicion": bad})
+
+
+_CITES = [
+    Reference(type="message", id="m22", cite="[M22]"),
+    Reference(type="event", id="e7"),
+]
+
+
+def test_reports_carry_no_references_by_default() -> None:
+    assert Observation.score(0.1).references == []
+    assert Decision.proceed().references == []
+
+
+_WITH_REFERENCES: list[Callable[[list[Reference]], Report]] = [
+    lambda refs: Observation.score(0.9, "see [M22]", references=refs),
+    lambda refs: Observation.flag("see [M22]", references=refs),
+    lambda refs: Decision.proceed("see [M22]", references=refs),
+    lambda refs: Decision.reject("see [M22]", references=refs),
+    lambda refs: Decision.terminate("see [M22]", references=refs),
+    lambda refs: Decision.escalate("see [M22]", references=refs),
+]
+
+
+@pytest.mark.parametrize("make", _WITH_REFERENCES)
+def test_constructors_take_references(
+    make: Callable[[list[Reference]], Report],
+) -> None:
+    report = make(_CITES)
+    assert report.references == _CITES
+    assert type(report).model_validate_json(report.model_dump_json()) == report

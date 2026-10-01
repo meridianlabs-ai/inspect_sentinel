@@ -342,6 +342,8 @@ class Observation(BaseModel):
     """How suspicious. Required — an Observation with no score says nothing."""
 
     explanation: str | None = Field(default=None)
+    references: list[Reference] = Field(default_factory=list)
+    """Messages and events the explanation cites, e.g. [M22]; see 'References' below."""
     metadata: dict[str, Any] | None = Field(default=None)
 
 
@@ -352,13 +354,16 @@ class Decision(BaseModel):
     """Required."""
 
     audit: bool = Field(default=False)
-    """Request that oversight budget be spent on this."""
+    """Request that oversight budget be spent on this. Recorded and shown as a flag; nothing acts on it yet."""
 
     modified: ToolCall | ChatMessageAssistant | BeforeGenerate | None = Field(default=None)
     """Replacement for the step's subject, for a 'modify' decision."""
 
     explanation: str | None = Field(default=None)
     """Why, for the log. The agent never sees it; see 'Two audiences' below."""
+
+    references: list[Reference] = Field(default_factory=list)
+    """Messages and events the explanation cites."""
 
     message: str | None = Field(default=None)
     """Text the agent reads when the step is rejected. The agent sees nothing else from a decision."""
@@ -487,6 +492,8 @@ Auditing — spending scarce human review — is orthogonal to what happens to t
 
 `audit` lives on `Decision` rather than `Observation`, because "spend human review on this" is itself a policy statement; a monitor flags something by scoring it high. The budget is the outermost protocol's: an inner protocol *requests* an audit, the outer one grants it if budget remains.
 
+For now `audit` is recorded for offline analysis and shown in the viewer as a flag; nothing acts on it yet, since no shipped protocol owns a budget.
+
 An earlier draft called this the first concrete consumer of per-task state. It is not. Ctrl-Z's budget is **1% of actions per episode** ([Prior art](#prior-art)), and an episode is one agent trajectory — one sample. So the canonical audit budget is per-*sample* state, which `context.store_as(BudgetState)` already handles with no new machinery. A budget pooled across samples is a different and also defensible design, but it is not what the literature specifies, and [Per-task](#per-task) is not on the critical path because of it.
 
 #### Final decisions {#authoritative-reports}
@@ -504,9 +511,13 @@ A protocol that has the last word calls `decide_final(decision)`, and the step e
 
 #### Two audiences
 
-Claude Code hooks separate `additionalContext` (the model sees it) from `systemMessage` (the operator sees it, the model does not). We do too, and the reason is security rather than tidiness: **telling an agent why it was flagged teaches it to evade.** `explanation` is log-only: the agent never sees it, so it can carry the full reasoning. `message` is the one field the agent reads, set explicitly with `Decision.reject(explanation, message=...)`; a reject without one gets the host's default "not approved" text.
+Claude Code hooks separate `additionalContext` (the model sees it) from `systemMessage` (the operator sees it, the model does not). We do too, and the reason is security rather than tidiness: **telling an agent why it was flagged teaches it to evade.** `explanation` is log-only: the agent never sees it, so it can carry the full reasoning. `message` is the one field the agent reads, set explicitly with `Decision.reject(explanation, message=...)`; a reject without one gets the host's default "not approved" text. This deliberately differs from inspect's `Approval.explanation`, which *is* shown to the model; the planned approval adapter maps an approver's explanation to `message`.
 
 `message` is legal only on a `reject` for now, and the shape check rejects it on any other action. The same field would give us the soft intervention we otherwise lack — a way to say "continue, but the model should know X" without rejecting anything — but that needs a way to deliver text to the agent while the step proceeds, which does not exist yet.
+
+#### References
+
+`references` on both report types points at the messages and events an explanation cites. It is a list of `inspect_ai.scorer.Reference` (`type` `"message"` or `"event"`, an `id`, and the optional `cite` text such as `[M22]`), the type Scout's `Result.references` uses, so Inspect View can render cites in a sentinel event's explanation as links, as it does for scanner scores. A monitor using `message_numbering()` fills it from `extract_refs(explanation)`. `threshold` copies the references of the monitor its explanation names onto its decision, since the explanation carries that monitor's.
 
 #### One vocabulary across stages
 
@@ -752,30 +763,34 @@ Both are `AfterGenerate`-only, and their signatures say so rather than annotatin
 
 ### A protocol may have no children {#a-protocol-may-have-no-children}
 
-The shipped `threshold` protocol, in full:
+The shipped `threshold` protocol, in outline, with configuration-time validation left out:
 
 ``` python
 @protocol
 def threshold(
-    monitors: Monitor | Monitors,
-    reject_at: float,
-    terminate_at: float | None = None,
+    monitors: Monitor | MonitorGroup | Monitors,
+    reject_at: float | Mapping[str, float],
+    terminate_at: float | Mapping[str, float] | None = None,
 ) -> Protocol:
+    rejects = thresholds(reject_at)  # a float is {"*": float}
+    terminates = thresholds(terminate_at)
+
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
-        score = observations.max_suspicion()
-        if score is None:
+        if not observations:
             return None
-        if terminate_at is not None and score >= terminate_at:
-            return Decision.terminate(explain(observations, score))
-        if score >= reject_at:
-            return Decision.reject(explain(observations, score))
+        if crossed := crossing(observations, terminates):
+            return Decision.terminate(crossed.explain(), references=crossed.references)
+        if crossed := crossing(observations, rejects):
+            return Decision.reject(crossed.explain(), references=crossed.references)
         return Decision.proceed()
 
     return decide
 ```
 
-It holds the constants a monitor cannot, reads its children's scores through the runner, and returns a decision. Nothing else. A reject or terminate is explained for the log, with the highest-scoring monitor's name, score and explanation. Neither sets `message`, so the agent learns only that the call was refused.
+It holds the constants a monitor cannot, reads its children's scores through the runner, and returns a decision. Nothing else. A reject or terminate is explained for the log, with the highest crossing score, its monitor's name, and that monitor's explanation and references. Neither sets `message`, so the agent learns only that the call was refused.
+
+Each threshold is one number or a mapping per dimension. A key `"<monitor>.<dimension>"` applies to one monitor's dimension (the monitor's instance name, as in `Reported.name`), a bare `"<dimension>"` to that dimension from every monitor, a monitor's instance name to its single-number score, and `"*"` to anything unlisted; the most specific key wins, and a score no key covers never triggers. A number is shorthand for `{"*": number}`, so a float threshold behaves and explains itself as it always has. A step is rejected (terminated) when any score reaches its threshold, terminate checked first. Configuration validates the keys, requires finite values, and requires terminate above reject wherever both cover a score. This is what thresholding [structured suspicion](#suspicion-is-structured) per dimension means: calibration produces one percentile per dimension, and the mapping holds them.
 
 And `no_curl` from [Shape](#shape), which is the same thing with the middle removed: no monitors, no runner call, a decision straight from the step. Both are protocols. **Deciding is what makes something a protocol, not having children.** An earlier draft defined a protocol as "a monitor that takes monitors", which made the combinator the essence and left rules and `human()` as a special kind of monitor — the kind that decides — with a decorator whose only job was to distinguish the two. That was the wrong seam. The seam the literature draws, and the one the report types already encode, is between observing and deciding; whether a decider consults anything is a detail of its implementation.
 
@@ -1370,6 +1385,8 @@ class SentinelEvent(BaseEvent):
     decision: Action | None
     audit: bool
     explanation: str | None
+    references: list[Reference]
+    """The report's references; empty for `cancelled` and `bypassed`."""
     metadata: dict[str, Any] | None
 ```
 
@@ -1500,7 +1517,7 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
         return Observation(
             suspicion=score,
             explanation=explanation,
-            metadata={"references": extract_refs(explanation)},
+            references=extract_refs(explanation),
         )
 
     return check

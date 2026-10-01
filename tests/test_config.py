@@ -298,6 +298,19 @@ ROUND_TRIPS: list[Any] = [
             },
         }
     ],
+    [
+        {
+            "name": "threshold",
+            "params": {
+                "reject_at": {"a": 0.8, "b.sabotage": 0.9, "*": 0.95},
+                "terminate_at": 0.99,
+            },
+            "monitors": {
+                "a": {"name": "cfg_suspicion"},
+                "b": {"name": "cfg_suspicion"},
+            },
+        }
+    ],
     {
         "attempt": {
             "name": "concurrent",
@@ -366,6 +379,11 @@ async def test_sentinel_to_config_to_sentinel_is_equivalent() -> None:
         ),
         "gate": threshold(
             {"a": cfg_suspicion(), "b": cfg_suspicion("m")}, reject_at=0.8
+        ),
+        "dims": threshold(
+            {"a": cfg_suspicion()},
+            reject_at={"a": 0.5, "sabotage": 0.7},
+            terminate_at={"*": 0.95},
         ),
         "pair": cfg_pair(),
         "bundle": cfg_bundle(fast=[cfg_suspicion()]),

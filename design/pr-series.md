@@ -230,6 +230,15 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 
 Implemented: the old private `Group`/`MonitorGroup`/`ProtocolGroup` with a raising `__call__` is gone; one internal base, `Group`, remains for `isinstance` checks and holds `functions`. Each member's accepted stages are recorded on its guarded function and `members()` reads them from there. `named_children` treats a group as one instance, as it does a callable.
 
+## References, per-dimension thresholds
+
+Decided with the user 2026-09-30, before the first release, so nothing is kept for compatibility:
+
+- `Observation` and `Decision` gain `references: list[Reference]`, reusing `inspect_ai.scorer.Reference` (the type Scout's `Result.references` uses), so Inspect View can link cites such as `[M22]` in an explanation. Every named constructor takes `references=` as a keyword. `threshold` copies the references of the monitor its explanation names onto its decision. inspect_ai's `SentinelEvent` records them; empty for `cancelled` and `bypassed`.
+- `threshold`'s `reject_at` and `terminate_at` take a float or a mapping keyed by `"<monitor>.<dimension>"`, `"<dimension>"`, a scalar monitor's instance name, or `"*"`; the most specific key wins, unlisted scores never trigger without `"*"`, and a float is `{"*": float}`, normalized at configuration, so a float threshold's decisions and explanations are unchanged. Any score reaching its threshold acts, terminate first. Configuration checks well-formed keys, that a dotted key names a configured monitor (so a dimension containing `.` must be qualified), finite values, and terminate above reject wherever both cover a score. A crossing through a dimension's own key is explained `sabotage 0.72 ≥ 0.60 from audit: ...`; through `"*"`, or for a scalar monitor, as before.
+- `audit` is documented as recorded for offline analysis and shown in the viewer as a flag; nothing acts on it yet.
+- The docs say why `explanation` is log-only though `Approval.explanation` is shown to the model, and give the `modify` pattern with `dataclasses.replace(step.call, arguments=...)`.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands.
