@@ -117,7 +117,7 @@ def monitor(
 ) -> Callable[P, Monitor | MonitorGroup] | _MonitorDecorator:
     """Register a monitor factory.
 
-    Use as `@monitor`, or as `@monitor(name=..., version=...)`. The factory returns a function that must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated `-> Observation`, or `-> Observation | None` if it can abstain. These are checked when the factory is called. Each function watches one stage; to watch several, return a `MonitorGroup` of functions, which together are one configured instance. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
+    Use as `@monitor`, or as `@monitor(name=..., version=...)`. The factory returns a function that must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated `-> Observation`, or `-> Observation | None` if it can abstain. These are checked when the factory is called. Each function watches one stage, so `Step` or any other union is rejected; to watch several, return a `MonitorGroup` of functions, which together are one configured instance. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     A configured function runs only through the runners while a sentinel is running: a protocol that calls one directly from its body raises `RuntimeError`, and must call it through `run_monitors` or `run_children` instead. Outside a run, as in a unit test, a direct call works.
 
@@ -153,7 +153,7 @@ def protocol(
 ) -> Callable[P, Protocol | ProtocolGroup] | _ProtocolDecorator:
     """Register a protocol factory.
 
-    Same contract as `@monitor`, with each returned function annotated `-> Decision`, or `-> Decision | None` if it can abstain, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. To configure several functions as one instance, return a `ProtocolGroup`; a function among them that returns `terminate` or calls `decide_final()` ends the instance's run, and those after it do not run and are not recorded. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
+    Same contract as `@monitor`, with each returned function annotated `-> Decision`, or `-> Decision | None` if it can abstain, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. A function never dispatches on the payload type: a union of some stages but not all is rejected, so write a `ProtocolGroup` with one function per stage instead. A union of every stage written out is `Step`. To configure several functions as one instance, return a `ProtocolGroup`; a function among them that returns `terminate` or calls `decide_final()` ends the instance's run, and those after it do not run and are not recorded. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     As with `@monitor`, a configured function called directly from another protocol's body during a run raises `RuntimeError`; call it through `run_protocols` or `run_children`.
 
@@ -279,6 +279,27 @@ def _guard(function: SentinelFunction) -> SentinelFunction:
     return guarded
 
 
+def check_stages(
+    kind: RegistryType,
+    name: str,
+    declared: frozenset[type[Any]],
+    stages: frozenset[type[Any]],
+) -> None:
+    # a union of every stage is `Step` by value, so it cannot be told apart from
+    # `Step` written out; only a proper subset with several members is partial
+    if len(declared) == 1:
+        return
+    annotated = " | ".join(sorted(stage.__name__ for stage in declared))
+    if kind == "monitor":
+        raise TypeError(
+            f"A monitor watches one stage; {name} annotates step as {annotated}. Return a MonitorGroup with one function per stage."
+        )
+    if declared != stages:
+        raise TypeError(
+            f"A protocol function handles one stage, or every stage; {name} annotates step as {annotated}, which covers some stages but not all. Return a ProtocolGroup with one function per stage, or annotate step as `Step` if the protocol is stage-agnostic."
+        )
+
+
 def _validate_signature(
     instance: Callable[..., Any],
     kind: RegistryType,
@@ -322,10 +343,7 @@ def _validate_signature(
         raise TypeError(
             f"The step parameter of {kind} {name} is annotated {step_hint!r}, which is not a stage payload."
         )
-    if kind == "monitor" and len(members) != 1:
-        raise TypeError(
-            f"A monitor watches one stage; {name} annotates step as {step_hint!r}. Write one monitor per stage."
-        )
+    check_stages(kind, name, frozenset(members), _STEP_TYPES)
     returned = hints.get("return")
     if returned is None:
         raise TypeError(

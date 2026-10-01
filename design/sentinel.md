@@ -1129,7 +1129,7 @@ Deduction runs when the factory is called — that is, at configuration time, wh
 
 > check: could not resolve the annotation `BeforeToolCall`. Import it at module level and at runtime, not under TYPE_CHECKING or inside the factory.
 
-A monitor annotates exactly one payload type. A protocol may annotate one payload type or `Step`, which registers it at every stage; a union of payload types on a protocol is the same as `Step`.
+A monitor annotates exactly one payload type. A protocol may annotate one payload type or `Step`, which registers it at every stage and is meant for stage-agnostic protocols that only forward the step, such as `concurrent` and `observe`. A function never dispatches on the payload type, so a union of some stages but not all is a `TypeError` when the factory is called, naming a `ProtocolGroup` with one function per stage, or `Step`. `Step` is a union, so a union of every stage written out is `Step` by value and is accepted as such; the check compares the annotated set against the set of all stages, and rejects any proper subset with more than one member.
 
 ### The kind is the decorator, and the return annotation is checked against it {#the-kind-comes-from-the-return-annotation}
 
