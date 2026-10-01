@@ -239,6 +239,15 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 - `audit` is documented as recorded for offline analysis and shown in the viewer as a flag; nothing acts on it yet.
 - The docs say why `explanation` is log-only though `Approval.explanation` is shown to the model, and give the `modify` pattern with `dataclasses.replace(step.call, arguments=...)`.
 
+## Context and Host
+
+Decided with the user 2026-09-30, before the first release, so nothing is kept for compatibility:
+
+- The `Context` docstrings say what fills: `task_description` and `sample_description` are None until inspect_ai has `Task(description=)` and `Sample(description=)`, and `target` is None until the `target=True` opt-in exists (both under [Deferred](#deferred)). `Context.store` is the whole sample store, the agent's state included, and is not namespaced; `store_as` is the namespaced way in.
+- `store_as` is keyed by the instance path, so renaming a mapping key or wrapping a monitor in another layer moves its state. The docs say so; there is no `namespace=` override.
+- `Host.generate(input, *, model: str | Model | None = None, role: str | None = None, tools=None, config=None)`. `model` is always a model (a name or an instance), `role` always a role, and passing both is an error the host raises. With neither, the host uses the `monitor` role; if that role is not configured, it falls back to the agent's model and logs a warning once per eval naming the role to set. LLM monitors expose `model=` and `role=` on their factory, `role` defaulting to `"monitor"`, and pass them through. `defer_to_trusted` and `resample` will use a `trusted` role, so a task declares `monitor` and `trusted` separately with `Task(model_roles=...)` or `--model-role`. The inspect_ai `Host` implementation follows in inspect_ai.
+- The docs no longer call `context.host` the only route out of a monitor. Outbound HTTP is planned as `fetch` through named endpoints (`sentinel-deployment.md`); meanwhile an in-process monitor may call inspect_ai APIs directly, such as `sandbox()` or `logging`, at the cost of portability to a proxy, which a future `portable=False` will declare.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands.
@@ -251,5 +260,8 @@ Agreed work that waits for something else. Each entry says what unblocks it. Kee
 - **Monitor model calls tied to their row**: today they are listed together at the end of the sentinel block, because a `ModelEvent` records no instance path. Needs a span per instance inside the sentinel span, or the model event ids on the `SentinelEvent`.
 - **`compaction_summary(step)`**, a helper returning the latest compaction summary text. Waits on inspect_ai making the `"summary"` message metadata key a documented constant, and must handle a summary merged into the task prompt.
 - **`react` overflow recovery rewriting history**: when a call overflows the context window, `react` replaces `state.messages` with the compacted list, so `step.history` loses the folded turns. To raise with inspect_ai.
-- **`defer_to_trusted`, `resample`, views and rendering helpers, `store_as(scope=)`, and `fetch`/`terminate` on `Host`**: designed, not yet built.
+- **`defer_to_trusted`, `resample`, views and rendering helpers, and `fetch`/`terminate` on `Host`**: designed, not yet built.
+- **`Task(description=)` and `Sample(description=)` in inspect_ai**, so `Context.task_description` and `Context.sample_description` fill. Held off by the user. Until then both are always None in an eval.
+- **The `target` opt-in**: `@monitor(target=True)` and `@protocol(target=True)`, the runner passing `Context.target` only to instances that declared it, and the registry recording that they did, so the log shows which monitors used the answer. Performance with the answer is not achievable in deployment, sandbagging detection legitimately needs it, and a monitor that reads `target` is not portable to a proxy. Until then `target` is always None.
+- **`store_as(scope="task")`**: per-task state across samples, documented in the design (`sentinel.md`, "Per-task") but not built. Needs a design for concurrency and checkpointing first.
 - **Threshold comparisons in the viewer** (`0.62 < 0.80`): the event does not record the threshold a protocol applied.

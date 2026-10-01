@@ -233,19 +233,19 @@ class Context:
     path: str
     """Instance path, e.g. "attempt/internet_attempt". Empty at the top layer."""
 
-    # -- the monitor's own memory
+    # -- memory
     store: Store
-    """This monitor's per-sample state, namespaced. Raw form."""
+    """The whole sample store, the agent's state included; not namespaced."""
 
     def store_as(self, model_cls: Type[SMT], *, scope: Scope = "sample") -> SMT:
-        """Typed view of this monitor's state. Mirrors the global `store_as()`."""
+        """Typed view of this instance's state, namespaced by `path`. `scope="task"` is not built."""
 
     # -- effects
     host: Host
-    """Inference, keyed storage and outbound JSON. The only route out of a monitor."""
+    """Inference today; outbound JSON and keyed storage are planned. See [Effects](#effects)."""
 
     target: Target | None = None
-    """The expected answer. None unless explicitly opted into."""
+    """The expected answer. None unless explicitly opted into; the opt-in is not built."""
 ```
 
 The dispatcher hands the top layer a `RunnerContext`, which the runner requires and preserves down the layers. Authors never see its extra fields.
@@ -272,7 +272,7 @@ Rules:
 
 - **Use the assignment fields to judge the step.** The same `curl` command is exfiltration in one task and the assigned work in another. A monitor that ignores `task_description` can only flag things that would look bad in any task, and it will produce false positives on tasks that are designed to look bad.
 - **Keep context and step separate when you build a prompt.** Put the assignment in a labelled instructions section and the conversation in a labelled evidence section. Do not concatenate them into one block where a tool result can claim to be a revised assignment.
-- **Do not read `target` unless the monitor's job requires the answer.** It is absent by default. Request it explicitly, and the log records that you did, so readers can tell whether the monitor's performance is achievable in deployment. Sandbagging detection needs it. An AI control monitor standing in for a deployed one must not have it. See [View](#view).
+- **Do not read `target` unless the monitor's job requires the answer.** It is absent by default, and until `@monitor(target=True)` and `@protocol(target=True)` are built it is always None. Request it explicitly, and the log records that you did, so readers can tell whether the monitor's performance is achievable in deployment. Sandbagging detection needs it. An AI control monitor standing in for a deployed one must not have it. See [View](#view).
 - **Do not cache the context.** It is passed on every call. Storing it would make the monitor stateful.
 - **Use `context.host` for inference and every other outside effect.** Do not call `get_model()` directly. See [Effects](#effects).
 
@@ -286,7 +286,7 @@ How the fields are populated:
 | `input` | `Sample.input` | the request's system prompt and first user turn |
 | `metadata` | task + sample metadata | headers, deployment config |
 
-`Task(description=)` and `Sample(description=)` do not exist yet. They are the proposed home for the assignment text; the fallback is a `metadata` convention. See [Open questions](#open-questions) item 13. Structured context goes in `metadata` either way.
+`Task(description=)` and `Sample(description=)` do not exist yet, so in an eval `task_description` and `sample_description` are always None. They are the proposed home for the assignment text; the fallback is a `metadata` convention. See [Open questions](#open-questions) item 13. Structured context goes in `metadata` either way.
 
 ### Reports
 
@@ -429,7 +429,7 @@ Rules:
 
 ### State
 
-Per-sample state lives in the sample `Store`, namespaced to the monitor so two configured instances of the same monitor do not collide:
+Per-sample state lives in the sample `Store`. `context.store_as()` namespaces it by the instance path so two configured instances of the same monitor do not collide; `context.store` is the whole store, the agent's state included, and is not namespaced:
 
 ```python
 class TrajectoryState(StoreModel):
@@ -444,7 +444,9 @@ async def check(context: Context, step: BeforeToolCall) -> Observation | None:
 
 You get three things for free: the state is recorded to the transcript as `StoreEvent`s, it survives checkpoint and resume, and `store_from_events_as()` reconstructs it from a finished log for analysis. A scorer holding a `TaskState` reads it with `store_as(TrajectoryState, instance=<instance path>)`, for example `instance="attempt/internet_attempt"`.
 
-Per-task state uses `scope="task"`:
+The key is the instance path, so renaming a mapping key or wrapping a monitor in another layer moves its state: a resumed sample or a scorer reading under the old path finds nothing.
+
+Per-task state would use `scope="task"`. It is designed but not built; it needs a design for concurrency and checkpointing first:
 
 ```python
 class RunTotals(StoreModel):
@@ -465,11 +467,12 @@ There is no `monitor_store_as()` or `monitor_host()` global. Helpers take what t
 
 ### Effects
 
-`context.host` is the only route out of a monitor: inference, keyed storage and outbound JSON; the runner records through a separate `Recorder`. `sentinel-deployment.md` defines it. In-process these are ordinary implementations; under a proxy they cross the host boundary.
+`context.host` is how a monitor reaches the outside world portably. Today that is inference; outbound JSON through named endpoints (`fetch`) and keyed storage are planned, and `sentinel-deployment.md` defines them. The runner records through a separate `Recorder`. In-process these are ordinary implementations; under a proxy they cross the host boundary. Until `fetch` lands, a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, at the cost of portability to a proxy, which a future `portable=False` will declare.
 
 Rules:
 
-- **Call `context.host.generate()` for inference, never `get_model()`.** It takes a prompt string or a message list, with optional `model` (a name or a role), `tools` and `config`, and returns a `ModelOutput`. The host defaults to `role="monitor"` and records monitor inference separately from the agent's. The `portable=True` check bans `get_model()`.
+- **Call `context.host.generate()` for inference, never `get_model()`.** It takes a prompt string or a message list, with optional `model` (a name or a `Model`), `role` (a model role), `tools` and `config`, and returns a `ModelOutput`. Passing both `model` and `role` is an error the host raises. With neither, the host uses the `monitor` role; if that role is not configured it falls back to the agent's model and logs a warning once per eval naming the role to set. It records monitor inference separately from the agent's. The `portable=True` check bans `get_model()`.
+- **Expose `model=` and `role=` on an LLM monitor's factory** and pass them through, with `role` defaulting to `"monitor"`, so a task can point it elsewhere without editing it.
 - **Monitor inference is not charged to the agent's limits.** Approvers get the same exemption today via `suspend_token_limit()` and `suspend_turn_limit()`. Monitor usage is separable from agent usage in `ModelUsage`.
 - **Treat model completions, tool arguments, and tool output as untrusted.** The monitor's output decides whether the sample stops, so a successful injection against the monitor can stop a sample or prevent it from being stopped. `monitor_prompt` delivers evidence in a delimited, clearly-untrusted envelope by default; see [View](#view).
 - **Classify incrementally.** Judge the newest turn and fold the verdict into stored state rather than re-judging the whole trajectory each step. Re-judging is quadratic in inference cost and linear in deserialization cost, and under WASM the memory never shrinks.
@@ -515,7 +518,7 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 
 ```python
 @monitor
-def suspicion_monitor(model: str | None = None) -> Monitor:
+def suspicion_monitor(model: str | Model | None = None, role: str = "monitor") -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
@@ -525,7 +528,9 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
             history=new_since_last_report(context, step.history),
             messages_as_str=messages_as_str,
         )
-        output = await context.host.generate(prompt, model=model)
+        output = await context.host.generate(
+            prompt, model=model, role=None if model is not None else role
+        )
         score, explanation = parse_score(output.completion)
         return Observation(suspicion=score, explanation=explanation,
                            references=extract_refs(explanation))
@@ -879,7 +884,7 @@ Rules for protocols that generate:
 - **Annotate `AfterGenerate`.** Regeneration needs the request, and only that stage carries `input`, `tools`, `tool_choice` and `config` beside the `output`.
 - **Regenerate with `step.tools` and `step.config`.** The candidate must be a completion the agent could have produced.
 - **Run candidates through the runner.** Every draw's scores are then in the log, not only the winner's.
-- **`defer_to_trusted` defaults to the `trusted` model role.** `--model-role trusted=...` configures it without touching code.
+- **`defer_to_trusted` defaults to the `trusted` model role.** `defer_to_trusted` and `resample` will use a `trusted` role, separate from the monitors' `monitor` role, so a task declares the two separately, with `Task(model_roles={"monitor": ..., "trusted": ...})` or `--model-role monitor=... --model-role trusted=...`, without touching code.
 - **Protocol inference is a separate usage bucket.** Recorded under `protocol` in `ModelUsage`, not charged to the agent's limits.
 
 A third party ships a protocol the same way it ships a monitor: a decorated factory in a package, with no core change. Research-grade machinery lives outside core until there is demand.
@@ -1231,7 +1236,7 @@ The known failure is PEP 563: under `from __future__ import annotations`, `get_t
 
 ### Why no global accessors
 
-Ambient accessors exist in Inspect for call boundaries you do not control: a tool invoked by the model, a scorer invoked by the framework. A monitor controls its own helper call sites, so helpers take parameters. `StoreModel` falls back to a global `ContextVar` that a proxy cannot provide; `context.store_as()` passes the store explicitly so that path is never taken. A `monitor_host()` global would reopen the property that `context.host` is the only route out of a monitor. `get_model()` is the leak that already exists, which is why the portability check bans it.
+Ambient accessors exist in Inspect for call boundaries you do not control: a tool invoked by the model, a scorer invoked by the framework. A monitor controls its own helper call sites, so helpers take parameters. `StoreModel` falls back to a global `ContextVar` that a proxy cannot provide; `context.store_as()` passes the store explicitly so that path is never taken. A `monitor_host()` global would reopen the property that `context.host` is the only portable route out of a monitor. `get_model()` is the leak that already exists, which is why the portability check bans it.
 
 ### Where the decorator lives
 
