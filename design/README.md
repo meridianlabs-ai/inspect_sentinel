@@ -13,4 +13,4 @@ Eight documents. **Start with [sentinel-overview.md](sentinel-overview.md)**, wh
 | [workstreams.md](workstreams.md) | **Who can work on what**: the areas that can be owned separately (Scout integration, inspect_core, generate stages, `sequential()` and `human()`, bridged agents and deployment, shipped protocols and helpers, auto-mode approvers, remote human surfaces), each with its design doc and what it touches. | Current as of 2026-09-30 |
 | [inspect-core.md](inspect-core.md) | Extracting Inspect's **wire types** into a leaf package light enough for this one, or another language, to depend on. | Measured where marked, reasoned elsewhere |
 
-These documents were drafted on the `design/monitor` branch of [inspect_ai](https://github.com/UKGovernmentBEIS/inspect_ai) and moved here when the package was created. Issue numbers (`#5423`, `#5355`) and file paths in them refer to that repository.
+These documents are canonical. They were drafted on the `design/monitor` branch of [inspect_ai](https://github.com/UKGovernmentBEIS/inspect_ai), which is no longer updated. Issue numbers (`#5423`, `#5355`) and file paths in them refer to that repository.

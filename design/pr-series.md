@@ -191,7 +191,7 @@ Implemented: the shape is `SentinelConfig`, a pydantic `RootModel` over a list o
 
 ## Design sync
 
-The canonical docs on inspect_ai's `design/monitor` branch were synced with this series on 2026-09-28 (inspect_ai 12f555a65): `decide_final()`, the runner-side `Recorder`, `Context.path`, `RunnerContext`, the plural-only runner, and multi-function factories. The copies in `design/` match them; edit both together.
+Decided with the user 2026-10-01: these documents in `design/` are canonical. They were drafted on inspect_ai's `design/monitor` branch and kept in sync with it by hand until then; that branch has a final sync and a note pointing here, and is no longer updated. Edit only the copies in this repository.
 
 ## S7: the factory name for the log
 
