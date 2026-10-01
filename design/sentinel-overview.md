@@ -133,7 +133,7 @@ Built-in protocols cover the common compositions and basic control scenarios:
 | `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `continue`). What a list containing a protocol resolves to. Use for independent guards that must all be satisfied. |
 | `sequential()` | Runs children in order until one decides; first non-`escalate` wins, and escalations are handed to the next link so a human at the end sees who asked and why. Use for a cheap rule ahead of an expensive judge. |
 | `observe()` | Records every observation and acts on none. What a bare monitor resolves to, and how a benign score distribution gets collected. |
-| `threshold()` | Acts on a score: `reject` above one constant, `terminate` above another. The smallest protocol, and the one calibration feeds. |
+| `threshold()` | Acts on scores: `reject` at or above one threshold, `terminate` at or above another, each one number or a mapping per dimension (`{"audit.sabotage": 0.6, "*": 0.9}`). The smallest protocol, and the one calibration feeds. |
 | `defer_to_trusted()` | Above a threshold, substitutes a trusted model's action for the untrusted one's. Defaults to the `trusted` model role. |
 | `resample()` | Above a threshold, draws further completions, scores each, and executes the least suspicious; escalates if none clears. |
 
@@ -141,24 +141,26 @@ Built-in protocols cover the common compositions and basic control scenarios:
 
 A protocol's body is ordinary code around the runner (`run_monitors()`, `run_protocols()`, `run_children()`), which runs the children concurrently and records their reports. Thresholds, budget arithmetic, and aggregation are up to the protocol.
 
-For example, `threshold`, the smallest shipped protocol: it reads its children's scores and acts above a constant. This is the full implementation:
+For example, `threshold`, the smallest shipped protocol: it reads its children's scores and acts when one reaches its threshold. In outline, with configuration-time validation left out:
 
 ``` python
 @protocol
 def threshold(
     monitors: Monitor | MonitorGroup | Monitors,
-    reject_at: float,
-    terminate_at: float | None = None,
+    reject_at: float | Mapping[str, float],
+    terminate_at: float | Mapping[str, float] | None = None,
 ) -> Protocol:
+    rejects = thresholds(reject_at)  # a float is {"*": float}
+    terminates = thresholds(terminate_at)
+
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
-        score = observations.max_suspicion()
-        if score is None:
+        if not observations:
             return None
-        if terminate_at is not None and score >= terminate_at:
-            return Decision.terminate(explain(observations, score))
-        if score >= reject_at:
-            return Decision.reject(explain(observations, score))
+        if crossed := crossing(observations, terminates):
+            return Decision.terminate(crossed.explain(), references=crossed.references)
+        if crossed := crossing(observations, rejects):
+            return Decision.reject(crossed.explain(), references=crossed.references)
         return Decision.proceed()
 
     return decide
