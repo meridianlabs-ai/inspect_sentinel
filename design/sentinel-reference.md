@@ -782,7 +782,7 @@ class Host(Protocol):
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
 ```
 
-The host is handed the step and renders it by its type: the call, its view, the conversation and `step.escalations`, plus the result after a call. It notifies the person, marks the sample as awaiting a person, and raises a clear error for a stage it cannot render. When the person ends the prompt without one of the choices, the host answers `terminate`, whether or not it was offered, so the step fails closed. inspect_ai renders the tool stages with its human approval surfaces; a proxy implements the same method, e.g. as a review queue.
+The host is handed the step and renders it by its type: the call, its view, the conversation and `step.escalations`, plus the result after a call. It notifies the person, marks the sample as awaiting a person, and raises a clear error for a stage it cannot render. When the person ends the prompt without one of the choices, the host answers `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered. inspect_ai renders the tool stages with its human approval surfaces; a proxy implements the same method, e.g. as a review queue.
 
 ### Static checking
 

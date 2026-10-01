@@ -89,7 +89,7 @@ class Host(typing.Protocol):
     ) -> ModelOutput: ...
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
     """Ask a person about the step, rendered by its type; a proxy might use a review queue.
-    A person who ends the prompt without an offered choice yields `terminate`, offered or not."""
+    A person who ends the prompt without an offered choice yields `reject` if offered, otherwise `terminate`."""
     async def fetch(
         self,
         endpoint: str,                      # a NAME, not a URL — see below
@@ -116,7 +116,7 @@ class HostResponse(typing.Protocol):
 
 Only `generate` and `ask_human` are built; `fetch`, `get`/`put` and `terminate` are planned.
 
-`ask_human` answers one of the offered choices, or `terminate` when the person ends the prompt without one, whether or not `terminate` was offered, so the step fails closed.
+`ask_human` answers one of the offered choices, or, when the person ends the prompt without one, `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered.
 
 Known limits of inspect_ai's surfaces: ACP cannot withdraw a permission request when the ask is cancelled, so the card stays and a later click on it is discarded; an ACP ask after a call resets the call's card to pending; and inspect_ai's surfaces return fixed reason text and cannot modify a call.
 
