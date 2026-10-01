@@ -570,3 +570,88 @@ def test_an_exact_name_wins_over_the_package_fallback() -> None:
         "inspect_sentinel/observe",
     ]
     assert config_from_sentinel(built) == SentinelConfig.model_validate(config)
+
+
+@monitor(version=2)
+def cfg_versioned() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(0.3)
+
+    return check
+
+
+@protocol(version=5)
+def cfg_versioned_rule() -> Protocol:
+    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+        return Decision.reject("no")
+
+    return decide
+
+
+def test_a_version_round_trips() -> None:
+    config = config_from_sentinel([cfg_versioned()])
+    assert config.model_dump() == [
+        {"name": "cfg_versioned", "params": {}, "version": 2}
+    ]
+    assert config_from_sentinel(sentinel_from_config(config)) == config
+    assert SentinelConfig.model_validate_json(config.model_dump_json()) == config
+
+
+def test_version_0_is_omitted() -> None:
+    config = config_from_sentinel(cfg_rule("stop"))
+    assert config.model_dump() == {"name": "cfg_rule", "params": {"reason": "stop"}}
+    assert "version" not in config.model_dump_json()
+
+
+def test_an_entry_without_a_version_builds_without_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    built = _only(sentinel_from_config([{"name": "cfg_versioned"}]))
+    assert registry_info(built).name == "cfg_versioned"
+    assert not caplog.records
+
+
+def test_a_version_mismatch_warns_once_and_still_builds(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    raw = [{"name": "cfg_versioned_rule", "version": 4}]
+    built = _only(sentinel_from_config(raw))
+    assert registry_info(built).name == "cfg_versioned_rule"
+    sentinel_from_config(raw)
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings == [
+        "cfg_versioned_rule was recorded at version 4 but version 5 is installed; building it anyway."
+    ]
+
+
+def test_a_matching_version_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    sentinel_from_config([{"name": "cfg_versioned", "version": 2}])
+    assert not caplog.records
+
+
+def test_a_version_must_be_an_integer() -> None:
+    with pytest.raises(ValueError, match=r"sentinel\[0\]\.version must be an integer"):
+        sentinel_from_config(cast(Any, [{"name": "cfg_versioned", "version": "2"}]))
+
+
+def test_nested_entries_carry_their_own_versions() -> None:
+    original = cfg_bundle(
+        fast=[cfg_versioned()],
+        slow={"plain": cfg_suspicion()},
+    )
+    gate = threshold({"v": cfg_versioned()}, reject_at=0.5)
+    config = config_from_sentinel({"bundle": original, "gate": gate})
+    assert config.model_dump() == {
+        "bundle": {
+            "name": "cfg_bundle",
+            "params": {},
+            "fast": [{"name": "cfg_versioned", "params": {}, "version": 2}],
+            "slow": {"plain": {"name": "cfg_suspicion", "params": {}}},
+        },
+        "gate": {
+            "name": "threshold",
+            "params": {"reject_at": 0.5},
+            "monitors": {"v": {"name": "cfg_versioned", "params": {}, "version": 2}},
+        },
+    }
+    assert config_from_sentinel(sentinel_from_config(config)) == config
