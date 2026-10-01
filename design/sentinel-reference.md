@@ -995,7 +995,8 @@ class SentinelEvent(BaseEvent):
     step_id: str          # triggering message id, assistant message id, or tool call id
     conversation: str     # the agent conversation; shared with its ModelEvents and CompactionEvents
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
-    kind: Literal["observation", "decision", "cancelled", "bypassed", "superseded"]
+    kind: Literal["observation", "decision"]  # the report family, for every status
+    status: Literal["reported", "cancelled", "bypassed", "superseded"]  # superseded is decisions only
     suspicion: Suspicion | None
     decision: Action | None
     audit: bool
@@ -1010,19 +1011,19 @@ Rules:
 - **One event per layer in a nested configuration.** Each participating child and each protocol above it emits one:
 
   ```
-  name="internet_attempt",  path="attempt/internet_attempt",  kind="decision",  decision="escalate"
-  name="sequential",        path="attempt",                   kind="bypassed"
-  name="sandbox_escape",    path="escape",                    kind="decision",  decision="continue"
-  name="concurrent",        path="",                          kind="bypassed"
-  name="human",             path="attempt/human",             kind="decision",  decision="reject"
+  name="internet_attempt",  path="attempt/internet_attempt",  kind="decision",  status="reported",  decision="escalate"
+  name="sequential",        path="attempt",                   kind="decision",  status="bypassed"
+  name="sandbox_escape",    path="escape",                    kind="decision",  status="reported",  decision="continue"
+  name="concurrent",        path="",                          kind="decision",  status="bypassed"
+  name="human",             path="attempt/human",             kind="decision",  status="reported",  decision="reject"
   ```
 
-  The person's `reject` went through `decide_final()`: its event is the ordinary decision event of `human`, recorded at the root when it takes effect, after one `bypassed` event per layer above, each written as the `decide_final()` passed it. If two `decide_final()` calls race in one layer, or an exception in the layer outranks one, the losing decision's event is `superseded` and it did not take effect; so is a recorded `terminate` that a sibling's `decide_final()` outran. Without a final decision the last line is the summary event, the root's own decision at `path=""`. Every layer's decision is recorded, the root's included; when more than one child decided, a layer's explanation lists each child's decision after the winner's own.
+  The person's `reject` went through `decide_final()`: its event is the ordinary decision event of `human`, recorded at the root when it takes effect, after one `bypassed` event per layer above, each written as the `decide_final()` passed it. If two `decide_final()` calls race in one layer, or an exception in the layer outranks one, the losing decision's event has status `superseded` and it did not take effect; so is a recorded `terminate` that a sibling's `decide_final()` outran. Without a final decision the last line is the summary event, the root's own decision at `path=""`. Every layer's decision is recorded, the root's included; when more than one child decided, a layer's explanation lists each child's decision after the winner's own.
 
-- **`name` is which code ran. `path` is which configured instance it was. `function` is which of its functions reported.** Two `sequential`s built from the same factory differ only in `path`; two functions of one instance differ only in `function`. `kind` says which family it belongs to, and agrees with the registry type by construction.
+- **`name` is which code ran. `path` is which configured instance it was. `function` is which of its functions reported.** Two `sequential`s built from the same factory differ only in `path`; two functions of one instance differ only in `function`. `kind` says which family it belongs to, and agrees with the registry type by construction; `status` says whether the report was made, cancelled, bypassed or superseded.
 - **`step_id` is what a label matches.** For `BeforeGenerate` it is the id of the message that triggered the generate, with an ordinal suffix on a regenerate; for `AfterGenerate` the assistant message id; for the tool stages the tool call id. All three exist before the monitor runs, so recorded events and replayed steps share ids. See `sentinel-development.md`.
 - **`decision` is what this layer decided.** What the layer above did with it is the event at the parent path, since every deciding layer records its own decision; a layer that a `decide_final()` bypassed has no decision of its own, and the `decide_final()` decision is the answer.
-- **There is no `strategy` field.** The protocol's name says what it did. "How often did this protocol defer" is `monitor == "defer_to_trusted" and decision == "modify"`. A protocol that takes several different actions should be composed from nested protocols, or record the detail in `metadata`.
+- **There is no `strategy` field.** The protocol's name says what it did. "How often did this protocol defer" is `factory == "inspect_sentinel/defer_to_trusted" and action == "modify"`. A protocol that takes several different actions should be composed from nested protocols, or record the detail in `metadata`.
 - **One flat event type across both families and all four stages.** The renderer, the dataframe, and the log schema all read it, and a split would push a union into `generated.ts`.
 
 Whether `SentinelEvent` replaces `ApprovalEvent` and `ReviewEvent` when the decision came from a protocol, sits beside them, or those events gain a `monitor` field, is open.

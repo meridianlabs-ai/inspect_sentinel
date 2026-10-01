@@ -1387,8 +1387,8 @@ class SentinelEvent(BaseEvent):
     function: str | None
     """`__name__` of the function that produced the report, which tells apart the functions of
     an instance whose factory returned several; path plus function identifies a report. Set for
-    `observation`, `decision` and `superseded` events; `None` for `cancelled` and `bypassed`,
-    which are per instance."""
+    `reported` and `superseded` events; `None` for `cancelled` and `bypassed`, which are per
+    instance."""
     step_id: str
     """The step examined: the triggering message id (BeforeGenerate), the assistant
     message id (AfterGenerate), or the tool call id (tool stages). See
@@ -1397,8 +1397,10 @@ class SentinelEvent(BaseEvent):
     """The agent conversation this step belongs to; the same id the loop's
     `ModelEvent`s and `CompactionEvent`s carry. See "Two histories"."""
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
-    kind: Literal["observation", "decision", "cancelled", "bypassed", "superseded"]
-    """`observation` or `decision` agrees with the registry type of `name` by construction; `cancelled` and `bypassed` record no report; `superseded` carries the decision of a protocol whose `decide_final()` lost a race or was outranked by an exception."""
+    kind: Literal["observation", "decision"]
+    """The report family; agrees with the registry type of `name` by construction, for every status."""
+    status: Literal["reported", "cancelled", "bypassed", "superseded"]
+    """What happened to the report: `reported` carries it; `cancelled` and `bypassed` record no report; `superseded` carries the decision of a protocol whose `decide_final()` lost a race or was outranked by an exception (decisions only)."""
     suspicion: Suspicion | None
     decision: Action | None
     audit: bool
@@ -1408,7 +1410,7 @@ class SentinelEvent(BaseEvent):
     metadata: dict[str, Any] | None
 ```
 
-A `cancelled` event carries no suspicion or decision; it says the child was in flight when the layer was torn down, by a sibling's `terminate` or `decide_final()` or by cancellation from above. A `decide_final()` decision's event is the ordinary `decision` event of the protocol that called it, written at the root when the decision takes effect, so it follows the `bypassed` event of each layer above it, each a protocol whose own decision logic never ran. When two `decide_final()` calls race in one layer, or an exception in the layer outranks one, the losing decision's event is `superseded`: it did not take effect. A `terminate` already recorded when a sibling's `decide_final()` outran it is followed by a `superseded` event for the same reason.
+A `cancelled` event carries no suspicion or decision, but its `kind` still says whether the child was a monitor or a protocol; it says the child was in flight when the layer was torn down, by a sibling's `terminate` or `decide_final()` or by cancellation from above. A `decide_final()` decision's event is the ordinary reported decision event of the protocol that called it, written at the root when the decision takes effect, so it follows the `bypassed` event of each layer above it, each a protocol whose own decision logic never ran. When two `decide_final()` calls race in one layer, or an exception in the layer outranks one, the losing decision's event has status `superseded`: it did not take effect. A `terminate` already recorded when a sibling's `decide_final()` outran it is followed by a `superseded` event for the same reason.
 
 What the layer above did with a report needs no field of its own. Every layer that decides records its decision at its own path, so the answer is the event at the parent path, or, for a layer a `decide_final()` bypassed, the `decide_final()` decision, which is recorded with the path that made it. A reader can therefore tell an overruled decision from one that was never made, which is what a reader of a nested configuration needs to see. An earlier draft carried an `outcome` field for this; it duplicated the parent's event and was removed. Which child's decision a top-level result came from is exact after `decide_final()` and otherwise inferred, by walking down from the top-level decision to a child that made the same one.
 
@@ -1419,16 +1421,16 @@ What the layer above did with a report needs no field of its own. Every layer th
 A protocol is recorded exactly as a monitor is, so a nested configuration emits **one `SentinelEvent` per layer**, and that is what makes the layering readable without any further field:
 
 ```
-name="internet_attempt",  path="attempt/internet_attempt",  kind="decision",  decision="escalate"
-name="sequential",        path="attempt",                   kind="bypassed"
-name="sandbox_escape",    path="escape",                    kind="decision",  decision="continue"
-name="concurrent",        path="",                          kind="bypassed"
-name="human",             path="attempt/human",             kind="decision",  decision="reject"
+name="internet_attempt",  path="attempt/internet_attempt",  kind="decision",  status="reported",  decision="escalate"
+name="sequential",        path="attempt",                   kind="decision",  status="bypassed"
+name="sandbox_escape",    path="escape",                    kind="decision",  status="reported",  decision="continue"
+name="concurrent",        path="",                          kind="decision",  status="bypassed"
+name="human",             path="attempt/human",             kind="decision",  status="reported",  decision="reject"
 ```
 
 The person's `reject` went through `decide_final()`, so the `sequential` and the top-level `concurrent` above it are `bypassed`, and the `reject` itself is recorded last, at the root, when it takes effect. Without a final decision the last line is the summary event #5423 wanted: the top-level `concurrent` records the combined decision at `path=""`. Every layer's decision is recorded, the root's included; a configuration that is a single rule logs one event per step, since the rule is the root; when more than one child decided, the layer's explanation lists each child's decision after the winner's own.
 
-An earlier draft added a `strategy: str` here and on `Decision`, to record whether a `modify` came from a deferral, a resample or a trusted edit. It was removed: **the layer's identity already is the strategy.** A protocol named `defer_to_trusted` returning `modify` has said what it did, and the aggregate query that justified the field — how often did this protocol defer — is `monitor == "defer_to_trusted" and decision == "modify"`. Worse, on `Decision` it was a field every rule carried and never set.
+An earlier draft added a `strategy: str` here and on `Decision`, to record whether a `modify` came from a deferral, a resample or a trusted edit. It was removed: **the layer's identity already is the strategy.** A protocol named `defer_to_trusted` returning `modify` has said what it did, and the aggregate query that justified the field — how often did this protocol defer — is `factory == "inspect_sentinel/defer_to_trusted" and action == "modify"`. Worse, on `Decision` it was a field every rule carried and never set.
 
 The residual case is a protocol that genuinely takes several different actions — Ctrl-Z choosing between deferral and audit on two thresholds over one score, where `monitor` does not disambiguate. Two answers in order of preference: compose it, which [nesting permits](#a-protocol-may-have-no-children), or put it in `metadata`, which already exists and needs no new contract on a serialized type.
 
@@ -1785,3 +1787,4 @@ ordered composition should be the default (no — see [Two compositions](#two-co
 22.  **Where does `conversation` come from, and is `history` eager?** The id wants minting by the loop that owns the messages, which is `react`, the generate loop and each bridge in-process, and the proxy's session key outside; whether `AgentState` should carry it, or the runner derive it from the agent span, is open. `history` on every payload is a reference to the scaffold's list in-process, but replay and a proxy must materialise it per step, which is O(n) per step over a long trajectory unless the runner hands out a shared, append-only view.
 23.  **Is `decide_final()` the right design at all?** Any protocol at any depth, third-party code inside `observe()` or `threshold()` included, can call it and bypass every layer above, while this design presents child decisions as advisory to the parent. The options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism.
 24.  **What should an `escalate` that reaches the root mean?** Today it proceeds as `continue` would, is recorded as the root's decision, and the host warns once per eval. The alternatives are rejecting it (fail-closed, as approval does when every approver escalates) or a setting with a chosen default. Rejecting turns every unsure rule into a blocked call.
+25.  **How do `review=` and tool approvers migrate?** Three parts are open. Is `review=` deprecated in favour of after-call protocols, as [Relationship to approval and review](#relationship-to-approval-and-review) proposes? How does `approval=` coexist with `sentinel=`? The ordering is already written down: approval and then the sentinel before a call, review and then the sentinel after. Can an existing approver run as a protocol through an `as_protocol(approver)` adapter, so that it composes with monitors? Tracked in `pr-series.md`, Deferred.
