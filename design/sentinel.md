@@ -255,20 +255,23 @@ class Context:
     path: str
     """Instance path, e.g. "attempt/internet_attempt". Empty at the top layer."""
 
-    # -- the monitor's own memory
+    # -- memory
     store: Store
-    """This monitor's per-sample state, namespaced. Raw form."""
+    """The whole sample store, the agent's state included; not namespaced."""
 
     def store_as(self, model_cls: Type[SMT], *, scope: Scope = "sample") -> SMT:
-        """Typed view of this monitor's state. Mirrors the global `store_as()`."""
+        """Typed view of this instance's state, namespaced by `path`.
+
+        `scope="task"` is not built; see [Per-task](#per-task).
+        """
 
     # -- effects
     host: Host
-    """Inference, keyed storage and outbound JSON.
+    """Inference today; outbound JSON (`fetch`) and keyed storage are planned.
 
-    The only sanctioned route out of a monitor. Defined in
-    `sentinel-deployment.md`; in-process these are ordinary implementations,
-    in a proxy they cross the host boundary.
+    The portable route out of a monitor. Defined in `sentinel-deployment.md`;
+    in-process these are ordinary implementations, in a proxy they cross the
+    host boundary.
     """
 
     target: Target | None = None
@@ -742,7 +745,11 @@ def defer_to_trusted(
         if score is None or score < threshold:
             return Decision.proceed()
         output = await context.host.generate(
-            step.input, model=trusted or "trusted", tools=step.tools, config=step.config
+            step.input,
+            model=trusted,
+            role="trusted" if trusted is None else None,
+            tools=step.tools,
+            config=step.config,
         )
         return Decision(
             action="modify", modified=output.message, explanation=f"suspicion {score:.2f}"
@@ -751,12 +758,12 @@ def defer_to_trusted(
     return decide
 ```
 
-This is `resample` with one draw on a different model and no candidate loop. The `trusted` model role is the natural default, so `--model-role trusted=openai/gpt-4o-mini` configures it without touching code. `trusted_editing` is the same shape again (the trusted model is given the untrusted output and told to rewrite it) and is left to an extension until someone wants it.
+This is `resample` with one draw on a different model and no candidate loop. The `trusted` model role is the natural default, so `--model-role trusted=openai/gpt-4o-mini` configures it without touching code. It is a separate role from the monitors' `monitor`, so a task declares both, with `Task(model_roles={"monitor": ..., "trusted": ...})` or two `--model-role` options. `trusted_editing` is the same shape again (the trusted model is given the untrusted output and told to rewrite it) and is left to an extension until someone wants it.
 
 Three things follow for the rest of the design:
 
 - **`AfterGenerate` carries the request.** `tools`, `tool_choice` and `config` join `input`, so a protocol regenerates with exactly what the agent was given.
-- **`Host.generate` is a real generate.** Messages or a string in, `ModelOutput` out, with `model`, `tools` and `config`; `model` accepts a name or a role. Under a proxy, generating as the agent's model is a re-issued upstream request. `sentinel-deployment.md` carries the signature.
+- **`Host.generate` is a real generate.** Messages or a string in, `ModelOutput` out, with `model`, `role`, `tools` and `config`. `model` is always a model (a name or a `Model`) and `role` always a role, so a role name can never be mistaken for a model name; passing both is an error the host raises. With neither, the host uses the `monitor` role, falling back to the agent's model with a warning, once per eval, naming the role to set. Under a proxy, generating as the agent's model is a re-issued upstream request. `sentinel-deployment.md` carries the signature.
 - **Protocol inference has its own usage bucket.** `resample` spends up to `n` times the agent's tokens on the agent's model. It is recorded under a `protocol` bucket in `ModelUsage`, separate from both agent and monitor usage and not charged to the agent's limits, because the protocol chose to spend it. See open question 8.
 
 Both are `AfterGenerate`-only, and their signatures say so rather than annotating `Step`.
@@ -1184,6 +1191,8 @@ async def check(context: Context, step: BeforeToolCall) -> Observation | None:
     state = context.store_as(TrajectoryState)
 ```
 
+The namespace is the instance path, so renaming a mapping key or wrapping a monitor in another layer moves its state; there is no override. `context.store` itself is the whole sample store, the agent's state included, and is not namespaced.
+
 This is where the shape argument from [What the function shape buys](#what-the-function-shape-buys) has to be cashed out rather than assumed. A factory closure is created once per configuration and shared by every sample, so anything captured in it is *task*-scoped whether the author meant it or not. `context.store_as()` is how per-sample state is spelled, and the factory docstring has to say so — the shape makes the sharing more visible, it does not prevent it.
 
 Backing per-sample state with the sample `Store` gets three things for free: it is recorded to the transcript as `StoreEvent`s, so the monitor's reasoning is in the log; it survives checkpoint and resume; and `store_from_events_as()` can reconstruct it from a finished log for analysis.
@@ -1200,14 +1209,14 @@ Injecting the store is also what keeps `StoreModel` usable outside an eval. `Sto
 
 #### No global for `host` {#no-global-for-host}
 
-Neither is there a `monitor_host()`, and here the argument above is reinforced by a second one. The store case rests only on helpers being able to take a parameter; the host case rests on that **and** on ambient authority being a thing to avoid on its own terms. The value of `context.host` is that it is the only route out of a monitor — everything a monitor can do to the outside world is enumerable from one interface — and any global reopens that.
+Neither is there a `monitor_host()`, and here the argument above is reinforced by a second one. The store case rests only on helpers being able to take a parameter; the host case rests on that **and** on ambient authority being a thing to avoid on its own terms. The value of `context.host` is that it is the only portable route out of a monitor — everything a portable monitor can do to the outside world is enumerable from one interface — and any global reopens that. Today it carries inference only; outbound HTTP is planned as `fetch` through named endpoints (`sentinel-deployment.md`). Meanwhile an in-process monitor may call inspect_ai APIs directly, such as `sandbox()` or `logging`, at the cost of portability to a proxy, which a future `portable=False` will declare.
 
 The leak that already exists is `get_model()`. A monitor can call it and bypass `context.host` entirely, so the `portable=True` check has to ban it. There is in-process value in routing through the host too, not only portability: `context.host.generate()` can default to `role="monitor"` and let the host record monitor inference distinctly from the agent's, neither of which a direct `get_model()` gets.
 
 
 ### Per-task
 
-Per-task state has no mechanism today and is the harder half.
+Not built. Per-task state has no mechanism today and is the harder half; it waits on a design for the concurrency and persistence questions below.
 
 ``` python
 class RunTotals(StoreModel):
@@ -1425,7 +1434,7 @@ Open: whether `SentinelEvent` replaces `ApprovalEvent`/`ReviewEvent` when the re
 ## Inference, budget, and injection {#inference-budget-and-injection}
 
 - **Budget.** Monitor inference must not be charged to the agent's limits, the same exemption approvers get today (`suspend_token_limit()`, `suspend_turn_limit()` in `approval/_apply.py`). A monitor that terminates a sample for exceeding a token limit its own inference consumed is a trap worth closing up front.
-- **Model role.** `get_model(role="monitor")` is the natural default, and `"monitor"` is already the example role name in `docs/models.qmd`. Monitor usage should be separable from agent usage in `ModelUsage`.
+- **Model role.** The `monitor` role is the default for `context.host.generate()` with neither `model` nor `role`, and `"monitor"` is already the example role name in `docs/models.qmd`. Monitor usage should be separable from agent usage in `ModelUsage`.
 - **Injection.** A monitor reads model completions, tool arguments, and tool output, all of which are agent-controlled text. `docs/control-channel.qmd` already makes this point for monitoring agents reading the control channel; it applies with more force here, because this monitor's output decides whether the sample stops. Worth a docs section, and the framework should structurally help rather than only warn: [Views](#views) proposes a shared rendering path whose default output is a delimited, clearly-untrusted evidence envelope.
 
 ## Views: what a monitor sees, and how it is rendered {#views}
@@ -1502,7 +1511,7 @@ An LLM monitor built from them:
 
 ``` python
 @monitor
-def suspicion_monitor(model: str | None = None) -> Monitor:
+def suspicion_monitor(model: str | Model | None = None, role: str = "monitor") -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
@@ -1512,7 +1521,9 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
             history=new_since_last_report(context, step.history),
             messages_as_str=messages_as_str,
         )
-        output = await context.host.generate(prompt, model=model)
+        output = await context.host.generate(
+            prompt, model=model, role=None if model is not None else role
+        )
         score, explanation = parse_score(output.completion)
         return Observation(
             suspicion=score,

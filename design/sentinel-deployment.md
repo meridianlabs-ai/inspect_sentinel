@@ -82,7 +82,8 @@ class Host(typing.Protocol):
         self,
         input: str | list[ChatMessage],
         *,
-        model: str | None = None,          # a model name or a model role; default role "monitor"
+        model: str | Model | None = None,  # a model name or instance; not with role
+        role: str | None = None,           # a model role; neither means "monitor"
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput: ...
@@ -110,13 +111,15 @@ class HostResponse(typing.Protocol):
     def text(self) -> str: ...
 ```
 
+`model` and `role` are separate so a role name is never read as a model name; passing both is an error the host raises. With neither, the host uses the `monitor` role and, if that role is not configured, falls back to the agent's model with a warning once per eval naming the role to set. `defer_to_trusted` and `resample` will ask for a separate `trusted` role.
+
 `generate` returns a `ModelOutput` rather than a string because the protocols that substitute an action (`defer_to_trusted`, `resample`) regenerate with the agent's tools and need the whole response; a text-prompt monitor reads `.completion`. Generating as the agent's own model is, in a proxy, a re-issued upstream request.
 
 The same surface whether the host is Envoy via proxy-wasm, a Go runtime, or ordinary Python in-process where these are normal implementations.
 
 Recording is not on the ABI. The runner records every report, cancellation, bypass and supersession through a separate `Recorder` that the host implements and authors never see (`sentinel-reference.md`, "Context"), so a protocol cannot skip recording by not calling it.
 
-A monitor reaches it as `context.host` (`sentinel.md`, "The context"), never by import. That is what keeps a monitor a pure function of its two arguments, and it is why the ABI is small enough to be worth specifying: everything a monitor can do to the outside world is enumerable from one interface.
+A monitor reaches it as `context.host` (`sentinel.md`, "The context"), never by import. That is what keeps a monitor a pure function of its two arguments, and it is why the ABI is small enough to be worth specifying: everything a portable monitor can do to the outside world is enumerable from one interface.
 
 ### Why `fetch` is a primitive, not an escape hatch
 

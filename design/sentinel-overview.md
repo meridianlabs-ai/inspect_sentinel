@@ -98,15 +98,15 @@ class Context:
     """Task metadata merged with sample metadata."""
 
     store: Store
-    """This monitor's per-sample state."""
+    """The whole sample store, not namespaced."""
 
     def store_as(
         self,
         model_cls: Type[SMT],
         *,
-        scope: Scope = "sample"
+        scope: Scope = "sample"  # "task" is not built
     ) -> SMT:
-        """Typed view of this monitor's state."""
+        """Typed view of this instance's state, namespaced by its path."""
 
     # -- effects
     host: Host

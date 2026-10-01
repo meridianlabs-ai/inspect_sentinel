@@ -5,6 +5,7 @@ from inspect_ai.model import (
     ChatMessageTool,
     ChatMessageUser,
     GenerateConfig,
+    Model,
     ModelOutput,
 )
 from inspect_ai.tool import ToolCall, ToolCallView, ToolInfo
@@ -20,7 +21,8 @@ class FakeHost:
         self,
         input: str | list[ChatMessage],
         *,
-        model: str | None = None,
+        model: str | Model | None = None,
+        role: str | None = None,
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput:

@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Any, TypeVar, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
-from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
+from inspect_ai.model import ChatMessage, GenerateConfig, Model, ModelOutput
 from inspect_ai.scorer import Target
 from inspect_ai.tool import ToolInfo
 from inspect_ai.util import Store, StoreModel
@@ -16,23 +16,33 @@ SMT = TypeVar("SMT", bound=StoreModel)
 
 
 class Host(TypingProtocol):
-    """What a monitor or protocol may do to the outside world. Author-facing."""
+    """What a monitor or protocol may do to the outside world. Author-facing.
+
+    Inference is the only effect for now. Outbound HTTP through named endpoints (`fetch`) is planned. Meanwhile a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, at the cost of portability to a proxy, which a future `portable=False` will declare.
+    """
 
     async def generate(
         self,
         input: str | list[ChatMessage],
         *,
-        model: str | None = None,
+        model: str | Model | None = None,
+        role: str | None = None,
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
-        """Generate with the host's model.
+        """Generate with a model the host resolves.
+
+        With neither `model` nor `role`, the host uses the `monitor` role. If that role is not configured, it falls back to the agent's model and logs a warning once per eval naming the role to set.
 
         Args:
             input: A prompt string or a list of chat messages.
-            model: A model name or a model role. The default role is `monitor`.
+            model: A model name or instance. Not with `role`.
+            role: A model role, e.g. `trusted`. Not with `model`.
             tools: Tool definitions to offer the model.
             config: Generation configuration.
+
+        Raises:
+            ValueError: Both `model` and `role` were given.
         """
         ...
 
@@ -100,7 +110,7 @@ class Context:
     """Task name, or the deployed agent's identifier."""
 
     task_description: str | None
-    """What agents in this setting are asked to do."""
+    """What agents in this setting are asked to do. None until inspect_ai has `Task(description=)`."""
 
     sample_id: str | int | None
     """Dataset sample identifier."""
@@ -109,7 +119,7 @@ class Context:
     """Epoch of the sample, when the task runs several."""
 
     sample_description: str | None
-    """What is distinctive about this instance."""
+    """What is distinctive about this instance. None until inspect_ai has `Sample(description=)`."""
 
     input: str | list[ChatMessage]
     """The sample's input: the assignment the agent was given. Judge a step against `step.input`, which is exactly what the model was sent; use this for what the agent was asked to do."""
@@ -121,16 +131,18 @@ class Context:
     """Instance path, e.g. `attempt/internet_attempt`. Empty at the top layer."""
 
     store: Store
-    """Per-sample state. Use `store_as()` for a typed, namespaced view."""
+    """The whole sample store, the agent's state included; not namespaced. Use `store_as()` for this instance's own state."""
 
     host: Host
-    """Inference and other effects on the outside world."""
+    """Inference through the host's models. See `Host`."""
 
     target: Target | None = None
-    """The expected answer. Absent unless the monitor asked for it."""
+    """The expected answer. None until monitors and protocols can opt in with `target=True`."""
 
     def store_as(self, model_cls: type[SMT]) -> SMT:
         """Typed view of this instance's state, namespaced by `path`.
+
+        Renaming the instance (its mapping key) or wrapping it in another layer changes `path`, so its state moves with it.
 
         Args:
             model_cls: The `StoreModel` subclass to read and write through.
