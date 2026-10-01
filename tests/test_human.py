@@ -23,11 +23,6 @@ from inspect_sentinel._types import Children, Monitor, Protocol, ProtocolGroup
 from tests._fakes import FakeHost, ListRecorder, after_step, before_step, runner_context
 
 
-@protocol
-def wrapped_human() -> Protocol | ProtocolGroup:
-    return human(stages=["tool_call"])
-
-
 @monitor
 def hum_score() -> Monitor:
     async def score(context: Context, step: BeforeToolCall) -> Observation | None:
@@ -165,7 +160,7 @@ async def test_an_answer_the_person_was_not_offered_is_an_error(
 
 
 @pytest.mark.anyio
-async def test_a_final_answer_ends_the_step_past_the_layers_above() -> None:
+async def test_the_answer_ends_only_its_chain() -> None:
     tree = concurrent(
         {
             "chain": sequential([hum_rule(), human(stages=["tool_call"])]),
@@ -175,21 +170,21 @@ async def test_a_final_answer_ends_the_step_past_the_layers_above() -> None:
     decision, _, recorder = await _root(tree, HumanAnswer("reject", reason="no"))
     assert decision is not None and decision.action == "reject"
     assert decision.message == "no"
-    assert recorder.bypassed_layers == [("chain", "chain"), ("", "concurrent")]
+    assert recorder.bypassed_layers == []
+    assert decision.explanation == "no (chain: reject; peer: continue)"
 
 
 @pytest.mark.anyio
-async def test_a_non_final_answer_is_one_vote() -> None:
+async def test_a_peer_reject_outranks_the_persons_approve() -> None:
     tree = concurrent(
         {
-            "chain": sequential([hum_rule(), human(stages=["tool_call"], final=False)]),
-            "peer": hum_rule("continue"),
+            "chain": sequential([hum_rule(), human(stages=["tool_call"])]),
+            "guard": hum_rule("reject"),
         }
     )
-    decision, _, recorder = await _root(tree, HumanAnswer("reject", reason="no"))
+    decision, host, _ = await _root(tree, HumanAnswer("approve"))
+    assert len(host.asked) == 1
     assert decision is not None and decision.action == "reject"
-    assert recorder.bypassed_layers == []
-    assert decision.explanation == "no (chain: reject; peer: continue)"
 
 
 @pytest.mark.anyio
@@ -237,29 +232,18 @@ async def test_after_a_call_the_person_sees_the_result() -> None:
 @pytest.mark.parametrize(
     "spec",
     [
-        [hum_rule(), human(stages=["tool_call"])],
-        {"rule": hum_rule(), "person": human(stages=["tool_call"])},
-        [concurrent([human(stages=["tool_call"])]), hum_rule()],
-        [wrapped_human(), hum_rule()],
+        [hum_rule("continue"), human(stages=["tool_call"])],
+        {"rule": hum_rule("continue"), "person": human(stages=["tool_call"])},
+        [hum_score(), human(stages=["tool_call"])],
     ],
 )
-def test_a_human_beside_others_in_concurrent_is_a_configuration_error(
+@pytest.mark.anyio
+async def test_a_human_beside_others_in_concurrent_asks_every_call(
     spec: Children,
 ) -> None:
-    with pytest.raises(ValueError, match=r"sequential\(\)"):
-        concurrent(spec)
-    with pytest.raises(ValueError, match=r"sequential\(\)"):
-        resolve_sentinel(spec)
-
-
-def test_a_human_in_a_chain_or_alone_is_fine() -> None:
-    resolve_sentinel(sequential([hum_rule(), human(stages=["tool_call"])]))
-    resolve_sentinel(human(stages=["tool_call"]))
-    resolve_sentinel(human(stages=["tool_call", "tool_result"]))
-    resolve_sentinel([hum_score(), human(stages=["tool_call"])])
-    resolve_sentinel(
-        [sequential([hum_rule(), human(stages=["tool_call"])]), hum_rule()]
-    )
+    decision, host, _ = await _root(spec, HumanAnswer("reject"))
+    assert len(host.asked) == 1
+    assert decision is not None and decision.action == "reject"
 
 
 def test_human_is_registered_under_the_package_name() -> None:

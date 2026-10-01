@@ -4,7 +4,6 @@ from collections.abc import Sequence
 
 from .._context import Context, HumanAnswer
 from .._decorators import protocol
-from .._final import decide_final
 from .._report import Decision
 from .._step import AfterToolCall, BeforeToolCall, Step
 from .._types import Protocol, ProtocolGroup
@@ -13,17 +12,6 @@ _LEGAL = {
     "tool_call": ("approve", "reject", "terminate", "modify"),
     "tool_result": ("approve", "terminate"),
 }
-_ASKS_HUMAN = "__inspect_sentinel_asks_human__"
-
-
-def asks_human(child: object) -> bool:
-    return getattr(child, _ASKS_HUMAN, False)
-
-
-def mark_asks_human(child: object) -> None:
-    setattr(child, _ASKS_HUMAN, True)
-
-
 _DEFAULTS = {
     "tool_call": ("approve", "reject", "terminate"),
     "tool_result": ("approve", "terminate"),
@@ -34,18 +22,16 @@ _DEFAULTS = {
 def human(
     stages: Sequence[str],
     choices: Sequence[str] | None = None,
-    final: bool = True,
 ) -> Protocol | ProtocolGroup:
     """Ask a person to decide, every time the step reaches this protocol.
 
     The person is asked through `Host.ask_human`, which is handed the step and shows it with `step.escalations`, so at the end of a `sequential()` the person sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call. The answer maps to a decision: `approve` to `continue`, `reject` to `reject` with the person's reason as both the `message` the agent reads and the `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
 
-    A `human()` directly beside other children of a `concurrent()` is a configuration error: the person would be asked about every call while the others decide in parallel. Put it at the end of a `sequential()` instead.
+    The answer is an ordinary decision: it ends a `sequential()` as any link's decision does, and beside other protocols in a `concurrent()` it is one vote, so another protocol's `reject` outranks the person's `approve`.
 
     Args:
         stages: The stages to ask at, as `SentinelEvent.stage` records them: `"tool_call"` (before a tool call) and/or `"tool_result"` (after it, with the result the model is about to receive).
         choices: What the person may pick, from `approve`, `reject`, `terminate` and `modify`. Defaults to `approve`, `reject` and `terminate` before a call and `approve` and `terminate` after it, where `reject` and `modify` are not legal.
-        final: End the step with the person's decision through `decide_final()`, so no layer above may weaken it. `False` returns it as an ordinary decision, making the person one vote in a panel.
     """
     valid = ", ".join(repr(stage) for stage in _LEGAL)
     if isinstance(stages, str) or not stages:
@@ -61,10 +47,7 @@ def human(
 
     async def ask(context: Context, step: Step, stage: str) -> Decision:
         answer = await context.host.ask_human(step, offered[stage])
-        decision = _decision(answer, offered[stage])
-        if final:
-            decide_final(decision)
-        return decision
+        return _decision(answer, offered[stage])
 
     async def tool_call(context: Context, step: BeforeToolCall) -> Decision | None:
         return await ask(context, step, "tool_call")
@@ -76,13 +59,9 @@ def human(
         "tool_call": tool_call,
         "tool_result": tool_result,
     }
-    instance: Protocol | ProtocolGroup = (
-        functions[stages[0]]
-        if len(stages) == 1
-        else ProtocolGroup(*(functions[stage] for stage in stages))
-    )
-    mark_asks_human(instance)
-    return instance
+    if len(stages) == 1:
+        return functions[stages[0]]
+    return ProtocolGroup(*(functions[stage] for stage in stages))
 
 
 def _choices(stage: str, choices: Sequence[str] | None) -> tuple[str, ...]:
