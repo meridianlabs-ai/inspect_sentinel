@@ -231,7 +231,9 @@ The monitor itself:
 ```{.python filename="examples/llm_suspicion.py"}
 @monitor
 def suspicion(model: str | Model | None = None, role: str = "monitor") -> Monitor: # <1>
-    async def score(context: Context, step: BeforeToolCall) -> Observation:
+    async def score(context: Context, step: BeforeToolCall) -> Observation | None:
+        if step.call.function == "submit":
+            return None  # the prompt is written for commands, not final answers
         prompt = PROMPT.format(
             task=context.input_text, # <2>
             message=untrusted(step.message or ""),

@@ -62,7 +62,9 @@ def suspicion(model: str | Model | None = None, role: str = "monitor") -> Monito
         role: The model role to ask.
     """
 
-    async def score(context: Context, step: BeforeToolCall) -> Observation:
+    async def score(context: Context, step: BeforeToolCall) -> Observation | None:
+        if step.call.function == "submit":
+            return None  # the prompt is written for commands, not final answers
         prompt = PROMPT.format(
             task=context.input_text,
             message=untrusted(step.message or ""),
