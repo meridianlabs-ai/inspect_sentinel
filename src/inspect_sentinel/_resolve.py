@@ -8,6 +8,7 @@ from inspect_ai._util.registry import is_registry_object, registry_info
 from ._monitor import (
     Child,
     Children,
+    Group,
     Monitor,
     MonitorGroup,
     Monitors,
@@ -26,7 +27,7 @@ Sentinels: TypeAlias = Monitor | MonitorGroup | Protocol | ProtocolGroup | Child
 def resolve_sentinel(spec: Sentinels) -> Protocol:
     """Turn a sentinel configuration into the one protocol that owns the layer's decision.
 
-    Every configuration is wrapped, so a lone child resolves exactly as a list of one does and records the same paths. A monitor, or a sequence or mapping of monitors only, resolves to `observe()` and logs a warning, since nothing is configured to act on the scores; anything containing a protocol, a lone protocol included, resolves to `concurrent()`. Every top-level configuration is therefore one of the two, and the dispatcher invokes it as the root, so the top-level children's paths are bare.
+    A lone protocol is the root itself, so `threshold(suspicion(), ...)` records `threshold` at the empty path and its monitor at `suspicion`. A lone `ProtocolGroup`, or a sequence or mapping containing a protocol, resolves to `concurrent()`: the root returns the step's one outcome, and combining the decisions of several functions is `concurrent`'s job. A monitor, or a sequence or mapping of monitors only, resolves to `observe()` and logs a warning, since nothing is configured to act on the scores. The dispatcher invokes the result as the root, so the root's children's paths are bare.
 
     Args:
         spec: One monitor or protocol, or a sequence or mapping of instance names to them.
@@ -38,6 +39,12 @@ def resolve_sentinel(spec: Sentinels) -> Protocol:
         raise ValueError(
             "A sentinel configuration needs at least one monitor or protocol."
         )
+    if (
+        single
+        and not isinstance(spec, Group)
+        and registry_info(spec).type == "protocol"
+    ):
+        return cast(Protocol, spec)
     if any(registry_info(child).type == "protocol" for _, child in named):
         return concurrent(children)
     for name, _ in named:

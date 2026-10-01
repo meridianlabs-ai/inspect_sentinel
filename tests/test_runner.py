@@ -71,7 +71,10 @@ def test_max_suspicion_over_scalars_and_dicts() -> None:
         (["modify", "terminate", "reject"], "terminate"),
         (["continue", "modify"], "modify"),
         (["continue"], "continue"),
-        (["escalate", "escalate"], None),
+        (["continue", "escalate", "continue"], "escalate"),
+        (["escalate", "reject"], "reject"),
+        (["modify", "escalate"], "modify"),
+        (["escalate", "escalate"], "escalate"),
         ([], None),
     ],
 )
@@ -1070,6 +1073,18 @@ async def test_run_root_records_the_roots_own_decision_at_the_empty_path() -> No
     assert [(r.reported.name, r.reported.path) for r in recorder.records] == [
         ("decides", "decides"),
         ("concurrent", ""),
+    ]
+
+
+@pytest.mark.anyio
+async def test_run_root_returns_an_escalate_with_nobody_to_hand_it_to() -> None:
+    recorder = ListRecorder()
+    decision = await run_root(
+        decides("escalate"), runner_context(recorder=recorder), before_step()
+    )
+    assert decision == Decision(action="escalate")
+    assert [(r.reported.name, r.reported.path) for r in recorder.records] == [
+        ("decides", "")
     ]
 
 

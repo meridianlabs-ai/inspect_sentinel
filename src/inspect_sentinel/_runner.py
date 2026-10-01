@@ -46,7 +46,6 @@ from ._report import (
     R_co,
     Report,
     Reported,
-    deciding,
 )
 from ._step import Step
 
@@ -100,11 +99,10 @@ class Decisions(_ReportSequence[Decision]):
     """What a layer's protocols decided, in configuration order."""
 
     def strongest(self) -> Reported[Decision] | None:
-        """The strongest decision by `terminate > reject > modify > continue`, the first in configuration order on a tie; `escalate` does not count; `None` if nobody decided."""
-        ranked = deciding(self._items)
-        if not ranked:
+        """The strongest decision by `terminate > reject > modify > escalate > continue`, the first in configuration order on a tie; `None` if nobody decided."""
+        if not self._items:
             return None
-        return max(ranked, key=lambda d: PRECEDENCE[d.report.action])
+        return max(self._items, key=lambda d: PRECEDENCE[d.report.action])
 
 
 class Reports(NamedTuple):
@@ -195,6 +193,8 @@ async def run_root(protocol: Protocol, context: Context, step: Step) -> Decision
 
     The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its context's `factory` is set to its full registry name. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 
+    An `escalate` is returned like any other decision, though at the root there is nobody to hand it to; the host decides what an unresolved escalate means.
+
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.
         context: The top layer's context, whose `path` is empty.
@@ -225,6 +225,8 @@ async def run_monitors(
 ) -> Observations:
     """Run monitors concurrently and collect their observations in configuration order.
 
+    A typed shortcut for `run_children` over monitors only: its parameter rejects a protocol and its return type is the observations alone.
+
     Derives each child's context under this layer's path and records every observation, including the ones the caller goes on to ignore. A monitor that abstained or does not watch this stage contributes nothing, so the result may be empty. An instance whose factory returned several functions contributes one observation per function that reported, in the order the factory returned them.
 
     Args:
@@ -241,7 +243,7 @@ async def run_protocols(
 ) -> Decisions:
     """Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns `terminate` or calls `decide_final()`.
 
-    A `decide_final()` from any protocol at any depth below propagates out of this call, so the caller's own decision logic does not run.
+    A typed shortcut for `run_children` over protocols only: its parameter rejects a monitor and its return type is the decisions alone. A `decide_final()` from any protocol at any depth below propagates out of this call, so the caller's own decision logic does not run.
 
     Args:
         protocols: One protocol or `ProtocolGroup`, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.
@@ -257,7 +259,7 @@ async def run_children(
 ) -> Reports:
     """Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns `terminate` or calls `decide_final()`.
 
-    A child cancelled this way is recorded through `Recorder.cancelled`; one that finishes without awaiting is recorded normally.
+    Runs any mix of children; `run_monitors` and `run_protocols` are typed shortcuts for one family. A child cancelled this way is recorded through `Recorder.cancelled`; one that finishes without awaiting is recorded normally.
 
     Args:
         children: One monitor, protocol or group, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.

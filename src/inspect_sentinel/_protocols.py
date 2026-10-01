@@ -16,7 +16,7 @@ from ._monitor import (
     members,
     protocol,
 )
-from ._report import Decision, Observation, Reported, deciding
+from ._report import Decision, Observation, Reported
 from ._runner import (
     Observations,
     describe,
@@ -53,7 +53,7 @@ def concurrent(
 ) -> Protocol:
     """Run every child at once; the strictest decision wins.
 
-    What a list containing a protocol resolves to. Monitors are recorded in the transcript; protocols vote by `terminate > reject > modify > continue`, the first in configuration order winning a tie, `escalate` does not count, and if every protocol escalated the result is `continue`. A `modify` when another protocol also decided becomes a `reject` naming the modifier, since the others decided about the call as it stood; votes count by instance, so another function of the modifier's own instance contests it only by also modifying; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own, labelling a function of a `ProtocolGroup` or `MonitorGroup` `name.function`. A child that calls `decide_final()` ends the step and no vote is taken.
+    What a list containing a protocol resolves to. Monitors are recorded in the transcript; protocols vote by `terminate > reject > modify > escalate > continue`, the first in configuration order winning a tie, so a peer's `continue` does not override an `escalate` and the layer escalates when that is the strongest vote. A `modify` when another protocol also decided anything but `escalate` becomes a `reject` naming the modifier, since the others decided about the call as it stood; votes count by instance, so another function of the modifier's own instance contests it only by also modifying; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own, labelling a function of a `ProtocolGroup` or `MonitorGroup` `name.function`. A child that calls `decide_final()` ends the step and no vote is taken.
 
     Args:
         children: A monitor, protocol or group, or several, to run together.
@@ -71,22 +71,22 @@ def concurrent(
 
     async def run(context: Context, step: Step) -> Decision | None:
         reports = await run_children(children, context, step)
-        if not reports.decisions:
-            return None
-        strongest = reports.decisions.strongest()
+        voters = reports.decisions
+        strongest = voters.strongest()
         if strongest is None:
-            return Decision.proceed()
-        voters = deciding(reports.decisions)
+            return None
         if len(voters) == 1:
             return strongest.report
         own = strongest.report.explanation
         update: dict[str, object] = {}
         if strongest.report.action == "modify":
-            # a function of the modifier's own instance contests only by modifying
+            # an escalate does not contest, and a function of the modifier's own
+            # instance contests only by modifying
             contesting = [
                 d
                 for d in voters
                 if d is not strongest
+                and d.report.action != "escalate"
                 and (d.path != strongest.path or d.report.action == "modify")
             ]
             others = {d.path for d in contesting if d.path != strongest.path}

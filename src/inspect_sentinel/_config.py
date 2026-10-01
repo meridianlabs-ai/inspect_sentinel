@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 from collections.abc import Callable, Hashable, Mapping, Sequence
-from typing import Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, TypeAlias, cast
 
 import yaml
 from inspect_ai._util.file import exists, local_path
@@ -19,7 +19,14 @@ from inspect_ai._util.registry import (
     registry_value,
 )
 from inspect_ai.util import resource
-from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    RootModel,
+    Tag,
+)
 
 from ._context import validate_instance_name
 from ._monitor import Child, Children
@@ -43,12 +50,10 @@ class SentinelEntry(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     """Arguments passed to the factory, other than the nested ones."""
 
-    @model_validator(mode="after")
-    def _validate_nested(self) -> SentinelEntry:
-        extra = self.__pydantic_extra__ or {}
-        for key, value in extra.items():
-            extra[key] = SentinelConfig.model_validate(value)
-        return self
+    if not TYPE_CHECKING:
+        # pydantic validates each extra as a nested layer, so an error carries
+        # its location; hidden from the checker, which sees an invalid override
+        __pydantic_extra__: dict[str, SentinelConfig] = Field(init=False)
 
     @property
     def nested(self) -> dict[str, SentinelConfig]:
@@ -56,11 +61,40 @@ class SentinelEntry(BaseModel):
         return cast(dict[str, SentinelConfig], dict(self.__pydantic_extra__ or {}))
 
 
-class SentinelConfig(RootModel[list[SentinelEntry] | dict[str, SentinelEntry]]):
-    """A sentinel configuration: a list of entries, or a mapping of instance names to entries.
+def _layer_kind(value: object) -> str | None:
+    if isinstance(value, SentinelEntry):
+        return "entry"
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[object, object], value)
+        if isinstance(mapping.get("name"), str):
+            return "entry"
+        if all(isinstance(v, Mapping | SentinelEntry) for v in mapping.values()):
+            return "mapping"
+    return None
 
-    The value of the `sentinel:` key in a configuration file, and what the eval log records.
+
+SentinelLayer: TypeAlias = Annotated[
+    Annotated[SentinelEntry, Tag("entry")]
+    | Annotated[list[SentinelEntry], Tag("list")]
+    | Annotated[dict[str, SentinelEntry], Tag("mapping")],
+    Discriminator(
+        _layer_kind,
+        custom_error_type="sentinel_layer",
+        custom_error_message="A sentinel layer is an entry with a string 'name', a list of entries, or a mapping of instance names to entries",
+    ),
+]
+
+
+class SentinelConfig(RootModel[SentinelLayer]):
+    """A sentinel configuration: one entry, a list of entries, or a mapping of instance names to entries.
+
+    The value of the `sentinel:` key in a configuration file, and what the eval log records. A mapping is one entry when its `name` is a string, and a mapping of instance names when every value is an entry, so an instance named `name` still configures a mapping.
     """
+
+
+SentinelEntry.model_rebuild()
 
 
 class _Factory(NamedTuple):
@@ -70,17 +104,14 @@ class _Factory(NamedTuple):
 
 
 def sentinel_from_config(
-    config: str
-    | SentinelConfig
-    | Sequence[Mapping[str, Any]]
-    | Mapping[str, Mapping[str, Any]],
-) -> Children:
+    config: str | SentinelConfig | Sequence[Mapping[str, Any]] | Mapping[str, Any],
+) -> Child | Children:
     """Build the monitors and protocols a configuration describes.
 
-    Each entry is constructed through the registry with its `params` and its nested entries, which are built first. The result is not resolved; pass it to `resolve_sentinel`.
+    Each entry is constructed through the registry with its `params` and its nested entries, which are built first. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved; pass it to `resolve_sentinel`.
 
     Args:
-        config: A YAML or JSON file whose only key is `sentinel`, a registered monitor or protocol name, or the configuration itself: a list of entries or a mapping of instance names to entries.
+        config: A YAML or JSON file whose only key is `sentinel`, a registered monitor or protocol name, or the configuration itself: one entry, a list of entries, or a mapping of instance names to entries.
 
     Raises:
         ValueError: If the configuration is invalid; the message names the entry, as in `sentinel.attempt.children[1]`.
@@ -93,12 +124,12 @@ def sentinel_from_config(
     return _build_layer(config, "sentinel")
 
 
-def _from_string(config: str) -> Children:
+def _from_string(config: str) -> Child | Children:
     path = local_path(config)
     if exists(path):
         return _build_layer(_read_file(path), "sentinel")
     if _find_all(config):
-        return [_build_entry({"name": config}, "sentinel[0]")]
+        return _build_entry({"name": config}, "sentinel")
     raise ValueError(
         f"{config!r} is neither a config file nor a registered monitor or protocol."
     )
@@ -170,9 +201,11 @@ def _unique_keys(value: object, file: str, path: str) -> object:
     return value
 
 
-def _build_layer(layer: object, path: str) -> Children:
+def _build_layer(layer: object, path: str) -> Child | Children:
     if isinstance(layer, Mapping):
         entries = cast(Mapping[object, object], layer)
+        if _layer_kind(entries) == "entry":
+            return _build_entry(entries, path)
         built: dict[str, Child] = {}
         for key, entry in entries.items():
             try:
@@ -253,7 +286,7 @@ def _lookup(name: str) -> list[_Factory]:
 def config_from_sentinel(sentinels: Sentinels) -> SentinelConfig:
     """Record constructed monitors and protocols as the configuration that rebuilds them.
 
-    The inverse of `sentinel_from_config`, for the eval log and retry: each instance becomes an entry with its registry name and the params it was created with, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a list of one.
+    The inverse of `sentinel_from_config`, for the eval log and retry: each instance becomes an entry with its registry name and the params it was created with, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a lone entry, so it rebuilds as the root it was.
 
     Args:
         sentinels: One monitor or protocol, or a sequence or mapping of instance names to them, as `Task(sentinel=)` accepts.
@@ -262,7 +295,7 @@ def config_from_sentinel(sentinels: Sentinels) -> SentinelConfig:
         TypeError: If a value is not a configured monitor or protocol.
     """
     if is_registry_object(sentinels):
-        return _config_layer([_registry_dict(sentinels)])
+        return SentinelConfig(_config_entry(_registry_dict(sentinels)))
     if isinstance(sentinels, Mapping):
         mapping = cast(Mapping[str, object], sentinels)
         return _config_layer(
