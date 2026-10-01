@@ -134,7 +134,7 @@ A protocol decides what happens at a step. It may consult monitors, other protoc
 - **Control actions**: accept, audit, defer to a trusted model, trusted edit, resample. These are things a protocol does with a score, not values a monitor can return.
 - **Pipeline stages** such as paraphrasing agent output before monitors see it, or injecting honeypot inputs to catch a colluding monitor.
 
-Built-in protocols cover the common compositions and basic control scenarios. `concurrent()`, `observe()` and `threshold()` ship today; the other three are designed but not yet built:
+Built-in protocols cover the common compositions and basic control scenarios. `concurrent()`, `sequential()`, `observe()` and `threshold()` ship today; the other two are designed but not yet built:
 
 | Protocol | Description |
 |------------------------|------------------------------------------------|

@@ -39,6 +39,7 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 
 ### observe
 ### concurrent
+### sequential
 ### threshold
 
 ## Runner

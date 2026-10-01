@@ -2,7 +2,7 @@
 
 A sentinel is what a task runs to watch an agent: a protocol with its monitors, configured with `Task(sentinel=)`. A monitor is a function that watches an agent while it runs and reports what it sees. It attaches to one of four stages, the points in the agent loop before a model call, after a model call, before a tool call, and after a tool call. At every stage it receives the same context object and keeps its state in the same place. A monitor observes: it returns an `Observation` or nothing, and can never act. A protocol decides: it returns a `Decision`, optionally after consulting monitors and other protocols. A protocol with no children is a rule.
 
-Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe`, `concurrent` and `threshold` are implemented. The generate stages, `sequential`, `human`, `defer_to_trusted`, `resample`, the view helpers, the failure policy and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
+Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe`, `concurrent`, `sequential` and `threshold` are implemented. The generate stages, `human`, `defer_to_trusted`, `resample`, the view helpers, the failure policy and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
 
 Related documents:
 
@@ -83,7 +83,7 @@ The pieces:
 | `Decision` | A protocol's report: an action (`continue`, `modify`, `reject`, `terminate`, `escalate`). Applied at the top level; advisory to a parent protocol. |
 | Rule | A protocol with no children. `no_curl`, `strip_force`, and `human` are rules. |
 | `run_monitors`, `run_protocols`, `run_children` | The runner. The only way a protocol invokes a child. Names, records, and (once implemented) applies the failure policy. |
-| `concurrent`, `sequential` | The two compositions: concurrent (every child runs, strongest decision wins) and ordered (first non-`escalate` decides). `sequential` is not built yet. |
+| `concurrent`, `sequential` | The two compositions: concurrent (every child runs, strongest decision wins) and ordered (first non-`escalate` decides). |
 | `threshold`, `observe`, `defer_to_trusted`, `resample` | The shipped protocols that turn monitors' scores into decisions. `defer_to_trusted` and `resample` are not built yet. |
 | `human` | A rule that asks a person through the human approval surfaces. Its decisions are final by default. Not built yet. |
 | `decide_final` | Ends the step with a decision. Nothing above the calling protocol runs. |
@@ -734,22 +734,24 @@ Rules:
 
 ```python
 @protocol
-def sequential(children: Monitor | Protocol | Children) -> Protocol:
+def sequential(children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Children) -> Protocol:
+    named = named_children(children, None)
+    if not named:
+        raise ValueError("sequential needs at least one child.")
+
     async def run(context: Context, step: Step) -> Decision | None:
-        escalations: list[Reported[Decision]] = []
+        escalations: list[Reported[Decision]] = []   # starts empty for each run
         participated = False
-        for name, child in named_children(children, None):
+        for name, child in named:
             current = replace(step, escalations=tuple(escalations))
-            if is_monitor(child):
-                if await run_monitors({name: child}, context, current):
-                    participated = True      # recorded; falls through
-                continue
-            for reported in await run_protocols({name: child}, context, current):
+            observations, decisions = await run_children({name: child}, context, current)
+            if observations:
+                participated = True      # recorded; falls through
+            for reported in decisions:
                 participated = True
-                if reported.report.action == "escalate":
-                    escalations.append(reported)
-                else:
+                if reported.report.action != "escalate":
                     return reported.report
+                escalations.append(reported)
         if escalations:
             return escalations[-1].report   # nobody decided; pass it up
         return Decision.proceed() if participated else None
@@ -835,7 +837,7 @@ Task(sentinel=defer_to_trusted(network_suspicion(), threshold=0.8))
 Task(sentinel=resample(network_suspicion(), threshold=0.8, n=3))
 ```
 
-Use one of these rather than writing threshold logic by hand. The control papers explain why each exists. `observe` and `threshold` are built; `defer_to_trusted` and `resample` are not yet, and neither is `sequential` in the table below.
+Use one of these rather than writing threshold logic by hand. The control papers explain why each exists. `observe`, `threshold` and `sequential` are built; `defer_to_trusted` and `resample` are not yet.
 
 `threshold` takes one number or a mapping per dimension for each of `reject_at` and `terminate_at`:
 

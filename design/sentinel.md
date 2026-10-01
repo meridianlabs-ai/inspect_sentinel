@@ -4,7 +4,7 @@ Exploratory design for two new registry types, `@monitor` and `@protocol`: one a
 
 *Sentinel* is the umbrella: the name of the feature, and of one configured tree — a protocol with its monitors — as passed to `Task(sentinel=)` and recorded as a `SentinelEvent`. Inside it, *monitor* and *protocol* keep their AI-control-literature senses, which are also ControlArena's: the monitor is a scorer, the protocol decides. An earlier draft used "monitor" for both the umbrella (`Task(monitor=)`) and the scorer, and reviewers read the umbrella as "the monitor plus the protocol"; renaming the umbrella rather than the scorer keeps the literature's pair intact.
 
-Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe`, `concurrent` and `threshold` are implemented in `inspect_sentinel` and its inspect_ai integration. The generate stages, `sequential`, `human`, `defer_to_trusted`, `resample`, the view helpers, the failure policy and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those is illustrative.
+Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe`, `concurrent`, `sequential` and `threshold` are implemented in `inspect_sentinel` and its inspect_ai integration. The generate stages, `human`, `defer_to_trusted`, `resample`, the view helpers, the failure policy and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those is illustrative.
 
 **Related design documents.** This one defines the protocol. `sentinel-deployment.md` covers running a sentinel outside the eval process — in a proxy on the wire — and the constraints that places on the protocol. `sentinel-development.md` covers measuring and calibrating a monitor before it acts, by replaying it over transcripts as an Inspect Scout scanner. `inspect-core.md` covers extracting the wire types into a package light enough for a monitor author (or another language) to depend on.
 
@@ -690,7 +690,7 @@ The literature's protocols are all arrangements of three resources with differen
 | `trusted_editing` | the trusted model rewrites the suspicious parts rather than replacing the whole action |
 | `untrusted_monitoring` | the *untrusted* model scores — more capable, but it may collude, so it needs honeypots and lie detection |
 
-The first six ship in core; `concurrent`, `observe` and `threshold` are built, and `sequential`, `defer_to_trusted` and `resample` are not yet. The last three are extension candidates, with the pipeline stages (honeypots, paraphrasing). `trusted_monitoring` is the surprising one to leave out, since it is the literature's baseline; the reason is the audit budget. It is a deployment-economics idea — the scarce resource being modelled is human labour — and as a headline parameter it means "how much to *not* review", which reads badly to the eval operators this package is for, who want to see everything flagged. Nothing stops an extension shipping it, and `threshold` plus `audit=True` is the eval-shaped version.
+The first six ship in core; `concurrent`, `sequential`, `observe` and `threshold` are built, and `defer_to_trusted` and `resample` are not yet. The last three are extension candidates, with the pipeline stages (honeypots, paraphrasing). `trusted_monitoring` is the surprising one to leave out, since it is the literature's baseline; the reason is the audit budget. It is a deployment-economics idea — the scarce resource being modelled is human labour — and as a headline parameter it means "how much to *not* review", which reads badly to the eval operators this package is for, who want to see everything flagged. Nothing stops an extension shipping it, and `threshold` plus `audit=True` is the eval-shaped version.
 
 Two things follow that a reader should not have to infer.
 
@@ -961,24 +961,24 @@ The first draft treated the ordered form as "wrong for a set of observers" and s
 
 ``` python
 @protocol
-def sequential(children: Monitor | Protocol | Children) -> Protocol:
+def sequential(children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Children) -> Protocol:
+    named = named_children(children, None)
+    if not named:
+        raise ValueError("sequential needs at least one child.")
+
     async def run(context: Context, step: Step) -> Decision | None:
-        escalations: list[Reported[Decision]] = []
+        escalations: list[Reported[Decision]] = []   # starts empty: escalations do not cross layers
         participated = False
-        for name, child in named_children(children, None):
-            if is_monitor(child):
-                if await run_monitors({name: child}, context, step):
-                    participated = True             # recorded; falls through
-                continue
-            decisions = await run_protocols(
-                {name: child}, context, replace(step, escalations=tuple(escalations))
-            )
+        for name, child in named:
+            current = replace(step, escalations=tuple(escalations))
+            observations, decisions = await run_children({name: child}, context, current)
+            if observations:
+                participated = True                  # recorded; falls through
             for reported in decisions:
                 participated = True
-                if reported.report.action == "escalate":
-                    escalations.append(reported)
-                else:
+                if reported.report.action != "escalate":
                     return reported.report
+                escalations.append(reported)
         if escalations:
             return escalations[-1].report         # nobody decided; pass it up
         return Decision.proceed() if participated else None

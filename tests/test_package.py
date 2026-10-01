@@ -45,6 +45,7 @@ def test_author_facing_names_are_exported() -> None:
         "run_protocols",
         "observe",
         "concurrent",
+        "sequential",
         "threshold",
         "decide_final",
     }

@@ -222,7 +222,7 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 - The protocol alias is `Protocol`, not `ControlProtocol`: it pairs with `@protocol` as `Tool` pairs with `@tool`. The collision with `typing.Protocol` is accepted; the package imports typing's as `TypingProtocol`, and the docs say "a control protocol, not `typing.Protocol`" on first use. The decorator stays `@protocol`, the registry type `"protocol"`, and the plural `Protocols`.
 - `Decision.clear()` is `Decision.proceed()`, which says what happens to the step rather than what the protocol concluded; it still produces `continue`.
 - `Reports`, what `run_children` returns, is a `NamedTuple` of `observations` and `decisions`, so `observations, decisions = await run_children(...)` works beside named access.
-- The planned ordered composition is `sequential`, not `chain`: it pairs with `concurrent` and does not collide with `inspect_ai.solver.chain`. It is not implemented yet.
+- The planned ordered composition is `sequential`, not `chain`: it pairs with `concurrent` and does not collide with `inspect_ai.solver.chain`. It shipped 2026-10-01 (see "sequential()").
 - `Reported` keeps its name. It was reviewed as a possible verb form of `Report`; read as an adjective on its type parameter, like `typing.Annotated`, `Reported[Decision]` is a reported decision: the decision together with the identity of the instance that reported it. `ChildReport` and `Attributed` were considered.
 - Vocabulary: a *step* is the payload a monitor receives, a *stage* is its type (`BeforeToolCall`, `AfterToolCall`, and the generate stages), and "a point in the loop" is only an informal gloss on stage. `Context` and `Step` are unrelated to inspect_ai's `StepEvent` and `step()`. A monitor judges a call against `step.input`, exactly what the model was sent; `context.input` is the sample's input, the assignment.
 
@@ -302,6 +302,10 @@ Decided with the user 2026-10-01, before the first release, so nothing is kept f
 - The examples pass a single instance where they mean one, `threshold(suspicion(), reject_at=0.8)`, rather than a one-element list.
 - `concurrent` lists the votes in its explanation only when they are not all `continue`; an all-continue layer keeps the winner's own explanation, if any.
 
+## sequential()
+
+Shipped 2026-10-01, the first of the `sequential()` and `human()` series. `sequential(children)` takes what `concurrent` takes, annotates `Step`, and runs each child through `run_children` with a one-entry mapping, so each link is recorded under its own name and a link that does not watch the stage is not invoked. The first decision other than `escalate` is returned and later links do not run; an `escalate` is appended to `step.escalations` for the next link. The list starts empty for each run of the chain, so escalations do not cross layers. Monitors are recorded and fall through. All-escalate returns the last escalate, monitors only `continue`, nothing participating `None`. An empty children list is a `ValueError` when the factory is called; YAML nests the links under `children:`. The check that a `human()` directly under `concurrent` is an error is not stubbed: with no `human()` it would be dead code, so it lands with `human()`.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands.
@@ -320,7 +324,7 @@ Agreed work that waits for something else. Each entry says what unblocks it. Kee
 - **The duplicate-key config loader, for `approval=` and `review=` too.** Move sentinel's YAML/JSON loader that rejects duplicate keys into inspect_ai `_util`, and adopt it for `approval=` and `review=` configs. That changes behaviour for those users, so it is its own PR to inspect_ai's `main`.
 - **Generate stages** (`BeforeGenerate`, `AfterGenerate`), and with them the design of what a generate-stage `modify` may replace.
 - **`Decision.modify(step, arguments=...)`**, a constructor that keeps the call's id and function by construction. Waits for the generate stages, since the constructor's shape depends on what a generate-stage modify replaces. Until then, authors write `Decision(action="modify", modified=replace(step.call, arguments={...}))`, and the shape check rejects a changed id or function.
-- **`sequential()` and `human()`**, shipped together: the case that needs both is a rule that escalates to a person, who ends the step with `decide_final()`.
+- **`human()`**: the person at the end of a `sequential()`, who ends the step with `decide_final()`; with it the configuration check that a `human()` directly under `concurrent` is an error naming `sequential()`.
 - **The failure policy** (`sentinel.md`, "Failure semantics"): until the per-child hook lands, the runner propagates every exception.
 - **Containing `decide_final()`**: a parent configured to hold back a child's final decision, e.g. `shadow(child)` for trialling a protocol on live traffic, recorded as its own event kind. Waits for a user who needs shadow mode.
 - **Monitor model calls tied to their row**: today they are listed together at the end of the sentinel block, because a `ModelEvent` records no instance path. Needs a span per instance inside the sentinel span, or the model event ids on the `SentinelEvent`.
