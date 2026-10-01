@@ -67,6 +67,17 @@ def seq_pair() -> ProtocolGroup:
 
 
 @protocol
+def seq_mixed(first_action: Action, second_action: Action) -> ProtocolGroup:
+    async def first(context: Context, step: BeforeToolCall) -> Decision | None:
+        return Decision(action=first_action, explanation="first")
+
+    async def second(context: Context, step: BeforeToolCall) -> Decision | None:
+        return Decision(action=second_action, explanation="second")
+
+    return ProtocolGroup(first, second)
+
+
+@protocol
 def seq_final() -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         decide_final(Decision.reject("final"))
@@ -207,6 +218,34 @@ async def test_a_group_link_runs_in_one_call_and_sees_the_step_before_its_escala
     assert context.store.get("second_saw") == 0
     assert context.store.get("seen") == {"next": [("pair", "pair")]}
     assert [r.reported.function for r in recorder.records[:2]] == ["first", "second"]
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "expected"),
+    [
+        ("continue", "terminate", ("terminate", "second")),
+        ("continue", "reject", ("reject", "second")),
+        ("reject", "continue", ("reject", "first")),
+        ("escalate", "continue", ("escalate", "first")),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_group_link_decides_by_its_strongest_decision(
+    first: Action, second: Action, expected: tuple[Action, str]
+) -> None:
+    decision, _, _ = await _root(sequential({"pair": seq_mixed(first, second)}))
+    assert decision is not None
+    assert (decision.action, decision.explanation) == expected
+
+
+@pytest.mark.anyio
+async def test_a_group_link_that_escalates_hands_forward() -> None:
+    decision, _, context = await _root(
+        sequential({"pair": seq_mixed("escalate", "continue"), "next": seq_link()})
+    )
+    assert decision is not None and decision.action == "continue"
+    # only the escalating function's decision is handed forward
+    assert context.store.get("seen") == {"next": [("pair",)]}
 
 
 @pytest.mark.anyio

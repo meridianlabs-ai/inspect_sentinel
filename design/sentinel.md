@@ -974,11 +974,13 @@ def sequential(children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Chi
             observations, decisions = await run_children({name: child}, context, current)
             if observations:
                 participated = True                  # recorded; falls through
-            for reported in decisions:
-                participated = True
-                if reported.report.action != "escalate":
-                    return reported.report
-                escalations.append(reported)
+            strongest = decisions.strongest()      # a group link decides by its strongest function
+            if strongest is None:
+                continue
+            participated = True
+            if strongest.report.action != "escalate":
+                return strongest.report
+            escalations.extend(d for d in decisions if d.report.action == "escalate")
         if escalations:
             return escalations[-1].report         # nobody decided; pass it up
         return Decision.proceed() if participated else None
@@ -986,7 +988,7 @@ def sequential(children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Chi
     return run
 ```
 
-The functions of one [`ProtocolGroup`](#one-function-one-stage) run in one call, so each sees the step as it was before any of their escalations is appended; they share state through the store, not through `step.escalations`.
+The functions of one [`ProtocolGroup`](#one-function-one-stage) run in one call and the link decides by the strongest of their decisions, as `concurrent` does, so one function's `continue` cannot hide another's `terminate`; each sees the step as it was before any of their escalations is appended; they share state through the store, not through `step.escalations`.
 
 Three properties fall out of writing it as ordinary code. A monitor in a `sequential` is recorded and falls through, since an observation cannot be "the first decision" — ordered composition is Decision-shaped in substance. A `sequential` whose every deciding link escalated returns the last escalate, so it passes up to the layer above as concurrent's does, and the host [proceeds and warns](#composition) if it reaches the root; one where only monitors participated returns `continue`. The [approval adapter](#a-protocol-layer-for-approval-too) keeps approval's fail-closed `reject` on its own path, so existing approval users see no change, and a `sequential` that wants fail-closed ends with a rejecting monitor, as approval lists end with `auto` today. And sequential dispatch stops being a violation of the independence rule, because the loop is a named, shipped protocol whose mode the transcript shows.
 

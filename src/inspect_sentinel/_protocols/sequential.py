@@ -39,11 +39,14 @@ def sequential(
             )
             if observations:
                 participated = True
-            for reported in decisions:
-                participated = True
-                if reported.report.action != "escalate":
-                    return reported.report
-                escalations.append(reported)
+            strongest = decisions.strongest()
+            if strongest is None:
+                continue
+            participated = True
+            if strongest.report.action != "escalate":
+                # a group link decides by its strongest function, as concurrent does
+                return strongest.report
+            escalations.extend(d for d in decisions if d.report.action == "escalate")
         if escalations:
             return escalations[-1].report
         return Decision.proceed() if participated else None

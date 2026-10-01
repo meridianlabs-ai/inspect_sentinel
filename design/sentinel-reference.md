@@ -747,11 +747,13 @@ def sequential(children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Chi
             observations, decisions = await run_children({name: child}, context, current)
             if observations:
                 participated = True      # recorded; falls through
-            for reported in decisions:
-                participated = True
-                if reported.report.action != "escalate":
-                    return reported.report
-                escalations.append(reported)
+            strongest = decisions.strongest()      # a group link decides by its strongest function
+            if strongest is None:
+                continue
+            participated = True
+            if strongest.report.action != "escalate":
+                return strongest.report
+            escalations.extend(d for d in decisions if d.report.action == "escalate")
         if escalations:
             return escalations[-1].report   # nobody decided; pass it up
         return Decision.proceed() if participated else None
