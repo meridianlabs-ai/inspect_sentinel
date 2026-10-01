@@ -20,6 +20,6 @@ How a protocol makes a decision that no layer above it may weaken, and how a per
 - `examples/nested.py`, walked through
 - Two final decisions at once (superseded)
 - `escalate`, and what happens when it reaches the top
-- `human()` and `sequential(..., human())` (planned)
+- `human()` and `sequential([rule(), human()])` (planned)
 - Panels: a person as one vote with `human(final=False)` (planned)
 - Notifications and remote decisions, e.g. Slack (planned)
