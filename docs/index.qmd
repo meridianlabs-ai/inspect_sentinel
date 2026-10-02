@@ -346,7 +346,7 @@ The token usage for the `monitor` role is reported separately from the agent's i
 ## Next Steps
 
 - [Monitors](monitors.qmd) and [Protocols and Rules](protocols.qmd): writing your own, the stages they run at, and the actions a protocol can take.
-- [Composition](composition.qmd): `concurrent()`, `threshold()`, `observe()` and the planned `sequential()`.
+- [Composition](composition.qmd): `concurrent()`, `sequential()`, `threshold()` and `observe()`.
 - [State](state.qmd): keeping state across a sample's steps with `context.store_as()`.
 - [The Host and Model Roles](host.qmd): model calls from monitors and protocols.
 - [Final Decisions and Humans](final-decisions.qmd): `decide_final()` and the planned `human()`.

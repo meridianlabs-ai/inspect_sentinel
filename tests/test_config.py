@@ -16,7 +16,6 @@ from inspect_sentinel._decorators import (
     protocol,
 )
 from inspect_sentinel._integration import (
-    Sentinels,
     config_from_sentinel,
     resolve_sentinel,
     run_root,
@@ -26,27 +25,27 @@ from inspect_sentinel._protocols import concurrent, threshold
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import (
-    Child,
-    Children,
     Monitor,
     MonitorGroup,
     Monitors,
     Protocol,
+    Sentinel,
+    Sentinels,
 )
 from tests._fakes import ListRecorder, after_step, before_step, runner_context
 
 
-def _listed(built: Child | Children) -> list[Child]:
+def _listed(built: Sentinels) -> list[Sentinel]:
     assert isinstance(built, list)
-    return cast(list[Child], built)
+    return cast(list[Sentinel], built)
 
 
-def _mapped(built: Child | Children) -> dict[str, Child]:
+def _mapped(built: Sentinels) -> dict[str, Sentinel]:
     assert isinstance(built, dict)
-    return cast(dict[str, Child], built)
+    return cast(dict[str, Sentinel], built)
 
 
-def _only(built: Child | Children) -> Child:
+def _only(built: Sentinels) -> Sentinel:
     [child] = _listed(built)
     return child
 

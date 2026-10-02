@@ -1,6 +1,6 @@
 ---
 title: "Composition"
-description: "Combining monitors and protocols: concurrent(), threshold(), observe(), and the planned sequential()."
+description: "Combining monitors and protocols: concurrent(), sequential(), threshold() and observe()."
 ---
 
 ::: {.callout-warning}
@@ -10,7 +10,7 @@ This page is an outline: a summary and the sections planned for it, not yet the 
 
 ## Overview
 
-How several monitors and protocols combine into one sentinel. Covers what a list or mapping passed to `Task(sentinel=...)` resolves to, the shipped protocols that combine and threshold, how decisions are ranked, instance names and paths, and nesting. `sequential()`, `defer_to_trusted()` and `resample()` are planned.
+How several monitors and protocols combine into one sentinel. Covers what a list or mapping passed to `Task(sentinel=...)` resolves to, the shipped protocols that combine and threshold, how decisions are ranked, instance names and paths, and nesting. `defer_to_trusted()` and `resample()` are planned.
 
 ## Planned Sections
 
@@ -19,7 +19,34 @@ How several monitors and protocols combine into one sentinel. Covers what a list
 - `concurrent()`: every child runs; the strongest decision wins (`terminate` > `reject` > `modify` > `escalate` > `continue`)
 - `threshold()`: `reject_at` and `terminate_at`, as one number or per monitor and dimension
 - `observe()`: recording scores with nothing acting on them, and collecting a benign distribution
-- `sequential([...])`: an ordered chain of children that hands escalations forward, e.g. `sequential([rule(), human()])` (planned)
 - `defer_to_trusted()` and `resample()` (planned)
 - Nesting compositions
 - Writing your own composition over the runner
+
+## Sequential
+
+`sequential()` runs its children one at a time, in order. The first child that decides anything but `escalate` decides for the chain, and the children after it do not run. Use it for a cheap rule ahead of an expensive judge, or (once `human()` ships) a person at the end who is asked only what the rules could not settle.
+
+```python
+from inspect_sentinel import sequential
+
+sentinel = sequential([network_rule(), llm_judge()])
+```
+
+- **Escalations are handed forward.** A child that returns `Decision.escalate(...)` passes the step to the next child, which finds the escalation in `step.escalations`, together with every earlier one in the chain. The list starts empty each time the chain runs, so a nested `sequential` does not see the escalations of the chain around it.
+- **Monitors fall through.** A monitor in the chain is recorded and the next child runs, since an observation is not a decision.
+- **Children watch their own stages.** A child that does not watch the current stage is skipped, as everywhere else.
+- **When nobody decides.** If every child that decided escalated, the chain returns the last escalate, passing it up to the layer above. If only monitors reported it returns `continue`, and if no child took part it abstains.
+- **Final decisions.** A child that calls `decide_final()` ends the step as usual; the chain and every layer above it are recorded as bypassed.
+
+Each child is recorded under its instance name below the chain's path: `attempt/network_rule` for a chain configured under the name `attempt`. In YAML the children go under `children:`:
+
+```yaml
+sentinel:
+  attempt:
+    name: sequential
+    children:
+      network_rule: {name: network_rule}
+      judge: {name: llm_judge, params: {model: openai/gpt-4o-mini}}
+```
+

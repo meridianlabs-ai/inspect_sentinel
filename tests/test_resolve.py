@@ -5,6 +5,7 @@ from typing import Any, cast
 import pytest
 from inspect_ai._util.registry import registry_info
 
+from inspect_sentinel import Sentinels
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import (
     monitor,
@@ -12,7 +13,7 @@ from inspect_sentinel._decorators import (
 )
 from inspect_sentinel._protocols import concurrent, observe, threshold
 from inspect_sentinel._report import Decision, Observation
-from inspect_sentinel._resolve import Sentinels, resolve_sentinel
+from inspect_sentinel._resolve import resolve_sentinel
 from inspect_sentinel._runner import (
     run_protocols,
     run_root,

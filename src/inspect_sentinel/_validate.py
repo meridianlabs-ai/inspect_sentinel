@@ -13,7 +13,7 @@ from ._context import validate_instance_name
 from ._decorators import step_types
 from ._report import Decision
 from ._step import AfterToolCall, Step
-from ._types import Child, Group
+from ._types import Group, Sentinel
 
 
 def validate_decision_shape(decision: Decision, step: Step) -> None:
@@ -70,15 +70,15 @@ def check_child(
 
 
 def named_children(
-    children: Child | Mapping[str, Child] | Iterable[Child],
+    children: Sentinel | Mapping[str, Sentinel] | Iterable[Sentinel],
     expected: Literal["monitor", "protocol"] | None,
-) -> list[tuple[str, Child]]:
-    pairs: list[tuple[object, Child]]
+) -> list[tuple[str, Sentinel]]:
+    pairs: list[tuple[object, Sentinel]]
     if callable(children) or isinstance(children, Group):
         pairs = [(None, children)]
         keyed = False
     elif isinstance(children, Mapping):
-        mapping = cast(Mapping[str, Child], children)
+        mapping = cast(Mapping[str, Sentinel], children)
         pairs = [(key, child) for key, child in mapping.items()]
         keyed = True
     elif isinstance(children, Sequence) and not isinstance(children, str):
@@ -88,7 +88,7 @@ def named_children(
         raise TypeError(
             "children must be a monitor, protocol or group, a Mapping or a Sequence; a set or an iterator has no configuration order"
         )
-    named: list[tuple[str, Child]] = []
+    named: list[tuple[str, Sentinel]] = []
     seen: set[str] = set()
     for given, child in pairs:
         info, _ = check_child(child, expected)

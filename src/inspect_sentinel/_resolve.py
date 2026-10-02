@@ -1,27 +1,21 @@
 from __future__ import annotations
 
 import logging
-from typing import TypeAlias, cast
+from typing import cast
 
 from inspect_ai._util.registry import is_registry_object, registry_info
 
 from ._protocols import concurrent, observe
 from ._types import (
-    Child,
-    Children,
     Group,
-    Monitor,
-    MonitorGroup,
     Monitors,
     Protocol,
-    ProtocolGroup,
+    Sentinel,
+    Sentinels,
 )
 from ._validate import named_children
 
 logger = logging.getLogger(__name__)
-
-Sentinels: TypeAlias = Monitor | MonitorGroup | Protocol | ProtocolGroup | Children
-"""What `Task(sentinel=)` accepts: one monitor, protocol or group, or a sequence or mapping of them."""
 
 
 def resolve_sentinel(spec: Sentinels) -> Protocol:
@@ -33,7 +27,7 @@ def resolve_sentinel(spec: Sentinels) -> Protocol:
         spec: One monitor or protocol, or a sequence or mapping of instance names to them.
     """
     single = is_registry_object(spec)
-    children: Children = [cast(Child, spec)] if single else cast(Children, spec)
+    children: Sentinels = [cast(Sentinel, spec)] if single else spec
     named = named_children(children, None)
     if not named:
         raise ValueError(

@@ -6,19 +6,20 @@ A *monitor* observes a step of an agent's execution and reports a suspicion scor
 from ._context import Context, Host
 from ._decorators import monitor, protocol
 from ._final import decide_final
-from ._protocols import concurrent, observe, threshold
+from ._protocols import concurrent, observe, sequential, threshold
 from ._report import Action, Decision, Observation, Report, Reported, Suspicion
 from ._results import Decisions, Observations, Reports
 from ._runner import run_children, run_monitors, run_protocols
 from ._step import AfterToolCall, BeforeToolCall, Step
 from ._types import (
-    Children,
     Monitor,
     MonitorGroup,
     Monitors,
     Protocol,
     ProtocolGroup,
     Protocols,
+    Sentinel,
+    Sentinels,
 )
 
 try:
@@ -31,7 +32,6 @@ __all__ = [
     "Action",
     "AfterToolCall",
     "BeforeToolCall",
-    "Children",
     "Context",
     "Decision",
     "Decisions",
@@ -47,6 +47,8 @@ __all__ = [
     "Report",
     "Reported",
     "Reports",
+    "Sentinel",
+    "Sentinels",
     "Step",
     "Suspicion",
     "concurrent",
@@ -57,6 +59,7 @@ __all__ = [
     "run_children",
     "run_monitors",
     "run_protocols",
+    "sequential",
     "threshold",
     "__version__",
 ]
