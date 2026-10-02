@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from typing import Any, NamedTuple, cast
 
@@ -9,6 +10,7 @@ import yaml
 from inspect_ai._util.file import exists, local_path
 from inspect_ai._util.registry import (
     RegistryDict,
+    RegistryInfo,
     RegistryType,
     create_registry_object,
     has_registry_params,
@@ -22,10 +24,14 @@ from inspect_ai.log import SentinelConfig, SentinelEntry
 from inspect_ai.util import resource
 
 from ._context import validate_instance_name
+from ._decorators import ENTRY_FIELDS, VERSION
 from ._types import Sentinel, Sentinels
 
+logger = logging.getLogger(__name__)
+
 PACKAGE = "inspect_sentinel"
-ENTRY_FIELDS = frozenset({"name", "params"})
+
+_warned_versions: set[tuple[str, int, int]] = set()
 
 
 class _Factory(NamedTuple):
@@ -39,7 +45,7 @@ def sentinel_from_config(
 ) -> Sentinels:
     """Build the monitors and protocols a configuration describes.
 
-    Each entry is constructed through the registry with its `params` and its nested entries, which are built first. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved; pass it to `resolve_sentinel`.
+    Each entry is constructed through the registry with its `params` and its nested entries, which are built first. An entry whose recorded `version` differs from the installed factory's is built anyway, with a warning naming both versions; its `meta` is ignored. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved; pass it to `resolve_sentinel`.
 
     Args:
         config: A YAML or JSON file whose only key is `sentinel`, a registered monitor or protocol name, or the configuration itself: one entry, a list of entries, or a mapping of instance names to entries.
@@ -167,6 +173,7 @@ def _build_entry(entry: object, path: str) -> Sentinel:
         raise ValueError(f"{path}.params must be a mapping of arguments.")
     args = dict(cast(Mapping[str, object], params))
     found = _find(name, path)
+    _check_version(found, fields.get(VERSION), path)
     signature = inspect.signature(cast(Any, found.factory)).parameters
     accepted = [key for key, p in signature.items() if p.kind is not p.VAR_KEYWORD]
     any_key = len(accepted) < len(signature)
@@ -186,6 +193,27 @@ def _build_entry(entry: object, path: str) -> Sentinel:
         error = TypeError if isinstance(ex, TypeError) else ValueError
         raise error(f"{path}: {ex}") from ex
     return cast(Sentinel, instance)
+
+
+def _check_version(found: _Factory, recorded: object, path: str) -> None:
+    if recorded is None:
+        return
+    if not isinstance(recorded, int) or isinstance(recorded, bool):
+        raise ValueError(f"{path}.version must be an integer, not {recorded!r}.")
+    installed = _version(registry_info(found.factory))
+    key = (found.name, recorded, installed)
+    if recorded != installed and key not in _warned_versions:
+        _warned_versions.add(key)
+        logger.warning(
+            "%s was recorded at version %d but version %d is installed; building it anyway.",
+            found.name,
+            recorded,
+            installed,
+        )
+
+
+def _version(info: RegistryInfo) -> int:
+    return cast(int, info.metadata.get(VERSION, 0))
 
 
 def _find(name: str, path: str) -> _Factory:
@@ -217,7 +245,7 @@ def _lookup(name: str) -> list[_Factory]:
 def config_from_sentinel(sentinels: Sentinels) -> SentinelConfig:
     """Record constructed monitors and protocols as the configuration that rebuilds them.
 
-    The inverse of `sentinel_from_config`, for the eval log and retry: each instance becomes an entry with its registry name and the params it was created with, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a lone entry, so it rebuilds as the root it was.
+    The inverse of `sentinel_from_config`, for the eval log and retry: each instance becomes an entry with its registry name, the params it was created with, and its factory's version unless that is 0, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a lone entry, so it rebuilds as the root it was.
 
     Args:
         sentinels: One monitor or protocol, or a sequence or mapping of instance names to them, as `Task(sentinel=)` accepts.
@@ -226,14 +254,19 @@ def config_from_sentinel(sentinels: Sentinels) -> SentinelConfig:
         TypeError: If a value is not a configured monitor or protocol.
     """
     if is_registry_object(sentinels):
-        return SentinelConfig(_config_entry(_registry_dict(sentinels)))
+        return SentinelConfig(_instance_entry(sentinels))
     if isinstance(sentinels, Mapping):
         mapping = cast(Mapping[str, object], sentinels)
-        return _config_layer(
-            {name: _registry_dict(child) for name, child in mapping.items()}
+        return SentinelConfig(
+            {name: _instance_entry(child) for name, child in mapping.items()}
         )
     items = cast(Sequence[object], sentinels)
-    return _config_layer([_registry_dict(child) for child in items])
+    return SentinelConfig([_instance_entry(child) for child in items])
+
+
+def _instance_entry(instance: object) -> SentinelEntry:
+    recorded = _registry_dict(instance)
+    return _config_entry(recorded, _version(registry_info(instance)))
 
 
 def _registry_dict(instance: object) -> RegistryDict:
@@ -251,11 +284,19 @@ def _config_layer(
     layer: Sequence[RegistryDict] | Mapping[str, RegistryDict],
 ) -> SentinelConfig:
     if isinstance(layer, Mapping):
-        return SentinelConfig({name: _config_entry(d) for name, d in layer.items()})
-    return SentinelConfig([_config_entry(d) for d in layer])
+        return SentinelConfig({name: _nested_entry(d) for name, d in layer.items()})
+    return SentinelConfig([_nested_entry(d) for d in layer])
 
 
-def _config_entry(recorded: RegistryDict) -> SentinelEntry:
+def _nested_entry(recorded: RegistryDict) -> SentinelEntry:
+    # registry params hold nested instances as dicts, so the version comes from
+    # the factory they name
+    factory = registry_lookup(recorded["type"], recorded["name"])
+    version = 0 if factory is None else _version(registry_info(factory))
+    return _config_entry(recorded, version)
+
+
+def _config_entry(recorded: RegistryDict, version: int) -> SentinelEntry:
     params: dict[str, Any] = {}
     nested: dict[str, SentinelConfig] = {}
     for key, value in recorded["params"].items():
@@ -264,9 +305,10 @@ def _config_entry(recorded: RegistryDict) -> SentinelEntry:
             params[key] = value
         else:
             nested[key] = _config_layer(layer)
-    return SentinelEntry.model_validate(
-        {"name": _config_name(recorded["name"]), "params": params, **nested}
-    )
+    fields: dict[str, Any] = {"name": _config_name(recorded["name"]), "params": params}
+    if version != 0:
+        fields[VERSION] = version
+    return SentinelEntry.model_validate({**fields, **nested})
 
 
 def _sentinel_layer(
