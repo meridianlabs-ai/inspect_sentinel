@@ -10,7 +10,7 @@ This page is an outline: a summary and the sections planned for it, not yet the 
 
 ## Overview
 
-How a sentinel sits beside Inspect's existing `approval=` and `review=` policies. Covers the order in which they run around a tool call, when to use each, the differences in vocabulary (`approve` versus `continue`, and the agent-facing `message`), and what is planned for running approvers as protocols.
+How a sentinel sits beside Inspect's existing `approval=` and `review=` policies. Covers the order in which they run around a tool call, when to use each, the differences in vocabulary (`approve` versus `continue`, and the agent-facing `message`), and running approvers as protocols.
 
 ## Planned Sections
 
@@ -18,5 +18,39 @@ How a sentinel sits beside Inspect's existing `approval=` and `review=` policies
 - When to use approval, review or a sentinel
 - Vocabulary: `approve` and `continue`; `Approval.explanation` and `Decision.message`
 - Using an approval and a sentinel on one task
-- Approvers as protocols, `as_protocol()` (planned)
 - Reviewers and after-call protocols (under review)
+
+## Approvers as Protocols
+
+`as_protocol()` runs an Inspect approver, or a list of approval policies, as a protocol before each tool call, so it composes with monitors and other protocols in `Task(sentinel=)`:
+
+```python
+from inspect_ai.approval import ApprovalPolicy, auto_approver, human_approver
+from inspect_sentinel import as_protocol, sequential
+
+# what approval= would do, as a sentinel
+sentinel = as_protocol([
+    ApprovalPolicy(human_approver(), "bash"),
+    ApprovalPolicy(auto_approver(), "*"),
+])
+
+# a rule ahead of an existing approver, which decides what the rule escalates
+sentinel = sequential([triage(), as_protocol(my_approver())])
+```
+
+Given policies, an approval config file or a registered approver's name, which is what `Task(approval=)` accepts, the protocol decides as `approval=` would: tools match the same way, an approver that escalates hands the call to the next matching one, and a call no approver covers, or that every one escalates, is rejected. Given a single approver, its `escalate` is the protocol's decision, so in a `sequential()` the next link decides.
+
+The approver's decisions map to decisions of the same name, with `approve` becoming `continue`. A reject's explanation is what the agent is told, as under `approval=`, and every explanation is recorded as the decision's. Each approver call is also recorded as an `ApprovalEvent`, as under `approval=`. The differences from `approval=`:
+
+- **A replacement call keeps the call's `id` and `function`.** A `modify` that changes either fails the sample, as any protocol's would.
+- **A terminate is explained by the approver.** The sample's limit reason is the approver's explanation rather than "Tool call approver requested termination."
+- **Two approvers in one layer need names.** Each protocol is named `approver` (one approver) or `approval` (policies), so give several distinct names with a mapping.
+
+The approvers must be registered with `@approver`, as the log records them by name and parameters. In YAML, an approval config file goes under `policies`:
+
+```yaml
+sentinel:
+  name: approval
+  params:
+    policies: approval.yaml
+```

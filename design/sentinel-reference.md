@@ -86,6 +86,7 @@ The pieces:
 | `concurrent`, `sequential` | The two compositions: concurrent (every child runs, strongest decision wins) and ordered (first non-`escalate` decides). |
 | `threshold`, `observe`, `defer_to_trusted`, `resample` | The shipped protocols that turn monitors' scores into decisions. `defer_to_trusted` and `resample` are not built yet. |
 | `human` | A rule that asks a person through `Host.ask_human`, which the host renders with its human approval surfaces. Its decisions are final by default. |
+| `as_protocol` | Runs an inspect approver, or approval policies, as a protocol before each tool call. |
 | `decide_final` | Ends the step with a decision. Nothing above the calling protocol runs. |
 | `SentinelEvent` | Transcript record of every report, keyed by instance path. |
 
@@ -351,7 +352,7 @@ Rules:
 - **Prefer structured suspicion.** `{"goal_alignment": 0.1, "sabotage": 0.8}` lets a protocol threshold per dimension and lets independent monitors score separate dimensions. A scalar is accepted.
 - **A detector reports `1.0`.** `Observation.flag(explanation)` is a monitor's way of saying "this is definitely it" without holding a threshold; `threshold(detector(), reject_at=1.0)` acts on it.
 - **Set `audit=True` to request human review.** It is independent of the action: you can continue-and-audit or reject-and-audit. A parent protocol owning a budget may decline. For now it is recorded for offline analysis and shown in the viewer as a flag; nothing acts on it yet.
-- **Write `explanation` for the operator.** It is log-only; the agent never sees it. If the agent learns why it was flagged, it can learn to avoid being flagged. Text the agent is meant to read goes in `message`, `Decision.reject(explanation, message=...)`, which is legal only on a reject for now; a reject without one gets the host's default "not approved" text. This deliberately differs from inspect's `Approval.explanation`, which *is* shown to the model; the planned approval adapter maps an approver's explanation to `message`. Continuing while telling the agent something needs a delivery mechanism that does not exist yet.
+- **Write `explanation` for the operator.** It is log-only; the agent never sees it. If the agent learns why it was flagged, it can learn to avoid being flagged. Text the agent is meant to read goes in `message`, `Decision.reject(explanation, message=...)`, which is legal only on a reject for now; a reject without one gets the host's default "not approved" text. This deliberately differs from inspect's `Approval.explanation`, which *is* shown to the model; the approval adapter, `as_protocol()`, maps a rejecting approver's explanation to `message`. Continuing while telling the agent something needs a delivery mechanism that does not exist yet.
 - **Point at the evidence with `references`.** A list of `inspect_ai.scorer.Reference` (`type` `"message"` or `"event"`, `id`, optional `cite` such as `[M22]`), the type Scout's `Result.references` uses. Inspect View renders each cite in the explanation as a link to what it references. Every constructor takes `references=` as a keyword.
 - **Call `decide_final(decision)` only for a decision no layer above may weaken.** It ends the step: siblings still in flight are cancelled, every layer above is recorded as bypassed, and the decision is the outcome. No shipped protocol calls it; `human()` returns an ordinary decision. The framework cannot verify the claim to the last word, so the claim is visible in the log and in code review, as `portable=False` is.
 
@@ -1105,6 +1106,21 @@ Action           = Literal["continue", "modify", "reject", "terminate", "escalat
 
   The list form keeps its current code path. The `ApprovalPolicy` list is shorthand for an honour-everything protocol. Human approvers stay final under any protocol. `Approval` does not gain a score field; an approver that wants to score should be a monitor under `threshold()`. This is probably a separate PR.
 
+### Approvers as protocols
+
+`as_protocol(approval)` takes what `Task(approval=)` takes (policies, a config file or an approver's name) or one approver, and returns a `BeforeToolCall` protocol:
+
+```python
+Task(sentinel=as_protocol([ApprovalPolicy(human_approver(), "bash"), ApprovalPolicy(auto_approver(), "*")]))
+Task(sentinel=sequential([triage(), as_protocol(my_approver())]))
+```
+
+- **Policies decide as `approval=` does.** The adapter wraps inspect's `policy_approver`: the same tool matching, escalate fall-through, and reject of a call nothing covers or every approver escalates. One approver's `escalate` is the protocol's decision, so a `sequential` passes it on.
+- **The decision words map by name**, `approve` to `continue`. A reject's explanation is both `message` and `explanation`, so the agent reads what `approval=` shows it. `approve` or `modify` with a `modified` call is a `modify`, without one a `continue`, as `approval=` applies them.
+- **Each approver call is an `ApprovalEvent`**, inside the sentinel span, as under `approval=`.
+- **Recorded and rebuilt.** Registered as `inspect_sentinel/approver` (param `approver`) and `inspect_sentinel/approval` (param `policies`, a list of `{approver, tools}` or a config file); approvers are recorded as registry dicts, so they must be `@approver`s.
+- **Differences from `approval=`:** a replacement call must keep the call's `id` and `function`; a terminate's limit reason is the approver's explanation; two adapted approvers in one layer need names from a mapping.
+
 ### The reviewer group's requirements (#5423)
 
 Issue #5423 proposed that `approval` and `review` accept a dict of named policy chains, every chain running on every matching call, each with today's first-non-`escalate` semantics inside. The motivating defect: one ordered chain silences independent monitors, and the workaround loses per-monitor events, invents a severity order, and gives an inner monitor nowhere to escalate. The group has agreed to build on sentinels instead, so the proposal's requirements are requirements here.
@@ -1392,4 +1408,4 @@ What keeps the simple case simple:
 22. **Where does `conversation` come from, and is `history` eager?** In-process the dispatcher takes the current agent span's id (the sample uuid outside any agent span); whether `AgentState` should carry it instead is open. `history` is a reference in-process, but replay and a proxy materialise it per step, O(n) per step unless the runner hands out a shared, append-only view.
 23. **Is `decide_final()` the right design at all?** Any protocol at any depth, third-party code inside `observe()` or `threshold()` included, can call it and bypass every layer above, while this design presents child decisions as advisory to the parent. The options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism. `human()` no longer uses it, which weakens the case for keeping it.
 24. **What should an `escalate` that reaches the root mean?** Today it proceeds as `continue` would, is recorded as the root's decision, and the host warns once per eval. The alternatives are rejecting it (fail-closed, as approval does when every approver escalates) or a setting with a chosen default. Rejecting turns every unsure rule into a blocked call.
-25. **How do `review=` and tool approvers migrate?** Is `review=` deprecated in favour of after-call protocols, as [Relationship to approval and review](#relationship-to-approval-and-review) proposes? How does `approval=` coexist with `sentinel=`? The ordering is already written down: approval and then the sentinel before a call, review and then the sentinel after. Can an existing approver run as a protocol through an `as_protocol(approver)` adapter? Tracked in `pr-series.md`, Deferred.
+25. **How do `review=` and `approval=` migrate?** Approvers run as protocols through `as_protocol()`, and the ordering is written down: approval and then the sentinel before a call, review and then the sentinel after. Open: is `review=` deprecated in favour of after-call protocols, and does it get an adapter first? Does `approval=` eventually run through the adapter? `sentinel.md`, "Migrating `approval=` and `review=`", has the proposal. Tracked in `pr-series.md`, Deferred.
