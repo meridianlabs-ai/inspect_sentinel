@@ -4,7 +4,7 @@ Exploratory design for two new registry types, `@monitor` and `@protocol`: one a
 
 *Sentinel* is the umbrella: the name of the feature, and of one configured tree — a protocol with its monitors — as passed to `Task(sentinel=)` and recorded as a `SentinelEvent`. Inside it, *monitor* and *protocol* keep their AI-control-literature senses, which are also ControlArena's: the monitor is a scorer, the protocol decides. An earlier draft used "monitor" for both the umbrella (`Task(monitor=)`) and the scorer, and reviewers read the umbrella as "the monitor plus the protocol"; renaming the umbrella rather than the scorer keeps the literature's pair intact.
 
-Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe`, `concurrent`, `sequential`, `threshold` and `human` are implemented in `inspect_sentinel` and its inspect_ai integration (`Host.ask_human` in inspect_ai follows). The [failure policy](#failure-semantics) is implemented too. The generate stages, `defer_to_trusted`, `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those is illustrative.
+Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe`, `concurrent`, `sequential`, `threshold` and `human` are implemented in `inspect_sentinel` and its inspect_ai integration (`Host.ask_human` in inspect_ai follows). The [failure policy](#failure-semantics) is implemented too. The generate stages, `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those is illustrative.
 
 **Related design documents.** This one defines the protocol. `sentinel-deployment.md` covers running a sentinel outside the eval process — in a proxy on the wire — and the constraints that places on the protocol. `sentinel-development.md` covers measuring and calibrating a monitor before it acts, by replaying it over transcripts as an Inspect Scout scanner. `inspect-core.md` covers extracting the wire types into a package light enough for a monitor author (or another language) to depend on.
 
@@ -194,7 +194,7 @@ Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCal
 """The union, for code that handles any stage — a protocol, or a dispatcher."""
 ```
 
-`AfterGenerate` carries the request that produced `output` — `input`, `tools`, `tool_choice`, `config` — as well as the output, because a protocol that substitutes an action (`resample`, `defer_to_trusted`) has to regenerate with exactly what the agent was given.
+`AfterGenerate` carries the request that produced `output` — `input`, `tools`, `tool_choice`, `config` — as well as the output, because a protocol that substitutes an action (`resample`) has to regenerate with exactly what the agent was given.
 
 A monitor never annotates `Step`, since [its annotation is what selects the stage](#the-stage-comes-from-the-annotation). The alias exists for the layer above, which does see all four.
 
@@ -617,7 +617,7 @@ The collusion countermeasures land here too: paraphrasing and minification are a
 The [two registry types](#monitor-or-protocol) are not just two shapes of data. Each implies a way of deciding, and the design has to support both rather than treating one as the degenerate case of the other.
 
 - **Rules, no monitors.** The protocol decides directly from what it sees. No thresholds, no calibration, no budget. This is the shipped-guardrail philosophy — and it is not hypothetical in Inspect, because **it is exactly what `@approver` does today.** An approver consults nothing, its decisions are binding, and nobody regards that as unsafe.
-- **Monitors under a calibrated protocol.** The monitor never decides; thresholds, budget and actions all live in the protocol that reads it. This is the control-literature philosophy, and it is what `threshold`, `defer_to_trusted` and `resample` are for.
+- **Monitors under a calibrated protocol.** The monitor never decides; thresholds, budget and actions all live in the protocol that reads it. This is the control-literature philosophy, and it is what `threshold` and `resample` are for.
 
 Neither is the advanced version of the other. What a protocol is *for* becomes sharper as a result: **a protocol exists to decide.** When there is a score, deciding means thresholding it; when there is not, the rule is the decision.
 
@@ -668,7 +668,6 @@ The control literature's protocols are a small, finite, well-studied set. Ship t
 ``` python
 Task(sentinel=observe(network_suspicion()))
 Task(sentinel=threshold(network_suspicion(), reject_at=0.8))
-Task(sentinel=defer_to_trusted(network_suspicion(), threshold=0.8))
 Task(sentinel=resample(network_suspicion(), threshold=0.8, n=3))
 ```
 
@@ -684,13 +683,12 @@ The literature's protocols are all arrangements of three resources with differen
 | `sequential` | run children in order, first non-`escalate` decides; approval's chain as a protocol |
 | `observe` | record every monitor's score; never act. What a list of monitors resolves to, and how a benign distribution gets collected |
 | `threshold` | act on a score: `reject` above one constant, `terminate` above another. The smallest protocol, and the one calibration feeds |
-| `defer_to_trusted` | above a threshold, substitute the trusted model's action for the untrusted one's |
 | `resample` | above a threshold, draw further completions, score each, execute the least suspicious; escalate if none clears (Ctrl-Z; multi-step settings only) |
 | `trusted_monitoring` | the trusted model scores the untrusted model's output; the most suspicious slice, up to an audit budget, goes to human review and the rest is accepted |
 | `trusted_editing` | the trusted model rewrites the suspicious parts rather than replacing the whole action |
 | `untrusted_monitoring` | the *untrusted* model scores — more capable, but it may collude, so it needs honeypots and lie detection |
 
-The first six ship in core; `concurrent`, `sequential`, `observe` and `threshold` are built, and `defer_to_trusted` and `resample` are not yet. The last three are extension candidates, with the pipeline stages (honeypots, paraphrasing). `trusted_monitoring` is the surprising one to leave out, since it is the literature's baseline; the reason is the audit budget. It is a deployment-economics idea — the scarce resource being modelled is human labour — and as a headline parameter it means "how much to *not* review", which reads badly to the eval operators this package is for, who want to see everything flagged. Nothing stops an extension shipping it, and `threshold` plus `audit=True` is the eval-shaped version.
+The first five ship in core; `concurrent`, `sequential`, `observe` and `threshold` are built, and `resample` is not yet. `defer_to_trusted` was removed from the plan by the maintainer on 2026-10-02: an eval has no trusted model to defer to. The last three are extension candidates, with the pipeline stages (honeypots, paraphrasing). `trusted_monitoring` is the surprising one to leave out, since it is the literature's baseline; the reason is the audit budget. It is a deployment-economics idea — the scarce resource being modelled is human labour — and as a headline parameter it means "how much to *not* review", which reads badly to the eval operators this package is for, who want to see everything flagged. Nothing stops an extension shipping it, and `threshold` plus `audit=True` is the eval-shaped version.
 
 Two things follow that a reader should not have to infer.
 
@@ -709,9 +707,9 @@ A protocol owns:
 
 All of which is ordinary code, not framework surface — see [The runner](#the-runner).
 
-#### Two that generate
+#### One that generates
 
-`threshold` never calls a model. The two control protocols that ship beside it do, and they are worth showing because they exercise the parts of the surface a threshold does not: regenerating with the agent's own request, and substituting the result.
+`threshold` never calls a model. The control protocol that ships beside it does, and it is worth showing because it exercises the parts of the surface a threshold does not: regenerating with the agent's own request, and substituting the result.
 
 ``` python
 @protocol
@@ -739,41 +737,13 @@ def resample(monitors: Monitor | MonitorGroup | Monitors, threshold: float, n: i
 
 Each candidate's scores go through the runner, so the log holds every draw, not only the winner. Returning `escalate` when nothing clears the threshold is Ctrl-Z's incrimination signal in its simplest form, and it composes: `sequential([resample(...), human()])` sends exactly the incriminated steps to a person.
 
-``` python
-@protocol
-def defer_to_trusted(
-    monitors: Monitor | MonitorGroup | Monitors, threshold: float, trusted: str | None = None
-) -> Protocol:
-    """`trusted` is a model name; None means the `trusted` model role."""
-
-    async def decide(context: Context, step: AfterGenerate) -> Decision | None:
-        reports = await run_monitors(monitors, context, step)
-        score = reports.max_suspicion()
-        if score is None or score < threshold:
-            return Decision.proceed()
-        output = await context.host.generate(
-            step.input,
-            model=trusted,
-            role="trusted" if trusted is None else None,
-            tools=step.tools,
-            config=step.config,
-        )
-        return Decision(
-            action="modify", modified=output.message, explanation=f"suspicion {score:.2f}"
-        )
-
-    return decide
-```
-
-This is `resample` with one draw on a different model and no candidate loop. The `trusted` model role is the natural default, so `--model-role trusted=openai/gpt-4o-mini` configures it without touching code. It is a separate role from the monitors' `monitor`, so a task declares both, with `Task(model_roles={"monitor": ..., "trusted": ...})` or two `--model-role` options. `trusted_editing` is the same shape again (the trusted model is given the untrusted output and told to rewrite it) and is left to an extension until someone wants it.
-
 Three things follow for the rest of the design:
 
 - **`AfterGenerate` carries the request.** `tools`, `tool_choice` and `config` join `input`, so a protocol regenerates with exactly what the agent was given.
 - **`Host.generate` is a real generate.** Messages or a string in, `ModelOutput` out, with `model`, `role`, `tools` and `config`. `model` is always a model (a name or a `Model`) and `role` always a role, so a role name can never be mistaken for a model name. As with inspect's `get_model(model=, role=)`, a configured role wins, then `model`, then the agent's model with a warning, once per eval, naming the role to set; with neither, the role is `monitor`. Under a proxy, generating as the agent's model is a re-issued upstream request. `sentinel-deployment.md` carries the signature.
 - **Protocol inference has its own usage bucket.** `resample` spends up to `n` times the agent's tokens on the agent's model. It is recorded under a `protocol` bucket in `ModelUsage`, separate from both agent and monitor usage and not charged to the agent's limits, because the protocol chose to spend it. See open question 8.
 
-Both are `AfterGenerate`-only, and their signatures say so rather than annotating `Step`.
+It is `AfterGenerate`-only, and its signature says so rather than annotating `Step`.
 
 ### A protocol may have no children {#a-protocol-may-have-no-children}
 
@@ -1480,7 +1450,7 @@ factory="inspect_sentinel/concurrent",  path="",                          kind="
 
 The person's `reject` ends the `sequential` at `attempt`, and the top-level `concurrent` takes it as the strongest vote; its decision at `path=""` is the summary event #5423 wanted. A `decide_final()` decision is instead recorded last, at the root, when it takes effect, after a `bypassed` event for each layer above it. Every layer's decision is recorded, the root's included; a configuration that is a single rule logs one event per step, since the rule is the root; when more than one child decided, the layer's explanation lists each child's decision after the winner's own.
 
-An earlier draft added a `strategy: str` here and on `Decision`, to record whether a `modify` came from a deferral, a resample or a trusted edit. It was removed: **the layer's identity already is the strategy.** A protocol named `defer_to_trusted` returning `modify` has said what it did, and the aggregate query that justified the field — how often did this protocol defer — is `factory == "inspect_sentinel/defer_to_trusted" and action == "modify"`. Worse, on `Decision` it was a field every rule carried and never set.
+An earlier draft added a `strategy: str` here and on `Decision`, to record whether a `modify` came from a deferral, a resample or a trusted edit. It was removed: **the layer's identity already is the strategy.** A protocol named `resample` returning `modify` has said what it did, and the aggregate query that justified the field — how often did this protocol resample — is `factory == "inspect_sentinel/resample" and action == "modify"`. Worse, on `Decision` it was a field every rule carried and never set.
 
 The residual case is a protocol that genuinely takes several different actions — Ctrl-Z choosing between deferral and audit on two thresholds over one score, where `factory` does not disambiguate. Two answers in order of preference: compose it, which [nesting permits](#a-protocol-may-have-no-children), or put it in `metadata`, which already exists and needs no new contract on a serialized type.
 
@@ -1815,7 +1785,7 @@ ordered composition should be the default (no — see [Two compositions](#two-co
 
 1.  **Does `@approver` eventually become a protocol?** [Settled for now](#relationship-to-approval-and-review): a rule subsumes the merged `Reviewer`, `@approver` survives. What is open is whether the binding/advisory distinction deserves its own type permanently, or whether `@approver` becomes a `BeforeToolCall` rule once protocols have users. Deliberately deferred rather than answered.
 2.  **Who owns the budget when protocols nest?** [Protocols nest](#a-protocol-may-have-no-children), so a budget-owning protocol can wrap a paraphrasing one wrapping leaf monitors — which is the point, but two nested budget-owning protocols need a rule. Outermost wins is the obvious answer; whether an inner one should be an error is open.
-3.  **Which protocols ship in core?** Settled in [Ship protocols, not parts](#ship-protocols-not-parts): `concurrent`, `sequential`, `observe`, `threshold`, `defer_to_trusted` and `resample`. `trusted_monitoring` (the audit budget), `trusted_editing`, `untrusted_monitoring` and the pipeline stages are extension candidates.
+3.  **Which protocols ship in core?** Settled in [Ship protocols, not parts](#ship-protocols-not-parts): `concurrent`, `sequential`, `observe`, `threshold` and `resample`; `defer_to_trusted` was removed by the maintainer on 2026-10-02. `trusted_monitoring` (the audit budget), `trusted_editing`, `untrusted_monitoring` and the pipeline stages are extension candidates.
 4.  **Score aggregation.** Max across monitors is the obvious default; per-dimension max when scores are structured. Weighted combination and requiring agreement are protocol policy — but the framework has to pick a default and say so.
 5.  **Where does threshold calibration get its benign distribution?** Answered in `sentinel-development.md`: replay the `Observation` monitor over a known-benign corpus as a Scout scanner, and the results dataframe's score column is the distribution; a budget becomes a threshold by percentile, and a labelled corpus gives the precision–recall curve. What remains open there is hygiene — holding the calibration corpus out of the validation split.
 6.  **Does anything in v1 actually need per-task state?** The audit budget does not — it is per-episode, hence per-sample. Cross-sample gating ("terminate once 3 samples are flagged") does, and it is the case where in-memory state resets in the *unsafe* direction. If nothing in v1 needs it, [Per-task](#per-task) can be deferred whole; if something does, its scope wants deciding between task, run and eval-set.
