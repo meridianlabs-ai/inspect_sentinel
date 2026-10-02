@@ -87,6 +87,9 @@ class Host(typing.Protocol):
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput: ...
+    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
+    """Ask a person about the step, rendered by its type; a proxy might use a review queue.
+    A person who ends the prompt without an offered choice yields `reject` if offered, otherwise `terminate`."""
     async def fetch(
         self,
         endpoint: str,                      # a NAME, not a URL — see below
@@ -111,7 +114,11 @@ class HostResponse(typing.Protocol):
     def text(self) -> str: ...
 ```
 
-Only `generate` is built; `fetch`, `get`/`put` and `terminate` are planned.
+Only `generate` and `ask_human` are built; `fetch`, `get`/`put` and `terminate` are planned.
+
+`ask_human` answers one of the offered choices, or, when the person ends the prompt without one, `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered.
+
+Known limits of inspect_ai's surfaces: ACP cannot withdraw a permission request when the ask is cancelled, so the card stays and a later click on it is discarded; an ACP ask after a call resets the call's card to pending; and inspect_ai's surfaces return fixed reason text and cannot modify a call.
 
 `model` and `role` are separate so a role name is never read as a model name; as with inspect's `get_model(model=, role=)`, a configured role wins, then `model`, then the agent's model with a warning once per eval naming the role to set. With neither, the role is `monitor`. `defer_to_trusted` and `resample` will ask for a separate `trusted` role.
 

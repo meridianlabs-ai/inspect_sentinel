@@ -118,7 +118,7 @@ class Context:
 
     # -- effects
     host: Host
-    """Interface to the host; inference only for now, `fetch` planned."""
+    """Interface to the host; inference and asking a person for now, `fetch` planned."""
 
     target: Target | None = None
     """The expected answer (opt-in, not built yet; always None for now)."""
@@ -134,7 +134,7 @@ A protocol decides what happens at a step. It may consult monitors, other protoc
 - **Control actions**: accept, audit, defer to a trusted model, trusted edit, resample. These are things a protocol does with a score, not values a monitor can return.
 - **Pipeline stages** such as paraphrasing agent output before monitors see it, or injecting honeypot inputs to catch a colluding monitor.
 
-Built-in protocols cover the common compositions and basic control scenarios. `concurrent()`, `sequential()`, `observe()` and `threshold()` ship today; the other two are designed but not yet built:
+Built-in protocols cover the common compositions and basic control scenarios. `concurrent()`, `sequential()`, `observe()`, `threshold()` and `human()` ship today; the other two are designed but not yet built:
 
 | Protocol | Description |
 |------------------------|------------------------------------------------|
@@ -142,6 +142,7 @@ Built-in protocols cover the common compositions and basic control scenarios. `c
 | `sequential()` | Runs children in order until one decides; first non-`escalate` wins, and escalations are handed to the next link so a human at the end sees who asked and why. Use for a cheap rule ahead of an expensive judge. |
 | `observe()` | Records every observation and acts on none. What a bare monitor resolves to, and how a benign score distribution gets collected. |
 | `threshold()` | Acts on scores: `reject` at or above one threshold, `terminate` at or above another, each one number or a mapping per dimension (`{"audit.sabotage": 0.6, "*": 0.9}`). The smallest protocol, and the one calibration feeds. |
+| `human()` | Asks a person whenever it is reached, at the stages named in its required `stages` (`tool_call`, `tool_result`), through `Host.ask_human(step, choices)`. The answer is an ordinary decision: it ends a `sequential()`, and beside other protocols in a `concurrent()` it is one vote; a reject's typed reason is the `message` the agent reads. Put it at the end of a `sequential()` to ask only on escalation. |
 | `defer_to_trusted()` | Above a threshold, substitutes a trusted model's action for the untrusted one's. Defaults to the `trusted` model role. |
 | `resample()` | Above a threshold, draws further completions, scores each, and executes the least suspicious; escalates if none clears. |
 

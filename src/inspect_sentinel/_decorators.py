@@ -100,6 +100,10 @@ class _ProtocolDecorator(TypingProtocol):
     def __call__(
         self, factory: Callable[P, ProtocolGroup]
     ) -> Callable[P, ProtocolGroup]: ...
+    @overload
+    def __call__(
+        self, factory: Callable[P, Protocol | ProtocolGroup]
+    ) -> Callable[P, Protocol | ProtocolGroup]: ...
 
 
 @overload
@@ -142,6 +146,10 @@ def monitor(
 def protocol(factory: Callable[P, Protocol], /) -> Callable[P, Protocol]: ...
 @overload
 def protocol(factory: Callable[P, ProtocolGroup], /) -> Callable[P, ProtocolGroup]: ...
+@overload
+def protocol(
+    factory: Callable[P, Protocol | ProtocolGroup], /
+) -> Callable[P, Protocol | ProtocolGroup]: ...
 @overload
 def protocol(*, name: str | None = None, version: int = 0) -> _ProtocolDecorator: ...
 def protocol(

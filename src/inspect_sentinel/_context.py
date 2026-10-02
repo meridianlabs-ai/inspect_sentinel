@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any, TypeVar, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
 from inspect_ai.model import ChatMessage, GenerateConfig, Model, ModelOutput
 from inspect_ai.scorer import Target
-from inspect_ai.tool import ToolInfo
+from inspect_ai.tool import ToolCall, ToolInfo
 from inspect_ai.util import Store, StoreModel
 
 from ._report import Decision, Report, Reported
@@ -15,10 +16,24 @@ from ._step import Step
 SMT = TypeVar("SMT", bound=StoreModel)
 
 
+@dataclass(frozen=True)
+class HumanAnswer:
+    """What a person answered when `Host.ask_human` asked them about a step."""
+
+    decision: str
+    """The choice the person picked, one of the `choices` they were offered (`approve`, `reject`, `terminate` or `modify`), or, when the person ended the prompt without one of them, `reject` if it was offered and `terminate` otherwise."""
+
+    reason: str | None = None
+    """The reason the surface gives for the answer, if any: the person's typed reason, or fixed text such as "Human operator rejected the tool call."."""
+
+    modified: ToolCall | None = None
+    """The replacement call, when the person chose `modify` at a tool stage."""
+
+
 class Host(TypingProtocol):
     """What a monitor or protocol may do to the outside world. Author-facing.
 
-    Inference is the only effect for now. Outbound HTTP through named endpoints (`fetch`) is planned. Meanwhile a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, at the cost of portability to a proxy, which a future `portable=False` will declare.
+    Inference and asking a person are the only effects for now. Outbound HTTP through named endpoints (`fetch`) is planned. Meanwhile a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, at the cost of portability to a proxy, which a future `portable=False` will declare.
     """
 
     async def generate(
@@ -40,6 +55,17 @@ class Host(TypingProtocol):
             role: A model role, e.g. `trusted`. Defaults to `monitor` when `model` is None.
             tools: Tool definitions to offer the model.
             config: Generation configuration.
+        """
+        ...
+
+    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
+        """Ask a person to decide about a step, and wait for the answer.
+
+        The host is handed the step itself and renders it by its type: before a tool call the call, its view, the conversation and `step.escalations` (who escalated and why); after a call the same with the result the model is about to receive. A host raises a clear error for a stage it cannot render. When the person ends the prompt without one of the `choices`, the host answers `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered. It notifies the person and marks the sample as awaiting a person while it waits. `human()` calls this; most protocols never need to.
+
+        Args:
+            step: The step to decide about.
+            choices: What the person may pick, from `approve`, `reject`, `terminate` and `modify`, in the order to present them.
         """
         ...
 
@@ -131,7 +157,7 @@ class Context:
     """The whole sample store, the agent's state included; not namespaced. Use `store_as()` for this instance's own state."""
 
     host: Host
-    """Inference through the host's models. See `Host`."""
+    """Inference through the host's models, and asking a person. See `Host`."""
 
     target: Target | None = None
     """The expected answer. None until monitors and protocols can opt in with `target=True`."""

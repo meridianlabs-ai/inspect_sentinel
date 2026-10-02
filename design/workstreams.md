@@ -43,7 +43,7 @@ Lives in inspect_ai's model path and sentinel's step types. Best after inspect_c
 
 **Design:** [sentinel.md](sentinel.md), "Humans in the loop" and the ordered composition.
 
-The case they serve: a rule that escalates to a person, who ends the step with `decide_final()`. `human()` reuses inspect's human approval surfaces (the approval panel, ACP and the console) and shows the escalations that led to it. Like the human approver, it calls inspect's `notify()` (Apprise, so Slack, email and the rest) before prompting, so the person learns a decision is waiting. `sequential()` is the ordered composition (formerly `chain`), passing escalations from one link to the next.
+The case they serve: a rule that escalates to a person, whose answer decides for the chain. `human()` reuses inspect's human approval surfaces (the approval panel, ACP and the console) and shows the escalations that led to it. Like the human approver, it calls inspect's `notify()` (Apprise, so Slack, email and the rest) before prompting, so the person learns a decision is waiting. `sequential()` is the ordered composition (formerly `chain`), passing escalations from one link to the next.
 
 Moderate in size, but it touches runner semantics (escalation hand-off, `decide_final()`, cancellation), so it needs close review.
 

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import NamedTuple
 
 from inspect_ai.model import (
@@ -11,12 +12,25 @@ from inspect_ai.model import (
 from inspect_ai.tool import ToolCall, ToolCallView, ToolInfo
 from inspect_ai.util import Store
 
-from inspect_sentinel._context import RunnerContext
+from inspect_sentinel._context import HumanAnswer, RunnerContext
 from inspect_sentinel._report import Decision, Report, Reported
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 
 
+class Asked(NamedTuple):
+    step: Step
+    choices: tuple[str, ...]
+
+
 class FakeHost:
+    def __init__(self, *answers: HumanAnswer) -> None:
+        self.answers = list(answers)
+        self.asked: list[Asked] = []
+
+    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
+        self.asked.append(Asked(step, tuple(choices)))
+        return self.answers.pop(0)
+
     async def generate(
         self,
         input: str | list[ChatMessage],
@@ -64,7 +78,7 @@ class ListRecorder:
 
 
 def runner_context(
-    path: str = "", recorder: ListRecorder | None = None
+    path: str = "", recorder: ListRecorder | None = None, host: FakeHost | None = None
 ) -> RunnerContext:
     return RunnerContext(
         task="t",
@@ -76,7 +90,7 @@ def runner_context(
         metadata={},
         path=path,
         store=Store(),
-        host=FakeHost(),
+        host=host or FakeHost(),
         recorder=recorder or ListRecorder(),
     )
 
