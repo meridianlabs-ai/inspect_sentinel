@@ -110,6 +110,8 @@ class MonitorFailedError(RuntimeError):
     """Raised on reading the observations of a layer in which a monitor failed. Check `Observations.failed` first to decide without the failed monitors."""
 
     def __init__(self, failed: Sequence[Failed]) -> None:
+        if not failed:
+            raise ValueError("MonitorFailedError needs at least one failure.")
         listed = "; ".join(
             f"{f.path!r} (function {f.function!r}): {type(f.error).__name__}: {f.error}"
             for f in failed

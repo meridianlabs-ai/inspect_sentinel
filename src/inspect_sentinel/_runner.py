@@ -356,6 +356,10 @@ async def _run_member(
             raise
         if errors:
             failure = _surface(errors, finals)
+            # a limit ends the sample, whichever leaf surfaced
+            limits = [e for e in errors if isinstance(e, LimitExceededError)]
+            if limits:
+                failure = limits[0]
     except Exception as ex:
         failure = ex
     if failure is not None:
@@ -364,6 +368,8 @@ async def _run_member(
             and isinstance(failure, Exception)
             and not isinstance(failure, LimitExceededError)
         ):
+            # a monitor that turned its cancellation into an error was cancelled
+            await anyio.lowlevel.checkpoint_if_cancelled()
             failed = Failed(
                 name=child_name,
                 path=child_context.path,

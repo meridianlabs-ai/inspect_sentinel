@@ -181,6 +181,79 @@ async def test_a_limit_reached_in_a_monitor_ends_the_step() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_monitor_that_turns_its_cancellation_into_an_error_is_cancelled() -> (
+    None
+):
+    entered = anyio.Event()
+
+    @monitor
+    def converts_cancellation() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            entered.set()
+            try:
+                await anyio.sleep_forever()
+            except anyio.get_cancelled_exc_class():
+                raise ValueError("connection closed") from None
+            return None
+
+        return check
+
+    recorder = ListRecorder()
+    returned: list[Observations] = []
+    with anyio.fail_after(5):
+        async with anyio.create_task_group() as tg:
+
+            async def run() -> None:
+                returned.append(
+                    await run_monitors(
+                        {"c": converts_cancellation()},
+                        runner_context(recorder=recorder),
+                        before_step(),
+                    )
+                )
+
+            tg.start_soon(run)
+            await entered.wait()
+            tg.cancel_scope.cancel()
+    assert returned == []
+    assert recorder.failures == []
+    assert recorder.cancellations == [("c", "c")]
+
+
+@pytest.mark.anyio
+async def test_a_limit_beside_another_error_in_a_monitors_own_group_ends_the_step() -> (
+    None
+):
+    async def over_budget() -> None:
+        raise LimitExceededError("cost", value=2.0, limit=1.0)
+
+    async def broken() -> None:
+        raise ValueError("model unavailable")
+
+    @monitor
+    def fans_out() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(broken)
+                tg.start_soon(over_budget)
+            return None
+
+        return check
+
+    recorder = ListRecorder()
+    with pytest.raises(LimitExceededError):
+        await run_monitors(
+            [fans_out()], runner_context(recorder=recorder), before_step()
+        )
+    assert recorder.failures == []
+
+
+def test_a_monitor_failed_error_names_at_least_one_failure() -> None:
+    with pytest.raises(ValueError, match="at least one failure"):
+        MonitorFailedError([])
+
+
+@pytest.mark.anyio
 async def test_observe_records_a_failure_warns_once_and_continues(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
