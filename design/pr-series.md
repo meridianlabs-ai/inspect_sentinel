@@ -339,6 +339,12 @@ Agreed work that waits for something else. Each entry says what unblocks it. Kee
   - **How do `approval=` and `sentinel=` coexist on one task?** Both stay for now.
   - **Settled: the ordering.** inspect_ai documents it in `docs/review.qmd`, "Approval, Review and Sentinels". Before a call, approval runs and then the sentinel, so a rejected call never reaches the sentinel and a modified one reaches it modified. After a call, review runs and then the sentinel.
   - **Can existing tool approvers run as protocols?** The proposal is an `as_protocol(approver)` adapter, so that approval users can compose approvers with monitors. It would map `approve` to `continue`, the approval's `explanation` to the decision's `message` (what the agent is told), and `reject`, `escalate`, `terminate` and `modify` to the action of the same name.
+  - **Parked 2026-10-02: the draft adapter is #40** (`as_protocol()` over registered `approver` and `approval` protocols, with tests comparing it to `approval=`). Not a priority; before it lands:
+    - Suppress the duplicate record: each approver call writes an `ApprovalEvent` beside the `SentinelEvent`, so a tool card shows the same decision twice. Show only the sentinel's when an approval runs under one.
+    - Export the inspect_ai helpers it imports from private modules (`call_approver`, `policy_approver`, `approval_policies_from_config`, `ApprovalPolicyConfig`) rather than depend on `inspect_ai.approval._call` and `._policy`.
+    - Decide whether a lone `as_protocol(approver)` whose escalate reaches the top rejects, as `approval=` does, instead of letting the call run; tied to the top-level escalate policy above.
+    - Say in the docs that configuring a human approver in both `approval=` and `as_protocol()` asks the person twice.
+    - A reviewer adapter, once deprecating `review=` is decided.
 
   `sentinel.md` open question 25.
 - **Record `step.input` instead of rebuilding it.** The dispatcher scans the transcript to rebuild what the model was sent. Instead, record each generate's input when it finishes, keyed by its assistant message id, scoped to the sample and bounded, and fall back to a scan only for a message no inspect generate produced.
