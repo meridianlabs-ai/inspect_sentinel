@@ -64,7 +64,7 @@ class AfterGenerate:
     """The generation configuration the model was sent."""
 
     output: ModelOutput
-    """What the model returned; `output.message`, the first choice, is what the agent receives."""
+    """What the model returned; the first choice's message is what the agent receives. Some providers return an output with no choices, so check `output.choices` before reading `output.message`."""
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""

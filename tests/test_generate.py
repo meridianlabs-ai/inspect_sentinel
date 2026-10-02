@@ -88,6 +88,11 @@ def tool_stages() -> ProtocolGroup:
     return ProtocolGroup(call, result)
 
 
+@protocol
+def wraps_a_composition(monitors: Monitor) -> Protocol:
+    return concurrent([observe(monitors), decides("terminate")])
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "step, expected",
@@ -159,6 +164,7 @@ async def test_an_unsupported_generate_decision_fails_the_protocol() -> None:
             {BeforeGenerate, AfterGenerate, BeforeToolCall, AfterToolCall},
         ),
         (lambda: decides("continue"), {AfterGenerate}),
+        (lambda: wraps_a_composition(sees_call()), {AfterGenerate, BeforeToolCall}),
     ],
 )
 def test_watched_stages_are_what_the_tree_watches(
