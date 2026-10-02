@@ -269,15 +269,21 @@ def _watched(
         instance.functions if isinstance(instance, Group) else (instance,)
     )
     given = [*_given(args), *_given(kwargs)]
-    own = frozenset[type[Any]]().union(
-        *(
-            step_types(cast(Any, function))
-            for function in functions
-            # a composition whose children were not found watches every stage it accepts
-            if not (given and getattr(function, _FORWARDS_ATTR, False))
-        )
+    return frozenset[type[Any]]().union(
+        *(_own_stages(function, bool(given)) for function in functions),
+        *(watched_stages(cast(Sentinel, child)) for child in given),
     )
-    return own.union(*(watched_stages(cast(Sentinel, child)) for child in given))
+
+
+def _own_stages(function: object, has_children: bool) -> frozenset[type[Any]]:
+    # a configured instance returned by another factory keeps what its tree watches
+    inherited = getattr(function, WATCHED_ATTR, None)
+    if inherited is not None:
+        return frozenset(inherited)
+    # a composition whose children were not found watches every stage it accepts
+    if has_children and getattr(function, _FORWARDS_ATTR, False):
+        return frozenset()
+    return step_types(cast(Any, function))
 
 
 def _register(

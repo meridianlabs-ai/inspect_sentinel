@@ -43,7 +43,7 @@ Decided before this design: the generate stages check the agent's own model call
 A generate is the agent's when all of these hold:
 
 1. a sentinel is configured for the task and some function in it watches a generate stage;
-2. the sample is running its solvers: inspect_ai sets a context variable around `plan(state, generate)`, so init, setup and scoring (`scorers` span, and `inspect score`) are outside;
+2. the sample is running its solvers: inspect_ai sets a context variable around `plan(state, generate)`, so init and scoring (the `scorers` span, and `inspect score`) are outside. A task's `setup` solvers are part of the plan and are inside; `score()` called from a solver runs its scorers outside;
 3. the model is the active model;
 4. the call is not made inside a sentinel run: the dispatcher sets a context variable around `run_sentinel`, which covers `Host.generate` and a monitor that calls `get_model()` itself;
 5. the call is not a compaction summary: the summary strategy sets the same variable;
@@ -62,7 +62,8 @@ A generate is the agent's when all of these hold:
 | a sub-agent or handoff with an explicit other model | no | rule 3; decision 2 |
 | an agent whose model is a role (`get_model(role="untrusted")`) | no | rule 3, as the role resolves to another instance; decision 2 |
 | a model-graded tool calling `get_model()` | no | rule 6 |
-| scorers, `model_graded_qa()` | no | rule 2 |
+| scorers, `model_graded_qa()`, including `score()` called from a solver | no | rule 2 |
+| a task's `setup` solvers calling the active model | yes | they are part of the plan |
 | `Host.generate`, monitor model calls | no | rule 4 |
 | compaction summaries | no | rule 5; decision 3 |
 | a bridge filter that returns a `ModelOutput` itself | no | no `Model.generate` call; a gap to close with the bridge hook (workstream 5) |
@@ -78,7 +79,9 @@ Identity has one fragility: a sub-agent given the agent model's *name* rather th
 2. **Once per call, in `Model.generate`, outside the slot.** `BeforeGenerate` runs after the input is prepared and before the slot is acquired (so before the cache lookup); `AfterGenerate` runs after the slot is released, when the output is complete and about to be returned.
 3. **In the agent loops** (option B above).
 
-**Recommendation: 2.** The input preparation that was at the top of `_generate` (resolving tools and `tool_choice`, reasoning history, tool `model_input` handlers, media extraction, merging consecutive messages) moves into `Model._prepare_input`, called before the slot, so `step.input` is what is sent. Only `Hooks.on_before_model_generate`, which runs per attempt and may mutate the request, can still change it afterwards. The move takes tool resolution (an MCP server's tool listing, for example) out of the connection slot, which no longer holds a slot while it runs.
+**Recommendation: 2.** The input preparation that was at the top of `_generate` (resolving tools and `tool_choice`, reasoning history, tool `model_input` handlers, media extraction, merging consecutive messages) moves into `Model._prepare_input`, called before the slot, so `step.input` is what is sent. Only `Hooks.on_before_model_generate`, which runs per attempt and may mutate the request, can still change it afterwards. The move is a behaviour change for every caller, sentinel or not: tool resolution (an MCP server's tool listing, for example) no longer holds a connection slot, so `max_connections` no longer bounds it, and `ModelEvent.timestamp` and the fallback `working_time` start after preparation rather than before it.
+
+The step holds copies of the request's message and tool lists and of the config, so a monitor that mutates them cannot change what is sent; `history` is the caller's own list, as at the tool stages, and monitors must not mutate it.
 
 ### Interactions
 
@@ -90,6 +93,7 @@ Identity has one fragility: a sub-agent given the agent model's *name* rather th
 - **`cache_prompt`.** Unaffected by observation. A future `BeforeGenerate` modify that edits an early message invalidates the provider's cached prefix, which costs tokens but is not wrong.
 - **Limits.** The token and turn limits are suspended inside a sentinel run, as at the tool stages. The message limit is checked before `BeforeGenerate`, so a generate the limit refuses is not checked. Time and working limits keep running, so a slow monitor counts against the sample's time. A turn or token limit raised inside the call means no `AfterGenerate`, since the output never reaches the agent.
 - **`fail_on_refusal`.** The `ModelRefusalError` is raised before `AfterGenerate` runs, so a refusal configured to fail produces no after step (decision 6). A refusal returned as an output is checked like any output.
+- **Failures.** A monitor or protocol that raises fails the sample with its own error. The dispatcher wraps it so that, inside an `as_tool()` agent, the tool call does not turn it into a tool error the model sees; the tool call unwraps it, as at the tool stages, and so does the sample's solver phase for a generate outside any tool.
 - **Spans.** Each stage runs in its own `sentinel` span: the before span precedes the call's `ModelEvent`, the after span follows it, and monitor model calls sit inside their span. A stage that nothing in the configured tree watches opens no span (decision 7). Under a bridge with a `ModelEventSink`, the `ModelEvent` goes to the sink while the `SentinelEvent`s go to the transcript, so their order in the log depends on the sink; unverified.
 
 ### Dispatching only watched stages
@@ -179,7 +183,7 @@ def defer_to_trusted(monitors: Monitors, threshold: float) -> Protocol:
 `step_id` follows sentinel-development.md, "Step ids":
 
 - `model_input`: the id of the last message in `input`, the one that triggered the generate. A repeat behind the same message in one sample takes an ordinal suffix, `{message_id}:2`, counted per sample by the dispatcher.
-- `model_output`: the id of `output.message`.
+- `model_output`: the id of `output.message`, or empty for an output with no choices. A cached output carries the message id it was stored with, so two cache hits on the same request in one sample give two `model_output` events with one `step_id`; suffixing those as for `model_input` is open.
 
 Linking to the `ModelEvent` needs no new field: a `model_output` event's `step_id` is the `ModelEvent`'s `output.message.id`, and a `model_input` event's `step_id`, without its suffix, is the id of the last message of the next `ModelEvent`'s `input`. Event uuids cannot be used, since a `BeforeGenerate` runs before its `ModelEvent` exists. In Inspect View the before span sits directly above the `ModelEvent` and the after span directly below it, so a viewer that renders the sentinel span inline needs no lookup; one that wants a "checked by" badge on the `ModelEvent` matches by message id. Whether ts-mono renders the two new stage values well is unverified. A monitor's own model calls sit in its stage's sentinel span, listed together as at the tool stages; tying each to its instance stays deferred (pr-series.md, "Monitor model calls tied to their row").
 
