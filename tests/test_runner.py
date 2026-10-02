@@ -137,12 +137,12 @@ def after_only() -> Monitor:
     return check
 
 
-@monitor
-def raises() -> Monitor:
-    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
-        raise RuntimeError("monitor exploded")
+@protocol
+def raises() -> Protocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        raise RuntimeError("protocol exploded")
 
-    return check
+    return decide
 
 
 @protocol
@@ -254,9 +254,9 @@ async def test_runner_requires_a_runner_context() -> None:
 
 
 @pytest.mark.anyio
-async def test_exceptions_propagate() -> None:
+async def test_a_protocols_exception_propagates() -> None:
     with pytest.raises(RuntimeError, match="exploded"):
-        await run_monitors([raises()], runner_context(), before_step())
+        await run_protocols([raises()], runner_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -482,13 +482,13 @@ async def test_a_raising_child_surfaces_while_a_sibling_is_mid_await() -> None:
 
         return decide
 
-    @monitor
-    def explodes_after_start() -> Monitor:
-        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+    @protocol
+    def explodes_after_start() -> Protocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
             raise RuntimeError("boom")
 
-        return check
+        return decide
 
     recorder = ListRecorder()
     with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):
@@ -591,15 +591,15 @@ async def test_undecorated_function_in_a_sequence_gets_the_friendly_error() -> N
 
 @pytest.mark.anyio
 async def test_a_child_exception_keeps_its_own_cause() -> None:
-    @monitor
-    def chained() -> Monitor:
-        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+    @protocol
+    def chained() -> Protocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
             raise RuntimeError("wrapped") from KeyError("inner")
 
-        return check
+        return decide
 
     with pytest.raises(RuntimeError, match="wrapped") as info:
-        await run_monitors([chained()], runner_context(), before_step())
+        await run_protocols([chained()], runner_context(), before_step())
     assert isinstance(info.value.__cause__, KeyError)
 
 
@@ -694,9 +694,9 @@ async def test_a_child_error_alongside_a_cancellation_surfaces_on_both_backends(
 ):
     entered = anyio.Event()
 
-    @monitor
-    def converts_cancellation() -> Monitor:
-        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+    @protocol
+    def converts_cancellation() -> Protocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
             entered.set()
             try:
                 await anyio.sleep_forever()
@@ -704,23 +704,23 @@ async def test_a_child_error_alongside_a_cancellation_surfaces_on_both_backends(
                 raise ValueError("boom") from None
             return None
 
-        return check
+        return decide
 
-    @monitor
-    def hangs() -> Monitor:
-        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+    @protocol
+    def hangs_on() -> Protocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
             await anyio.sleep_forever()
             return None
 
-        return check
+        return decide
 
     seen: list[BaseException] = []
     async with anyio.create_task_group() as tg:
 
         async def run() -> None:
             try:
-                await run_monitors(
-                    {"c": converts_cancellation(), "h": hangs()},
+                await run_protocols(
+                    {"c": converts_cancellation(), "h": hangs_on()},
                     runner_context(),
                     before_step(),
                 )
@@ -898,14 +898,14 @@ async def test_an_error_beside_a_final_decision_is_not_hidden_by_it() -> None:
 
         return decide
 
-    @monitor
-    def explodes() -> Monitor:
-        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+    @protocol
+    def explodes() -> Protocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
             waiting.set()
             await gate.wait()
             raise RuntimeError("boom")
 
-        return check
+        return decide
 
     recorder = ListRecorder()
     with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):

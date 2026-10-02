@@ -9,11 +9,12 @@ from typing import Literal, NamedTuple, TypeVar, cast
 import anyio
 from anyio.abc import TaskGroup
 from inspect_ai._util.registry import registry_info, registry_unqualified_name
+from inspect_ai.util import LimitExceededError
 
 from ._context import Context, RunnerContext, validate_instance_name
 from ._decorators import invoke, members
 from ._final import Final, Origin
-from ._report import Decision, Observation, Report, Reported
+from ._report import Decision, Failed, Observation, Report, Reported
 from ._results import Decisions, Observations, Reports
 from ._step import Step
 from ._types import (
@@ -126,7 +127,7 @@ async def run_root(protocol: Protocol, context: Context, step: Step) -> Decision
     found: list[Reported[Decision]] = []
     try:
         await _run_child(
-            protocol, "protocol", Decision, context, step, None, found, root=True
+            protocol, "protocol", Decision, context, step, None, found, [], root=True
         )
     except Final as ex:
         origin = ex.origin
@@ -147,6 +148,8 @@ async def run_monitors(
     A typed shortcut for `run_children` over monitors only: its parameter rejects a protocol and its return type is the observations alone.
 
     Derives each child's context under this layer's path and records every observation, including the ones the caller goes on to ignore. A monitor that abstained or does not watch this stage contributes nothing, so the result may be empty. An instance whose factory returned several functions contributes one observation per function that reported, in the order the factory returned them.
+
+    A monitor function that raises does not fail the call: its failure is recorded through `Recorder.failed` and listed in the result's `failed`, and reading the result's observations then raises `MonitorFailedError`, so a caller that reads them fails unless it checks `failed` first. A `LimitExceededError` is not a monitor failure; it propagates, as a cancellation does.
 
     Args:
         monitors: One monitor or `MonitorGroup`, named by its registry name without the package prefix; a sequence of them, named the same way; or a mapping of instance names to them.
@@ -191,6 +194,7 @@ async def _run_named(
     named: Sequence[tuple[str, Sentinel]], context: Context, step: Step
 ) -> Reports:
     observations: list[tuple[int, Reported[Observation]]] = []
+    failures: list[tuple[int, Failed]] = []
     decisions: list[tuple[int, Reported[Decision]]] = []
     terminated: list[tuple[str, Reported[Decision]]] = []
 
@@ -204,6 +208,7 @@ async def _run_named(
         # returns what it recorded, as a single child finishing first does
         if registry_info(child).type == "monitor":
             observed: list[Reported[Observation]] = []
+            failed: list[Failed] = []
             try:
                 await _run_child(
                     child,
@@ -213,9 +218,11 @@ async def _run_named(
                     step,
                     name,
                     observed,
+                    failed,
                 )
             finally:
                 observations.extend((index, o) for o in observed)
+                failures.extend((index, f) for f in failed)
         else:
             decided: list[Reported[Decision]] = []
             try:
@@ -227,6 +234,7 @@ async def _run_named(
                     step,
                     name,
                     decided,
+                    [],
                 )
             finally:
                 decisions.extend((index, d) for d in decided)
@@ -251,7 +259,10 @@ async def _run_named(
         raise
 
     return Reports(
-        Observations(o for _, o in sorted(observations, key=lambda t: t[0])),
+        Observations(
+            (o for _, o in sorted(observations, key=lambda t: t[0])),
+            (f for _, f in sorted(failures, key=lambda t: t[0])),
+        ),
         Decisions(d for _, d in sorted(decisions, key=lambda t: t[0])),
     )
 
@@ -264,6 +275,7 @@ async def _run_child(
     step: Step,
     name: str | None,
     found: list[Reported[R]],
+    failed: list[Failed],
     *,
     root: bool = False,
 ) -> None:
@@ -303,7 +315,9 @@ async def _run_child(
                 child_name,
                 grouped,
             )
-            if reported is not None:
+            if isinstance(reported, Failed):
+                failed.append(reported)
+            elif reported is not None:
                 found.append(reported)
                 # nothing outranks terminate, so the rest of the group does not run
                 if isinstance(reported.report, Decision) and (
@@ -326,7 +340,7 @@ async def _run_member(
     step: Step,
     child_name: str,
     grouped: bool,
-) -> Reported[R] | None:
+) -> Reported[R] | Failed | None:
     label = describe(child_name, function.__name__, grouped)
     report: Report | None = None
     finals: list[Final] = []
@@ -342,7 +356,22 @@ async def _run_member(
             raise
         if errors:
             failure = _surface(errors, finals)
+    except Exception as ex:
+        failure = ex
     if failure is not None:
+        if (
+            kind == "monitor"
+            and isinstance(failure, Exception)
+            and not isinstance(failure, LimitExceededError)
+        ):
+            failed = Failed(
+                name=child_name,
+                path=child_context.path,
+                function=function.__name__,
+                error=failure,
+            )
+            child_context.recorder.failed(child_context, step, failed)
+            return failed
         raise failure
     if finals:
         raise _on_final(

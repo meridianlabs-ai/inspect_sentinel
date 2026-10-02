@@ -4,7 +4,7 @@ Exploratory design for two new registry types, `@monitor` and `@protocol`: one a
 
 *Sentinel* is the umbrella: the name of the feature, and of one configured tree — a protocol with its monitors — as passed to `Task(sentinel=)` and recorded as a `SentinelEvent`. Inside it, *monitor* and *protocol* keep their AI-control-literature senses, which are also ControlArena's: the monitor is a scorer, the protocol decides. An earlier draft used "monitor" for both the umbrella (`Task(monitor=)`) and the scorer, and reviewers read the umbrella as "the monitor plus the protocol"; renaming the umbrella rather than the scorer keeps the literature's pair intact.
 
-Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe`, `concurrent`, `sequential`, `threshold` and `human` are implemented in `inspect_sentinel` and its inspect_ai integration (`Host.ask_human` in inspect_ai follows). The generate stages, `defer_to_trusted`, `resample`, the view helpers, the failure policy and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those is illustrative.
+Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe`, `concurrent`, `sequential`, `threshold` and `human` are implemented in `inspect_sentinel` and its inspect_ai integration (`Host.ask_human` in inspect_ai follows). The [failure policy](#failure-semantics) is implemented too. The generate stages, `defer_to_trusted`, `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those is illustrative.
 
 **Related design documents.** This one defines the protocol. `sentinel-deployment.md` covers running a sentinel outside the eval process — in a proxy on the wire — and the constraints that places on the protocol. `sentinel-development.md` covers measuring and calibrating a monitor before it acts, by replaying it over transcripts as an Inspect Scout scanner. `inspect-core.md` covers extracting the wire types into a package light enough for a monitor author (or another language) to depend on.
 
@@ -881,9 +881,9 @@ async def run_monitors(
     """Invoke each monitor annotated for this stage, concurrently.
 
     Derives each child's Context under this layer's path, records a
-    SentinelEvent per report, applies the failure policy (deferred). Results
-    in configuration order; empty if every child abstained or does not watch
-    this stage.
+    SentinelEvent per report, records a raising monitor as failed (the
+    result's `failed`) rather than propagating. Results in configuration
+    order; empty if every child abstained or does not watch this stage.
     """
 
 
@@ -910,7 +910,7 @@ Every form carries the per-child obligations:
 - **derive the child's `Context`** — the dispatcher hands the top layer a `RunnerContext`, a `Context` that also carries the recorder, the registry name of the instance's factory as `factory`, and a `child(name, factory)` method; the runner requires it (a bare `Context` is a `TypeError`) and builds each child's context under this layer's path. Every `Recorder` call receives the `RunnerContext` of the instance it concerns, so the recorder reads which code ran from `factory` and which instance from `path`; the dispatcher's top-layer context has an empty `factory`, and `run_root` sets the root's. Naming and duplicate detection live in a private `named_children()` helper (`_validate.py`), which `sequential()` will reuse
 - **run each of the instance's functions** — every function of the instance annotated for the step runs, in the order its factory returned them and one after another, since they share one store, until one returns `terminate` or calls `decide_final()`, which ends the instance's run: the functions after it do not run and are not recorded; a lone function is the one-member case
 - **record the report** — one `SentinelEvent` per report, including the ones the protocol goes on to ignore, which is load-bearing because the ignored ones are the benign distribution calibration needs
-- **apply the [failure policy](#failure-semantics)** uniformly (deferred: the first runner propagates every exception; see `pr-series.md`)
+- **apply the [failure policy](#failure-semantics)** uniformly: a monitor function that raises is recorded through `Recorder.failed` and listed in the result's `failed`, and the rest of the instance's functions and its siblings run on; a protocol's exception propagates
 
 Across the children of one call it adds the concurrent obligations: it **fans out on an anyio task group, with the same ordering and first-exception semantics as inspect_ai's `tg_collect()`** (per AGENTS.md, which [Concurrency is a safety property](#concurrency-is-a-safety-property-not-just-a-latency-one) shows is a safety requirement rather than a latency one); and `run_children` **holds the group so a `terminate` decision can cancel the still-running siblings**, since nothing outranks it and the sample is ending — prompting a human about a sample that no longer exists is the concrete thing this avoids. A cancelled child is recorded as cancelled, meaning it was cancelled before it finished, so the log distinguishes it from one that abstained; any reports it already made, from the earlier functions of a multi-function instance, stand; its observation, if wanted, is recovered by replay. Monitors are cancelled too: once a protocol has decided `terminate` no sibling's report can change the outcome, and spending their inference live would only save a replay later. Cancellation lands at a child's next await, so a child that finishes without awaiting is recorded normally. A cancellation from above the layer, or one caused by a sibling raising, is recorded the same way; the `terminate` or the exception in the same layer says which. A child calling [`decide_final()`](#authoritative-reports) cancels its siblings the same way and propagates out of the call; as with `terminate`, the functions of one instance after the one that called it do not run, and an instance cancelled part way is recorded as cancelled once; if two race, the first to reach the group wins and the other is recorded as `superseded`, a final decision that did not take effect, and an exception in the same group outranks both, so a bug is not hidden behind a final decision.
 
@@ -926,8 +926,21 @@ class Reported(Generic[R]):
 
 
 class Observations(Sequence[Reported[Observation]]):
+    failed: tuple[Failed, ...]
+    """Monitor functions that raised; while any are present, reading raises MonitorFailedError."""
+    succeeded: Observations
+    """The observations without the failures, readable whether or not any failed."""
+
     def max_suspicion(self) -> float | None:
         """Max over observations (per-dimension max, then max); None if nobody observed."""
+
+
+@dataclass(frozen=True)
+class Failed:
+    name: str
+    path: str
+    function: str
+    error: Exception
 
 
 class Decisions(Sequence[Reported[Decision]]):
@@ -1163,7 +1176,7 @@ The group is an explicit type rather than a list. An earlier version accepted an
 
 ### Decorator arguments {#decorator-arguments}
 
-Both decorators take an optional argument form, `@monitor(name=..., version=...)` and `@protocol(name=..., version=...)`, typed by overload so the bare and called forms check alike. `name` overrides the registered name, as `@solver(name=)` does. `version` is a non-negative `int`, default 0, stored in the registry info's metadata and recorded in the log's configuration entry when not 0, so a calibration can record which version of a monitor it measured, the same convention as Inspect Scout's scanners; bump it when a change alters the scores or decisions. `portable=` and `fail=` (see [Failure semantics](#failure-semantics)) are future arguments on this form.
+Both decorators take an optional argument form, `@monitor(name=..., version=...)` and `@protocol(name=..., version=...)`, typed by overload so the bare and called forms check alike. `name` overrides the registered name, as `@solver(name=)` does. `version` is a non-negative `int`, default 0, stored in the registry info's metadata and recorded in the log's configuration entry when not 0, so a calibration can record which version of a monitor it measured, the same convention as Inspect Scout's scanners; bump it when a change alters the scores or decisions. `portable=` is a future argument on this form; there is no `fail=` (see [Failure semantics](#failure-semantics)).
 
 Two alternatives were considered and rejected:
 
@@ -1343,25 +1356,37 @@ There is no `tools` key. An earlier draft borrowed it from `ApprovalPolicy` to s
 
 ## Failure semantics {#failure-semantics}
 
-**A protocol that raises fails loud. A monitor that raises fails loud unless nothing was consuming its report.**
+**A monitor that raises never fails the sample itself. A protocol that reads a failed monitor's layer fails, unless it checks for the failure first. A protocol that raises fails the sample.**
 
-Not built yet: until the per-child hook lands, the runner propagates every exception, a monitor's under `observe()` included (`pr-series.md`, "Deferred").
+Decided with the maintainer 2026-10-01; this replaces the earlier design, in which a monitor's exception propagated unless nothing consumed its report and `@monitor(fail="open")` / `@protocol(fail="open")` declared tolerance per function.
 
-The precedent is unanimous once you look at the code rather than the docs. Neither `apply_tool_approval` nor review's `_apply.py` wraps the call itself — each has exactly one `try/except`, and it is around the *viewer*, falling back to default rendering. An approver or reviewer that raises propagates and ends the sample. Only `Hooks` swallows and warns, and `Hooks` is process-global, observational, and outside any single eval's control.
+The runner catches an `Exception` from a monitor function at the call. The monitor's result is a failure, `Failed(name, path, function, error)`, in place of an observation: it is recorded through `Recorder.failed` (inspect_ai records a `SentinelEvent` with `status="error"` and the error's message in `error`, one per failure, at the call), and the siblings run on. A cancellation is not a failure: it is a `BaseException`, recorded as cancelled as before. Nor is a limit the host enforces: a `LimitExceededError` raised in a monitor (a cost or time limit reached during its model call) ends the sample as it would anywhere else. What the runner itself detects about a monitor, such as returning a `Decision` or calling `decide_final()`, is a bug in the monitor's code rather than a failure of its check, and raises as before.
 
-The obvious objection is flakiness: LLM monitors 429 and time out, and an eval that dies because a monitor's model hiccuped is a bad trade for a safety mechanism most people run under `observe()`. That objection is weaker than it looks, because **the transients are already absorbed below**. `GenerateConfig.max_retries` and `timeout` retry model calls before anything reaches the monitor boundary, so an exception arriving here has survived the retry policy — it is a persistent outage or a bug, not a blip. Neither should be swallowed.
+What happens next depends on who reads the scores:
 
-The exception is the case the configuration makes visible:
-
-| Configuration | On exception |
+| Configuration | When a monitor raises |
 |------------------------|------------------------|
-| a protocol, at any depth | **propagate**; ending the sample beats silently losing the protection |
-| a monitor under a protocol that reads it — `threshold`, `resample` | **propagate**, for the same reason |
-| a monitor under `observe()`, or bare | **warn and continue**; killing a sample over a report that was going nowhere is absurd |
+| `observe()`, or a monitor as a plain link of `concurrent()` or `sequential()` | recorded; a warning is logged once per instance path and exception type; the step continues |
+| a protocol that reads the observations, such as `threshold()` | reading them raises `MonitorFailedError`, naming each failed monitor and its error; the protocol fails, so the sample fails |
+| a protocol that checks `observations.failed` first | it decides what a failure means, reading the other monitors' scores through `observations.succeeded` |
+| a protocol, at any depth, that raises | the sample fails |
 
-That is the "safety mechanism with no consumer" rule from [A bare monitor records only](#observe-only-is-the-default), applied to failures instead of to configurations, and it needs no new machinery — the same config-time analysis answers both.
+**Consuming protocols fail closed by default.** `Observations` carries the layer's failures in `failed`, and while any are present its readers (iteration, `len`, indexing and `max_suspicion()`) raise `MonitorFailedError`, chained to the first failure's exception. A protocol written without failures in mind cannot decide on a partial set of scores by accident: an empty-looking result when the only monitor failed would otherwise read as "nobody observed" and abstain, which is failing open. `threshold()` does not handle failures, so a failed monitor under it fails the sample. `succeeded` is the same layer's observations without the failures, readable whether or not any failed; a protocol that escalates, rejects, or decides from the rest when a monitor fails says so in its own code:
 
-The escape hatch is per-function and declared, following `portable=False`: `@monitor(fail="open")` and `@protocol(fail="open")` make tolerating a failure a visible choice that appears in code review and the registry, rather than something a function gets by default for being flaky. Failing open silently is the one behavior with no configuration that produces it.
+``` python
+observations = await run_monitors(monitors, context, step)
+if observations.failed:
+    return Decision.escalate(f"{len(observations.failed)} monitor(s) failed")
+peak = observations.max_suspicion()
+```
+
+**Recording-only compositions record and continue.** Under `observe()` nothing reads the scores, so killing a sample over a report that was going nowhere would trade a safety mechanism's purpose, collecting scores, for nothing; `concurrent()` and `sequential()` read only their protocols' decisions, so a monitor among their links is recorded the same way, and `sequential()` lets a failed monitor fall through as an observing one does. The warning is the one live signal; the event is the durable one, so a calibration run can count failures per monitor.
+
+**Protocols that raise fail the sample.** The precedent is unanimous once you look at the code rather than the docs. Neither `apply_tool_approval` nor review's `_apply.py` wraps the call itself — each has exactly one `try/except`, and it is around the *viewer*, falling back to default rendering. An approver or reviewer that raises propagates and ends the sample. A protocol that raises because a monitor's observations could not be read fails the same way; the monitor's own `error` event is already in the transcript.
+
+Transients are absorbed below: `GenerateConfig.max_retries` and `timeout` retry model calls before anything reaches the monitor boundary, so an exception arriving here has survived the retry policy — a persistent outage or a bug. That is why the failure is recorded rather than retried, and why a protocol that reads scores fails rather than guessing.
+
+There is no `fail=` argument on `@monitor` or `@protocol`: a monitor never fails the sample on its own, and the consuming protocol's code is where tolerating a failure is decided, visible in review.
 
 ## Composition {#composition}
 
@@ -1404,8 +1429,8 @@ class SentinelEvent(BaseEvent):
     function: str | None
     """`__name__` of the function that produced the report, which tells apart the functions of
     an instance whose factory returned several; path plus function identifies a report. Set for
-    `reported` and `superseded` events; `None` for `cancelled` and `bypassed`, which are per
-    instance."""
+    `reported`, `superseded` and `error` events; `None` for `cancelled` and `bypassed`, which
+    are per instance."""
     step_id: str
     """The step examined: the triggering message id (BeforeGenerate), the assistant
     message id (AfterGenerate), or the tool call id (tool stages). See
@@ -1416,8 +1441,8 @@ class SentinelEvent(BaseEvent):
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
     kind: Literal["observation", "decision"]
     """The report family; agrees with the registry type of `factory` by construction, for every status."""
-    status: Literal["reported", "cancelled", "bypassed", "superseded"]
-    """What happened to the report: `reported` carries it; `cancelled` and `bypassed` record no report; `superseded` carries the decision of a protocol whose `decide_final()` lost a race or was outranked by an exception (decisions only)."""
+    status: Literal["reported", "cancelled", "bypassed", "superseded", "error"]
+    """What happened to the report: `reported` carries it; `cancelled` and `bypassed` record no report; `superseded` carries the decision of a protocol whose `decide_final()` lost a race or was outranked by an exception (decisions only); `error` records a monitor function that raised instead of reporting (observations only)."""
     suspicion: Suspicion | None
     action: Action | None
     audit: bool
@@ -1429,7 +1454,11 @@ class SentinelEvent(BaseEvent):
     references: list[Reference]
     """The report's references; empty for `cancelled` and `bypassed`."""
     metadata: dict[str, Any] | None
+    error: str | None
+    """The exception's type and message, for an `error` event; `None` otherwise."""
 ```
+
+An `error` event records a [failed monitor](#failure-semantics): one per failure, written at the call, with `function` set and no suspicion, action or references. Whether the step went on or the sample failed is not on the event; a protocol that read the layer and failed shows as the sample's error.
 
 A `cancelled` event carries no suspicion or action, but its `kind` still says whether the child was a monitor or a protocol; it says the child was in flight when the layer was torn down, by a sibling's `terminate` or `decide_final()` or by cancellation from above. A `decide_final()` decision's event is the ordinary reported decision event of the protocol that called it, written at the root when the decision takes effect, so it follows the `bypassed` event of each layer above it, each a protocol whose own decision logic never ran. When two `decide_final()` calls race in one layer, or an exception in the layer outranks one, the losing decision's event has status `superseded`: it did not take effect. A `terminate` already recorded when a sibling's `decide_final()` outran it is followed by a `superseded` event for the same reason.
 
@@ -1798,7 +1827,7 @@ ordered composition should be the default (no — see [Two compositions](#two-co
 12.  **Does `AfterToolCall` get a bridged-agent fallback?** [Bridged agents are the in-process proxy case](#bridged-agents-are-the-proxy-case), so three of the four stages map onto the bridge once its hook lands. Whether the lossy fourth — reconstructing a result from the *next* request — is worth building, or whether `AfterToolCall` should simply decline to fire and say why, is open.
 13.  **Does `Task` / `Sample` grow a `description` field?** A public API change for a general-purpose affordance monitors happen to need first. If not, monitor context comes from `metadata` by convention and is correspondingly undiscoverable.
 14.  **Which stages can `human()` serve?** The tool stages: `BeforeToolCall`, and `AfterToolCall` with the result shown. `Host.ask_human` takes the step itself, so another stage needs only a new rendering, not a new interface. A human at `AfterGenerate` — approve the assistant message before the agent acts on it — is plausible and would need a new rendering; `BeforeGenerate` is hard to make meaningful to a person.
-15.  **Failure tolerance across many samples.** [Failing loud](#failure-semantics) is settled for the single-sample case. What is open is whether a monitor that fails on 3 samples in 500 should fail the eval, and whether that reuses `fail_on_error`'s existing shape (`True` / `False` / a proportion / a count) or needs a monitor-specific knob.
+15.  **Failure tolerance across many samples.** [The failure policy](#failure-semantics) is settled for the single step. What is open is whether a monitor that fails on 3 samples in 500 under `observe()` should fail the eval, and whether that reuses `fail_on_error`'s existing shape (`True` / `False` / a proportion / a count) or needs a monitor-specific knob.
 16.  **Should reading an eval-only surface be recorded?** `target` is opt-in and logged so a reader can tell whether a monitor's performance is achievable in deployment. `step.output` and `step.view` raise the same question and get no such treatment; a declared view was one answer and was judged heavier than the problem. A lighter one is for `briefing_as_str` and `step_as_str` to take the eval-only surfaces as explicit flags, which puts the choice in the call for a reviewer to see.
 17.  **Default history window in `monitor_prompt`.** Full history is safe and matches what approvers get today; `new_since_last_report` is the incremental shape this design argues for elsewhere. A default is hard to change later, so this wants deciding before v1.
 18.  **Is the rendered prompt part of the recorded decision?** `host.generate` already records a `ModelEvent`, so the prompt is in the log without any new field. The open part is whether replay should compare its rendering against the recorded one to detect drift in the helpers.

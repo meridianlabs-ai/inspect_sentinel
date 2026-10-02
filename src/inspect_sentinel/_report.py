@@ -149,3 +149,20 @@ class Reported(Generic[R_co]):
 
     function: str
     """The `__name__` of the function that produced the report, which tells apart the functions of an instance whose factory returned several."""
+
+
+@dataclass(frozen=True)
+class Failed:
+    """A monitor function that raised instead of reporting, with the identity of its configured instance."""
+
+    name: str
+    """Instance name, as in `Reported.name`."""
+
+    path: str
+    """Instance path, e.g. `attempt/internet_attempt`."""
+
+    function: str
+    """The `__name__` of the function that raised."""
+
+    error: Exception
+    """What it raised."""

@@ -10,7 +10,7 @@ from inspect_ai.scorer import Target
 from inspect_ai.tool import ToolCall, ToolInfo
 from inspect_ai.util import Store, StoreModel
 
-from ._report import Decision, Report, Reported
+from ._report import Decision, Failed, Report, Reported
 from ._step import Step
 
 SMT = TypeVar("SMT", bound=StoreModel)
@@ -83,6 +83,16 @@ class Recorder(TypingProtocol):
             context: The child's context; its `path` identifies the instance and its `factory` the code that ran.
             step: The step the child examined.
             reported: The child's report with its instance identity.
+        """
+        ...
+
+    def failed(self, context: RunnerContext, step: Step, failed: Failed) -> None:
+        """Record that a monitor function raised instead of reporting. The step goes on; a protocol that reads the layer's observations fails unless it checks `Observations.failed` first.
+
+        Args:
+            context: The monitor's context; its `path` identifies the instance and its `factory` the code that ran.
+            step: The step the monitor was examining.
+            failed: The failure with its instance identity.
         """
         ...
 
@@ -185,7 +195,7 @@ class RunnerContext(Context):
     """A `Context` plus what the runner needs."""
 
     recorder: Recorder
-    """Where the runner records reports and cancellations."""
+    """Where the runner records reports, failures and cancellations."""
 
     factory: str = ""
     """Registry name of the factory of the instance at `path`, package prefix included, e.g. `inspect_sentinel/concurrent`. Empty in the context the dispatcher builds; `run_root` sets the root's."""
@@ -194,7 +204,7 @@ class RunnerContext(Context):
         # a runtime check for hosts that are not type-checked against Recorder
         if not isinstance(cast(object, self.recorder), Recorder):
             raise TypeError(
-                f"Recorder {type(self.recorder).__name__} must implement record(), cancelled(), bypassed() and superseded()."
+                f"Recorder {type(self.recorder).__name__} must implement record(), failed(), cancelled(), bypassed() and superseded()."
             )
 
     def child(self, name: str, factory: str) -> RunnerContext:

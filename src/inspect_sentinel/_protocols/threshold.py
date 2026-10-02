@@ -28,6 +28,8 @@ def threshold(
 
     The smallest protocol, and the one calibration feeds: the constants come from a benign score distribution, which is why they live here and not on a monitor. Every monitor, and every function of a `MonitorGroup`, must watch `BeforeToolCall`, since that is the only stage a `reject` is legal at.
 
+    A monitor that raises fails the step: `threshold` does not decide without one of its monitors, so the `MonitorFailedError` reading its observations propagates and the sample fails, with the monitor's failure in the transcript.
+
     Args:
         monitors: The monitor, or monitors, whose scores are thresholded.
         reject_at: Suspicion at or above which the call is rejected: one number, or a mapping by dimension.
