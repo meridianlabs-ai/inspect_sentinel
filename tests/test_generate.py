@@ -112,6 +112,28 @@ async def test_each_monitor_runs_only_at_its_stage(
     assert [r.reported.name for r in recorder.records] == expected
 
 
+@monitor
+def fails_at_generate() -> Monitor:
+    async def check(context: Context, step: BeforeGenerate) -> Observation | None:
+        raise ValueError("model unavailable")
+
+    return check
+
+
+@pytest.mark.anyio
+async def test_a_monitor_failing_at_a_generate_stage_is_recorded_and_observe_proceeds() -> (
+    None
+):
+    recorder = ListRecorder()
+    root = observe({"broken": fails_at_generate(), "ok": sees_input()})
+    decision = await run_root(
+        root, runner_context(recorder=recorder), before_generate_step()
+    )
+    assert decision is None
+    assert [f.name for f in recorder.failures] == ["broken"]
+    assert [r.reported.name for r in recorder.records] == ["ok"]
+
+
 @pytest.mark.parametrize("action", ["continue", "terminate"])
 @pytest.mark.parametrize("step", [before_generate_step(), after_generate_step()])
 def test_continue_and_terminate_are_legal_at_the_generate_stages(

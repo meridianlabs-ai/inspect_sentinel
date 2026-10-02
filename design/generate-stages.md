@@ -21,7 +21,7 @@ Status: prototyped. Monitors observe both generate stages and protocols may retu
 | 11 | `modify` after a generate | Replace `choices[0].message` with a `ChatMessageAssistant`; usage, time and model unchanged; other choices dropped. |
 | 12 | `Decision.modify(step, ...)` | One constructor, overloaded on the step type: `arguments=` at `BeforeToolCall`, `input=`/`tools=`/`tool_choice=` at `BeforeGenerate`, `message=` at `AfterGenerate`. |
 | 13 | `SentinelEvent.modified` at the generate stages | `ChatMessageAssistant` joins the union for `AfterGenerate`; a `BeforeGenerate` modify records no copy, since the `ModelEvent` holds the request sent. A log contract change, for when `modify` lands. |
-| 14 | `Host.generate` and `tool_choice` | Add `tool_choice=`, so `resample` and `defer_to_trusted` regenerate exactly. |
+| 14 | `Host.generate` and `tool_choice` | Add `tool_choice=`, so `resample` regenerates exactly. |
 | 15 | `history` at the generate stages | The caller's messages for now; the agent loops declare their full history later ([e](#e-what-the-step-carries)). |
 | 16 | `escalate` at the generate stages | Enable with the next step, with the same root behaviour as the tool stages. |
 | 17 | Recording `step.input` at generate time | Follow-up: the after-generate hook records each input by its assistant message id, replacing the transcript scan the tool stages use. |
@@ -92,6 +92,7 @@ The step holds copies of the request's message and tool lists and of the config,
 - **`fallback_models`.** Handled inside the provider call, so one call is checked once; `step.model` is the model requested, and `output.model` and `output.fallback` say which answered.
 - **`cache_prompt`.** Unaffected by observation. A future `BeforeGenerate` modify that edits an early message invalidates the provider's cached prefix, which costs tokens but is not wrong.
 - **Limits.** The token and turn limits are suspended inside a sentinel run, as at the tool stages. The message limit is checked before `BeforeGenerate`, so a generate the limit refuses is not checked. Time and working limits keep running, so a slow monitor counts against the sample's time. A turn or token limit raised inside the call means no `AfterGenerate`, since the output never reaches the agent.
+- **Monitor failures.** As at the tool stages ([sentinel.md](sentinel.md), "Failure semantics"): a monitor that raises at a generate stage is recorded as failed, with an `error` `SentinelEvent` in the stage's span, and the generate goes ahead unless a protocol reading its observations without checking `failed` raises `MonitorFailedError` and so fails the sample.
 - **`fail_on_refusal`.** The `ModelRefusalError` is raised before `AfterGenerate` runs, so a refusal configured to fail produces no after step (decision 6). A refusal returned as an output is checked like any output.
 - **Failures.** A monitor or protocol that raises fails the sample with its own error. The dispatcher wraps it so that, inside an `as_tool()` agent, the tool call does not turn it into a tool error the model sees; the tool call unwraps it, as at the tool stages, and so does the sample's solver phase for a generate outside any tool.
 - **Spans.** Each stage runs in its own `sentinel` span: the before span precedes the call's `ModelEvent`, the after span follows it, and monitor model calls sit inside their span. A stage that nothing in the configured tree watches opens no span (decision 7). Under a bridge with a `ModelEventSink`, the `ModelEvent` goes to the sink while the `SentinelEvent`s go to the transcript, so their order in the log depends on the sink; unverified.
@@ -109,7 +110,7 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
   - `input`, freely: redact a secret, annotate ("you have used 8 of 10 commands"), drop a turn. The change is not written back to the agent's history, so a persistent annotation is re-added at every generate.
   - `tools`, narrowed to a subset by name. Adding a tool the loop cannot execute produces a call that fails with "tool not found".
   - `tool_choice`, e.g. `"none"` to force a text answer.
-  - not `model`: answering from another model is `defer_to_trusted`, an `AfterGenerate` protocol.
+  - not `model`: answering from another model is an `AfterGenerate` `modify` with that model's message.
   - not `config`: a protocol that needs other settings generates through `Host.generate` and substitutes at `AfterGenerate`.
 
   The replacement is applied to the prepared input, the list `step.input` showed, and the `ModelEvent` records it. The tool-stage policy argument for `AfterToolCall` (#5355: withholding a result makes the model's picture of the sandbox diverge from the sandbox) applies to a `modify` that removes or rewrites a tool result in `input`; the docs should say so rather than the shape check forbid it, since redacting a leaked secret from a result is a legitimate use.
@@ -135,24 +136,7 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
   - The replacement keeps its own message id; the step id stays the original's, and `SentinelEvent.modified` carries the replacement, so both are in the log.
   - Its tool calls run through `BeforeToolCall` like any other, so a protocol that substituted a call sees it again there; tool call ids must be unique within the message.
 
-`defer_to_trusted` and `resample` are `AfterGenerate` protocols over these:
-
-```python
-@protocol
-def defer_to_trusted(monitors: Monitors, threshold: float) -> Protocol:
-    async def decide(context: Context, step: AfterGenerate) -> Decision | None:
-        score = (await run_monitors(monitors, context, step)).max_suspicion()
-        if score is None or score < threshold:
-            return Decision.proceed()
-        trusted = await context.host.generate(
-            step.input, role="trusted", tools=step.tools, tool_choice=step.tool_choice, config=step.config
-        )
-        return Decision.modify(step, message=trusted.message, explanation=f"suspicion {score:.2f}")
-
-    return decide
-```
-
-`resample` draws with `model=step.model` in a loop, scores each candidate through `run_monitors(monitors, context, replace(step, output=candidate))`, and returns `Decision.modify(step, message=best.message)` or `escalate`. Its draws run inside the sentinel run, so they are not themselves checked (rule 4), are not charged to the agent's token limit, and are recorded under the agent model's usage until the `protocol` usage bucket exists (sentinel.md open question 8). Both need `tool_choice` on `Host.generate` (decision 14).
+`resample` is an `AfterGenerate` protocol over these. It draws with `model=step.model` in a loop, scores each candidate through `run_monitors(monitors, context, replace(step, output=candidate))`, and returns `Decision.modify(step, message=best.message)` or `escalate`. Its draws run inside the sentinel run, so they are not themselves checked (rule 4), are not charged to the agent's token limit, and are recorded under the agent model's usage until the `protocol` usage bucket exists (sentinel.md open question 8). It needs `tool_choice` on `Host.generate` (decision 14).
 
 ## e. What the step carries {#e-what-the-step-carries}
 
@@ -168,7 +152,7 @@ def defer_to_trusted(monitors: Monitors, threshold: float) -> Protocol:
 | `output` | — | the `ModelOutput` returned; `output.message` is the subject |
 | `escalations` | inside a `sequential` | same |
 
-`AfterGenerate` repeats the request so that `resample` and `defer_to_trusted` can regenerate with exactly what the agent was given.
+`AfterGenerate` repeats the request so that `resample` can regenerate with exactly what the agent was given.
 
 **`history`.** `Model.generate` sees only the messages it is passed. For the `generate()` solver and for `react` without compaction those are the agent's whole conversation; with compaction they are the compacted conversation, and after `react`'s overflow recovery replaces `state.messages`, the folded turns are gone from both (pr-series.md, "react overflow recovery rewriting history"). The full history needs the loop that owns the messages to declare them: a context the loops set around their generate, holding their message list, which the dispatcher reads (decision 15). The same declaration is where a loop would mint `conversation`, which sentinel.md open question 22 leaves open.
 
