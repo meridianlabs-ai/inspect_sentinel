@@ -318,6 +318,10 @@ Shipped 2026-10-01, the second of the series; the inspect_ai host implementation
 - **A `human()` in a `concurrent()` is allowed (decided by the maintainer in review, 2026-10-01).** This replaces the placement check that raised a `ValueError` naming `sequential()`. A `human()` there, beside other protocols or at the root a top-level list or mapping resolves to, asks about every call it is reached on, which can be intended, as with no warning when nothing earlier watches a stage. The docs recommend `sequential()` for asking only on escalation.
 - `@protocol` gained an overload for a factory annotated `-> Protocol | ProtocolGroup`, which `human()` is.
 
+## Examples and guide for sequential() and human()
+
+Shipped 2026-10-01, the fourth of the series. `examples/escalate_to_human.py` puts a rule, `triage()`, ahead of `human(stages=["tool_call"])` in a `sequential()`: it rejects `bash()` commands that mention `/etc`, escalates ones that delete files, and proceeds on everything else, non-`bash()` calls included, since a link that abstains passes the step on and the person would be asked about it. The sequential section of `docs/composition.qmd` and the humans section of `docs/final-decisions.qmd` teach it, including the inspect_ai surfaces' limits (the reason is the surface's fixed text; `modify` is not supported). No example runs unattended, since `human()` waits for a person.
+
 ## Versions in the log
 
 Decided by the maintainer 2026-10-01: `SentinelEntry` has `version: int | None` (inspect_ai), `config_from_sentinel` records each factory's `version` when not 0, nested entries included, and `sentinel_from_config` warns once per factory and version pair when a recorded version differs from the installed one, and builds anyway. The model's `version` is a `StrictInt`, so `true`, `"3"` and `3.0` are rejected. `@monitor(version=)` and `@protocol(version=)` raise a `TypeError` naming the factory for a version that is not an `int` (a `bool` included) and a `ValueError` for a negative one.
