@@ -13,7 +13,7 @@ from inspect_ai.tool import ToolCall, ToolCallView, ToolInfo
 from inspect_ai.util import Store
 
 from inspect_sentinel._context import HumanAnswer, RunnerContext
-from inspect_sentinel._report import Decision, Report, Reported
+from inspect_sentinel._report import Decision, Failed, Report, Reported
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 
 
@@ -57,11 +57,17 @@ class ListRecorder:
         self.bypassed_layers: list[tuple[str, str]] = []
         self.bypassed_contexts: list[RunnerContext] = []
         self.supersessions: list[Recorded] = []
+        self.failures: list[Failed] = []
+        self.failed_contexts: list[RunnerContext] = []
 
     def record(
         self, context: RunnerContext, step: Step, reported: Reported[Report]
     ) -> None:
         self.records.append(Recorded(context, step, reported))
+
+    def failed(self, context: RunnerContext, step: Step, failed: Failed) -> None:
+        self.failures.append(failed)
+        self.failed_contexts.append(context)
 
     def cancelled(self, context: RunnerContext, step: Step, name: str) -> None:
         self.cancellations.append((context.path, name))

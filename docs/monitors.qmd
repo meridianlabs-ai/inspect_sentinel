@@ -23,5 +23,5 @@ How to write a monitor: a `@monitor` factory returning a function that takes a `
 - Monitor or protocol? Keeping thresholds out of monitors
 - Several functions in one monitor: `MonitorGroup`
 - Prompting an LLM monitor safely: separating instructions from evidence; prompt helpers such as `monitor_prompt()` (planned)
-- Failures: what happens when a monitor raises; `fail="open"` (planned)
+- Failures: a monitor that raises is recorded as failed and the step goes on; a protocol that reads its scores fails unless it checks `observations.failed`
 - Testing a monitor

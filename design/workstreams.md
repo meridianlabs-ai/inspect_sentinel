@@ -61,7 +61,6 @@ Many small, independent tasks, good for onboarding:
 
 - `defer_to_trusted` and `resample`.
 - The prompt and view helpers, such as `monitor_prompt`.
-- The failure policy: `@monitor(fail="open")` and `@protocol(fail="open")`, with the per-child hook in the runner.
 
 ## 7. Auto-mode approvers
 

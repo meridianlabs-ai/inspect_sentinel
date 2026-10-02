@@ -5,6 +5,7 @@ from dataclasses import replace
 from .._context import Context
 from .._decorators import protocol
 from .._report import Decision, Reported
+from .._results import warn_failed
 from .._runner import run_children
 from .._step import Step
 from .._types import Protocol, Sentinels
@@ -19,7 +20,7 @@ def sequential(
 
     Each child is run through the runner and recorded under its own name, and a child that does not watch the current stage is not invoked. An `escalate` hands the step to the next child with the escalation appended to `step.escalations`, so a person at the end sees who asked and why. The list starts empty for each run of the chain: escalations do not cross layers, so a nested `sequential` does not see the escalations of the chain around it. The functions of one `ProtocolGroup` run in one call and all see the step before any of their own escalations.
 
-    A monitor is recorded and falls through, since an observation is not a decision. When every child that decided escalated, the chain returns the last escalate, passing it up as `concurrent` does; when only monitors reported, it returns `continue`; when no child took part, `None`. A child that calls `decide_final()` ends the step as usual.
+    A monitor is recorded and falls through, since an observation is not a decision; one that raises is recorded as failed, logged as a warning, and falls through the same way. When every child that decided escalated, the chain returns the last escalate, passing it up as `concurrent` does; when only monitors reported, it returns `continue`; when no child took part, `None`. A child that calls `decide_final()` ends the step as usual.
 
     Args:
         children: A monitor, protocol or group, or several, to run in order.
@@ -37,7 +38,8 @@ def sequential(
             observations, decisions = await run_children(
                 {name: child}, context, current
             )
-            if observations:
+            warn_failed(observations.failed)
+            if observations.failed or observations.succeeded:
                 participated = True
             strongest = decisions.strongest()
             if strongest is None:

@@ -21,6 +21,7 @@ How to write a protocol: a `@protocol` factory returning a function that returns
 - Modifying a call with `dataclasses.replace(step.call, arguments=...)`
 - Requesting human review with `audit=True` (recorded; nothing acts on it yet)
 - Consulting children: `run_monitors()`, `run_protocols()`, `run_children()`, and the `Observations`, `Decisions` and `Reports` they return
+- When a monitor fails: reading `Observations` raises `MonitorFailedError`; deciding anyway with `observations.failed` and `observations.succeeded`; a protocol that reads only decisions gets no warning for a failed monitor unless it checks `failed` itself
 - Taking children as a parameter, and naming them
 - The boundary check: shape errors raised before a decision takes effect
 - Running at every stage with `Step`
