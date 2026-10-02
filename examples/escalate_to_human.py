@@ -18,7 +18,7 @@ from inspect_sentinel import (
     sequential,
 )
 
-DELETE_COMMANDS = ["rm ", "rmdir ", "-delete"]
+DELETE_WORDS = ["rm", "rmdir", "-delete"]
 
 
 @protocol
@@ -34,9 +34,10 @@ def triage() -> Protocol:
                 "command mentions /etc",
                 message="`/etc` is off limits; work only under /work.",
             )
-        for name in DELETE_COMMANDS:
-            if name in command:
-                return Decision.escalate(f"command deletes files ({name.strip()})")
+        words = command.split()
+        for word in DELETE_WORDS:
+            if word in words:
+                return Decision.escalate(f"command deletes files ({word})")
         return Decision.proceed()
 
     return decide

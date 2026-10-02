@@ -38,7 +38,7 @@ Task(..., sentinel=sequential([triage(), human(stages=["tool_call"])]))
 inspect eval examples/escalate_to_human.py --model openai/gpt-5-mini
 ```
 
-The person chooses from `choices`: by default approve, reject or terminate before a call, and approve or terminate after it. Before a call a host may also offer `"modify"`, to edit the call's arguments. The reason that comes with the answer is what the agent is told on a reject, and is recorded as the decision's explanation.
+The person chooses from `choices`: by default approve, reject or terminate before a call, and approve or terminate after it. Before a call you can also offer `"modify"`, to edit the call's arguments, where the host supports it. The reason that comes with the answer is what the agent is told on a reject, and is recorded as the decision's explanation.
 
 The answer is an ordinary decision. At the end of a `sequential()` it decides for the chain, as any link's decision does, and the layers above vote on it as usual. Beside other protocols in a `concurrent()` group, which is what a list or mapping passed to `Task(sentinel=)` becomes, the person is one vote: another protocol's `reject` outranks the person's `approve`, and the person's `reject` or `terminate` wins over a weaker vote.
 
@@ -46,7 +46,7 @@ A `human()` in a `concurrent()` group asks about every call it is reached on. To
 
 In Inspect, the person is asked through the human approval surfaces: an attached ACP client, the approval panel in the full-screen display, or the console otherwise. The prompt shows the call, the escalations above it, and, after a call, its result. Two limits for now:
 
-- The reason is the surface's fixed text (for example, that a human rejected the call), not something the person types.
+- The reason is not something the person types: the panel and console give a fixed text (for example, that a human rejected the call), and an ACP client gives none, so on a reject the agent is told only that the call was not approved.
 - `"modify"` is not supported: offering it raises an error when the person would be asked.
 
 An eval with a `human()` waits for an answer, so run it where someone can answer.
