@@ -321,7 +321,9 @@ When a decision must not be weakened by anything above it, a protocol calls `dec
 inspect eval examples/nested.py --model openai/gpt-5-mini --model-role monitor=anthropic/claude-haiku-4-5
 ```
 
-See [Final Decisions and Humans](final-decisions.qmd).
+To ask a person about what a rule cannot settle, put the rule and `human()` in a `sequential()`: the rule rejects or proceeds where it is sure and escalates the rest, and only the escalated calls reach the person. `examples/escalate_to_human.py` does this for commands that delete files; it waits for your answer in the approval panel.
+
+See [Composition](composition.qmd#sequential) and [Final Decisions and Humans](final-decisions.qmd).
 
 ## Viewing the Results
 
