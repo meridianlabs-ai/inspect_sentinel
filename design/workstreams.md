@@ -22,7 +22,7 @@ Touches modules that sentinel, Scout and inspect_ai all import. Agree up front w
 
 ## 2. Generate stages
 
-**Priority:** high. **Owner:** cteague. **Design:** [sentinel.md](sentinel.md), the payloads and "One vocabulary across stages".
+**Priority:** high. **Owner:** cteague. **Design:** [generate-stages.md](generate-stages.md), with [sentinel.md](sentinel.md), the payloads and "One vocabulary across stages". Prototyped: monitors observe both stages and protocols may `continue` or `terminate`.
 
 `BeforeGenerate` and `AfterGenerate`: the payload types, the dispatcher hooks around model generation in inspect_ai, and the decision about what a generate-stage `modify` may replace (a message, the request, or nothing). That decision unblocks `Decision.modify(step, ...)`, deferred until then.
 

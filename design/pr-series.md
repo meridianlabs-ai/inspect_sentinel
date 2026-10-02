@@ -450,6 +450,10 @@ Decided by the maintainer on 2026-10-07, before the first release, so nothing is
 - An LLM monitor's factory takes `model=None, role=None` and passes both through (`examples/llm_suspicion.py`).
 - `tool_choice` is added beside `tools`, so a protocol that regenerates (`resample`) repeats exactly the request the agent made.
 
+## Generate stages prototype
+
+Prototyped 2026-10-02, a draft for review; [generate-stages.md](generate-stages.md) is the design and lists the decisions it needs. `BeforeGenerate` and `AfterGenerate` are steps with the design's fields, in `Step`, `Monitor` and `Protocol`. At those stages the shape check allows `continue` and `terminate` only. The decorators record on each instance the stages it, or any instance passed to its factory, watches (`watched_stages()` in the integration contract), with `concurrent`, `sequential` and `observe_only` contributing only their children's, so the host skips a stage nothing watches. inspect_ai checks a generate on the sample's active model during its solvers, outside a sentinel run, a compaction and a tool's own body, once per call in `Model.generate` and outside the connection slot.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands. Grouped by priority, decided by the maintainer on 2026-10-02, in the order to take them.
@@ -484,7 +488,7 @@ Agreed work that waits for something else. Each entry says what unblocks it. Kee
 - **Revisit `decide_final()`: is it the right design at all?** Raised in review: any protocol at any depth, including third-party code inside `observe_only()` or `threshold()`, can call it and bypass every layer above, while the design sells child decisions as advisory to the parent. Options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism. `sentinel.md` open question 23. `human()` no longer uses it, which weakens the case for keeping it. Simplifying the runner's origin-threading and its superseded and bypassed bookkeeping is part of the outcome.
 - **Containing `decide_final()`**: a parent configured to hold back a child's final decision, e.g. `shadow(child)` for trialling a protocol on live traffic, recorded as its own event kind. Waits for a user who needs shadow mode.
 - **Revisit an `escalate` that reaches the top with nobody to hand it to.** Today it proceeds, is recorded as the root's decision, and the host warns once per process. The alternatives are rejecting it (fail-closed, as inspect's approval does when every approver escalates) or a configurable setting with a chosen default. The trade-off: rejecting turns every unsure rule into a blocked call. `sentinel.md` open question 24.
-- **`Decision.modify(step, arguments=...)`**, a constructor that keeps the call's id and function by construction. A tool-call form can land before the generate stages, with the signature designed for both, since what a generate-stage modify replaces shapes it. Until then, authors write `Decision(action="modify", modified=replace(step.call, arguments={...}))`, and the shape check rejects a changed id or function.
+- **`Decision.modify(step, arguments=...)`**, a constructor that keeps the call's id and function by construction. A tool-call form can land before the generate-stage `modify`, with the signature designed for both; [generate-stages.md](generate-stages.md) proposes one constructor overloaded on the step type. Until then, authors write `Decision(action="modify", modified=replace(step.call, arguments={...}))`, and the shape check rejects a changed id or function.
 
 ### Then: tool-stage completeness
 
@@ -500,7 +504,7 @@ Agreed work that waits for something else. Each entry says what unblocks it. Kee
 
 Waits on another workstream, or not urgent.
 
-- **Generate stages** (`BeforeGenerate`, `AfterGenerate`), and with them the design of what a generate-stage `modify` may replace.
+- **Generate stages beyond the prototype** ([generate-stages.md](generate-stages.md)): `reject`, `modify` and `escalate` at `BeforeGenerate` and `AfterGenerate`, the full `history`, and the other decisions listed there. Waits on the maintainer's rulings.
 - **`compaction_summary(step)`**, a helper returning the latest compaction summary text. Waits on inspect_ai making the `"summary"` message metadata key a documented constant, and must handle a summary merged into the task prompt.
 - **An example compaction monitor.** Raised by the maintainer on 2026-10-02: a stateful generate-stage monitor that watches the messages, detects a compaction summary, and runs a check on the summary, keeping what it has seen in `store_as()`. Waits on the generate stages (inspect_sentinel PR #42), and uses `compaction_summary` once it exists.
 - **`react` overflow recovery rewriting history**: when a call overflows the context window, `react` replaces `state.messages` with the compacted list, so `step.history` loses the folded turns. To raise with inspect_ai.
