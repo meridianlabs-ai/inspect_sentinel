@@ -187,7 +187,7 @@ async def test_a_monitor_that_turns_its_cancellation_into_an_error_is_cancelled(
     entered = anyio.Event()
 
     @monitor
-    def converts_cancellation() -> Monitor:
+    def monitor_converts_cancellation() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             entered.set()
             try:
@@ -206,7 +206,7 @@ async def test_a_monitor_that_turns_its_cancellation_into_an_error_is_cancelled(
             async def run() -> None:
                 returned.append(
                     await run_monitors(
-                        {"c": converts_cancellation()},
+                        {"c": monitor_converts_cancellation()},
                         runner_context(recorder=recorder),
                         before_step(),
                     )
