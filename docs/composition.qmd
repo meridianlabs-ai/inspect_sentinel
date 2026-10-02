@@ -10,7 +10,7 @@ This page is an outline: a summary and the sections planned for it, not yet the 
 
 ## Overview
 
-How several monitors and protocols combine into one sentinel. Covers what a list or mapping passed to `Task(sentinel=...)` resolves to, the shipped protocols that combine and threshold, how decisions are ranked, instance names and paths, and nesting. `defer_to_trusted()` and `resample()` are planned.
+How several monitors and protocols combine into one sentinel. Covers what a list or mapping passed to `Task(sentinel=...)` resolves to, the shipped protocols that combine and threshold, how decisions are ranked, instance names and paths, and nesting. `resample()` is planned.
 
 ## Planned Sections
 
@@ -19,7 +19,7 @@ How several monitors and protocols combine into one sentinel. Covers what a list
 - `concurrent()`: every child runs; the strongest decision wins (`terminate` > `reject` > `modify` > `escalate` > `continue`)
 - `threshold()`: `reject_at` and `terminate_at`, as one number or per monitor and dimension
 - `observe()`: recording scores with nothing acting on them, and collecting a benign distribution
-- `defer_to_trusted()` and `resample()` (planned)
+- `resample()` (planned)
 - Nesting compositions
 - Writing your own composition over the runner
 

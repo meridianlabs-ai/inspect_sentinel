@@ -17,7 +17,6 @@ How a monitor or protocol calls a model. Covers `context.host.generate()` and wh
 - `context.host.generate()`: prompts, messages, tools and `GenerateConfig`
 - `model=` and `role=` on an LLM monitor's factory
 - The `monitor` role: `--model-role monitor=...` and `Task(model_roles=...)`, and the fallback to the agent's model
-- The `trusted` role for `defer_to_trusted()` and `resample()` (planned)
 - Structured output with `ResponseSchema`
 - Usage: monitor calls recorded separately and not charged to the agent's limits
 - Treating agent text as untrusted in prompts

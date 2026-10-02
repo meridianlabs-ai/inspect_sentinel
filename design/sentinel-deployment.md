@@ -120,9 +120,9 @@ Only `generate` and `ask_human` are built; `fetch`, `get`/`put` and `terminate` 
 
 Known limits of inspect_ai's surfaces: ACP cannot withdraw a permission request when the ask is cancelled, so the card stays and a later click on it is discarded; an ACP ask after a call resets the call's card to pending; and inspect_ai's surfaces return fixed reason text and cannot modify a call.
 
-`model` and `role` are separate so a role name is never read as a model name; as with inspect's `get_model(model=, role=)`, a configured role wins, then `model`, then the agent's model with a warning once per eval naming the role to set. With neither, the role is `monitor`. `defer_to_trusted` and `resample` will ask for a separate `trusted` role.
+`model` and `role` are separate so a role name is never read as a model name; as with inspect's `get_model(model=, role=)`, a configured role wins, then `model`, then the agent's model with a warning once per eval naming the role to set. With neither, the role is `monitor`.
 
-`generate` returns a `ModelOutput` rather than a string because the protocols that substitute an action (`defer_to_trusted`, `resample`) regenerate with the agent's tools and need the whole response; a text-prompt monitor reads `.completion`. Generating as the agent's own model is, in a proxy, a re-issued upstream request.
+`generate` returns a `ModelOutput` rather than a string because a protocol that substitutes an action (`resample`) regenerates with the agent's tools and need the whole response; a text-prompt monitor reads `.completion`. Generating as the agent's own model is, in a proxy, a re-issued upstream request.
 
 The same surface whether the host is Envoy via proxy-wasm, a Go runtime, or ordinary Python in-process where these are normal implementations.
 
