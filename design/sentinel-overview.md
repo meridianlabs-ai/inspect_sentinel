@@ -43,7 +43,7 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
 Task(sentinel=threshold(suspicion_monitor(), reject_at=0.8))
 ```
 
-Both run before the tool call executes (the `step` they take is `BeforeToolCall`). There are four stages, the step types a monitor or protocol could choose to target; the two tool stages are built, and the generate stages are designed but not yet built:
+Both run before the tool call executes (the `step` they take is `BeforeToolCall`). There are four stages, the step types a monitor or protocol could choose to target; the two tool stages are built, and the generate stages are prototyped (observing, with `continue` and `terminate` only):
 
 | Stage | Fires |
 |------------------------------------|------------------------------------|

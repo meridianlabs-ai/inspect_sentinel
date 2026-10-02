@@ -1,6 +1,6 @@
 # Design
 
-Eight documents. **Start with [sentinel-overview.md](sentinel-overview.md)**, which is the short form written to solicit feedback on the concepts and Python API. [sentinel.md](sentinel.md) is the full design and the place arguments are made; [sentinel-reference.md](sentinel-reference.md) restates its conclusions as a reference, without the reasoning. The remaining three each take one concern the core design depends on.
+Nine documents. **Start with [sentinel-overview.md](sentinel-overview.md)**, which is the short form written to solicit feedback on the concepts and Python API. [sentinel.md](sentinel.md) is the full design and the place arguments are made; [sentinel-reference.md](sentinel-reference.md) restates its conclusions as a reference, without the reasoning. The remaining three each take one concern the core design depends on.
 
 | | covers | status |
 |---|---|---|
@@ -11,6 +11,7 @@ Eight documents. **Start with [sentinel-overview.md](sentinel-overview.md)**, wh
 | [sentinel-development.md](sentinel-development.md) | **Measuring and calibrating** a monitor before it acts: replaying it over transcripts as an Inspect Scout scanner, step ids, validation, and threshold calibration. | Sketch; Scout facts measured 2026-09-09 |
 | [pr-series.md](pr-series.md) | **How the design becomes code**: the first sentinel PRs and the inspect_ai registry PR, with the decisions taken along the way (`Recorder`, `RunnerContext`, tool stages only, and the later decision records). | Kept current; ends with the Deferred list |
 | [workstreams.md](workstreams.md) | **Who can work on what**: the areas that can be owned separately (building and validating monitors, inspect_core, generate stages, `sequential()` and `human()`, bridged agents and deployment, shipped protocols and helpers, auto-mode approvers, remote human surfaces, LLM affordances for monitors, a host in a proxy, monitoring the monitors, a portability linter), each with its design doc and what it touches. | Current as of 2026-10-02 |
+| [generate-stages.md](generate-stages.md) | **The generate stages**: which model calls `BeforeGenerate` and `AfterGenerate` check, where the hook sits in inspect_ai, what each action means at a generate, the step's fields, and the events; with the decisions they need. | Prototyped: observe, `continue` and `terminate` |
 | [inspect-core.md](inspect-core.md) | Extracting Inspect's **wire types** into a leaf package light enough for this one, or another language, to depend on. | Measured where marked, reasoned elsewhere |
 
 These documents are canonical. They were drafted on the `design/monitor` branch of [inspect_ai](https://github.com/UKGovernmentBEIS/inspect_ai), which is no longer updated. Issue numbers (`#5423`, `#5355`) and file paths in them refer to that repository.

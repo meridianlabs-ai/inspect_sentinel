@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .._context import Context
-from .._decorators import protocol
+from .._decorators import forwards, protocol
 from .._report import Decision
 from .._results import warn_failed
 from .._runner import run_monitors
@@ -30,4 +30,4 @@ def observe(monitors: Monitor | MonitorGroup | Monitors) -> Protocol:
         warn_failed(observations.failed)
         return None
 
-    return run
+    return forwards(run)

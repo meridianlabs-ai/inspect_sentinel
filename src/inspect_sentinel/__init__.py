@@ -18,7 +18,7 @@ from ._report import (
 )
 from ._results import Decisions, MonitorFailedError, Observations, Reports
 from ._runner import run_children, run_monitors, run_protocols
-from ._step import AfterToolCall, BeforeToolCall, Step
+from ._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 from ._types import (
     Monitor,
     MonitorGroup,
@@ -38,7 +38,9 @@ except ImportError:
 
 __all__ = [
     "Action",
+    "AfterGenerate",
     "AfterToolCall",
+    "BeforeGenerate",
     "BeforeToolCall",
     "Context",
     "Decision",

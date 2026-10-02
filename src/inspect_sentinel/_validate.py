@@ -12,19 +12,27 @@ from inspect_ai._util.registry import (
 from ._context import validate_instance_name
 from ._decorators import step_types
 from ._report import Decision
-from ._step import AfterToolCall, Step
+from ._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 from ._types import Group, Sentinel
 
 
 def validate_decision_shape(decision: Decision, step: Step) -> None:
     """Check a decision for the deterministic protocol bugs no type can express, raising `ValueError` on one.
 
-    The action must be legal for the stage (`reject` and `modify` are not legal after a tool call), `modified` must be set exactly when the action is `modify`, a `modify` may rewrite only the call's arguments (its `id` and `function` must match the step's call), and `message` may be set only on a `reject`.
+    The action must be legal for the stage (`reject` and `modify` are not legal after a tool call, and only `continue` and `terminate` are supported at the generate stages for now), `modified` must be set exactly when the action is `modify`, a `modify` may rewrite only the call's arguments (its `id` and `function` must match the step's call), and `message` may be set only on a `reject`.
 
     Args:
         decision: The decision a layer returned.
         step: The step it decided about.
     """
+    if isinstance(step, (BeforeGenerate, AfterGenerate)) and decision.action not in (
+        "continue",
+        "terminate",
+    ):
+        raise ValueError(
+            f"A decision {_GENERATE_STAGES[type(step)]} cannot {decision.action} yet; "
+            "only 'continue' and 'terminate' are supported at the generate stages."
+        )
     if isinstance(step, AfterToolCall) and decision.action in ("reject", "modify"):
         raise ValueError(
             f"A decision after a tool call cannot {decision.action}; the call has already run."
@@ -35,8 +43,10 @@ def validate_decision_shape(decision: Decision, step: Step) -> None:
             f"got action {decision.action!r} with modified={decision.modified!r}."
         )
     modified = decision.modified
-    if modified is not None and (
-        modified.id != step.call.id or modified.function != step.call.function
+    if (
+        modified is not None
+        and isinstance(step, BeforeToolCall)
+        and (modified.id != step.call.id or modified.function != step.call.function)
     ):
         raise ValueError(
             "A `modify` may change only the call's arguments; "
@@ -48,6 +58,12 @@ def validate_decision_shape(decision: Decision, step: Step) -> None:
             f"`message` may be set only on a `reject`; got action {decision.action!r}. "
             "Telling the agent something while the step proceeds needs a way to deliver it, which does not exist yet."
         )
+
+
+_GENERATE_STAGES = {
+    BeforeGenerate: "before a generate",
+    AfterGenerate: "after a generate",
+}
 
 
 def validate_shape(decision: Decision, step: Step, label: str) -> None:

@@ -14,7 +14,13 @@ from inspect_ai.util import Store
 
 from inspect_sentinel._context import HumanAnswer, RunnerContext
 from inspect_sentinel._report import Decision, Failed, Report, Reported
-from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
+from inspect_sentinel._step import (
+    AfterGenerate,
+    AfterToolCall,
+    BeforeGenerate,
+    BeforeToolCall,
+    Step,
+)
 
 
 class Asked(NamedTuple):
@@ -122,4 +128,29 @@ def after_step() -> AfterToolCall:
         view=ToolCallView(),
         input=[ChatMessageUser(content="go")],
         history=[ChatMessageUser(content="go")],
+    )
+
+
+def before_generate_step() -> BeforeGenerate:
+    return BeforeGenerate(
+        model="mockllm/model",
+        conversation="c",
+        input=[ChatMessageUser(content="go")],
+        history=[ChatMessageUser(content="go")],
+        tools=[],
+        tool_choice="auto",
+        config=GenerateConfig(),
+    )
+
+
+def after_generate_step() -> AfterGenerate:
+    return AfterGenerate(
+        model="mockllm/model",
+        conversation="c",
+        input=[ChatMessageUser(content="go")],
+        history=[ChatMessageUser(content="go")],
+        tools=[],
+        tool_choice="auto",
+        config=GenerateConfig(),
+        output=ModelOutput.from_content(model="mockllm/model", content="done"),
     )
