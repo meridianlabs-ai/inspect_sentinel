@@ -1108,7 +1108,7 @@ Action           = Literal["continue", "modify", "reject", "terminate", "escalat
 
 ### Approvers as protocols
 
-`as_protocol(approval)` takes what `Task(approval=)` takes (policies, a config file or an approver's name) or one approver, and returns a `BeforeToolCall` protocol:
+`as_protocol(approval)` takes what `Task(approval=)` takes (policies, an `ApprovalPolicyConfig`, a config file or an approver's name) or one approver, and returns a `BeforeToolCall` protocol:
 
 ```python
 Task(sentinel=as_protocol([ApprovalPolicy(human_approver(), "bash"), ApprovalPolicy(auto_approver(), "*")]))
@@ -1119,7 +1119,7 @@ Task(sentinel=sequential([triage(), as_protocol(my_approver())]))
 - **The decision words map by name**, `approve` to `continue`. A reject's explanation is both `message` and `explanation`, so the agent reads what `approval=` shows it. `approve` or `modify` with a `modified` call is a `modify`, without one a `continue`, as `approval=` applies them.
 - **Each approver call is an `ApprovalEvent`**, inside the sentinel span, as under `approval=`.
 - **Recorded and rebuilt.** Registered as `inspect_sentinel/approver` (param `approver`) and `inspect_sentinel/approval` (param `policies`, a list of `{approver, tools}` or a config file); approvers are recorded as registry dicts, so they must be `@approver`s.
-- **Differences from `approval=`:** a replacement call must keep the call's `id` and `function`; a terminate's limit reason is the approver's explanation; two adapted approvers in one layer need names from a mapping.
+- **Differences from `approval=`:** a replacement call must keep the call's `id` and `function`; a terminate's limit reason is the approver's explanation, or the sentinel's fixed text without one; one approver's `escalate` that reaches the root proceeds, where `approval=` rejects; two adapted approvers in one layer need names from a mapping.
 
 ### The reviewer group's requirements (#5423)
 

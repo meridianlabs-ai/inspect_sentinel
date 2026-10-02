@@ -43,7 +43,8 @@ Given policies, an approval config file or a registered approver's name, which i
 The approver's decisions map to decisions of the same name, with `approve` becoming `continue`. A reject's explanation is what the agent is told, as under `approval=`, and every explanation is recorded as the decision's. Each approver call is also recorded as an `ApprovalEvent`, as under `approval=`. The differences from `approval=`:
 
 - **A replacement call keeps the call's `id` and `function`.** A `modify` that changes either fails the sample, as any protocol's would.
-- **A terminate is explained by the approver.** The sample's limit reason is the approver's explanation rather than "Tool call approver requested termination."
+- **An escalate that nobody takes lets the call run.** A single approver's `escalate`, alone or at the end of a `sequential()`, reaches the top of the sentinel, which proceeds and warns; `approval=` rejects it. Pass `[ApprovalPolicy(approver, "*")]` instead, or end the chain with a link that decides, to fail closed.
+- **A terminate is explained by the approver.** The sample's limit reason is the approver's explanation, or "Sentinel requested termination." without one, rather than "Tool call approver requested termination."
 - **Two approvers in one layer need names.** Each protocol is named `approver` (one approver) or `approval` (policies), so give several distinct names with a mapping.
 
 The approvers must be registered with `@approver`, as the log records them by name and parameters. In YAML, an approval config file goes under `policies`:

@@ -16,6 +16,7 @@ from inspect_ai.approval import (
 )
 from inspect_ai.approval._human import acp as acp_module
 from inspect_ai.approval._human import approver as approver_module
+from inspect_ai.approval._policy import ApprovalPolicyConfig, ApproverPolicyConfig
 from inspect_ai.dataset import Sample
 from inspect_ai.event import ApprovalEvent
 from inspect_ai.log import EvalLog
@@ -109,7 +110,9 @@ def outcome(log: EvalLog) -> Outcome:
 
 
 def assert_equivalent(
-    tmp_path: Path, policies: list[ApprovalPolicy] | str, *sentinels: Sentinels
+    tmp_path: Path,
+    policies: list[ApprovalPolicy] | str | ApprovalPolicyConfig,
+    *sentinels: Sentinels,
 ) -> Outcome:
     expected = outcome(run(tmp_path, approval=policies))
     for sentinel in sentinels:
@@ -216,12 +219,15 @@ def test_a_config_file_or_approver_name_decides_as_under_approval(
         "  - name: auto\n"
         "    tools: '*'\n"
     )
-    for spec in [str(config), "auto"]:
+    for spec in [
+        str(config),
+        "auto",
+        ApprovalPolicyConfig(approvers=[ApproverPolicyConfig(name="auto", tools="*")]),
+    ]:
         expected = assert_equivalent(
             tmp_path,
             spec,
             as_protocol(spec),
-            sentinel_from_config({"name": "approval", "params": {"policies": spec}}),
         )
         assert expected.tools == [("2", None)]
 
@@ -312,6 +318,45 @@ def test_an_unregistered_approver_is_a_configuration_error() -> None:
         as_protocol(approve)
     with pytest.raises(TypeError, match="'approve' is not a configured approver"):
         as_protocol([ApprovalPolicy(approve, "*")])
+
+
+def test_a_config_file_is_accepted_in_yaml(tmp_path: Path) -> None:
+    config = tmp_path / "approval.yaml"
+    config.write_text(
+        "approvers:\n  - name: auto\n    decision: reject\n    tools: '*'\n"
+    )
+    sentinel = sentinel_from_config(
+        {"name": "approval", "params": {"policies": str(config)}}
+    )
+    assert_equivalent(tmp_path, str(config), sentinel)
+
+
+@pytest.mark.parametrize(
+    ("make", "tools"),
+    [
+        (
+            lambda: as_protocol([ApprovalPolicy(scripted("escalate"), "*")]),
+            [("", "No approval granted for tool addition")],
+        ),
+        (lambda: as_protocol(scripted("escalate")), [("2", None)]),
+    ],
+)
+def test_an_escalate_nobody_takes_rejects_only_through_policies(
+    tmp_path: Path, make: Any, tools: list[tuple[str, str | None]]
+) -> None:
+    assert outcome(run(tmp_path, sentinel=make())).tools == tools
+
+
+@pytest.mark.parametrize(
+    ("explanation", "reason"),
+    [("stop", "stop"), (None, "Sentinel requested termination.")],
+)
+def test_a_terminate_is_explained_by_the_approver(
+    tmp_path: Path, explanation: str | None, reason: str
+) -> None:
+    log = run(tmp_path, sentinel=as_protocol(scripted("terminate", explanation)))
+    assert log.samples and log.samples[0].limit
+    assert log.samples[0].limit.reason == reason
 
 
 @pytest.mark.parametrize(

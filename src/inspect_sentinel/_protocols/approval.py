@@ -7,6 +7,7 @@ from inspect_ai._util.registry import is_registry_object, registry_info
 from inspect_ai.approval import Approval, ApprovalPolicy, Approver
 from inspect_ai.approval._call import call_approver
 from inspect_ai.approval._policy import (
+    ApprovalPolicyConfig,
     approval_policies_from_config,
     policy_approver,
 )
@@ -20,20 +21,22 @@ from .._types import Protocol
 _POLICY_KEYS = {"approver", "tools"}
 
 
-def as_protocol(approval: Approver | str | Sequence[ApprovalPolicy]) -> Protocol:
+def as_protocol(
+    approval: Approver | str | ApprovalPolicyConfig | Sequence[ApprovalPolicy],
+) -> Protocol:
     """Run an inspect tool approver, or a list of approval policies, as a protocol before each tool call.
 
     An approver's decision maps to a decision: `approve` to `continue`, `reject` to `reject` with the approver's explanation as both the `message` the agent reads and the `explanation`, `terminate` to `terminate`, `escalate` to `escalate`, and `modify` to a `modify` with the approver's replacement call. As under `Task(approval=)`, an `approve` or `modify` carrying a replacement call runs that call and one without runs the call unchanged. A replacement call must keep the call's `id` and `function`. The approver's explanation and metadata are the decision's, and each approver call is recorded as an `ApprovalEvent`, as under `Task(approval=)`.
 
-    Given policies, or a string as `Task(approval=)` takes (an approval config file or a registered approver's name), the protocol decides as `Task(approval=)` would: the approvers whose tools match the call are asked in order until one does not escalate, and a call that no approver covers, or that every one escalates, is rejected. Given one approver, its `escalate` is the protocol's decision, so in a `sequential()` the next link decides.
+    Given policies, an `ApprovalPolicyConfig`, or a string as `Task(approval=)` takes (an approval config file or a registered approver's name), the protocol decides as `Task(approval=)` would: the approvers whose tools match the call are asked in order until one does not escalate, and a call that no approver covers, or that every one escalates, is rejected. Given one approver, its `escalate` is the protocol's decision, so in a `sequential()` the next link decides; an escalate that reaches the top lets the call run, where `Task(approval=)` rejects it, so wrap a lone approver as `[ApprovalPolicy(approver, "*")]` to fail closed.
 
     Args:
-        approval: A registered approver, approval policies, or an approval config file or registered approver name.
+        approval: A registered approver, approval policies or their configuration, or an approval config file or registered approver name.
 
     Raises:
         TypeError: If an approver is not registered with `@approver`.
     """
-    if isinstance(approval, str):
+    if isinstance(approval, str | ApprovalPolicyConfig):
         return approval_protocol(
             _policy_params(approval_policies_from_config(approval))
         )
