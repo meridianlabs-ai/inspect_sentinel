@@ -72,6 +72,17 @@ def _call(function: str, **arguments: Any) -> ToolCall:
         (_call("web_browser_type_submit", element_id=3, text="hi"), "hi"),
         (_call("computer", action="type", text="hello"), "hello"),
         (_call("computer", action="left_click", coordinate=[1, 2]), ""),
+        (
+            _call(
+                "computer",
+                actions=[
+                    {"action": "left_click", "coordinate": [1, 2]},
+                    {"action": "type", "text": "rm -rf /"},
+                    "junk",
+                ],
+            ),
+            "rm -rf /",
+        ),
         (_call("ask_user", message="ok?", schema={"type": "string"}), "ok?"),
         (_call("notify_user", title="t", message="m"), "t\nm"),
         (_call("submit", answer="42"), "42"),
@@ -139,8 +150,14 @@ def test_tool_matches_any_of_several_patterns() -> None:
     assert not tool_matches(_call("python"))
 
 
-def test_tool_matches_ignores_arguments() -> None:
+def test_tool_matches_ignores_arguments_where_approval_does_not() -> None:
     assert not tool_matches(_call("bash", command="python x"), "python")
+    assert not tool_matches(_call("bash", x="1"), "*1'")
+    assert _approval_matches("bash", "*1'")
+
+
+def test_tool_matches_patterns_with_spaces_around_commas() -> None:
+    assert tool_matches(_call("think"), " bash , think ", "python")
 
 
 @pytest.mark.parametrize(
@@ -161,6 +178,7 @@ def test_tool_matches_ignores_arguments() -> None:
         ("a.b(c)", ["a.b(c)"], ["a.b(c)"]),
         ("Curl x", ["curl"], []),
         ("anything", ["", " "], []),
+        ("axb a+b", ["a.b", "a+b"], ["a+b"]),
     ],
 )
 def test_find_words(text: str, words: list[str], expected: list[str]) -> None:
@@ -251,7 +269,11 @@ def test_paths_in(call: ToolCall, expected: list[str]) -> None:
         ("/w/c.py", ["/w/c.p"], None, False),
         ("~/.aws/credentials", ["~/.aws/**"], None, True),
         ("~/x/../.aws/credentials", ["~/.aws/**"], None, True),
-        ("~/../../.aws", ["~/.aws"], None, True),
+        ("~/../../etc/passwd", ["~/etc/**"], None, False),
+        ("~/../../etc/passwd", ["/etc/**"], None, False),
+        ("~x", ["/w/~x"], "/w", True),
+        ("/a/b", ["/a/b/"], None, True),
+        ("/a/b", ["/a/[bc]"], None, False),
         ("~", ["~"], None, True),
         ("/root/.aws/c", ["~/.aws/**"], None, False),
         ("../etc/passwd", ["/etc/**"], "/work", True),

@@ -51,8 +51,9 @@ _BUILTINS: dict[str, _Builtin] = {
     "web_browser_type": _Builtin(("text",), ("element_id",)),
     "web_browser_type_submit": _Builtin(("text",), ("element_id",)),
     "computer": _Builtin(
-        ("text", "actions"),
+        ("text",),
         (
+            "actions",
             "action",
             "coordinate",
             "duration",
@@ -104,7 +105,7 @@ def call_text(call: ToolCall) -> str:
     | `web_search()` | `query` |
     | `web_browser_go()` | `url` |
     | `web_browser_type()`, `web_browser_type_submit()` | `text` |
-    | `computer()` | `text`, `actions` |
+    | `computer()` | `text`, then each of `actions`' `text` |
     | `ask_user()` | `message` |
     | `notify_user()` | `title`, `message` |
 
@@ -122,9 +123,21 @@ def call_text(call: ToolCall) -> str:
         *builtin.other,
     }:
         values = [call.arguments.get(name) for name in builtin.text]
+        if call.function == "computer":
+            values.extend(_action_texts(call.arguments.get("actions")))
     else:
         values = list(call.arguments.values())
     return "\n".join(text for value in values for text in _strings(value) if text)
+
+
+def _action_texts(actions: object) -> list[object]:
+    if not isinstance(actions, list):
+        return []
+    return [
+        cast("dict[str, object]", action).get("text")
+        for action in cast("list[object]", actions)
+        if isinstance(action, dict)
+    ]
 
 
 def _strings(value: object) -> Iterable[str]:
@@ -188,9 +201,9 @@ def find_words(
 
 
 def result_text(step: AfterToolCall) -> str:
-    """The tool call's result as text, as the model will see it.
+    """The tool call's result as text, as inspect_ai's human review shows it.
 
-    Content other than text, such as an image, appears as its type in brackets (`[image]`). A call that failed reads `"Error (<type>): <message>"`, as inspect_ai's human review shows it.
+    Content other than text, such as an image, appears as its type in brackets (`[image]`). A call that failed reads `"Error (<type>): <message>"`.
 
     Args:
         step: The step after the tool call.
@@ -210,7 +223,7 @@ def result_text(step: AfterToolCall) -> str:
 def paths_in(call: ToolCall) -> list[str]:
     """Paths the tool call names, as best it can tell.
 
-    Two sources, in this order: the path arguments of inspect_ai's built-in file tools (`text_editor()`'s and `list_files()`'s `path`, `memory()`'s `path`, `old_path` and `new_path`, `read_file()`'s `file_path`, `grep()`'s `path`); and, in the text of `bash()`, `bash_session()`, `python()` and `code_execution()` calls, tokens that begin with `/` or `~/`, or are `~` alone, ending at whitespace, quotes or shell punctuation. Relative paths in commands, paths built from variables (`$HOME/x`), and paths inside URLs are not found, and a `/` used as an operator is found as the root.
+    Two sources, in this order: the path arguments of inspect_ai's built-in file tools (`text_editor()`'s and `list_files()`'s `path`, `memory()`'s `path`, `old_path` and `new_path`, `read_file()`'s `file_path`, `grep()`'s `path`); and, in the text of `bash()`, `bash_session()`, `python()` and `code_execution()` calls, tokens that begin with `/` or `~/`, or are `~` alone, ending at whitespace, quotes or shell punctuation. Relative paths in commands, paths built from variables (`$HOME/x`), and paths inside URLs, `file:///etc/passwd` included, are not found, and a `/` used as an operator is found as the root.
 
     Args:
         call: The tool call.
@@ -231,9 +244,9 @@ def paths_in(call: ToolCall) -> list[str]:
 def path_matches(path: str, patterns: Iterable[str], *, cwd: str | None = None) -> bool:
     """Whether a path, once normalised, matches any of the glob patterns.
 
-    The path is normalised first: repeated slashes collapse, and `.` and `..` resolve, so `/work/../etc/passwd` is `/etc/passwd`. A relative path is resolved against `cwd` when given, and otherwise matched as it is. `~` is not expanded, since the home directory is the agent's and not known here: `~/x` matches a `~/...` pattern, and `..` does not climb above `~`. List both forms (`"~/.aws/**"` and `"/root/.aws/**"`) to catch either.
+    The path is normalised first: repeated slashes collapse, and `.` and `..` resolve, so `/work/../etc/passwd` is `/etc/passwd`. A relative path is resolved against `cwd` when given, and otherwise matched as it is. `~` is not expanded, since the home directory is the agent's and not known here: `~/x` matches a `~/...` pattern, and a path whose `..` climbs out of `~` keeps it (`~/../etc`), so it matches neither form. List both forms (`"~/.aws/**"` and `"/root/.aws/**"`) to catch either.
 
-    In a pattern, `*` matches within one path segment, `?` matches one character other than `/`, and `**` as a whole segment matches any number of segments, including none: `"/etc/**"` matches `/etc` and everything under it. Other characters match themselves. Patterns have their repeated slashes collapsed but are not otherwise normalised.
+    In a pattern, `*` matches within one path segment, `?` matches one character other than `/`, and `**` as a whole segment matches any number of segments, including none: `"/etc/**"` matches `/etc` and everything under it. Other characters, `[` included, match themselves. Patterns have repeated and trailing slashes removed but are not otherwise normalised.
 
     Args:
         path: The path, such as one from `paths_in()`.
@@ -245,9 +258,13 @@ def path_matches(path: str, patterns: Iterable[str], *, cwd: str | None = None) 
     """
     normalized = _normalize(path, cwd)
     return any(
-        re.fullmatch(_glob_regex(_collapse(pattern)), normalized)
-        for pattern in patterns
+        re.fullmatch(_glob_regex(_pattern(pattern)), normalized) for pattern in patterns
     )
+
+
+def _pattern(pattern: str) -> str:
+    pattern = _collapse(pattern)
+    return pattern.rstrip("/") if len(pattern) > 1 else pattern
 
 
 def _collapse(path: str) -> str:
@@ -256,11 +273,12 @@ def _collapse(path: str) -> str:
 
 def _normalize(path: str, cwd: str | None) -> str:
     path = _collapse(path)
-    if cwd is not None and not path.startswith(("/", "~")):
-        path = f"{_collapse(cwd)}/{path}"
-    if path == "~" or path.startswith("~/"):
-        rest = posixpath.normpath("/" + path[2:])
-        return "~" if rest == "/" else "~" + rest
+    home = path == "~" or path.startswith("~/")
+    if cwd is not None and not home and not path.startswith("/"):
+        return _normalize(f"{_collapse(cwd)}/{path}", None)
+    if home:
+        rest = posixpath.normpath(path[2:] or ".")
+        return "~" if rest == "." else f"~/{rest}"
     return posixpath.normpath(path)
 
 
@@ -294,7 +312,7 @@ def _glob_regex(pattern: str) -> str:
 def before_tool_call(function: str, /, **arguments: Any) -> BeforeToolCall:
     """A `BeforeToolCall` for unit-testing a rule.
 
-    The call has id `"call_1"`, and the other fields are empty: no message, an empty view, and no input or history.
+    The call has id `"call_1"` and the conversation id `"conversation"`; the other fields are empty: no message, an empty view, and no input or history.
 
     Args:
         function: The tool's name.
