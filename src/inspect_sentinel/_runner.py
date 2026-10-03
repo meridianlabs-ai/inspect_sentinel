@@ -14,7 +14,7 @@ from inspect_ai.util import LimitExceededError
 from ._context import Context, validate_instance_name
 from ._decorators import invoke, members
 from ._final import Final, Origin
-from ._host import HostContext, Recorder, RunState, run_state
+from ._host import HostContext, enter_layer, layer, running_step
 from ._report import Decision, Failed, Observation, Report, Reported
 from ._results import Decisions, Observations, Reports
 from ._step import Step
@@ -70,10 +70,8 @@ def _supersede(finals: Sequence[Final]) -> None:
             raise RuntimeError(
                 f"Runner invariant violated: Final({ex.decision.action!r}) reached a task group without an origin; every Final leaving a child is given one by the runner."
             )
-        run = run_state(origin.context)
-        run.recorder.superseded(
-            origin.context, run.factory, origin.step, origin.reported
-        )
+        recorder, factory = layer(origin.context, "The runner")
+        recorder.superseded(origin.context, factory, origin.step, origin.reported)
 
 
 def _surface(errors: Sequence[BaseException], finals: Sequence[Final]) -> BaseException:
@@ -123,7 +121,7 @@ async def run_sentinel(
 
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.
-        host_context: The top layer's context, whose `path` is empty, and the recorder.
+        host_context: The top layer's context, whose `path` is empty, the recorder and the sample store.
         step: The step being examined.
     """
     if isinstance(protocol, Group):
@@ -131,28 +129,28 @@ async def run_sentinel(
             "The root is one protocol function, as resolve_sentinel returns it; a group of functions cannot be the root."
         )
     found: list[Reported[Decision]] = []
-    try:
-        await _run_child(
-            protocol,
-            "protocol",
-            Decision,
-            host_context.context,
-            host_context.recorder,
-            step,
-            None,
-            found,
-            [],
-            root=True,
-        )
-    except Final as ex:
-        origin = ex.origin
-        if origin is None:
-            raise RuntimeError(
-                f"Runner invariant violated: Final({ex.decision.action!r}) left the root without an origin."
-            ) from ex
-        run = run_state(origin.context)
-        run.recorder.record(origin.context, run.factory, origin.step, origin.reported)
-        return ex.decision
+    with running_step(host_context.recorder, host_context.store):
+        try:
+            await _run_child(
+                protocol,
+                "protocol",
+                Decision,
+                host_context.context,
+                step,
+                None,
+                found,
+                [],
+                root=True,
+            )
+        except Final as ex:
+            origin = ex.origin
+            if origin is None:
+                raise RuntimeError(
+                    f"Runner invariant violated: Final({ex.decision.action!r}) left the root without an origin."
+                ) from ex
+            recorder, factory = layer(origin.context, "The runner")
+            recorder.record(origin.context, factory, origin.step, origin.reported)
+            return ex.decision
     return found[0].report if found else None
 
 
@@ -169,11 +167,11 @@ async def run_monitors(
 
     Args:
         monitors: One monitor or `MonitorGroup`, named by its registry name without the package prefix; a sequence of them, named the same way; or a mapping of instance names to them.
-        context: This layer's context.
+        context: This layer's context, the one this protocol was given. Call this while the protocol runs; after it returns this raises `RuntimeError`.
         step: The step being examined.
     """
     named = named_children(monitors, "monitor")
-    return (await _run_named(named, context, step)).observations
+    return (await _run_named(named, context, step, "run_monitors")).observations
 
 
 async def run_protocols(
@@ -185,11 +183,11 @@ async def run_protocols(
 
     Args:
         protocols: One protocol or `ProtocolGroup`, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.
-        context: This layer's context.
+        context: This layer's context, the one this protocol was given. Call this while the protocol runs; after it returns this raises `RuntimeError`.
         step: The step being examined.
     """
     named = named_children(protocols, "protocol")
-    return (await _run_named(named, context, step)).decisions
+    return (await _run_named(named, context, step, "run_protocols")).decisions
 
 
 async def run_children(children: Sentinels, context: Context, step: Step) -> Reports:
@@ -199,17 +197,17 @@ async def run_children(children: Sentinels, context: Context, step: Step) -> Rep
 
     Args:
         children: One monitor, protocol or group, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.
-        context: This layer's context.
+        context: This layer's context, the one this protocol was given. Call this while the protocol runs; after it returns this raises `RuntimeError`.
         step: The step being examined.
     """
     named = named_children(children, None)
-    return await _run_named(named, context, step)
+    return await _run_named(named, context, step, "run_children")
 
 
 async def _run_named(
-    named: Sequence[tuple[str, Sentinel]], context: Context, step: Step
+    named: Sequence[tuple[str, Sentinel]], context: Context, step: Step, caller: str
 ) -> Reports:
-    recorder = run_state(context).recorder
+    recorder = layer(context, caller).recorder
     observations: list[tuple[int, Reported[Observation]]] = []
     failures: list[tuple[int, Failed]] = []
     decisions: list[tuple[int, Reported[Decision]]] = []
@@ -232,7 +230,6 @@ async def _run_named(
                     "monitor",
                     Observation,
                     context,
-                    recorder,
                     step,
                     name,
                     observed,
@@ -249,7 +246,6 @@ async def _run_named(
                     "protocol",
                     Decision,
                     context,
-                    recorder,
                     step,
                     name,
                     decided,
@@ -273,7 +269,7 @@ async def _run_named(
         # a decide_final() outran a terminate already recorded as a decision
         for factory, reported in terminated:
             recorder.superseded(
-                _child_context(context, reported.name, recorder, factory),
+                _child_context(context, reported.name),
                 factory,
                 step,
                 reported,
@@ -294,7 +290,6 @@ async def _run_child(
     kind: Literal["monitor", "protocol"],
     report_type: type[R],
     context: Context,
-    recorder: Recorder,
     step: Step,
     name: str | None,
     found: list[Reported[R]],
@@ -317,11 +312,9 @@ async def _run_child(
     running = [m for m in members(child) if isinstance(step, tuple(m.accepted))]
     if not running:
         return
-    child_context = (
-        replace(context, _run=RunState(recorder, info.name))
-        if root
-        else _child_context(context, child_name, recorder, info.name)
-    )
+    child_context = context if root else _child_context(context, child_name)
+    enter_layer(child_context.path, info.name)
+    recorder = layer(child_context, "The runner").recorder
     try:
         # sequential, since a group's members share one store
         for member in running:
@@ -360,7 +353,7 @@ async def _run_member(
     child_name: str,
     grouped: bool,
 ) -> Reported[R] | Failed | None:
-    run = run_state(child_context)
+    recorder, factory = layer(child_context, "The runner")
     label = describe(child_name, function.__name__, grouped)
     report: Report | None = None
     finals: list[Final] = []
@@ -396,7 +389,7 @@ async def _run_member(
                 function=function.__name__,
                 error=failure,
             )
-            run.recorder.failed(child_context, run.factory, step, failed)
+            recorder.failed(child_context, factory, step, failed)
             return failed
         raise failure
     if finals:
@@ -417,7 +410,7 @@ async def _run_member(
         report=report,
         function=function.__name__,
     )
-    run.recorder.record(child_context, run.factory, step, reported)
+    recorder.record(child_context, factory, step, reported)
     return reported
 
 
@@ -430,7 +423,6 @@ def _on_final(
     function: str,
     label: str,
 ) -> Final:
-    run = run_state(child_context)
     winner = finals[0]
     unclaimed = [ex for ex in finals if ex.origin is None]
     if kind == "monitor" and unclaimed:
@@ -458,19 +450,14 @@ def _on_final(
             ),
         )
     if not own:
-        run.recorder.bypassed(child_context, run.factory, step, child_name)
+        recorder, factory = layer(child_context, "The runner")
+        recorder.bypassed(child_context, factory, step, child_name)
     return cast(Final, _surface([], finals))
 
 
-def _child_context(
-    context: Context, name: str, recorder: Recorder, factory: str
-) -> Context:
+def _child_context(context: Context, name: str) -> Context:
     validate_instance_name(name)
-    return replace(
-        context,
-        path=f"{context.path}/{name}" if context.path else name,
-        _run=RunState(recorder, factory),
-    )
+    return replace(context, path=f"{context.path}/{name}" if context.path else name)
 
 
 def describe(name: str, function: str, grouped: bool) -> str:

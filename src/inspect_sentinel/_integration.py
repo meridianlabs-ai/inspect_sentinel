@@ -2,7 +2,7 @@
 
 Everything here is re-exported from the module that defines it. inspect_ai imports from this module only, so refactors inside the package have one file to keep stable.
 
-The host builds the top layer's `Context`, wraps it with its `Recorder` in a `HostContext`, and invokes the resolved root through `run_sentinel`, which records the root's decision at the empty path like any layer's; a final decision is recorded there, when it takes effect, and returned as the step's outcome, so the host neither catches `Final` nor checks a decision's shape.
+The host builds the top layer's `Context`, wraps it with its `Recorder` and the sample store in a `HostContext`, and invokes the resolved root through `run_sentinel`, which records the root's decision at the empty path like any layer's; a final decision is recorded there, when it takes effect, and returned as the step's outcome, so the host neither catches `Final` nor checks a decision's shape.
 """
 
 from ._config import config_from_sentinel, sentinel_from_config

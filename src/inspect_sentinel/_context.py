@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from inspect_ai.model import ChatMessage
 from inspect_ai.scorer import Target
-from inspect_ai.util import Store, StoreModel
+from inspect_ai.util import StoreModel
 
-from ._host import Host, RunState
+from ._host import Host, active_step
 
 SMT = TypeVar("SMT", bound=StoreModel)
 
@@ -46,10 +46,6 @@ class Context:
     target: Target | None = None
     """The expected answer. None until monitors and protocols can opt in with `target=True`."""
 
-    _store: Store = field(repr=False, compare=False)
-
-    _run: RunState | None = field(default=None, repr=False, compare=False)
-
     @property
     def sample_input_text(self) -> str:
         """`sample_input` as one string: `sample_input` itself if a string, else its messages' text joined with newlines."""
@@ -60,12 +56,12 @@ class Context:
     def store_as(self, model_cls: type[SMT]) -> SMT:
         """Typed view of this instance's state, namespaced by `path`.
 
-        Renaming the instance (its mapping key) or wrapping it in another layer changes `path`, so its state moves with it.
+        Renaming the instance (its mapping key) or wrapping it in another layer changes `path`, so its state moves with it. The store is the one the host supplied for the running step, so call this while the monitor or protocol runs; outside a step it raises `RuntimeError`.
 
         Args:
             model_cls: The `StoreModel` subclass to read and write through.
         """
-        return model_cls(store=self._store, instance=self.path)
+        return model_cls(store=active_step("store_as()").store, instance=self.path)
 
 
 def validate_instance_name(name: object) -> str:

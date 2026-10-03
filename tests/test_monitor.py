@@ -32,7 +32,7 @@ from inspect_sentinel._types import (
     Protocol,
     ProtocolGroup,
 )
-from tests._fakes import before_step, host_context, layer_context
+from tests._fakes import before_step, host_context
 
 
 @monitor
@@ -421,7 +421,7 @@ def test_a_monitor_group_from_a_protocol_factory_is_rejected() -> None:
 @pytest.mark.anyio
 async def test_a_group_cannot_be_called() -> None:
     with pytest.raises(TypeError, match="not callable"):
-        await cast(Any, paired())(layer_context(), before_step())
+        await cast(Any, paired())(host_context().context, before_step())
 
 
 @monitor(name="renamed_monitor", version=3)
@@ -500,7 +500,8 @@ async def test_a_configured_function_keeps_its_identity() -> None:
     assert check.__name__ == "check"
     assert list(inspect.signature(check).parameters) == ["context", "step"]
     assert inspect.iscoroutinefunction(check)
-    assert await check(layer_context(), before_step()) == Observation.score(0.1)
+    context = host_context().context
+    assert await check(context, before_step()) == Observation.score(0.1)
 
 
 @monitor
@@ -546,7 +547,7 @@ async def test_a_call_through_the_runner_during_a_run_is_allowed() -> None:
 @pytest.mark.anyio
 async def test_a_direct_call_outside_a_run_is_allowed() -> None:
     decide = cast(Callable[..., Any], calls_directly(watched()))
-    assert await decide(layer_context(), before_step()) is None
+    assert await decide(host_context().context, before_step()) is None
 
 
 def test_a_monitor_and_a_protocol_cannot_share_a_name() -> None:

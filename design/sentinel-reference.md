@@ -248,13 +248,14 @@ class Context:
     """The expected answer. None unless explicitly opted into; the opt-in is not built."""
 ```
 
-The host (inspect_ai's dispatcher, or a proxy) builds the top layer's `Context`, with an empty `path` and the sample store as the private `_store` that `store_as()` namespaces into, and wraps it with its recorder in a `HostContext` for `run_sentinel`. Authors never see a `HostContext`: every monitor and protocol is given a plain `Context`. The runner keeps its per-layer state (the recorder and the factory of the instance at `path`) in a second private field of `Context`, which `run_sentinel` sets on the root's context and the runner sets on each child's; `run_monitors`, `run_protocols` and `run_children` read it from the context a protocol passes them, and raise `TypeError` for a `Context` the runner did not build.
+The host (inspect_ai's dispatcher, or a proxy) builds the top layer's `Context`, with an empty `path`, and passes it to `run_sentinel` in a `HostContext` with its recorder and the sample store. Authors never see a `HostContext`: every monitor and protocol is given a plain `Context`, which has no private fields. For the duration of the step, `run_sentinel` sets a private context variable holding the recorder, the store, and the factory of each layer that has run, keyed by `path`; the runner registers each child's path before invoking it, and tasks a protocol starts inherit the variable. `run_monitors`, `run_protocols` and `run_children` look up the `path` of the context a protocol passes them: called outside a step, for example with a context kept after its protocol returned, they raise `RuntimeError`; given a context whose `path` is not a layer of the running step, `ValueError`. `store_as()` reads the store from the same variable and raises `RuntimeError` outside a step. Two instances with different factories under one `path` in one step are a `ValueError`, since their records and state would be indistinguishable.
 
 ```python
 @dataclass(frozen=True, kw_only=True)
 class HostContext:
     context: Context      # the top layer's context
     recorder: Recorder
+    store: Store          # the sample store store_as() namespaces into
 
 
 async def run_sentinel(protocol: Protocol, host_context: HostContext, step: Step) -> Decision | None: ...

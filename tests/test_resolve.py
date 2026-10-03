@@ -24,7 +24,7 @@ from inspect_sentinel._types import (
     Protocol,
     ProtocolGroup,
 )
-from tests._fakes import ListRecorder, before_step, host_context, layer_context
+from tests._fakes import ListRecorder, before_step, host_context, in_step
 
 
 @monitor
@@ -150,9 +150,10 @@ async def test_the_root_records_at_the_empty_path_and_its_children_bare(
 
 @pytest.mark.anyio
 async def test_a_resolved_protocol_decides() -> None:
-    [reported] = await run_protocols(
-        resolve_sentinel([blocks()]), layer_context(), before_step()
-    )
+    with in_step() as context:
+        [reported] = await run_protocols(
+            resolve_sentinel([blocks()]), context, before_step()
+        )
     assert reported.report.action == "reject"
 
 

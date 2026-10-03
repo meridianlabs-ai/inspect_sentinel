@@ -1,5 +1,5 @@
-from collections.abc import Sequence
-from dataclasses import replace
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from typing import NamedTuple
 
 from inspect_ai.model import (
@@ -14,7 +14,7 @@ from inspect_ai.tool import ToolCall, ToolCallView, ToolInfo
 from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context
-from inspect_sentinel._host import HostContext, HumanAnswer, RunState
+from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step
 from inspect_sentinel._report import Decision, Failed, Report, Reported
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 
@@ -109,22 +109,25 @@ def host_context(
             sample_input="prompt",
             metadata={},
             path=path,
-            _store=store or Store(),
             host=host or FakeHost(),
         ),
         recorder=recorder or ListRecorder(),
+        store=store or Store(),
     )
 
 
-def layer_context(
+@contextmanager
+def in_step(
     path: str = "",
     recorder: ListRecorder | None = None,
     host: FakeHost | None = None,
     store: Store | None = None,
     factory: str = "",
-) -> Context:
+) -> Generator[Context]:
     built = host_context(path, recorder, host, store)
-    return replace(built.context, _run=RunState(built.recorder, factory))
+    with running_step(built.recorder, built.store):
+        enter_layer(path, factory)
+        yield built.context
 
 
 def before_step() -> BeforeToolCall:

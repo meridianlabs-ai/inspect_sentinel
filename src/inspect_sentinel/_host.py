@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast, runtime_checkable
+from typing import TYPE_CHECKING, NamedTuple, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
 from inspect_ai.model import ChatMessage, GenerateConfig, Model, ModelOutput
 from inspect_ai.tool import ToolCall, ToolInfo
+from inspect_ai.util import Store
 
 from ._report import Decision, Failed, Report, Reported
 from ._step import Step
@@ -143,9 +146,9 @@ class Recorder(TypingProtocol):
 
 @dataclass(frozen=True, kw_only=True)
 class HostContext:
-    """What the host passes to `run_sentinel`: the top layer's `Context`, and where the runner records reports.
+    """What the host passes to `run_sentinel`: the top layer's `Context`, where the runner records reports, and the sample store.
 
-    The host builds the `Context` with an empty `path` and the sample store as `_store`; monitors and protocols reach the store only through `store_as()`.
+    The host builds the `Context` with an empty `path`. Monitors and protocols reach the store only through `Context.store_as()`, which namespaces it by their `path`.
     """
 
     context: Context
@@ -153,6 +156,9 @@ class HostContext:
 
     recorder: Recorder
     """Where the runner records reports, failures and cancellations."""
+
+    store: Store
+    """The sample store that `Context.store_as()` reads and writes while the step runs."""
 
     def __post_init__(self) -> None:
         # a runtime check for hosts that are not type-checked against Recorder
@@ -163,16 +169,55 @@ class HostContext:
 
 
 @dataclass(frozen=True)
-class RunState:
+class StepState:
+    recorder: Recorder
+    store: Store
+    # instance path -> factory registry name, for every layer that has run in
+    # this step; tasks share it through the context var, and no lock is needed
+    # since they run on one event loop and each access is one dict operation
+    factories: dict[str, str]
+
+
+class Layer(NamedTuple):
     recorder: Recorder
     factory: str
 
 
-def run_state(context: Context) -> RunState:
-    # getattr: `_run` is hidden from authors, not from the runner
-    run: RunState | None = getattr(context, "_run", None)
-    if run is None:
-        raise TypeError(
-            "The runner needs a Context it built and passed to this monitor or protocol; a Context constructed elsewhere cannot record reports."
+_step: ContextVar[StepState | None] = ContextVar("inspect_sentinel_step", default=None)
+
+
+@contextmanager
+def running_step(recorder: Recorder, store: Store) -> Generator[None]:
+    token = _step.set(StepState(recorder, store, {}))
+    try:
+        yield
+    finally:
+        _step.reset(token)
+
+
+def active_step(caller: str) -> StepState:
+    state = _step.get()
+    if state is None:
+        raise RuntimeError(
+            f"{caller} works only while run_sentinel is running a step, in the monitor or protocol it called or a task that one started; it was called outside a step, for example after the monitor or protocol returned."
         )
-    return run
+    return state
+
+
+def enter_layer(path: str, factory: str) -> None:
+    factories = active_step("The runner").factories
+    running = factories.setdefault(path, factory)
+    if running != factory:
+        raise ValueError(
+            f"Instance path {path!r} already ran {running!r} in this step, so {factory!r} cannot run under it too. Give each instance its own name."
+        )
+
+
+def layer(context: Context, caller: str) -> Layer:
+    state = active_step(caller)
+    factory = state.factories.get(context.path)
+    if factory is None:
+        raise ValueError(
+            f"{caller} was given a Context whose path {context.path!r} is not a layer of the running step. Pass the Context this monitor or protocol was given."
+        )
+    return Layer(state.recorder, factory)

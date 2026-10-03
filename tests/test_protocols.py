@@ -33,7 +33,7 @@ from tests._fakes import (
     after_step,
     before_step,
     host_context,
-    layer_context,
+    in_step,
 )
 
 
@@ -93,7 +93,8 @@ def wrapper(child: Protocol) -> Protocol:
 async def _run(
     instance: Protocol, step: Step, recorder: ListRecorder
 ) -> Decision | None:
-    decisions = await run_protocols(instance, layer_context(recorder=recorder), step)
+    with in_step(recorder=recorder) as context:
+        decisions = await run_protocols(instance, context, step)
     return decisions[0].report if decisions else None
 
 
