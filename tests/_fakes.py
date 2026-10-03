@@ -4,18 +4,17 @@ from typing import NamedTuple
 
 from inspect_ai.model import (
     ChatMessage,
-    ChatMessageTool,
-    ChatMessageUser,
     GenerateConfig,
     Model,
     ModelOutput,
 )
-from inspect_ai.tool import ToolCall, ToolCallView, ToolInfo
+from inspect_ai.tool import ToolInfo
 from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step
 from inspect_sentinel._report import Decision, Failed, Report, Reported
+from inspect_sentinel._rules import after_tool_call, before_tool_call
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 
 
@@ -131,24 +130,8 @@ def in_step(
 
 
 def before_step() -> BeforeToolCall:
-    return BeforeToolCall(
-        conversation="c",
-        message="",
-        call=ToolCall(id="c1", function="bash", arguments={"cmd": "ls"}),
-        view=ToolCallView(),
-        input=[ChatMessageUser(content="go")],
-        history=[ChatMessageUser(content="go")],
-    )
+    return before_tool_call("bash", cmd="ls")
 
 
 def after_step() -> AfterToolCall:
-    return AfterToolCall(
-        conversation="c",
-        message="",
-        call=ToolCall(id="c1", function="bash", arguments={"cmd": "ls"}),
-        result=ChatMessageTool(content="out", tool_call_id="c1"),
-        output="out",
-        view=ToolCallView(),
-        input=[ChatMessageUser(content="go")],
-        history=[ChatMessageUser(content="go")],
-    )
+    return after_tool_call("bash", "out", cmd="ls")

@@ -54,7 +54,7 @@ Many small, independent tasks, good for onboarding:
 
 - `resample`. `defer_to_trusted` was removed from the plan by the maintainer on 2026-10-02: an eval has no trusted model to defer to.
 - Views: helpers that give a monitor author views of the messages and the step, such as the last six messages (maintainer, 2026-10-02).
-- A helper that renders a call's arguments as text (`Sequence[str]`), and similar conveniences that make rules shorter (maintainer, 2026-10-02).
+- A helper that renders a call's arguments as text, and similar conveniences that make rules shorter (maintainer, 2026-10-02). The first set is done (`call_text`, `tool_matches`, `find_words`, `paths_in`, `path_matches`, `result_text` and step builders; [pr-series.md](pr-series.md), "Helpers for rules"); `urls_in`, `host_matches` and `secrets_in` follow.
 - The prompt helpers, such as `monitor_prompt`, unless they move to workstream 3.
 
 ## 6. Auto-mode approvers
