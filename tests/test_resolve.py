@@ -144,7 +144,8 @@ async def test_the_root_records_at_the_empty_path_and_its_children_bare(
         resolve_sentinel(spec()), host_context(recorder=recorder), before_step()
     )
     recorded = [(r.reported.name, r.reported.path) for r in recorder.records]
-    assert sorted(recorded) == sorted(expected)
+    assert sorted(recorded[:-1]) == sorted(expected[:-1])
+    assert recorded[-1] == expected[-1]
 
 
 @pytest.mark.anyio

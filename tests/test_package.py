@@ -84,7 +84,7 @@ def test_single_child_runners_are_gone() -> None:
         assert not hasattr(inspect_sentinel, name)
 
 
-def test_integration_module_exports_the_dispatcher_surface() -> None:
+def test_integration_module_exports_the_host_surface() -> None:
     assert set(inspect_sentinel._integration.__all__) == {
         "Recorder",
         "HostContext",

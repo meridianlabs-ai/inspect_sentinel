@@ -429,7 +429,7 @@ Rules:
 
 ### State
 
-Per-sample state lives in the sample `Store`. `context.store_as()` namespaces it by the instance path so two configured instances of the same monitor do not collide. It is the only way in: `Context` is immutable and has no `store`, so a monitor or protocol cannot read or change the agent's state:
+Per-sample state lives in the sample `Store`. `context.store_as()` namespaces it by the instance path so two configured instances of the same monitor do not collide. It is the only way in the API offers: `Context` is immutable and has no `store`, so nothing hands a monitor or protocol the agent's state. This is a convention, not isolation, since the `StoreModel` that `store_as()` returns carries the store it reads:
 
 ```python
 class TrajectoryState(StoreModel):

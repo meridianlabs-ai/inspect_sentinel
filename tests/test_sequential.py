@@ -31,7 +31,8 @@ class PairSaw(StoreModel):
     second: int | None = None
 
 
-def _seen(store: Store, *paths: str) -> dict[str, list[tuple[str, ...]]]:
+def _seen(store: Store) -> dict[str, list[tuple[str, ...]]]:
+    paths = [key.split(":")[1] for key in store.keys() if key.startswith("Seen:")]
     return {path: Seen(store=store, instance=path).escalations for path in paths}
 
 
@@ -151,7 +152,7 @@ async def test_escalations_are_handed_forward_link_by_link() -> None:
             }
         )
     )
-    assert _seen(store, "a", "b", "c") == {
+    assert _seen(store) == {
         "a": [()],
         "b": [("a",)],
         "c": [("a", "b")],
@@ -168,7 +169,7 @@ async def test_a_chain_does_not_inherit_the_incoming_escalations() -> None:
             }
         )
     )
-    assert _seen(store, "first", "inner/x", "inner/y") == {
+    assert _seen(store) == {
         "first": [()],
         "inner/x": [()],
         "inner/y": [("x",)],
@@ -234,7 +235,7 @@ async def test_a_group_link_runs_in_one_call_and_sees_the_step_before_its_escala
     assert decision is not None and decision.action == "continue"
     saw = PairSaw(store=store, instance="pair")
     assert (saw.first, saw.second) == (0, 0)
-    assert _seen(store, "pair", "next") == {"pair": [], "next": [("pair", "pair")]}
+    assert _seen(store) == {"next": [("pair", "pair")]}
     assert [r.reported.function for r in recorder.records[:2]] == ["first", "second"]
 
 
@@ -263,7 +264,7 @@ async def test_a_group_link_that_escalates_hands_forward() -> None:
     )
     assert decision is not None and decision.action == "continue"
     # only the escalating function's decision is handed forward
-    assert _seen(store, "next") == {"next": [("pair",)]}
+    assert _seen(store) == {"next": [("pair",)]}
 
 
 @pytest.mark.anyio
