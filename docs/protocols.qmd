@@ -5,7 +5,7 @@ description: "Writing protocols, which decide what happens at a step, and rules,
 
 ::: {.callout-warning}
 ## Outline
-This page is an outline: a summary and the sections planned for it, not yet the documentation. See [Getting Started](index.qmd) for a worked example.
+This page is an outline: a summary and the sections planned for it, not yet the documentation, apart from [Helpers for Rules](#helpers-for-rules). See [Getting Started](index.qmd) for a worked example.
 :::
 
 ## Overview
@@ -26,3 +26,56 @@ How to write a protocol: a `@protocol` factory returning a function that returns
 - The boundary check: shape errors raised before a decision takes effect
 - Running at every stage with `Step`
 - Shipping protocols in a package
+
+## Helpers for Rules
+
+A rule usually reads a tool call as text and looks for something in it. These functions do the common parts. They are plain functions of their arguments, so a rule built on them is easy to test. Rules on text catch an agent's mistakes, not an adversary: a command built at run time, or a tool the rule does not know, gets past them.
+
+| Function | Returns |
+|---|---|
+| `call_text(call)` | The call's text whichever tool it is: `bash()`'s `command`, `python()`'s `code`, `text_editor()`'s path and text, and so on; for any other tool, its string arguments. |
+| `tool_matches(call, *patterns)` | Whether the tool's name matches a glob, as an approval policy's `tools` do: `"bash"` also matches `bash_session`, and `"web_browser*"` every browser tool. |
+| `find_words(text, words)` | The words that appear in the text as whole words, in the order they appear, so an explanation can name them. `rm` does not match `platform`; `-delete` and `pip install` work as written. |
+| `paths_in(call)` | The paths a call names: a file tool's path arguments, and absolute and `~/` paths in `bash()` and `python()` code. Best effort. |
+| `path_matches(path, patterns, cwd=None)` | Whether a path matches a glob once `..`, `.` and repeated slashes are resolved, so `/work/../etc/passwd` matches `/etc/**`. |
+| `result_text(step)` | After a call: its result as text, or `Error (<type>): <message>` when it failed. |
+
+For example, a rule that keeps file tools and commands out of protected directories:
+
+```python
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Decision,
+    Protocol,
+    path_matches,
+    paths_in,
+    protocol,
+)
+
+PROTECTED = ["/etc/**", "~/.ssh/**", "/root/.ssh/**"]
+
+
+@protocol
+def protected_paths() -> Protocol:
+    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+        for path in paths_in(step.call):
+            if path_matches(path, PROTECTED, cwd="/work"):
+                return Decision.reject(
+                    f"call touches {path}",
+                    message=f"`{path}` is off limits; work only under /work.",
+                )
+        return Decision.proceed()
+
+    return decide
+```
+
+`~` is not expanded, since the home directory is the agent's, so a pattern list names both forms. `cwd` resolves relative paths, such as `text_editor()`'s, against the agent's working directory.
+
+To unit-test a rule, `before_tool_call()` and `after_tool_call()` build the steps to pass to its function, without running an agent:
+
+```python
+from inspect_sentinel import before_tool_call
+
+step = before_tool_call("text_editor", command="view", path="../etc/passwd")
+```

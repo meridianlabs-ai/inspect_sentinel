@@ -114,7 +114,7 @@ def test_invalid_choices_are_a_configuration_error(
         human(stages=stages, choices=choices)
 
 
-MODIFIED = ToolCall(id="c1", function="bash", arguments={"cmd": "ls -a"})
+MODIFIED = ToolCall(id="call_1", function="bash", arguments={"cmd": "ls -a"})
 
 
 @pytest.mark.parametrize(
