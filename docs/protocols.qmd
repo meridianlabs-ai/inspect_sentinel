@@ -37,7 +37,8 @@ A rule usually reads a tool call as text and looks for something in it. These fu
 | `tool_matches(call, *patterns)` | Whether the tool's name matches a glob, as an approval policy's `tools` do: `"bash"` also matches `bash_session`, and `"web_browser*"` every browser tool. |
 | `find_words(text, words)` | The words that appear in the text as whole words, in the order they appear, so an explanation can name them. `rm` does not match `platform`; `-delete` and `pip install` work as written. |
 | `paths_in(call)` | The paths a call names: a file tool's path arguments, and absolute and `~/` paths in `bash()` and `python()` code. Best effort. |
-| `path_matches(path, patterns, cwd=None)` | Whether a path matches a glob once `..`, `.` and repeated slashes are resolved, so `/work/../etc/passwd` matches `/etc/**`. |
+| `path_matches(path, patterns, cwd=None, home=None)` | Whether a path matches a glob once `..`, `.` and repeated slashes are resolved, so `/work/../etc/passwd` matches `/etc/**`. Wildcards match dotfiles but never a `..`. |
+| `path_resolves(path, cwd=None, home=None)` | Whether a path resolves without a `..` left over, as `~/../etc` does not when `home` is not given. |
 | `result_text(step)` | After a call: its result as text, or `Error (<type>): <message>` when it failed. |
 
 For example, a rule that keeps file tools and commands out of protected directories:
@@ -53,14 +54,14 @@ from inspect_sentinel import (
     protocol,
 )
 
-PROTECTED = ["/etc/**", "~/.ssh/**", "/root/.ssh/**"]
+PROTECTED = ["/etc/**", "~/.ssh/**"]
 
 
 @protocol
 def protected_paths() -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         for path in paths_in(step.call):
-            if path_matches(path, PROTECTED, cwd="/work"):
+            if path_matches(path, PROTECTED, cwd="/work", home="/root"):
                 return Decision.reject(
                     f"call touches {path}",
                     message=f"`{path}` is off limits; work only under /work.",
@@ -70,7 +71,7 @@ def protected_paths() -> Protocol:
     return decide
 ```
 
-`~` is not expanded, since the home directory is the agent's, so a pattern list names both forms. `cwd` resolves relative paths, such as `text_editor()`'s, against the agent's working directory.
+`cwd` resolves relative paths, such as `text_editor()`'s, against the agent's working directory, and `home` expands `~` in paths and patterns alike, so `~/.ssh/**` here also matches `/root/.ssh/id_rsa`. Without `home`, `~` is kept as written: `~/x` matches only `~/` patterns, and a path that climbs out of `~` (`~/../etc`) cannot be resolved and matches no pattern with a wildcard. A rule that denies, as this one does, should then also reject the paths that `path_resolves()` says it cannot resolve; with `home` and an absolute `cwd`, as here, every path resolves.
 
 To unit-test a rule, `before_tool_call()` and `after_tool_call()` build the steps to pass to its function, without running an agent:
 

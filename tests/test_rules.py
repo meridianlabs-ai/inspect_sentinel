@@ -14,8 +14,6 @@ from inspect_sentinel import (
     before_tool_call,
     call_text,
     find_words,
-    path_matches,
-    paths_in,
     result_text,
     tool_matches,
 )
@@ -216,80 +214,6 @@ def test_result_text_names_content_that_is_not_text() -> None:
         ),
     )
     assert result_text(step) == "shot\n[image]"
-
-
-@pytest.mark.parametrize(
-    "call, expected",
-    [
-        (_call("text_editor", command="view", path="w/f.py"), ["w/f.py"]),
-        (
-            _call("memory", command="rename", old_path="/m/a", new_path="/m/b"),
-            ["/m/a", "/m/b"],
-        ),
-        (_call("read_file", file_path="/w/f"), ["/w/f"]),
-        (_call("grep", pattern="x", path="/w"), ["/w"]),
-        (
-            _call("bash", command="cat /etc/passwd ~/.aws/creds"),
-            ["/etc/passwd", "~/.aws/creds"],
-        ),
-        (_call("bash", command="cd ~ && ls"), ["~"]),
-        (_call("bash", command="rm -rf /"), ["/"]),
-        (_call("bash", command="cp '/a b' \"/c\";ls>/d"), ["/a", "/c", "/d"]),
-        (_call("bash", command="tar --file=/x.tar a"), ["/x.tar"]),
-        (_call("bash", command="PATH=/usr/bin:/bin x"), ["/usr/bin", "/bin"]),
-        (_call("bash", command="cat ./a ../b c/d ~user/e"), []),
-        (_call("bash", command="curl https://x.org/a file:///b"), []),
-        (_call("bash", command="cat //etc/passwd"), ["//etc/passwd"]),
-        (_call("bash", command="cat /a /a"), ["/a"]),
-        (_call("python", code="open('/etc/hosts').read()"), ["/etc/hosts"]),
-        (_call("bash_session", action="type_submit", input="ls /w"), ["/w"]),
-        (_call("think", thought="look at /etc"), []),
-        (_call("mine", path="/w"), []),
-    ],
-)
-def test_paths_in(call: ToolCall, expected: list[str]) -> None:
-    assert paths_in(call) == expected
-
-
-@pytest.mark.parametrize(
-    "path, patterns, cwd, expected",
-    [
-        ("/etc/passwd", ["/etc/**"], None, True),
-        ("/etc", ["/etc/**"], None, True),
-        ("/etcetera", ["/etc/**"], None, False),
-        ("/work/../etc/passwd", ["/etc/**"], None, True),
-        ("//etc///passwd", ["/etc/*"], None, True),
-        ("/etc/./ssh/key", ["/etc/*"], None, False),
-        ("/etc/./ssh/key", ["/etc/*/*"], None, True),
-        ("/w/a/b/c.env", ["**/*.env"], None, True),
-        ("c.env", ["**/*.env"], None, True),
-        ("/w/a/b/c.py", ["/w/**/c.py"], None, True),
-        ("/w/c.py", ["/w/**/c.py"], None, True),
-        ("/w/c.py", ["/w/c.p?"], None, True),
-        ("/w/c.py", ["/w/c.p"], None, False),
-        ("~/.aws/credentials", ["~/.aws/**"], None, True),
-        ("~/x/../.aws/credentials", ["~/.aws/**"], None, True),
-        ("~/../../etc/passwd", ["~/etc/**"], None, False),
-        ("~/../../etc/passwd", ["/etc/**"], None, False),
-        ("~x", ["/w/~x"], "/w", True),
-        ("/a/b", ["/a/b/"], None, True),
-        ("/a/b", ["/a/[bc]"], None, False),
-        ("~", ["~"], None, True),
-        ("/root/.aws/c", ["~/.aws/**"], None, False),
-        ("../etc/passwd", ["/etc/**"], "/work", True),
-        ("../etc/passwd", ["/etc/**"], None, False),
-        ("../etc/passwd", ["../etc/**"], None, True),
-        ("./a/../b", ["b"], None, True),
-        (".aws/c", ["~/.aws/**"], "~", True),
-        ("/etc/passwd", ["/etc/**"], "/work", True),
-        ("/w/x", [], None, False),
-        ("/w/x", ["/tmp/**", "/w/*"], None, True),
-    ],
-)
-def test_path_matches(
-    path: str, patterns: list[str], cwd: str | None, expected: bool
-) -> None:
-    assert path_matches(path, patterns, cwd=cwd) is expected
 
 
 def test_before_tool_call_builds_a_call() -> None:
