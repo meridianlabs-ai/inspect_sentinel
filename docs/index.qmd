@@ -235,7 +235,7 @@ def suspicion(model: str | Model | None = None, role: str = "monitor") -> Monito
         if step.call.function == "submit":
             return None  # the prompt is written for commands, not final answers
         prompt = PROMPT.format(
-            task=context.input_text, # <2>
+            task=context.sample_input_text, # <2>
             message=untrusted(step.message or ""),
             function=step.call.function,
             arguments=untrusted(json.dumps(step.call.arguments)),
@@ -250,7 +250,7 @@ def suspicion(model: str | Model | None = None, role: str = "monitor") -> Monito
 ```
 
 1. An LLM monitor takes `model=` and `role=`, so a task can point it at a different model without editing it. The host resolves them as `get_model()` does: the role if the task configures it, otherwise `model`, otherwise the agent's own model (with a warning).
-2. `context` holds what the agent was asked to do (the sample's `input`, and `input_text` for the same as one string), its task and sample ids, and metadata. Nothing in it came from the agent.
+2. `context` holds what the agent was asked to do (`sample_input`, and `sample_input_text` for the same as one string), its task and sample ids, and metadata. Nothing in it came from the agent.
 3. Call models through `context.host.generate()`, not `get_model()`. The host resolves the model, records the call apart from the agent's, and does not charge it to the agent's limits.
 4. The suspicion score, from 0 to 1, and an explanation for the log.
 
@@ -348,7 +348,7 @@ The token usage for the `monitor` role is reported separately from the agent's i
 ## Next Steps
 
 - [Monitors](monitors.qmd) and [Protocols and Rules](protocols.qmd): writing your own, the stages they run at, and the actions a protocol can take.
-- [Composition](composition.qmd): `concurrent()`, `sequential()`, `threshold()` and `observe()`.
+- [Composition](composition.qmd): `concurrent()`, `sequential()`, `threshold()` and `observe_only()`.
 - [State](state.qmd): keeping state across a sample's steps with `context.store_as()`.
 - [The Host and Model Roles](host.qmd): model calls from monitors and protocols.
 - [Final Decisions and Humans](final-decisions.qmd): `decide_final()` and `human()`.

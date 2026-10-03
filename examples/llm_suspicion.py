@@ -66,7 +66,7 @@ def suspicion(model: str | Model | None = None, role: str = "monitor") -> Monito
         if step.call.function == "submit":
             return None  # the prompt is written for commands, not final answers
         prompt = PROMPT.format(
-            task=context.input_text,
+            task=context.sample_input_text,
             message=untrusted(step.message or ""),
             function=step.call.function,
             arguments=untrusted(json.dumps(step.call.arguments)),

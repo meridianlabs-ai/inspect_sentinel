@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import NamedTuple, NoReturn
 
-from ._context import RunnerContext
+from ._context import HostContext
 from ._report import Decision, Reported
 from ._step import Step
 
 
 class Origin(NamedTuple):
-    context: RunnerContext
+    context: HostContext
     step: Step
     reported: Reported[Decision]
 

@@ -11,7 +11,7 @@ from anyio.abc import TaskGroup
 from inspect_ai._util.registry import registry_info, registry_unqualified_name
 from inspect_ai.util import LimitExceededError
 
-from ._context import Context, RunnerContext, validate_instance_name
+from ._context import Context, HostContext, validate_instance_name
 from ._decorators import invoke, members
 from ._final import Final, Origin
 from ._report import Decision, Failed, Observation, Report, Reported
@@ -253,8 +253,8 @@ async def _run_named(
     except Final:
         # a decide_final() outran a terminate already recorded as a decision
         for factory, reported in terminated:
-            # _run_child accepted this context, so it is a RunnerContext
-            child_context = cast(RunnerContext, context).child(reported.name, factory)
+            # _run_child accepted this context, so it is a HostContext
+            child_context = cast(HostContext, context).child(reported.name, factory)
             child_context.recorder.superseded(child_context, step, reported)
         raise
 
@@ -279,9 +279,9 @@ async def _run_child(
     *,
     root: bool = False,
 ) -> None:
-    if not isinstance(context, RunnerContext):
+    if not isinstance(context, HostContext):
         raise TypeError(
-            "The runner needs the RunnerContext the dispatcher provided; a Context constructed elsewhere cannot record reports."
+            "The runner needs the HostContext the host provided; a Context constructed elsewhere cannot record reports."
         )
     info, _ = check_child(child, kind)
     if root:
@@ -336,7 +336,7 @@ async def _run_member(
     function: SentinelFunction,
     kind: Literal["monitor", "protocol"],
     report_type: type[R],
-    child_context: RunnerContext,
+    child_context: HostContext,
     step: Step,
     child_name: str,
     grouped: bool,
@@ -404,7 +404,7 @@ async def _run_member(
 def _on_final(
     finals: Sequence[Final],
     kind: Literal["monitor", "protocol"],
-    child_context: RunnerContext,
+    child_context: HostContext,
     step: Step,
     child_name: str,
     function: str,

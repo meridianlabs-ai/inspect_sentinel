@@ -106,10 +106,10 @@ Events also restore `input` exactly, from `ModelEvent.input`, and let `history` 
 |------------------------|------------------------|
 | `task`, `task_description` | from the log's eval spec; from Scout's `TranscriptInfo.task_set` and `metadata` for other sources |
 | `sample_id`, `epoch` | `TranscriptInfo.task_id`, `task_repeat` |
-| `input` | the sample input from the log; the first user turn otherwise |
+| `sample_input` | the sample input from the log; the first user turn otherwise |
 | `metadata` | task and sample metadata merged, as in an eval |
 | `target` | available from the log; **still opt-in**, and the adapter records that it was requested, for the same validity reason as in an eval |
-| `store` | a fresh `Store` per transcript, so incremental monitors accumulate across the transcript's steps and nothing leaks between transcripts |
+| `store_as()` | backed by a fresh `Store` per transcript, so incremental monitors accumulate across the transcript's steps and nothing leaks between transcripts |
 | `host` | in-process: `generate()` uses the scan's model and its usage lands in the scan's `model_usage`; `fetch()` resolves named endpoints from scan config; `terminate()` returns `False` |
 
 ### What replay cannot do

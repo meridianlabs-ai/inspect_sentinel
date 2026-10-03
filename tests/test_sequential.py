@@ -1,8 +1,9 @@
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 from inspect_ai._util.registry import registry_info
 from inspect_ai.log import SentinelConfig
+from inspect_ai.util import Store, StoreModel
 
 from inspect_sentinel import sequential
 from inspect_sentinel._context import Context
@@ -18,20 +19,30 @@ from inspect_sentinel._report import Action, Decision, Observation
 from inspect_sentinel._runner import run_root
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup, Sentinels
-from tests._fakes import ListRecorder, after_step, before_step, runner_context
+from tests._fakes import ListRecorder, after_step, before_step, host_context
 
-# what each link saw in step.escalations, by instance name
-Seen = dict[str, list[tuple[str, ...]]]
+
+class Seen(StoreModel):
+    escalations: list[tuple[str, ...]] = []
+
+
+class PairSaw(StoreModel):
+    first: int | None = None
+    second: int | None = None
+
+
+def _seen(store: Store, *paths: str) -> dict[str, list[tuple[str, ...]]]:
+    return {path: Seen(store=store, instance=path).escalations for path in paths}
 
 
 @protocol
 def seq_link(action: Action = "continue", explanation: str | None = None) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        seen: Seen = context.store.get("seen", {})
-        seen.setdefault(context.path, []).append(
-            tuple(e.name for e in step.escalations)
-        )
-        context.store.set("seen", seen)
+        seen = context.store_as(Seen)
+        seen.escalations = [
+            *seen.escalations,
+            tuple(e.name for e in step.escalations),
+        ]
         return Decision(action=action, explanation=explanation)
 
     return decide
@@ -56,11 +67,11 @@ def seq_after_only() -> Protocol:
 @protocol
 def seq_pair() -> ProtocolGroup:
     async def first(context: Context, step: BeforeToolCall) -> Decision | None:
-        context.store.set("first_saw", len(step.escalations))
+        context.store_as(PairSaw).first = len(step.escalations)
         return Decision.escalate("first")
 
     async def second(context: Context, step: BeforeToolCall) -> Decision | None:
-        context.store.set("second_saw", len(step.escalations))
+        context.store_as(PairSaw).second = len(step.escalations)
         return Decision.escalate("second")
 
     return ProtocolGroup(first, second)
@@ -93,13 +104,20 @@ def seq_watch() -> Monitor:
     return check
 
 
+class _Rooted(NamedTuple):
+    decision: Decision | None
+    recorder: ListRecorder
+    store: Store
+
+
 async def _root(
     instance: Protocol, step: Step | None = None, recorder: ListRecorder | None = None
-) -> tuple[Decision | None, ListRecorder, Context]:
+) -> _Rooted:
     recorder = recorder or ListRecorder()
-    context = runner_context(recorder=recorder)
+    store = Store()
+    context = host_context(recorder=recorder, store=store)
     decision = await run_root(instance, context, step or before_step())
-    return decision, recorder, context
+    return _Rooted(decision, recorder, store)
 
 
 def _paths(recorder: ListRecorder) -> list[str]:
@@ -124,7 +142,7 @@ async def test_the_first_real_decision_ends_the_chain() -> None:
 
 @pytest.mark.anyio
 async def test_escalations_are_handed_forward_link_by_link() -> None:
-    _, _, context = await _root(
+    _, _, store = await _root(
         sequential(
             {
                 "a": seq_link("escalate"),
@@ -133,7 +151,7 @@ async def test_escalations_are_handed_forward_link_by_link() -> None:
             }
         )
     )
-    assert context.store.get("seen") == {
+    assert _seen(store, "a", "b", "c") == {
         "a": [()],
         "b": [("a",)],
         "c": [("a", "b")],
@@ -142,7 +160,7 @@ async def test_escalations_are_handed_forward_link_by_link() -> None:
 
 @pytest.mark.anyio
 async def test_a_chain_does_not_inherit_the_incoming_escalations() -> None:
-    _, _, context = await _root(
+    _, _, store = await _root(
         sequential(
             {
                 "first": seq_link("escalate"),
@@ -150,7 +168,7 @@ async def test_a_chain_does_not_inherit_the_incoming_escalations() -> None:
             }
         )
     )
-    assert context.store.get("seen") == {
+    assert _seen(store, "first", "inner/x", "inner/y") == {
         "first": [()],
         "inner/x": [()],
         "inner/y": [("x",)],
@@ -210,13 +228,13 @@ async def test_what_a_chain_returns_when_no_link_decides(
 async def test_a_group_link_runs_in_one_call_and_sees_the_step_before_its_escalations() -> (
     None
 ):
-    decision, recorder, context = await _root(
+    decision, recorder, store = await _root(
         sequential({"pair": seq_pair(), "next": seq_link()})
     )
     assert decision is not None and decision.action == "continue"
-    assert context.store.get("first_saw") == 0
-    assert context.store.get("second_saw") == 0
-    assert context.store.get("seen") == {"next": [("pair", "pair")]}
+    saw = PairSaw(store=store, instance="pair")
+    assert (saw.first, saw.second) == (0, 0)
+    assert _seen(store, "pair", "next") == {"pair": [], "next": [("pair", "pair")]}
     assert [r.reported.function for r in recorder.records[:2]] == ["first", "second"]
 
 
@@ -240,12 +258,12 @@ async def test_a_group_link_decides_by_its_strongest_decision(
 
 @pytest.mark.anyio
 async def test_a_group_link_that_escalates_hands_forward() -> None:
-    decision, _, context = await _root(
+    decision, _, store = await _root(
         sequential({"pair": seq_mixed("escalate", "continue"), "next": seq_link()})
     )
     assert decision is not None and decision.action == "continue"
     # only the escalating function's decision is handed forward
-    assert context.store.get("seen") == {"next": [("pair",)]}
+    assert _seen(store, "next") == {"next": [("pair",)]}
 
 
 @pytest.mark.anyio
@@ -297,7 +315,7 @@ async def test_a_configured_chain_records_its_links_under_its_path() -> None:
     recorder = ListRecorder()
     decision = await run_root(
         resolve_sentinel(sentinel_from_config(RAW)),
-        runner_context(recorder=recorder),
+        host_context(recorder=recorder),
         before_step(),
     )
     assert decision is not None and decision.action == "reject"

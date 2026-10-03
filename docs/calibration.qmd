@@ -15,7 +15,7 @@ How to measure a monitor before anything acts on it, by replaying it over transc
 ## Planned Sections
 
 - The development loop: record, replay, label, validate, calibrate
-- Recording a benign distribution with `observe()` (available now)
+- Recording a benign distribution with `observe_only()` (available now)
 - A monitor as a Scout scanner, `as_scanner()` (planned)
 - Validation sets: labelling steps in Scout View; step ids
 - Precision, recall and F1 over the validation set

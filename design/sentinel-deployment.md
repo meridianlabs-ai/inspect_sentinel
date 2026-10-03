@@ -219,7 +219,7 @@ The fix comes from the first mechanism: **derive or verify the conversation key 
 
 So the store is as trustworthy as its key, and the key can be anchored in data the agent must send truthfully.
 
-### What backs `context.store`
+### What backs `context.store_as()`
 
 `StoreModel` itself is portable, and it should be Inspect's rather than a second one of our own. It is a genuinely odd class — it overrides `__getattribute__` to intercept every attribute read, overrides `__setattr__` to re-validate on every write, and namespaces store keys by class name — but none of that is WASM-hostile. It is pure-Python metaprogramming over Pydantic, and `pydantic-core`, the one native extension in the `inspect_core` floor, compiles to wasm32 (Pyodide ships it). Its state must be JSON-serializable either way, which the keyed store needs regardless.
 
@@ -239,11 +239,11 @@ It is a large *constant*, not a complexity problem: read cost is flat in list le
 
 It is more visible in a proxy, where a deterministic monitor has no inference to hide behind and \~100 µs of store access is a real share of what a rule-based filter should cost. Three local fixes, none WASM-specific and all of which pay off in-process too: cache the `TypeAdapter` per (class, field); validate the single changed field on write rather than the whole model; and skip the store write-back when coercion produced an equivalent value.
 
-What is open is the *backing*. In-process, `context.store` is the sample `Store`, and that buys transcript recording, checkpoint survival and `store_from_events_as()` reconstruction for free. In a proxy it is the keyed store described above, and none of that machinery applies.
+What is open is the *backing*. In-process, `store_as()` is backed by the sample `Store`, and that buys transcript recording, checkpoint survival and `store_from_events_as()` reconstruction for free. In a proxy it is the keyed store described above, and none of that machinery applies.
 
 `Store` records itself to the transcript as a *diff stream*: `store_changes()` runs at span boundaries to emit a `StoreEvent`, and `jsonpatch.apply_patch` replays those events in `store_from_events()`. The diff is not an implementation whim — `store.get("items", [])` hands back a mutable container that callers mutate in place, so no write hook on `Store` could be complete, and snapshot-before/compare-after at a boundary is the only reliable way to learn what changed (full snapshots per span would also be O(spans × store size) in the log).
 
-That machinery is therefore coupled to the transcript, and a proxy has no transcript. So the cut is a natural one rather than a nicety: typing `context.store` as a Protocol lets a proxy back it with its keyed store and carry none of the diffing. `Store` is thin enough (a dict wrapper; writes are plain dict operations) that a proxy *could* simply use it, in which case the only cost is closure weight — `jsonpatch` and `jsonpointer` are imported at module level in `util/_store.py` but used only on the transcript path, so a lazy import inside those two functions would keep them out of a constrained build.
+That machinery is therefore coupled to the transcript, and a proxy has no transcript. So the cut is a natural one rather than a nicety: typing the store `HostContext` carries as a Protocol lets a proxy back it with its keyed store and carry none of the diffing. `Store` is thin enough (a dict wrapper; writes are plain dict operations) that a proxy *could* simply use it, in which case the only cost is closure weight — `jsonpatch` and `jsonpointer` are imported at module level in `util/_store.py` but used only on the transcript path, so a lazy import inside those two functions would keep them out of a constrained build.
 
 ### Operational consequences
 
@@ -253,7 +253,7 @@ That machinery is therefore coupled to the transcript, and a proxy has no transc
 
 ### Consequence for the protocol
 
-State reaches a monitor as an argument and only as an argument. `context.store_as(...)` survives here — the dispatcher builds one context per conversation and hands the monitor whatever it loaded for the key. An ambient accessor would not, since a proxy has nothing to bind to, which is one reason `sentinel.md` declines to provide one.
+State reaches a monitor as an argument and only as an argument. `context.store_as(...)` survives here — the host builds one context per conversation and hands the monitor whatever it loaded for the key. An ambient accessor would not, since a proxy has nothing to bind to, which is one reason `sentinel.md` declines to provide one.
 
 The same holds for effects. `context.host` is how a monitor reaches inference, keyed storage and outbound JSON, and routing them through an argument rather than an import is what makes the monitor a pure function of `(context, step)` — which is the property everything in this document depends on. Since `sentinel.md` made monitors annotated functions, that is now the literal signature rather than a description of one.
 
@@ -402,4 +402,4 @@ Expect two tiers regardless, and design for them: portable monitors that run any
 7.  **Are `fetch` results part of a recorded decision?** Replaying a monitor from a transcript requires its external calls to be recorded, which means deciding what is safe to record (an allowlist response is fine; a credentialed payload may not be).
 8.  **Fail open or closed** when the processor is down. A safety monitor wants closed, which makes it a hard dependency on the request path.
 9.  **Does the portability checker run per module or per function?** The affordance half is per function and the dependency half is per module, so the answer is "both", and the open part is what it reports when they disagree.
-10. **Should `context.store` be a Protocol** rather than the concrete `Store`? The concrete class carries transcript diffing a proxy never uses; an interface lets a proxy back it with the keyed store directly. The cost is one more abstraction on a type authors already know.
+10. **Should the store behind `store_as()` be a Protocol** rather than the concrete `Store`? The concrete class carries transcript diffing a proxy never uses; an interface lets a proxy back it with the keyed store directly. The cost is one more abstraction on a type authors already know.

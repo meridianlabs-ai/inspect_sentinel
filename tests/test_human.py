@@ -20,7 +20,7 @@ from inspect_sentinel._report import Action, Decision, Observation
 from inspect_sentinel._runner import run_root
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup
-from tests._fakes import FakeHost, ListRecorder, after_step, before_step, runner_context
+from tests._fakes import FakeHost, ListRecorder, after_step, before_step, host_context
 
 
 @monitor
@@ -46,7 +46,7 @@ async def _root(
 ) -> tuple[Decision | None, FakeHost, ListRecorder]:
     host = FakeHost(*answers)
     recorder = ListRecorder()
-    context = runner_context(recorder=recorder, host=host)
+    context = host_context(recorder=recorder, host=host)
     decision = await run_root(resolve_sentinel(spec), context, step or before_step())
     return decision, host, recorder
 
@@ -229,7 +229,7 @@ async def test_a_lone_human_asks_about_every_call() -> None:
     instance = resolve_sentinel(human(stages=["tool_call"]))
     host = FakeHost(HumanAnswer("approve"), HumanAnswer("approve"))
     for _ in range(2):
-        await run_root(instance, runner_context(host=host), before_step())
+        await run_root(instance, host_context(host=host), before_step())
     assert len(host.asked) == 2
 
 

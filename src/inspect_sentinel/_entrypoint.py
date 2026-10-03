@@ -1,3 +1,3 @@
-from ._protocols import concurrent, human, observe, sequential, threshold
+from ._protocols import concurrent, human, observe_only, sequential, threshold
 
-__all__ = ["concurrent", "human", "observe", "sequential", "threshold"]
+__all__ = ["concurrent", "human", "observe_only", "sequential", "threshold"]

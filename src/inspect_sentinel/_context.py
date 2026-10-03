@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, TypeVar, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
@@ -75,7 +75,7 @@ class Recorder(TypingProtocol):
     """Where the runner records every report. Runner-facing; authors never call it."""
 
     def record(
-        self, context: RunnerContext, step: Step, reported: Reported[Report]
+        self, context: HostContext, step: Step, reported: Reported[Report]
     ) -> None:
         """Record one child's report for the step it examined.
 
@@ -86,7 +86,7 @@ class Recorder(TypingProtocol):
         """
         ...
 
-    def failed(self, context: RunnerContext, step: Step, failed: Failed) -> None:
+    def failed(self, context: HostContext, step: Step, failed: Failed) -> None:
         """Record that a monitor function raised instead of reporting. The step goes on; a protocol that reads the layer's observations fails unless it checks `Observations.failed` first.
 
         Args:
@@ -96,7 +96,7 @@ class Recorder(TypingProtocol):
         """
         ...
 
-    def cancelled(self, context: RunnerContext, step: Step, name: str) -> None:
+    def cancelled(self, context: HostContext, step: Step, name: str) -> None:
         """Record that a child was cancelled before it finished: a sibling decided `terminate` or called `decide_final()`, a sibling raised, or the layer was cancelled from above. Any reports it already made, from the earlier functions of an instance whose factory returned several, stand.
 
         The cause is not recorded here; a `terminate`, a `decide_final()` or an exception in the same layer says which it was.
@@ -108,7 +108,7 @@ class Recorder(TypingProtocol):
         """
         ...
 
-    def bypassed(self, context: RunnerContext, step: Step, name: str) -> None:
+    def bypassed(self, context: HostContext, step: Step, name: str) -> None:
         """Record that a final decision from a descendant passed this layer without running its decision logic. The step ended with that decision unless a later superseded record says otherwise.
 
         The final decision itself is recorded through `record` for the protocol that made it when it takes effect, at the root, after the `bypassed` record of each layer it passed.
@@ -121,7 +121,7 @@ class Recorder(TypingProtocol):
         ...
 
     def superseded(
-        self, context: RunnerContext, step: Step, reported: Reported[Decision]
+        self, context: HostContext, step: Step, reported: Reported[Decision]
     ) -> None:
         """Record a final decision that lost a race to another final decision in the same layer, or that an exception in the same layer outranked; it did not take effect.
 
@@ -154,7 +154,7 @@ class Context:
     sample_description: str | None
     """What is distinctive about this instance. None until inspect_ai has `Sample(description=)`."""
 
-    input: str | list[ChatMessage]
+    sample_input: str | list[ChatMessage]
     """The sample's input: the assignment the agent was given. Judge a step against `step.input`, which is exactly what the model was sent; use this for what the agent was asked to do."""
 
     metadata: dict[str, Any]
@@ -163,21 +163,20 @@ class Context:
     path: str
     """Instance path, e.g. `attempt/internet_attempt`. Empty at the top layer."""
 
-    store: Store
-    """The whole sample store, the agent's state included; not namespaced. Use `store_as()` for this instance's own state."""
-
     host: Host
     """Inference through the host's models, and asking a person. See `Host`."""
 
     target: Target | None = None
     """The expected answer. None until monitors and protocols can opt in with `target=True`."""
 
+    _store: Store = field(repr=False, compare=False)
+
     @property
-    def input_text(self) -> str:
-        """The sample's `input` as one string: `input` itself if a string, else its messages' text joined with newlines."""
-        if isinstance(self.input, str):
-            return self.input
-        return "\n".join(message.text for message in self.input)
+    def sample_input_text(self) -> str:
+        """`sample_input` as one string: `sample_input` itself if a string, else its messages' text joined with newlines."""
+        if isinstance(self.sample_input, str):
+            return self.sample_input
+        return "\n".join(message.text for message in self.sample_input)
 
     def store_as(self, model_cls: type[SMT]) -> SMT:
         """Typed view of this instance's state, namespaced by `path`.
@@ -187,18 +186,21 @@ class Context:
         Args:
             model_cls: The `StoreModel` subclass to read and write through.
         """
-        return model_cls(store=self.store, instance=self.path)
+        return model_cls(store=self._store, instance=self.path)
 
 
 @dataclass(frozen=True, kw_only=True)
-class RunnerContext(Context):
-    """A `Context` plus what the runner needs."""
+class HostContext(Context):
+    """A `Context` plus what the host supplies for the runner: where reports are recorded, and which factory is running.
+
+    The host also passes the sample store as `_store`; monitors and protocols reach it only through `store_as()`.
+    """
 
     recorder: Recorder
     """Where the runner records reports, failures and cancellations."""
 
     factory: str = ""
-    """Registry name of the factory of the instance at `path`, package prefix included, e.g. `inspect_sentinel/concurrent`. Empty in the context the dispatcher builds; `run_root` sets the root's."""
+    """Registry name of the factory of the instance at `path`, package prefix included, e.g. `inspect_sentinel/concurrent`. Empty in the context the host builds; `run_root` sets the root's."""
 
     def __post_init__(self) -> None:
         # a runtime check for hosts that are not type-checked against Recorder
@@ -207,7 +209,7 @@ class RunnerContext(Context):
                 f"Recorder {type(self.recorder).__name__} must implement record(), failed(), cancelled(), bypassed() and superseded()."
             )
 
-    def child(self, name: str, factory: str) -> RunnerContext:
+    def child(self, name: str, factory: str) -> HostContext:
         """The context for a child of this layer.
 
         Args:

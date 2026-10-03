@@ -14,7 +14,7 @@ from inspect_sentinel._decorators import (
     step_types,
 )
 from inspect_sentinel._final import decide_final
-from inspect_sentinel._protocols import concurrent, observe, threshold
+from inspect_sentinel._protocols import concurrent, observe_only, threshold
 from inspect_sentinel._report import Action, Decision, Observation, Suspicion
 from inspect_sentinel._runner import (
     run_protocols,
@@ -28,7 +28,7 @@ from inspect_sentinel._types import (
     ProtocolGroup,
     Protocols,
 )
-from tests._fakes import ListRecorder, after_step, before_step, runner_context
+from tests._fakes import ListRecorder, after_step, before_step, host_context
 
 
 @monitor
@@ -87,7 +87,7 @@ def wrapper(child: Protocol) -> Protocol:
 async def _run(
     instance: Protocol, step: Step, recorder: ListRecorder
 ) -> Decision | None:
-    decisions = await run_protocols(instance, runner_context(recorder=recorder), step)
+    decisions = await run_protocols(instance, host_context(recorder=recorder), step)
     return decisions[0].report if decisions else None
 
 
@@ -95,7 +95,7 @@ async def _run(
 async def test_observe_records_every_observation_and_never_acts() -> None:
     recorder = ListRecorder()
     decision = await _run(
-        observe({"low": graded(0.2), "high": graded(0.8)}), before_step(), recorder
+        observe_only({"low": graded(0.2), "high": graded(0.8)}), before_step(), recorder
     )
     assert decision is None
     assert sorted(r.reported.name for r in recorder.records) == ["high", "low"]
@@ -104,7 +104,7 @@ async def test_observe_records_every_observation_and_never_acts() -> None:
 @pytest.mark.anyio
 async def test_observe_records_nothing_for_a_monitor_of_another_stage() -> None:
     recorder = ListRecorder()
-    assert await _run(observe([afterwards()]), before_step(), recorder) is None
+    assert await _run(observe_only([afterwards()]), before_step(), recorder) is None
     assert recorder.records == []
 
 
@@ -245,7 +245,7 @@ async def test_a_panel_of_advisory_votes_has_the_last_word(
     recorder = ListRecorder()
     children = {f"v{index}": says(vote) for index, vote in enumerate(votes)}
     decision = await run_root(
-        wrapper(panel(children)), runner_context(recorder=recorder), before_step()
+        wrapper(panel(children)), host_context(recorder=recorder), before_step()
     )
     assert decision is not None and decision.action == expected
     assert sorted(r.reported.path for r in recorder.records) == [
@@ -605,7 +605,7 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
 @pytest.mark.parametrize(
     ("configure", "expected"),
     [
-        (lambda: observe(suspicion_monitor()), None),
+        (lambda: observe_only(suspicion_monitor()), None),
         (lambda: threshold(suspicion_monitor(), reject_at=0.8), "reject"),
         (lambda: concurrent(suspicion_monitor()), None),
         (lambda: concurrent(says("terminate")), "terminate"),
@@ -624,7 +624,7 @@ async def test_a_shipped_protocol_takes_a_single_instance(
 @pytest.mark.parametrize(
     ("configure", "error", "match"),
     [
-        (lambda: observe(cast(Any, says())), TypeError, "monitor"),
+        (lambda: observe_only(cast(Any, says())), TypeError, "monitor"),
         (lambda: threshold(cast(Any, says()), reject_at=0.5), TypeError, "monitor"),
         (lambda: threshold(afterwards(), reject_at=0.5), TypeError, "afterwards"),
         (lambda: concurrent(cast(Any, graded)), TypeError, "call it"),
@@ -638,12 +638,12 @@ def test_a_single_instance_is_validated_when_it_is_configured(
 
 
 def test_the_shipped_protocols_register_under_the_package() -> None:
-    assert [registry_info(f).name for f in (observe, concurrent, threshold)] == [
-        "inspect_sentinel/observe",
+    assert [registry_info(f).name for f in (observe_only, concurrent, threshold)] == [
+        "inspect_sentinel/observe_only",
         "inspect_sentinel/concurrent",
         "inspect_sentinel/threshold",
     ]
-    assert {registry_info(f).type for f in (observe, concurrent, threshold)} == {
+    assert {registry_info(f).type for f in (observe_only, concurrent, threshold)} == {
         "protocol"
     }
 
@@ -654,12 +654,12 @@ def test_step_types_come_from_the_annotations() -> None:
         {BeforeToolCall}
     )
     assert step_types(concurrent([graded()])) == both
-    assert step_types(observe([graded()])) == both
+    assert step_types(observe_only([graded()])) == both
 
 
 def test_observe_rejects_a_protocol_when_it_is_configured() -> None:
     with pytest.raises(TypeError, match="monitor"):
-        observe(cast(Any, [says()]))
+        observe_only(cast(Any, [says()]))
 
 
 def test_threshold_rejects_a_protocol_when_it_is_configured() -> None:
@@ -674,7 +674,7 @@ def test_concurrent_rejects_duplicate_names_when_it_is_configured() -> None:
 
 def test_a_shipped_protocol_rejects_an_uncalled_factory() -> None:
     with pytest.raises(TypeError, match="call it"):
-        observe(cast(Any, [graded]))
+        observe_only(cast(Any, [graded]))
 
 
 @pytest.mark.parametrize(
@@ -702,7 +702,7 @@ def test_threshold_rejects_a_monitor_that_never_watches_a_tool_call() -> None:
 @pytest.mark.parametrize(
     "configure",
     [
-        lambda: observe([]),
+        lambda: observe_only([]),
         lambda: concurrent({}),
         lambda: threshold([], reject_at=0.5),
     ],

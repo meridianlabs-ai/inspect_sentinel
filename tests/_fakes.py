@@ -12,7 +12,7 @@ from inspect_ai.model import (
 from inspect_ai.tool import ToolCall, ToolCallView, ToolInfo
 from inspect_ai.util import Store
 
-from inspect_sentinel._context import HumanAnswer, RunnerContext
+from inspect_sentinel._context import HostContext, HumanAnswer
 from inspect_sentinel._report import Decision, Failed, Report, Reported
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 
@@ -44,7 +44,7 @@ class FakeHost:
 
 
 class Recorded(NamedTuple):
-    context: RunnerContext
+    context: HostContext
     step: Step
     reported: Reported[Report]
 
@@ -53,49 +53,52 @@ class ListRecorder:
     def __init__(self) -> None:
         self.records: list[Recorded] = []
         self.cancellations: list[tuple[str, str]] = []
-        self.cancelled_contexts: list[RunnerContext] = []
+        self.cancelled_contexts: list[HostContext] = []
         self.bypassed_layers: list[tuple[str, str]] = []
-        self.bypassed_contexts: list[RunnerContext] = []
+        self.bypassed_contexts: list[HostContext] = []
         self.supersessions: list[Recorded] = []
         self.failures: list[Failed] = []
-        self.failed_contexts: list[RunnerContext] = []
+        self.failed_contexts: list[HostContext] = []
 
     def record(
-        self, context: RunnerContext, step: Step, reported: Reported[Report]
+        self, context: HostContext, step: Step, reported: Reported[Report]
     ) -> None:
         self.records.append(Recorded(context, step, reported))
 
-    def failed(self, context: RunnerContext, step: Step, failed: Failed) -> None:
+    def failed(self, context: HostContext, step: Step, failed: Failed) -> None:
         self.failures.append(failed)
         self.failed_contexts.append(context)
 
-    def cancelled(self, context: RunnerContext, step: Step, name: str) -> None:
+    def cancelled(self, context: HostContext, step: Step, name: str) -> None:
         self.cancellations.append((context.path, name))
         self.cancelled_contexts.append(context)
 
-    def bypassed(self, context: RunnerContext, step: Step, name: str) -> None:
+    def bypassed(self, context: HostContext, step: Step, name: str) -> None:
         self.bypassed_layers.append((context.path, name))
         self.bypassed_contexts.append(context)
 
     def superseded(
-        self, context: RunnerContext, step: Step, reported: Reported[Decision]
+        self, context: HostContext, step: Step, reported: Reported[Decision]
     ) -> None:
         self.supersessions.append(Recorded(context, step, reported))
 
 
-def runner_context(
-    path: str = "", recorder: ListRecorder | None = None, host: FakeHost | None = None
-) -> RunnerContext:
-    return RunnerContext(
+def host_context(
+    path: str = "",
+    recorder: ListRecorder | None = None,
+    host: FakeHost | None = None,
+    store: Store | None = None,
+) -> HostContext:
+    return HostContext(
         task="t",
         task_description=None,
         sample_id=1,
         epoch=1,
         sample_description=None,
-        input="prompt",
+        sample_input="prompt",
         metadata={},
         path=path,
-        store=Store(),
+        _store=store or Store(),
         host=host or FakeHost(),
         recorder=recorder or ListRecorder(),
     )

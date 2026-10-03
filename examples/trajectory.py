@@ -16,7 +16,7 @@ from inspect_sentinel import (
     MonitorGroup,
     Observation,
     monitor,
-    observe,
+    observe_only,
 )
 
 
@@ -50,5 +50,5 @@ def trajectory() -> Task:
         solver=react(tools=[bash(timeout=60), python(timeout=60)]),
         sandbox=("docker", "compose.yaml"),
         message_limit=20,
-        sentinel=observe(failure_count()),
+        sentinel=observe_only(failure_count()),
     )

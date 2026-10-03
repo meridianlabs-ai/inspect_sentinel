@@ -18,7 +18,7 @@ How a monitor or protocol keeps state across the steps of a sample, such as a ru
 - Why not closure variables or the global `store_as()`
 - Namespacing by instance path, and what renaming a key does to it
 - Sharing state between the functions of one `MonitorGroup` (`examples/trajectory.py`)
-- The whole sample store: `context.store`
+- Why there is no access to the whole sample store: `Context` is immutable and holds only what the monitor was given
 - State in the transcript, checkpointing and resume
 - Reading state from a log for analysis
 - Per-task state, `scope="task"` (planned)

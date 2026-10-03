@@ -6,7 +6,7 @@ A *monitor* observes a step of an agent's execution and reports a suspicion scor
 from ._context import Context, Host, HumanAnswer
 from ._decorators import monitor, protocol
 from ._final import decide_final
-from ._protocols import concurrent, human, observe, sequential, threshold
+from ._protocols import concurrent, human, observe_only, sequential, threshold
 from ._report import (
     Action,
     Decision,
@@ -66,7 +66,7 @@ __all__ = [
     "decide_final",
     "human",
     "monitor",
-    "observe",
+    "observe_only",
     "protocol",
     "run_children",
     "run_monitors",
