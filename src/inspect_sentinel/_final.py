@@ -2,19 +2,19 @@ from __future__ import annotations
 
 from typing import NamedTuple, NoReturn
 
-from ._context import RunnerContext
+from ._context import Context
 from ._report import Decision, Reported
 from ._step import Step
 
 
 class Origin(NamedTuple):
-    context: RunnerContext
+    context: Context
     step: Step
     reported: Reported[Decision]
 
 
 class Final(BaseException):
-    """Raised by `decide_final()` and carried through the runner to `run_root`, which records its decision, the one time it is recorded, and returns it; each layer it passes is recorded as bypassed as it is passed. A `BaseException`, so a protocol's own `except Exception` cannot swallow it."""
+    """Raised by `decide_final()` and carried through the runner to `run_sentinel`, which records its decision, the one time it is recorded, and returns it; each layer it passes is recorded as bypassed as it is passed. A `BaseException`, so a protocol's own `except Exception` cannot swallow it."""
 
     def __init__(self, decision: Decision) -> None:
         super().__init__(decision.action)

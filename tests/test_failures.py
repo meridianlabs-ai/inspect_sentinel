@@ -3,6 +3,7 @@ from collections.abc import Callable
 
 import anyio
 import pytest
+from inspect_ai._util.registry import registry_info
 from inspect_ai.util import LimitExceededError
 
 from inspect_sentinel import (
@@ -11,17 +12,17 @@ from inspect_sentinel import (
     Observations,
     _results,
     concurrent,
-    observe,
+    observe_only,
     sequential,
     threshold,
 )
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._report import Action, Decision, Observation
-from inspect_sentinel._runner import run_monitors, run_root
+from inspect_sentinel._runner import run_monitors, run_sentinel
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
-from tests._fakes import ListRecorder, before_step, runner_context
+from tests._fakes import ListRecorder, before_step, host_context, in_step
 
 _ERRORS: dict[str, type[Exception]] = {"value": ValueError, "os": OSError}
 
@@ -69,11 +70,12 @@ async def test_a_raising_monitor_is_recorded_as_failed_and_its_siblings_report()
     None
 ):
     recorder = ListRecorder()
-    observations = await run_monitors(
-        {"broken": fails(), "ok": scores(0.3)},
-        runner_context(path="layer", recorder=recorder),
-        before_step(),
-    )
+    with in_step(path="layer", recorder=recorder) as context:
+        observations = await run_monitors(
+            {"broken": fails(), "ok": scores(0.3)},
+            context,
+            before_step(),
+        )
     [failed] = observations.failed
     assert (failed.name, failed.path, failed.function) == (
         "broken",
@@ -82,7 +84,9 @@ async def test_a_raising_monitor_is_recorded_as_failed_and_its_siblings_report()
     )
     assert isinstance(failed.error, ValueError)
     assert recorder.failures == [failed]
-    assert [c.path for c in recorder.failed_contexts] == ["layer/broken"]
+    assert [(c.path, c.factory) for c in recorder.failed_instances] == [
+        ("layer/broken", registry_info(fails).name)
+    ]
     assert [r.reported.name for r in recorder.records] == ["ok"]
     assert [o.name for o in observations.succeeded] == ["ok"]
 
@@ -125,7 +129,8 @@ async def test_a_failing_function_of_a_group_does_not_stop_the_others() -> None:
 
         return MonitorGroup(first, second)
 
-    observations = await run_monitors([half_failing()], runner_context(), before_step())
+    with in_step() as context:
+        observations = await run_monitors([half_failing()], context, before_step())
     assert [f.function for f in observations.failed] == ["first"]
     assert [o.function for o in observations.succeeded] == ["second"]
 
@@ -153,9 +158,9 @@ async def test_a_cancelled_monitor_is_not_recorded_as_failed() -> None:
 
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        decision = await run_root(
+        decision = await run_sentinel(
             concurrent({"slow": slow_monitor(), "stops": stops()}),
-            runner_context(recorder=recorder),
+            host_context(recorder=recorder),
             before_step(),
         )
     assert decision is not None and decision.action == "terminate"
@@ -174,9 +179,8 @@ async def test_a_limit_reached_in_a_monitor_ends_the_step() -> None:
 
     recorder = ListRecorder()
     with pytest.raises(LimitExceededError):
-        await run_monitors(
-            [over_budget()], runner_context(recorder=recorder), before_step()
-        )
+        with in_step(recorder=recorder) as context:
+            await run_monitors([over_budget()], context, before_step())
     assert recorder.failures == []
 
 
@@ -204,13 +208,14 @@ async def test_a_monitor_that_turns_its_cancellation_into_an_error_is_cancelled(
         async with anyio.create_task_group() as tg:
 
             async def run() -> None:
-                returned.append(
-                    await run_monitors(
-                        {"c": monitor_converts_cancellation()},
-                        runner_context(recorder=recorder),
-                        before_step(),
+                with in_step(recorder=recorder) as context:
+                    returned.append(
+                        await run_monitors(
+                            {"c": monitor_converts_cancellation()},
+                            context,
+                            before_step(),
+                        )
                     )
-                )
 
             tg.start_soon(run)
             await entered.wait()
@@ -242,9 +247,8 @@ async def test_a_limit_beside_another_error_in_a_monitors_own_group_ends_the_ste
 
     recorder = ListRecorder()
     with pytest.raises(LimitExceededError):
-        await run_monitors(
-            [fans_out()], runner_context(recorder=recorder), before_step()
-        )
+        with in_step(recorder=recorder) as context:
+            await run_monitors([fans_out()], context, before_step())
     assert recorder.failures == []
 
 
@@ -254,15 +258,15 @@ def test_a_monitor_failed_error_names_at_least_one_failure() -> None:
 
 
 @pytest.mark.anyio
-async def test_observe_records_a_failure_warns_once_and_continues(
+async def test_observe_only_records_a_failure_warns_once_and_continues(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     recorder = ListRecorder()
-    root = observe({"observe_flaky": fails(), "steady": scores(0.2)})
+    root = observe_only({"observe_flaky": fails(), "steady": scores(0.2)})
     with caplog.at_level(logging.WARNING):
         for _ in range(2):
-            decision = await run_root(
-                root, runner_context(recorder=recorder), before_step()
+            decision = await run_sentinel(
+                root, host_context(recorder=recorder), before_step()
             )
             assert decision is None
     assert [f.path for f in recorder.failures] == ["observe_flaky", "observe_flaky"]
@@ -278,8 +282,8 @@ async def test_the_warning_is_once_per_instance_and_exception_type(
     with caplog.at_level(logging.WARNING):
         for error in ("value", "os", "value"):
             for name in ("dedupe_a", "dedupe_b"):
-                await run_root(
-                    observe({name: fails(error)}), runner_context(), before_step()
+                await run_sentinel(
+                    observe_only({name: fails(error)}), host_context(), before_step()
                 )
     for name in ("dedupe_a", "dedupe_b"):
         warnings = _warnings(caplog, name)
@@ -293,9 +297,9 @@ async def test_the_warning_is_once_per_instance_and_exception_type(
 async def test_a_failed_monitor_under_threshold_fails_the_step() -> None:
     recorder = ListRecorder()
     with pytest.raises(MonitorFailedError, match="'broken'.*model unavailable"):
-        await run_root(
+        await run_sentinel(
             threshold({"broken": fails(), "ok": scores(0.1)}, reject_at=0.5),
-            runner_context(recorder=recorder),
+            host_context(recorder=recorder),
             before_step(),
         )
     assert [f.path for f in recorder.failures] == ["broken"]
@@ -308,9 +312,9 @@ async def test_concurrent_records_a_failed_monitor_and_still_votes(
 ) -> None:
     recorder = ListRecorder()
     with caplog.at_level(logging.WARNING):
-        decision = await run_root(
+        decision = await run_sentinel(
             concurrent({"concurrent_flaky": fails(), "rule": says("reject")}),
-            runner_context(recorder=recorder),
+            host_context(recorder=recorder),
             before_step(),
         )
     assert decision is not None and decision.action == "reject"
@@ -333,8 +337,8 @@ async def test_sequential_records_a_failed_monitor_and_falls_through(
 ) -> None:
     recorder = ListRecorder()
     with caplog.at_level(logging.WARNING):
-        decision = await run_root(
-            sequential(links), runner_context(recorder=recorder), before_step()
+        decision = await run_sentinel(
+            sequential(links), host_context(recorder=recorder), before_step()
         )
     assert decision is not None and decision.action == expected
     assert len(recorder.failures) == 1
@@ -368,9 +372,9 @@ async def test_a_protocol_can_decide_from_the_monitors_that_did_not_fail(
     monitors: dict[str, Monitor], expected: Action
 ) -> None:
     recorder = ListRecorder()
-    decision = await run_root(
+    decision = await run_sentinel(
         tolerant(monitors, reject_at=0.5),
-        runner_context(recorder=recorder),
+        host_context(recorder=recorder),
         before_step(),
     )
     assert decision is not None and decision.action == expected

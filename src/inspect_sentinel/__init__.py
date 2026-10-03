@@ -3,10 +3,11 @@
 A *monitor* observes a step of an agent's execution and reports a suspicion score. A *protocol* decides what happens at that step, optionally after consulting monitors. See `design/` for the design these will implement.
 """
 
-from ._context import Context, Host, HumanAnswer
+from ._context import Context
 from ._decorators import monitor, protocol
 from ._final import decide_final
-from ._protocols import concurrent, human, observe, sequential, threshold
+from ._host import Host, HumanAnswer
+from ._protocols import concurrent, human, observe_only, sequential, threshold
 from ._report import (
     Action,
     Decision,
@@ -66,7 +67,7 @@ __all__ = [
     "decide_final",
     "human",
     "monitor",
-    "observe",
+    "observe_only",
     "protocol",
     "run_children",
     "run_monitors",

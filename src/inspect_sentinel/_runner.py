@@ -11,9 +11,10 @@ from anyio.abc import TaskGroup
 from inspect_ai._util.registry import registry_info, registry_unqualified_name
 from inspect_ai.util import LimitExceededError
 
-from ._context import Context, RunnerContext, validate_instance_name
+from ._context import Context, validate_instance_name
 from ._decorators import invoke, members
 from ._final import Final, Origin
+from ._host import HostContext, enter_layer, layer, running_step
 from ._report import Decision, Failed, Observation, Report, Reported
 from ._results import Decisions, Observations, Reports
 from ._step import Step
@@ -69,7 +70,8 @@ def _supersede(finals: Sequence[Final]) -> None:
             raise RuntimeError(
                 f"Runner invariant violated: Final({ex.decision.action!r}) reached a task group without an origin; every Final leaving a child is given one by the runner."
             )
-        origin.context.recorder.superseded(origin.context, origin.step, origin.reported)
+        recorder, factory = layer(origin.context, "The runner")
+        recorder.superseded(origin.context, factory, origin.step, origin.reported)
 
 
 def _surface(errors: Sequence[BaseException], finals: Sequence[Final]) -> BaseException:
@@ -108,16 +110,18 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
         raise first
 
 
-async def run_root(protocol: Protocol, context: Context, step: Step) -> Decision | None:
-    """Invoke the resolved root protocol for one step and return the step's outcome.
+async def run_sentinel(
+    protocol: Protocol, host_context: HostContext, step: Step
+) -> Decision | None:
+    """Run the sentinel `resolve_sentinel` returned for one step and return the step's outcome.
 
-    The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its context's `factory` is set to its full registry name. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
+    The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its full registry name is the `factory` its records carry. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 
     An `escalate` is returned like any other decision, though at the root there is nobody to hand it to; the host decides what an unresolved escalate means.
 
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.
-        context: The top layer's context, whose `path` is empty.
+        host_context: The top layer's context, whose `path` is empty, the recorder and the sample store.
         step: The step being examined.
     """
     if isinstance(protocol, Group):
@@ -125,18 +129,28 @@ async def run_root(protocol: Protocol, context: Context, step: Step) -> Decision
             "The root is one protocol function, as resolve_sentinel returns it; a group of functions cannot be the root."
         )
     found: list[Reported[Decision]] = []
-    try:
-        await _run_child(
-            protocol, "protocol", Decision, context, step, None, found, [], root=True
-        )
-    except Final as ex:
-        origin = ex.origin
-        if origin is None:
-            raise RuntimeError(
-                f"Runner invariant violated: Final({ex.decision.action!r}) left the root without an origin."
-            ) from ex
-        origin.context.recorder.record(origin.context, origin.step, origin.reported)
-        return ex.decision
+    with running_step(host_context.recorder, host_context.store):
+        try:
+            await _run_child(
+                protocol,
+                "protocol",
+                Decision,
+                host_context.context,
+                step,
+                None,
+                found,
+                [],
+                root=True,
+            )
+        except Final as ex:
+            origin = ex.origin
+            if origin is None:
+                raise RuntimeError(
+                    f"Runner invariant violated: Final({ex.decision.action!r}) left the root without an origin."
+                ) from ex
+            recorder, factory = layer(origin.context, "The runner")
+            recorder.record(origin.context, factory, origin.step, origin.reported)
+            return ex.decision
     return found[0].report if found else None
 
 
@@ -153,11 +167,11 @@ async def run_monitors(
 
     Args:
         monitors: One monitor or `MonitorGroup`, named by its registry name without the package prefix; a sequence of them, named the same way; or a mapping of instance names to them.
-        context: This layer's context.
+        context: This layer's context, the one this protocol was given. Call this while the protocol runs; after it returns this raises `RuntimeError`.
         step: The step being examined.
     """
     named = named_children(monitors, "monitor")
-    return (await _run_named(named, context, step)).observations
+    return (await _run_named(named, context, step, "run_monitors")).observations
 
 
 async def run_protocols(
@@ -169,11 +183,11 @@ async def run_protocols(
 
     Args:
         protocols: One protocol or `ProtocolGroup`, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.
-        context: This layer's context.
+        context: This layer's context, the one this protocol was given. Call this while the protocol runs; after it returns this raises `RuntimeError`.
         step: The step being examined.
     """
     named = named_children(protocols, "protocol")
-    return (await _run_named(named, context, step)).decisions
+    return (await _run_named(named, context, step, "run_protocols")).decisions
 
 
 async def run_children(children: Sentinels, context: Context, step: Step) -> Reports:
@@ -183,16 +197,17 @@ async def run_children(children: Sentinels, context: Context, step: Step) -> Rep
 
     Args:
         children: One monitor, protocol or group, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.
-        context: This layer's context.
+        context: This layer's context, the one this protocol was given. Call this while the protocol runs; after it returns this raises `RuntimeError`.
         step: The step being examined.
     """
     named = named_children(children, None)
-    return await _run_named(named, context, step)
+    return await _run_named(named, context, step, "run_children")
 
 
 async def _run_named(
-    named: Sequence[tuple[str, Sentinel]], context: Context, step: Step
+    named: Sequence[tuple[str, Sentinel]], context: Context, step: Step, caller: str
 ) -> Reports:
+    recorder = layer(context, caller).recorder
     observations: list[tuple[int, Reported[Observation]]] = []
     failures: list[tuple[int, Failed]] = []
     decisions: list[tuple[int, Reported[Decision]]] = []
@@ -253,9 +268,12 @@ async def _run_named(
     except Final:
         # a decide_final() outran a terminate already recorded as a decision
         for factory, reported in terminated:
-            # _run_child accepted this context, so it is a RunnerContext
-            child_context = cast(RunnerContext, context).child(reported.name, factory)
-            child_context.recorder.superseded(child_context, step, reported)
+            recorder.superseded(
+                _child_context(context, reported.name),
+                factory,
+                step,
+                reported,
+            )
         raise
 
     return Reports(
@@ -279,10 +297,6 @@ async def _run_child(
     *,
     root: bool = False,
 ) -> None:
-    if not isinstance(context, RunnerContext):
-        raise TypeError(
-            "The runner needs the RunnerContext the dispatcher provided; a Context constructed elsewhere cannot record reports."
-        )
     info, _ = check_child(child, kind)
     if root:
         if context.path != "":
@@ -294,15 +308,14 @@ async def _run_child(
         child_name = validate_instance_name(
             name if name is not None else registry_unqualified_name(info)
         )
+    child_context = context if root else _child_context(context, child_name)
+    # registered before the stage filter, so a path conflict fails at every stage
+    enter_layer(child_context.path, info.name)
     grouped = isinstance(child, Group)
     running = [m for m in members(child) if isinstance(step, tuple(m.accepted))]
     if not running:
         return
-    child_context = (
-        replace(context, factory=info.name)
-        if root
-        else context.child(child_name, info.name)
-    )
+    recorder = layer(child_context, "The runner").recorder
     try:
         # sequential, since a group's members share one store
         for member in running:
@@ -328,7 +341,7 @@ async def _run_child(
         # a recorder that raises here fails the layer, like one that raises
         # from record(); a cancellation record that cannot be written is not
         # something to paper over
-        child_context.recorder.cancelled(child_context, step, child_name)
+        recorder.cancelled(child_context, info.name, step, child_name)
         raise
 
 
@@ -336,11 +349,12 @@ async def _run_member(
     function: SentinelFunction,
     kind: Literal["monitor", "protocol"],
     report_type: type[R],
-    child_context: RunnerContext,
+    child_context: Context,
     step: Step,
     child_name: str,
     grouped: bool,
 ) -> Reported[R] | Failed | None:
+    recorder, factory = layer(child_context, "The runner")
     label = describe(child_name, function.__name__, grouped)
     report: Report | None = None
     finals: list[Final] = []
@@ -376,7 +390,7 @@ async def _run_member(
                 function=function.__name__,
                 error=failure,
             )
-            child_context.recorder.failed(child_context, step, failed)
+            recorder.failed(child_context, factory, step, failed)
             return failed
         raise failure
     if finals:
@@ -397,14 +411,14 @@ async def _run_member(
         report=report,
         function=function.__name__,
     )
-    child_context.recorder.record(child_context, step, reported)
+    recorder.record(child_context, factory, step, reported)
     return reported
 
 
 def _on_final(
     finals: Sequence[Final],
     kind: Literal["monitor", "protocol"],
-    child_context: RunnerContext,
+    child_context: Context,
     step: Step,
     child_name: str,
     function: str,
@@ -437,8 +451,14 @@ def _on_final(
             ),
         )
     if not own:
-        child_context.recorder.bypassed(child_context, step, child_name)
+        recorder, factory = layer(child_context, "The runner")
+        recorder.bypassed(child_context, factory, step, child_name)
     return cast(Final, _surface([], finals))
+
+
+def _child_context(context: Context, name: str) -> Context:
+    validate_instance_name(name)
+    return replace(context, path=f"{context.path}/{name}" if context.path else name)
 
 
 def describe(name: str, function: str, grouped: bool) -> str:

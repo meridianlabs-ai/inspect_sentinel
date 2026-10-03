@@ -1,6 +1,6 @@
 ---
 title: "Composition"
-description: "Combining monitors and protocols: concurrent(), sequential(), threshold() and observe()."
+description: "Combining monitors and protocols: concurrent(), sequential(), threshold() and observe_only()."
 ---
 
 ::: {.callout-warning}
@@ -14,11 +14,11 @@ How several monitors and protocols combine into one sentinel. Covers what a list
 
 ## Planned Sections
 
-- What `Task(sentinel=...)` resolves to: a lone protocol, a list or mapping, monitors alone
+- What `Task(sentinel=...)` resolves to: a lone protocol, or a list or mapping with at least one protocol; monitors alone are an error naming `observe_only()`
 - Instance names, mapping keys and paths (`llm/suspicion`)
 - `concurrent()`: every child runs; the strongest decision wins (`terminate` > `reject` > `modify` > `escalate` > `continue`)
 - `threshold()`: `reject_at` and `terminate_at`, as one number or per monitor and dimension
-- `observe()`: recording scores with nothing acting on them, and collecting a benign distribution
+- `observe_only()`: recording scores with nothing acting on them, and collecting a benign distribution; the only way to run monitors with no protocol
 - `resample()` (planned)
 - Nesting compositions
 - Writing your own composition over the runner

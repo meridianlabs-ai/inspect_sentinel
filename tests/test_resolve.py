@@ -1,4 +1,3 @@
-import logging
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -11,20 +10,21 @@ from inspect_sentinel._decorators import (
     monitor,
     protocol,
 )
-from inspect_sentinel._protocols import concurrent, observe, threshold
+from inspect_sentinel._protocols import concurrent, observe_only, threshold
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._resolve import resolve_sentinel
 from inspect_sentinel._runner import (
     run_protocols,
-    run_root,
+    run_sentinel,
 )
-from inspect_sentinel._step import BeforeToolCall, Step
+from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import (
     Monitor,
+    MonitorGroup,
     Protocol,
     ProtocolGroup,
 )
-from tests._fakes import ListRecorder, before_step, runner_context
+from tests._fakes import ListRecorder, before_step, host_context, in_step
 
 
 @monitor
@@ -41,6 +41,17 @@ def quieter() -> Monitor:
         return Observation.score(0.1)
 
     return check
+
+
+@monitor
+def watches_both() -> MonitorGroup:
+    async def before(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(0.2)
+
+    async def after(context: Context, step: AfterToolCall) -> Observation | None:
+        return Observation.score(0.3)
+
+    return MonitorGroup(before, after)
 
 
 @protocol
@@ -62,13 +73,28 @@ def pair() -> ProtocolGroup:
     return ProtocolGroup(one, two)
 
 
-def test_monitors_only_resolve_to_observe() -> None:
-    assert registry_info(resolve_sentinel(noisy())).name == "inspect_sentinel/observe"
-    assert registry_info(resolve_sentinel([noisy()])).name == "inspect_sentinel/observe"
-    assert (
-        registry_info(resolve_sentinel({"m": noisy()})).name
-        == "inspect_sentinel/observe"
-    )
+MONITORS_ONLY = (
+    "A sentinel needs a protocol to decide each step, but it was given only monitors"
+)
+
+
+@pytest.mark.parametrize(
+    ("spec", "names"),
+    [
+        (lambda: noisy(), "noisy"),
+        (lambda: [noisy(), quieter()], "noisy, quieter"),
+        (lambda: {"first": noisy(), "second": quieter()}, "first, second"),
+        (lambda: watches_both(), "watches_both"),
+    ],
+)
+def test_monitors_alone_are_a_configuration_error_naming_observe_only(
+    spec: Callable[[], Sentinels], names: str
+) -> None:
+    with pytest.raises(ValueError) as raised:
+        resolve_sentinel(spec())
+    message = str(raised.value)
+    assert message.startswith(f"{MONITORS_ONLY}: {names}.")
+    assert "observe_only()" in message and "threshold()" in message
 
 
 def test_anything_containing_a_protocol_resolves_to_concurrent() -> None:
@@ -82,23 +108,8 @@ def test_anything_containing_a_protocol_resolves_to_concurrent() -> None:
     )
 
 
-def test_a_monitor_nothing_acts_on_warns(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING, logger="inspect_sentinel._resolve"):
-        resolve_sentinel(noisy())
-    assert [record.getMessage() for record in caplog.records] == [
-        "Nothing is configured to act on these monitors: noisy. Wrap them in a protocol such as threshold() to act, or observe() to say that recording is intended."
-    ]
-
-
-def test_every_unwatched_monitor_is_named(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING, logger="inspect_sentinel._resolve"):
-        resolve_sentinel([noisy(), quieter()])
-    assert len(caplog.records) == 1
-    assert "these monitors: noisy, quieter." in caplog.text
-
-
 @pytest.mark.parametrize(
-    "instance", [blocks(), concurrent([blocks()]), observe([noisy()])]
+    "instance", [blocks(), concurrent([blocks()]), observe_only([noisy()])]
 )
 def test_a_lone_protocol_is_the_root(instance: Protocol) -> None:
     assert resolve_sentinel(instance) is instance
@@ -109,14 +120,6 @@ def test_a_lone_protocol_group_is_wrapped_in_concurrent() -> None:
     assert registry_info(resolved).name == "inspect_sentinel/concurrent"
 
 
-def test_observe_written_explicitly_does_not_warn(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    with caplog.at_level(logging.WARNING, logger="inspect_sentinel._resolve"):
-        resolve_sentinel(observe([noisy()]))
-    assert caplog.records == []
-
-
 @pytest.mark.parametrize(
     ("spec", "expected"),
     [
@@ -125,8 +128,11 @@ def test_observe_written_explicitly_does_not_warn(
             [("noisy", "noisy"), ("threshold", "")],
         ),
         (lambda: [blocks()], [("blocks", "blocks"), ("concurrent", "")]),
-        (lambda: noisy(), [("noisy", "noisy")]),
-        (lambda: [noisy()], [("noisy", "noisy")]),
+        (lambda: observe_only(noisy()), [("noisy", "noisy")]),
+        (
+            lambda: [noisy(), blocks()],
+            [("noisy", "noisy"), ("blocks", "blocks"), ("concurrent", "")],
+        ),
     ],
 )
 @pytest.mark.anyio
@@ -134,33 +140,20 @@ async def test_the_root_records_at_the_empty_path_and_its_children_bare(
     spec: Callable[[], Sentinels], expected: list[tuple[str, str]]
 ) -> None:
     recorder = ListRecorder()
-    await run_root(
-        resolve_sentinel(spec()), runner_context(recorder=recorder), before_step()
+    await run_sentinel(
+        resolve_sentinel(spec()), host_context(recorder=recorder), before_step()
     )
-    assert [(r.reported.name, r.reported.path) for r in recorder.records] == expected
-
-
-def test_a_protocol_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING, logger="inspect_sentinel._resolve"):
-        resolve_sentinel([noisy(), blocks()])
-    assert caplog.records == []
-
-
-@pytest.mark.anyio
-async def test_a_resolved_monitor_records_and_does_not_act() -> None:
-    recorder = ListRecorder()
-    decisions = await run_protocols(
-        resolve_sentinel(noisy()), runner_context(recorder=recorder), before_step()
-    )
-    assert not decisions
-    assert [record.reported.name for record in recorder.records] == ["noisy"]
+    recorded = [(r.reported.name, r.reported.path) for r in recorder.records]
+    assert sorted(recorded[:-1]) == sorted(expected[:-1])
+    assert recorded[-1] == expected[-1]
 
 
 @pytest.mark.anyio
 async def test_a_resolved_protocol_decides() -> None:
-    [reported] = await run_protocols(
-        resolve_sentinel([blocks()]), runner_context(), before_step()
-    )
+    with in_step() as context:
+        [reported] = await run_protocols(
+            resolve_sentinel([blocks()]), context, before_step()
+        )
     assert reported.report.action == "reject"
 
 
@@ -195,12 +188,3 @@ def test_duplicate_names_nested_in_a_protocol_fail_under_resolve() -> None:
 def test_a_spec_that_is_neither_a_mapping_nor_a_sequence_is_an_error(spec: Any) -> None:
     with pytest.raises(TypeError, match="Mapping or a Sequence"):
         resolve_sentinel(spec)
-
-
-def test_each_configured_instance_is_named_in_the_warning(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    with caplog.at_level(logging.WARNING, logger="inspect_sentinel._resolve"):
-        resolve_sentinel({"first": noisy(), "second": noisy()})
-    assert len(caplog.records) == 1
-    assert "these monitors: first, second." in caplog.text
