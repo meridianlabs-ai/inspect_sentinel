@@ -45,7 +45,7 @@ def test_author_facing_names_are_exported() -> None:
         "run_children",
         "run_monitors",
         "run_protocols",
-        "observe",
+        "observe_only",
         "concurrent",
         "sequential",
         "human",
@@ -59,7 +59,7 @@ def test_author_facing_names_are_exported() -> None:
 
 def test_integration_names_are_not_exported() -> None:
     for name in (
-        "RunnerContext",
+        "HostContext",
         "Recorder",
         "step_types",
         "Stage",
@@ -73,7 +73,7 @@ def test_integration_names_are_not_exported() -> None:
         "validate_instance_name",
         "PRECEDENCE",
         "named_children",
-        "run_root",
+        "run_sentinel",
     ):
         assert name not in inspect_sentinel.__all__
 
@@ -84,17 +84,17 @@ def test_single_child_runners_are_gone() -> None:
         assert not hasattr(inspect_sentinel, name)
 
 
-def test_integration_module_exports_the_dispatcher_surface() -> None:
+def test_integration_module_exports_the_host_surface() -> None:
     assert set(inspect_sentinel._integration.__all__) == {
         "Recorder",
-        "RunnerContext",
+        "HostContext",
         "Sentinels",
         "sentinel_from_config",
         "config_from_sentinel",
         "validate_instance_name",
         "resolve_sentinel",
         "step_types",
-        "run_root",
+        "run_sentinel",
     }
 
 

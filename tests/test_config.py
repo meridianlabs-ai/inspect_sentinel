@@ -18,7 +18,7 @@ from inspect_sentinel._decorators import (
 from inspect_sentinel._integration import (
     config_from_sentinel,
     resolve_sentinel,
-    run_root,
+    run_sentinel,
     sentinel_from_config,
 )
 from inspect_sentinel._protocols import concurrent, threshold
@@ -32,7 +32,7 @@ from inspect_sentinel._types import (
     Sentinel,
     Sentinels,
 )
-from tests._fakes import ListRecorder, after_step, before_step, runner_context
+from tests._fakes import ListRecorder, after_step, before_step, host_context
 
 
 def _listed(built: Sentinels) -> list[Sentinel]:
@@ -143,8 +143,8 @@ async def test_nested_entries_become_the_parameter_and_compose_paths() -> None:
         }
     )
     recorder = ListRecorder()
-    await run_root(
-        resolve_sentinel(built), runner_context(recorder=recorder), before_step()
+    await run_sentinel(
+        resolve_sentinel(built), host_context(recorder=recorder), before_step()
     )
     assert sorted(r.reported.path for r in recorder.records) == [
         "",
@@ -382,7 +382,10 @@ ROUND_TRIPS: list[Any] = [
                     "name": "concurrent",
                     "children": [
                         {"name": "cfg_rule"},
-                        {"name": "observe", "monitors": {"m": {"name": "cfg_pair"}}},
+                        {
+                            "name": "observe_only",
+                            "monitors": {"m": {"name": "cfg_pair"}},
+                        },
                     ],
                 },
             },
@@ -409,9 +412,9 @@ def test_config_to_sentinel_to_config_is_equal(raw: Any) -> None:
 
 async def _paths(sentinels: Sentinels) -> list[tuple[str, str]]:
     recorder = ListRecorder()
-    context = runner_context(recorder=recorder)
-    await run_root(resolve_sentinel(sentinels), context, before_step())
-    await run_root(resolve_sentinel(sentinels), context, after_step())
+    context = host_context(recorder=recorder)
+    await run_sentinel(resolve_sentinel(sentinels), context, before_step())
+    await run_sentinel(resolve_sentinel(sentinels), context, after_step())
     return sorted((r.reported.path, r.reported.function) for r in recorder.records)
 
 
@@ -536,20 +539,23 @@ def scratch_registry(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.usefixtures("scratch_registry")
 def test_an_exact_name_wins_over_the_package_fallback() -> None:
     @protocol
-    def observe(monitors: Monitors) -> Protocol:
+    def observe_only(monitors: Monitors) -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             return None
 
         return decide
 
     config: Any = [
-        {"name": "observe", "monitors": [{"name": "cfg_suspicion"}]},
-        {"name": "inspect_sentinel/observe", "monitors": [{"name": "cfg_suspicion"}]},
+        {"name": "observe_only", "monitors": [{"name": "cfg_suspicion"}]},
+        {
+            "name": "inspect_sentinel/observe_only",
+            "monitors": [{"name": "cfg_suspicion"}],
+        },
     ]
     built = _listed(sentinel_from_config(config))
     assert [registry_info(child).name for child in built] == [
-        "observe",
-        "inspect_sentinel/observe",
+        "observe_only",
+        "inspect_sentinel/observe_only",
     ]
     assert config_from_sentinel(built) == SentinelConfig.model_validate(config)
 

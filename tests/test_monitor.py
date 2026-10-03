@@ -23,7 +23,7 @@ from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._runner import (
     run_monitors,
-    run_root,
+    run_sentinel,
 )
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import (
@@ -32,7 +32,7 @@ from inspect_sentinel._types import (
     Protocol,
     ProtocolGroup,
 )
-from tests._fakes import before_step, runner_context
+from tests._fakes import before_step, host_context, layer_context
 
 
 @monitor
@@ -421,7 +421,7 @@ def test_a_monitor_group_from_a_protocol_factory_is_rejected() -> None:
 @pytest.mark.anyio
 async def test_a_group_cannot_be_called() -> None:
     with pytest.raises(TypeError, match="not callable"):
-        await cast(Any, paired())(runner_context(), before_step())
+        await cast(Any, paired())(layer_context(), before_step())
 
 
 @monitor(name="renamed_monitor", version=3)
@@ -500,7 +500,7 @@ async def test_a_configured_function_keeps_its_identity() -> None:
     assert check.__name__ == "check"
     assert list(inspect.signature(check).parameters) == ["context", "step"]
     assert inspect.iscoroutinefunction(check)
-    assert await check(runner_context(), before_step()) == Observation.score(0.1)
+    assert await check(layer_context(), before_step()) == Observation.score(0.1)
 
 
 @monitor
@@ -533,20 +533,20 @@ def calls_through_runner(child: Monitor) -> Protocol:
 async def test_a_direct_call_during_a_run_is_rejected() -> None:
     root = concurrent(calls_directly(watched()))
     with pytest.raises(RuntimeError, match="run_monitors/run_protocols/run_children"):
-        await run_root(root, runner_context(), before_step())
+        await run_sentinel(root, host_context(), before_step())
 
 
 @pytest.mark.anyio
 async def test_a_call_through_the_runner_during_a_run_is_allowed() -> None:
     root = concurrent(calls_through_runner(watched()))
-    decision = await run_root(root, runner_context(), before_step())
+    decision = await run_sentinel(root, host_context(), before_step())
     assert decision is not None and decision.action == "reject"
 
 
 @pytest.mark.anyio
 async def test_a_direct_call_outside_a_run_is_allowed() -> None:
     decide = cast(Callable[..., Any], calls_directly(watched()))
-    assert await decide(runner_context(), before_step()) is None
+    assert await decide(layer_context(), before_step()) is None
 
 
 def test_a_monitor_and_a_protocol_cannot_share_a_name() -> None:

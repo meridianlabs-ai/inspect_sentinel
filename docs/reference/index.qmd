@@ -39,7 +39,7 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 
 ## Shipped protocols
 
-### observe
+### observe_only
 ### concurrent
 ### sequential
 ### human

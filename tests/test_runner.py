@@ -5,7 +5,7 @@ import anyio
 import pytest
 from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import ToolCall
-from inspect_ai.util import StoreModel
+from inspect_ai.util import Store, StoreModel
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import (
@@ -25,7 +25,7 @@ from inspect_sentinel._runner import (
     run_children,
     run_monitors,
     run_protocols,
-    run_root,
+    run_sentinel,
 )
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import (
@@ -37,7 +37,13 @@ from inspect_sentinel._types import (
     Protocols,
     Sentinels,
 )
-from tests._fakes import ListRecorder, after_step, before_step, runner_context
+from tests._fakes import (
+    ListRecorder,
+    after_step,
+    before_step,
+    host_context,
+    layer_context,
+)
 
 
 def _obs(name: str, suspicion: float | dict[str, float]) -> Reported[Observation]:
@@ -186,7 +192,7 @@ def records_path() -> Protocol:
 @pytest.mark.anyio
 async def test_a_single_monitor_is_recorded_and_returned() -> None:
     recorder = ListRecorder()
-    context = runner_context(recorder=recorder)
+    context = layer_context(recorder=recorder)
     [reported] = await run_monitors(scores(0.4), context, before_step())
     assert reported.report.suspicion == 0.4
     assert reported.name == "scores" and reported.path == "scores"
@@ -198,7 +204,7 @@ async def test_a_single_monitor_is_recorded_and_returned() -> None:
 async def test_a_child_for_another_stage_is_skipped() -> None:
     recorder = ListRecorder()
     assert await run_monitors(
-        after_only(), runner_context(recorder=recorder), before_step()
+        after_only(), layer_context(recorder=recorder), before_step()
     ) == Observations([])
     assert recorder.records == []
 
@@ -207,7 +213,7 @@ async def test_a_child_for_another_stage_is_skipped() -> None:
 async def test_abstention_records_nothing() -> None:
     recorder = ListRecorder()
     assert await run_monitors(
-        abstains(), runner_context(recorder=recorder), before_step()
+        abstains(), layer_context(recorder=recorder), before_step()
     ) == Observations([])
     assert recorder.records == []
 
@@ -215,7 +221,7 @@ async def test_abstention_records_nothing() -> None:
 @pytest.mark.anyio
 async def test_a_mapping_key_names_the_child_and_extends_the_path() -> None:
     [reported] = await run_monitors(
-        {"judge": scores()}, runner_context(path="attempt"), before_step()
+        {"judge": scores()}, layer_context(path="attempt"), before_step()
     )
     assert (reported.name, reported.path) == ("judge", "attempt/judge")
 
@@ -223,7 +229,7 @@ async def test_a_mapping_key_names_the_child_and_extends_the_path() -> None:
 @pytest.mark.anyio
 async def test_child_context_is_derived_under_the_layer() -> None:
     [reported] = await run_protocols(
-        {"rule": records_path()}, runner_context(path="attempt"), before_step()
+        {"rule": records_path()}, layer_context(path="attempt"), before_step()
     )
     assert reported.report.explanation == "attempt/rule"
 
@@ -231,32 +237,32 @@ async def test_child_context_is_derived_under_the_layer() -> None:
 @pytest.mark.anyio
 async def test_run_monitors_rejects_a_single_protocol() -> None:
     with pytest.raises(TypeError, match="monitor"):
-        await run_monitors(cast(Any, decides()), runner_context(), before_step())
+        await run_monitors(cast(Any, decides()), layer_context(), before_step())
 
 
 @pytest.mark.anyio
-async def test_runner_requires_a_runner_context() -> None:
-    parent = runner_context()
+async def test_the_runner_rejects_a_context_it_did_not_build() -> None:
+    parent = layer_context()
     bare = Context(
         task=None,
         task_description=None,
         sample_id=None,
         epoch=None,
         sample_description=None,
-        input="p",
+        sample_input="p",
         metadata={},
         path="",
-        store=parent.store,
+        _store=Store(),
         host=parent.host,
     )
-    with pytest.raises(TypeError, match="RunnerContext"):
+    with pytest.raises(TypeError, match="constructed elsewhere"):
         await run_monitors(scores(), bare, before_step())
 
 
 @pytest.mark.anyio
 async def test_a_protocols_exception_propagates() -> None:
     with pytest.raises(RuntimeError, match="exploded"):
-        await run_protocols([raises()], runner_context(), before_step())
+        await run_protocols([raises()], layer_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -264,7 +270,7 @@ async def test_run_monitors_names_from_a_mapping_and_keeps_order() -> None:
     recorder = ListRecorder()
     observations = await run_monitors(
         {"low": scores(0.1), "high": scores(0.8)},
-        runner_context(recorder=recorder),
+        layer_context(recorder=recorder),
         before_step(),
     )
     assert [o.name for o in observations] == ["low", "high"]
@@ -277,7 +283,7 @@ async def test_run_monitors_records_reports_the_caller_ignores() -> None:
     recorder = ListRecorder()
     await run_monitors(
         {"a": scores(0.1), "b": abstains(), "c": scores(0.2)},
-        runner_context(recorder=recorder),
+        layer_context(recorder=recorder),
         before_step(),
     )
     assert len(recorder.records) == 2
@@ -286,7 +292,7 @@ async def test_run_monitors_records_reports_the_caller_ignores() -> None:
 @pytest.mark.anyio
 async def test_duplicate_names_in_a_layer_are_an_error() -> None:
     with pytest.raises(ValueError, match="scores"):
-        await run_monitors([scores(0.1), scores(0.2)], runner_context(), before_step())
+        await run_monitors([scores(0.1), scores(0.2)], layer_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -315,7 +321,7 @@ async def test_run_monitors_is_concurrent() -> None:
     with anyio.fail_after(5):
         observations = await run_monitors(
             {"a": waits_for_second(), "b": waits_for_first()},
-            runner_context(),
+            layer_context(),
             before_step(),
         )
     assert observations.max_suspicion() == 0.2
@@ -348,7 +354,7 @@ async def test_terminate_cancels_siblings() -> None:
     with anyio.fail_after(5):
         decisions = await run_protocols(
             {"slow": slow(), "stop": terminates()},
-            runner_context(recorder=recorder),
+            layer_context(recorder=recorder),
             before_step(),
         )
     strongest = decisions.strongest()
@@ -364,7 +370,7 @@ async def test_run_children_splits_by_kind() -> None:
     recorder = ListRecorder()
     reports = await run_children(
         {"m": scores(0.3), "p": decides("reject"), "skip": after_only()},
-        runner_context(recorder=recorder),
+        layer_context(recorder=recorder),
         before_step(),
     )
     assert reports.observations.max_suspicion() == 0.3
@@ -376,7 +382,7 @@ async def test_run_children_splits_by_kind() -> None:
 @pytest.mark.anyio
 async def test_run_children_unpacks_into_observations_and_decisions() -> None:
     reports = await run_children(
-        {"m": scores(0.3), "p": decides("reject")}, runner_context(), before_step()
+        {"m": scores(0.3), "p": decides("reject")}, layer_context(), before_step()
     )
     observations, decisions = reports
     assert observations == reports.observations
@@ -395,14 +401,14 @@ async def test_wrong_report_type_at_runtime_is_an_error() -> None:
 
     wrong = monitor(cast(Callable[[], Monitor], factory))()
     with pytest.raises(TypeError, match="must return Observation"):
-        await run_monitors(wrong, runner_context(), before_step())
+        await run_monitors(wrong, layer_context(), before_step())
 
 
 @pytest.mark.anyio
 async def test_sequence_children_are_named_by_registry_name() -> None:
     recorder = ListRecorder()
     observations = await run_monitors(
-        [scores(0.1), abstains()], runner_context(recorder=recorder), before_step()
+        [scores(0.1), abstains()], layer_context(recorder=recorder), before_step()
     )
     assert [o.name for o in observations] == ["scores"]
     assert [r.reported.path for r in recorder.records] == ["scores"]
@@ -417,7 +423,7 @@ async def test_run_children_keeps_configuration_order_per_family() -> None:
             "p2": decides("modify"),
             "m2": scores(0.2),
         },
-        runner_context(),
+        layer_context(),
         before_step(),
     )
     assert [o.name for o in reports.observations] == ["m1", "m2"]
@@ -427,14 +433,14 @@ async def test_run_children_keeps_configuration_order_per_family() -> None:
 @pytest.mark.anyio
 async def test_run_protocols_rejects_a_monitor() -> None:
     with pytest.raises(TypeError, match="protocol"):
-        await run_protocols(cast(Any, [scores()]), runner_context(), before_step())
+        await run_protocols(cast(Any, [scores()]), layer_context(), before_step())
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("name", ["", "a/b"])
 async def test_invalid_instance_names_are_rejected(name: str) -> None:
     with pytest.raises(ValueError, match="non-empty"):
-        await run_monitors({name: scores()}, runner_context(), before_step())
+        await run_monitors({name: scores()}, layer_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -443,7 +449,7 @@ async def test_wrong_kind_is_rejected_before_any_child_runs() -> None:
     with pytest.raises(TypeError, match="monitor"):
         await run_monitors(
             [scores(0.1), cast(Any, decides())],
-            runner_context(recorder=recorder),
+            layer_context(recorder=recorder),
             before_step(),
         )
     assert recorder.records == []
@@ -455,7 +461,7 @@ async def test_uncalled_factory_is_rejected_before_any_child_runs() -> None:
     with pytest.raises(TypeError, match="call it"):
         await run_protocols(
             {"a": decides(), "b": cast(Any, decides)},
-            runner_context(recorder=recorder),
+            layer_context(recorder=recorder),
             before_step(),
         )
     assert recorder.records == []
@@ -465,7 +471,7 @@ async def test_uncalled_factory_is_rejected_before_any_child_runs() -> None:
 async def test_iterators_are_rejected_rather_than_exhausted() -> None:
     with pytest.raises(TypeError, match="Mapping or a Sequence"):
         await run_protocols(
-            cast(Any, (p for p in [decides("reject")])), runner_context(), before_step()
+            cast(Any, (p for p in [decides("reject")])), layer_context(), before_step()
         )
 
 
@@ -494,7 +500,7 @@ async def test_a_raising_child_surfaces_while_a_sibling_is_mid_await() -> None:
     with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):
         await run_children(
             {"w": waits(), "e": explodes_after_start()},
-            runner_context(recorder=recorder),
+            layer_context(recorder=recorder),
             before_step(),
         )
     assert recorder.cancellations == [("w", "w")]
@@ -522,7 +528,7 @@ async def test_external_cancellation_propagates_through_the_runner() -> None:
         async def run() -> None:
             nonlocal completed
             await run_monitors(
-                [hangs()], runner_context(recorder=recorder), before_step()
+                [hangs()], layer_context(recorder=recorder), before_step()
             )
             completed = True
 
@@ -566,7 +572,7 @@ async def test_terminate_keeps_results_collected_before_it() -> None:
     with anyio.fail_after(5):
         reports = await run_children(
             {"quick": quick(), "slow": slow(), "stop": terminates()},
-            runner_context(),
+            layer_context(),
             before_step(),
         )
     assert [d.name for d in reports.decisions] == ["quick", "stop"]
@@ -575,7 +581,7 @@ async def test_terminate_keeps_results_collected_before_it() -> None:
 @pytest.mark.anyio
 async def test_sets_are_rejected_because_they_have_no_order() -> None:
     with pytest.raises(TypeError, match="Mapping or a Sequence"):
-        await run_monitors(cast(Any, {scores()}), runner_context(), before_step())
+        await run_monitors(cast(Any, {scores()}), layer_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -584,9 +590,9 @@ async def test_undecorated_function_in_a_sequence_gets_the_friendly_error() -> N
         return None
 
     with pytest.raises(TypeError, match="@monitor or @protocol"):
-        await run_monitors([cast(Any, plain)], runner_context(), before_step())
+        await run_monitors([cast(Any, plain)], layer_context(), before_step())
     with pytest.raises(TypeError, match="@monitor or @protocol"):
-        await run_monitors(cast(Any, plain), runner_context(), before_step())
+        await run_monitors(cast(Any, plain), layer_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -599,12 +605,12 @@ async def test_a_child_exception_keeps_its_own_cause() -> None:
         return decide
 
     with pytest.raises(RuntimeError, match="wrapped") as info:
-        await run_protocols([chained()], runner_context(), before_step())
+        await run_protocols([chained()], layer_context(), before_step())
     assert isinstance(info.value.__cause__, KeyError)
 
 
 class FailingRecorder(ListRecorder):
-    def cancelled(self, context: Context, step: Step, name: str) -> None:
+    def cancelled(self, context: Context, factory: str, step: Step, name: str) -> None:
         raise OSError("transcript unavailable")
 
 
@@ -632,7 +638,7 @@ async def test_a_recorder_failure_during_cancellation_fails_loud() -> None:
     with anyio.fail_after(5), pytest.raises(OSError, match="transcript unavailable"):
         await run_protocols(
             {"slow": slow(), "stop": terminates()},
-            runner_context(recorder=FailingRecorder()),
+            layer_context(recorder=FailingRecorder()),
             before_step(),
         )
 
@@ -669,7 +675,7 @@ async def test_terminate_cancels_monitors_at_their_next_await() -> None:
     with anyio.fail_after(5):
         reports = await run_children(
             {"quick": no_await(), "slow": hangs(), "stop": terminates()},
-            runner_context(recorder=recorder),
+            layer_context(recorder=recorder),
             before_step(),
         )
     assert [o.name for o in reports.observations] == ["quick"]
@@ -679,13 +685,13 @@ async def test_terminate_cancels_monitors_at_their_next_await() -> None:
 @pytest.mark.anyio
 async def test_invalid_name_is_rejected_even_when_the_stage_does_not_match() -> None:
     with pytest.raises(ValueError, match="non-empty"):
-        await run_monitors({"a/b": after_only()}, runner_context(), before_step())
+        await run_monitors({"a/b": after_only()}, layer_context(), before_step())
 
 
 @pytest.mark.anyio
 async def test_a_string_is_not_a_sequence_of_children() -> None:
     with pytest.raises(TypeError, match="Mapping or a Sequence"):
-        await run_monitors(cast(Any, "scores"), runner_context(), before_step())
+        await run_monitors(cast(Any, "scores"), layer_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -721,7 +727,7 @@ async def test_a_child_error_alongside_a_cancellation_surfaces_on_both_backends(
             try:
                 await run_protocols(
                     {"c": converts_cancellation(), "h": hangs_on()},
-                    runner_context(),
+                    layer_context(),
                     before_step(),
                 )
             except ValueError as ex:
@@ -737,7 +743,7 @@ async def test_a_child_error_alongside_a_cancellation_surfaces_on_both_backends(
 @pytest.mark.parametrize("key", [1, None])
 async def test_non_string_mapping_keys_are_a_configuration_error(key: Any) -> None:
     with pytest.raises(ValueError, match="non-empty string"):
-        await run_monitors(cast(Any, {key: scores()}), runner_context(), before_step())
+        await run_monitors(cast(Any, {key: scores()}), layer_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -761,7 +767,7 @@ async def test_packaged_children_are_named_without_the_package_prefix(
     assert registry_info(leaf).name == "acme/leaf"
     recorder = ListRecorder()
     observations = await run_monitors(
-        [leaf()], runner_context(recorder=recorder), before_step()
+        [leaf()], layer_context(recorder=recorder), before_step()
     )
     assert [o.name for o in observations] == ["leaf"]
     assert recorder.records[0].context.path == "leaf"
@@ -773,7 +779,7 @@ async def test_an_illegal_decision_fails_the_layer_that_returned_it() -> None:
     with pytest.raises(ValueError, match="rule") as info:
         await run_protocols(
             {"rule": decides("reject")},
-            runner_context(recorder=recorder),
+            layer_context(recorder=recorder),
             after_step(),
         )
     assert "already run" in str(info.value)
@@ -803,9 +809,9 @@ async def test_final_ends_the_step_past_every_layer_above() -> None:
 
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        decision = await run_root(
+        decision = await run_sentinel(
             wrapper(concurrent({"slow": slow(), "leaf": leaf()})),
-            runner_context(recorder=recorder),
+            host_context(recorder=recorder),
             before_step(),
         )
     assert decision == Decision.reject("a person said no")
@@ -822,7 +828,7 @@ async def test_a_final_propagating_below_the_root_is_not_yet_recorded() -> None:
     with pytest.raises(Final):
         await run_protocols(
             wrapper(finalizes("reject")),
-            runner_context(recorder=recorder),
+            layer_context(recorder=recorder),
             before_step(),
         )
     assert recorder.records == []
@@ -835,7 +841,7 @@ async def test_a_final_decision_illegal_for_the_stage_fails_the_protocol() -> No
     with pytest.raises(ValueError, match="'finalizes'") as info:
         await run_protocols(
             wrapper(finalizes("reject")),
-            runner_context(recorder=recorder),
+            layer_context(recorder=recorder),
             after_step(),
         )
     assert "already run" in str(info.value)
@@ -867,9 +873,9 @@ async def test_the_loser_of_a_final_race_is_recorded_as_superseded() -> None:
 
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        decision = await run_root(
+        decision = await run_sentinel(
             concurrent({"opens": opens(), "follows": follows()}),
-            runner_context(recorder=recorder),
+            host_context(recorder=recorder),
             before_step(),
         )
     assert decision is not None
@@ -911,7 +917,7 @@ async def test_an_error_beside_a_final_decision_is_not_hidden_by_it() -> None:
     with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):
         await run_children(
             {"opens": opens(), "explodes": explodes()},
-            runner_context(recorder=recorder),
+            layer_context(recorder=recorder),
             before_step(),
         )
     assert recorder.records == []
@@ -930,7 +936,7 @@ async def test_a_monitor_that_calls_final_is_a_bug() -> None:
     recorder = ListRecorder()
     with pytest.raises(TypeError, match="decides_instead"):
         await run_monitors(
-            [decides_instead()], runner_context(recorder=recorder), before_step()
+            [decides_instead()], layer_context(recorder=recorder), before_step()
         )
     assert recorder.records == []
 
@@ -968,8 +974,8 @@ async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -
 
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        decision = await run_root(
-            custom(), runner_context(recorder=recorder), before_step()
+        decision = await run_sentinel(
+            custom(), host_context(recorder=recorder), before_step()
         )
     assert decision == Decision.reject("fanned out")
     assert [(r.reported.path, r.reported.report) for r in recorder.records] == [
@@ -1015,8 +1021,8 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
 
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        decision = await run_root(
-            wrapper(custom()), runner_context(recorder=recorder), before_step()
+        decision = await run_sentinel(
+            wrapper(custom()), host_context(recorder=recorder), before_step()
         )
     assert decision is not None
     won = decision.explanation
@@ -1040,8 +1046,8 @@ async def test_a_final_propagating_through_a_monitor_names_the_protocol() -> Non
         return check
 
     recorder = ListRecorder()
-    decision = await run_root(
-        concurrent([consults()]), runner_context(recorder=recorder), before_step()
+    decision = await run_sentinel(
+        concurrent([consults()]), host_context(recorder=recorder), before_step()
     )
     assert decision is not None and decision.action == "reject"
     assert [r.reported.path for r in recorder.records] == ["consults/finalizes"]
@@ -1049,13 +1055,13 @@ async def test_a_final_propagating_through_a_monitor_names_the_protocol() -> Non
 
 
 @pytest.mark.anyio
-async def test_run_root_returns_a_final_decision_and_records_the_root_bypassed() -> (
+async def test_run_sentinel_returns_a_final_decision_and_records_the_root_bypassed() -> (
     None
 ):
     recorder = ListRecorder()
-    decision = await run_root(
+    decision = await run_sentinel(
         resolve_sentinel([finalizes("reject")]),
-        runner_context(recorder=recorder),
+        host_context(recorder=recorder),
         before_step(),
     )
     assert decision == Decision(action="reject")
@@ -1066,11 +1072,11 @@ async def test_run_root_returns_a_final_decision_and_records_the_root_bypassed()
 
 
 @pytest.mark.anyio
-async def test_run_root_records_the_roots_own_decision_at_the_empty_path() -> None:
+async def test_run_sentinel_records_the_roots_own_decision_at_the_empty_path() -> None:
     recorder = ListRecorder()
-    decision = await run_root(
+    decision = await run_sentinel(
         resolve_sentinel([decides("reject")]),
-        runner_context(recorder=recorder),
+        host_context(recorder=recorder),
         before_step(),
     )
     assert decision == Decision(action="reject")
@@ -1081,10 +1087,10 @@ async def test_run_root_records_the_roots_own_decision_at_the_empty_path() -> No
 
 
 @pytest.mark.anyio
-async def test_run_root_returns_an_escalate_with_nobody_to_hand_it_to() -> None:
+async def test_run_sentinel_returns_an_escalate_with_nobody_to_hand_it_to() -> None:
     recorder = ListRecorder()
-    decision = await run_root(
-        decides("escalate"), runner_context(recorder=recorder), before_step()
+    decision = await run_sentinel(
+        decides("escalate"), host_context(recorder=recorder), before_step()
     )
     assert decision == Decision(action="escalate")
     assert [(r.reported.name, r.reported.path) for r in recorder.records] == [
@@ -1093,7 +1099,7 @@ async def test_run_root_returns_an_escalate_with_nobody_to_hand_it_to() -> None:
 
 
 @pytest.mark.anyio
-async def test_run_root_checks_the_roots_decision_shape() -> None:
+async def test_run_sentinel_checks_the_roots_decision_shape() -> None:
     @protocol
     def illegal() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
@@ -1102,14 +1108,14 @@ async def test_run_root_checks_the_roots_decision_shape() -> None:
         return decide
 
     with pytest.raises(ValueError, match="'illegal'"):
-        await run_root(illegal(), runner_context(), before_step())
+        await run_sentinel(illegal(), host_context(), before_step())
 
 
 @pytest.mark.anyio
-async def test_run_root_needs_the_top_layer_context() -> None:
+async def test_run_sentinel_needs_the_top_layer_context() -> None:
     with pytest.raises(ValueError, match="path"):
-        await run_root(
-            resolve_sentinel([decides()]), runner_context(path="x"), before_step()
+        await run_sentinel(
+            resolve_sentinel([decides()]), host_context(path="x"), before_step()
         )
 
 
@@ -1138,7 +1144,7 @@ async def test_an_error_beside_a_protocols_own_final_in_its_task_group_surfaces(
         return decide
 
     with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):
-        await run_children([custom()], runner_context(), before_step())
+        await run_children([custom()], layer_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -1174,8 +1180,8 @@ async def test_an_error_beside_a_claimed_final_in_a_protocols_own_group_surfaces
 
     recorder = ListRecorder()
     with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):
-        await run_root(
-            wrapper(custom()), runner_context(recorder=recorder), before_step()
+        await run_sentinel(
+            wrapper(custom()), host_context(recorder=recorder), before_step()
         )
     assert recorder.records == []
     assert [r.reported.path for r in recorder.supersessions] == ["custom/leaf"]
@@ -1213,8 +1219,8 @@ async def test_an_illegal_own_final_supersedes_the_claimed_finals_beside_it() ->
 
     recorder = ListRecorder()
     with anyio.fail_after(5), pytest.raises(ValueError, match="'custom'"):
-        await run_root(
-            wrapper(custom()), runner_context(recorder=recorder), before_step()
+        await run_sentinel(
+            wrapper(custom()), host_context(recorder=recorder), before_step()
         )
     assert recorder.records == []
     assert [r.reported.path for r in recorder.supersessions] == ["custom/leaf"]
@@ -1251,8 +1257,8 @@ async def test_a_monitors_own_final_supersedes_the_claimed_finals_beside_it() ->
 
     recorder = ListRecorder()
     with anyio.fail_after(5), pytest.raises(TypeError, match="meddles"):
-        await run_root(
-            concurrent([meddles()]), runner_context(recorder=recorder), before_step()
+        await run_sentinel(
+            concurrent([meddles()]), host_context(recorder=recorder), before_step()
         )
     assert recorder.records == []
     assert [r.reported.path for r in recorder.supersessions] == ["meddles/leaf"]
@@ -1267,8 +1273,8 @@ async def test_a_terminate_outrun_by_a_siblings_final_is_superseded(
     if not terminate_first:
         children = {"f": children["f"], "t": children["t"]}
     recorder = ListRecorder()
-    decision = await run_root(
-        concurrent(children), runner_context(recorder=recorder), before_step()
+    decision = await run_sentinel(
+        concurrent(children), host_context(recorder=recorder), before_step()
     )
     assert decision == Decision(action="continue")
     recorded = sorted(r.reported.path for r in recorder.records)
@@ -1304,7 +1310,7 @@ async def test_an_ill_shaped_own_final_supersedes_nothing_it_made_itself(
 
     recorder = ListRecorder()
     with pytest.raises(ValueError, match="twice"):
-        await run_root(twice(), runner_context(recorder=recorder), after_step())
+        await run_sentinel(twice(), host_context(recorder=recorder), after_step())
     assert recorder.supersessions == []
     assert recorder.records == []
 
@@ -1321,7 +1327,7 @@ async def test_an_ill_shaped_own_final_supersedes_nothing_it_made_itself(
 async def test_run_monitors_takes_one_many_or_named(
     configure: Callable[[], Monitor | Monitors], expected: list[str]
 ) -> None:
-    observations = await run_monitors(configure(), runner_context(), before_step())
+    observations = await run_monitors(configure(), layer_context(), before_step())
     assert [o.name for o in observations] == expected
 
 
@@ -1337,7 +1343,7 @@ async def test_run_monitors_takes_one_many_or_named(
 async def test_run_protocols_takes_one_many_or_named(
     configure: Callable[[], Protocol | Protocols], expected: list[str]
 ) -> None:
-    decisions = await run_protocols(configure(), runner_context(), before_step())
+    decisions = await run_protocols(configure(), layer_context(), before_step())
     assert [d.name for d in decisions] == expected
 
 
@@ -1355,7 +1361,7 @@ async def test_run_children_takes_one_many_or_named(
     configure: Callable[[], Sentinels],
     expected: tuple[list[str], list[str]],
 ) -> None:
-    reports = await run_children(configure(), runner_context(), before_step())
+    reports = await run_children(configure(), layer_context(), before_step())
     assert (
         [o.name for o in reports.observations],
         [d.name for d in reports.decisions],
@@ -1367,7 +1373,7 @@ async def test_a_report_names_the_function_that_made_it() -> None:
     recorder = ListRecorder()
     reports = await run_children(
         {"m": scores(), "p": decides()},
-        runner_context(recorder=recorder),
+        layer_context(recorder=recorder),
         before_step(),
     )
     assert [o.function for o in reports.observations] == ["check"]
@@ -1378,9 +1384,9 @@ async def test_a_report_names_the_function_that_made_it() -> None:
 @pytest.mark.anyio
 async def test_a_final_decision_names_the_function_that_made_it() -> None:
     recorder = ListRecorder()
-    await run_root(
+    await run_sentinel(
         concurrent([finalizes("reject")]),
-        runner_context(recorder=recorder),
+        host_context(recorder=recorder),
         before_step(),
     )
     assert [(r.reported.path, r.reported.function) for r in recorder.records] == [
@@ -1408,7 +1414,7 @@ def paired() -> MonitorGroup:
 @pytest.mark.anyio
 async def test_a_groups_members_report_at_one_path_and_share_its_state() -> None:
     recorder = ListRecorder()
-    context = runner_context(recorder=recorder)
+    context = layer_context(recorder=recorder)
     group = paired()
     before = await run_monitors(group, context, before_step())
     after = await run_monitors(group, context, after_step())
@@ -1423,7 +1429,7 @@ async def test_a_groups_members_report_at_one_path_and_share_its_state() -> None
 
 @pytest.mark.anyio
 async def test_two_instances_of_a_group_keep_separate_state() -> None:
-    context = runner_context()
+    context = layer_context()
     group = {"a": paired(), "b": paired()}
     await run_monitors(group, context, before_step())
     observations = await run_monitors(group, context, before_step())
@@ -1448,7 +1454,7 @@ async def test_members_on_one_stage_report_in_factory_order() -> None:
 
     recorder = ListRecorder()
     reports = await run_children(
-        [twins(), decides()], runner_context(recorder=recorder), before_step()
+        [twins(), decides()], layer_context(recorder=recorder), before_step()
     )
     assert [(o.path, o.function) for o in reports.observations] == [
         ("twins", "second"),
@@ -1475,8 +1481,8 @@ async def test_a_group_member_calling_final_ends_the_step() -> None:
         return ProtocolGroup(screen, later)
 
     recorder = ListRecorder()
-    decision = await run_root(
-        concurrent([gatekeeper()]), runner_context(recorder=recorder), before_step()
+    decision = await run_sentinel(
+        concurrent([gatekeeper()]), host_context(recorder=recorder), before_step()
     )
     assert decision == Decision.reject("screened")
     assert ran == []
@@ -1514,7 +1520,7 @@ async def test_a_cancelled_group_is_recorded_once() -> None:
     with anyio.fail_after(5):
         reports = await run_children(
             {"g": quick_then_slow(), "stop": terminates()},
-            runner_context(recorder=recorder),
+            layer_context(recorder=recorder),
             before_step(),
         )
     assert [o.function for o in reports.observations] == ["quick"]
@@ -1538,7 +1544,7 @@ async def test_the_root_is_one_function() -> None:
         return ProtocolGroup(one, two)
 
     with pytest.raises(TypeError, match="root"):
-        await run_root(cast(Any, pair()), runner_context(), before_step())
+        await run_sentinel(cast(Any, pair()), host_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -1569,9 +1575,9 @@ async def test_a_members_terminate_stops_the_group() -> None:
 
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        decision = await run_root(
+        decision = await run_sentinel(
             concurrent({"g": stops(), "slow": slow()}),
-            runner_context(recorder=recorder),
+            host_context(recorder=recorder),
             before_step(),
         )
     assert decision == Decision.terminate()
@@ -1620,15 +1626,15 @@ async def test_a_group_members_error_names_its_function() -> None:
         TypeError,
         match=r"monitor 'bad_second' \(function 'wrong'\) returned a Decision",
     ):
-        await run_monitors(bad_second(), runner_context(), before_step())
+        await run_monitors(bad_second(), layer_context(), before_step())
     with pytest.raises(
         ValueError, match=r"protocol 'ill_shaped' \(function 'rejects'\)"
     ):
-        await run_protocols(ill_shaped(), runner_context(), after_step())
+        await run_protocols(ill_shaped(), layer_context(), after_step())
     with pytest.raises(
         TypeError, match=r"monitor 'meddles' \(function 'ends'\) called"
     ):
-        await run_monitors(meddles(), runner_context(), before_step())
+        await run_monitors(meddles(), layer_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -1661,17 +1667,16 @@ async def test_records_and_cancellations_name_the_factory_apart_from_the_instanc
     with anyio.fail_after(5):
         await run_children(
             {"watch": quick_then_slow(), "stop": terminates()},
-            runner_context(recorder=recorder),
+            layer_context(recorder=recorder),
             before_step(),
         )
     assert sorted(
-        (r.reported.name, r.reported.function, r.context.factory)
-        for r in recorder.records
+        (r.reported.name, r.reported.function, r.factory) for r in recorder.records
     ) == [
         ("stop", "decide", registry_info(terminates).name),
         ("watch", "quick", registry_info(quick_then_slow).name),
     ]
-    assert [(c.path, c.factory) for c in recorder.cancelled_contexts] == [
+    assert [(c.path, c.factory) for c in recorder.cancelled_instances] == [
         ("watch", registry_info(quick_then_slow).name)
     ]
 
@@ -1679,16 +1684,16 @@ async def test_records_and_cancellations_name_the_factory_apart_from_the_instanc
 @pytest.mark.anyio
 async def test_bypassed_and_root_records_name_the_factory() -> None:
     recorder = ListRecorder()
-    await run_root(
+    await run_sentinel(
         concurrent({"outer": wrapper(finalizes("reject"))}),
-        runner_context(recorder=recorder),
+        host_context(recorder=recorder),
         before_step(),
     )
-    assert [(c.path, c.factory) for c in recorder.bypassed_contexts] == [
+    assert [(c.path, c.factory) for c in recorder.bypassed_instances] == [
         ("outer", registry_info(wrapper).name),
         ("", "inspect_sentinel/concurrent"),
     ]
-    assert [(r.context.path, r.context.factory) for r in recorder.records] == [
+    assert [(r.context.path, r.factory) for r in recorder.records] == [
         ("outer/finalizes", registry_info(finalizes).name)
     ]
 
@@ -1696,14 +1701,12 @@ async def test_bypassed_and_root_records_name_the_factory() -> None:
 @pytest.mark.anyio
 async def test_the_roots_own_decision_names_its_factory() -> None:
     recorder = ListRecorder()
-    await run_root(
+    await run_sentinel(
         resolve_sentinel({"rule": decides("reject")}),
-        runner_context(recorder=recorder),
+        host_context(recorder=recorder),
         before_step(),
     )
-    assert [
-        (r.reported.name, r.context.path, r.context.factory) for r in recorder.records
-    ] == [
+    assert [(r.reported.name, r.context.path, r.factory) for r in recorder.records] == [
         ("rule", "rule", registry_info(decides).name),
         ("concurrent", "", "inspect_sentinel/concurrent"),
     ]
@@ -1735,24 +1738,24 @@ async def test_superseded_decisions_name_the_factory() -> None:
     factories = {"a": registry_info(opens).name, "b": registry_info(follows).name}
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        await run_root(
+        await run_sentinel(
             concurrent({"a": opens(), "b": follows()}),
-            runner_context(recorder=recorder),
+            host_context(recorder=recorder),
             before_step(),
         )
     [lost] = recorder.supersessions
-    assert lost.context.factory == factories[lost.reported.name]
+    assert lost.factory == factories[lost.reported.name]
 
 
 @pytest.mark.anyio
 async def test_a_terminate_superseded_by_a_final_names_its_factory() -> None:
     recorder = ListRecorder()
-    await run_root(
+    await run_sentinel(
         concurrent({"t": decides("terminate"), "f": finalizes("continue")}),
-        runner_context(recorder=recorder),
+        host_context(recorder=recorder),
         before_step(),
     )
-    assert [(r.context.path, r.context.factory) for r in recorder.supersessions] == [
+    assert [(r.context.path, r.factory) for r in recorder.supersessions] == [
         ("t", registry_info(decides).name)
     ]
-    assert recorder.cancelled_contexts == []
+    assert recorder.cancelled_instances == []
