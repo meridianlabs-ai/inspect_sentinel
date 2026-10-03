@@ -308,12 +308,13 @@ async def _run_child(
         child_name = validate_instance_name(
             name if name is not None else registry_unqualified_name(info)
         )
+    child_context = context if root else _child_context(context, child_name)
+    # registered before the stage filter, so a path conflict fails at every stage
+    enter_layer(child_context.path, info.name)
     grouped = isinstance(child, Group)
     running = [m for m in members(child) if isinstance(step, tuple(m.accepted))]
     if not running:
         return
-    child_context = context if root else _child_context(context, child_name)
-    enter_layer(child_context.path, info.name)
     recorder = layer(child_context, "The runner").recorder
     try:
         # sequential, since a group's members share one store

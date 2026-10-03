@@ -293,8 +293,11 @@ def runs_twice(first: Monitor, second: Monitor) -> Protocol:
 
 
 @pytest.mark.anyio
-async def test_two_factories_under_one_path_in_a_step_is_an_error() -> None:
-    root = runs_twice(scores(), abstains())
+@pytest.mark.parametrize("second", [abstains, after_only])
+async def test_two_factories_under_one_path_in_a_step_is_an_error(
+    second: Callable[[], Monitor],
+) -> None:
+    root = runs_twice(scores(), second())
     with pytest.raises(ValueError, match="'judge' already ran"):
         await run_sentinel(root, host_context(), before_step())
     recorder = ListRecorder()
@@ -363,6 +366,60 @@ async def test_a_protocols_own_task_group_can_run_children() -> None:
         before_step(),
     )
     assert sorted(r.context.path for r in recorder.records) == ["", "p/x", "p/y"]
+
+
+@monitor
+def nests_a_step() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        await run_sentinel(
+            wrapper(cast(Any, {"inner": decides()})), host_context(), step
+        )
+        return Observation.score(0.1)
+
+    return check
+
+
+@protocol
+def runs_after_a_nested_step() -> Protocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        await run_monitors({"n": nests_a_step()}, context, step)
+        await run_monitors({"after": scores()}, context, step)
+        return None
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_nested_step_leaves_the_outer_step_running() -> None:
+    recorder = ListRecorder()
+    await run_sentinel(
+        runs_after_a_nested_step(), host_context(recorder=recorder), before_step()
+    )
+    assert [r.context.path for r in recorder.records] == ["n", "after"]
+
+
+@protocol
+def waits_forever() -> Protocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        await anyio.sleep_forever()
+        return None
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_the_step_ends_when_run_sentinel_raises_or_is_cancelled() -> None:
+    kept: list[Context] = []
+    with pytest.raises(RuntimeError, match="exploded"):
+        await run_sentinel(
+            wrapper(cast(Any, {"k": keeps_context(kept), "r": raises()})),
+            host_context(),
+            before_step(),
+        )
+    with anyio.move_on_after(0.01):
+        await run_sentinel(waits_forever(), host_context(), before_step())
+    with pytest.raises(RuntimeError, match="outside a step"):
+        kept[0].store_as(Sample)
 
 
 class Sample(StoreModel):
