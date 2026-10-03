@@ -36,9 +36,9 @@ A rule usually reads a tool call as text and looks for something in it. These fu
 | `call_text(call)` | The call's text whichever tool it is: `bash()`'s `command`, `python()`'s `code`, `text_editor()`'s path and text, and so on; for any other tool, its string arguments. |
 | `tool_matches(call, *patterns)` | Whether the tool's name matches a glob, as an approval policy's `tools` do: `"bash"` also matches `bash_session`, and `"web_browser*"` every browser tool. |
 | `find_words(text, words)` | The words that appear in the text as whole words, in the order they appear, so an explanation can name them. `rm` does not match `platform`; `-delete` and `pip install` work as written. |
-| `paths_in(call)` | The paths a call names: a file tool's path arguments, and absolute and `~/` paths in `bash()` and `python()` code. Best effort. |
+| `paths_in(call)` | The paths a call names: a file tool's path arguments, and absolute and `~/` paths in the code of `bash()`, `bash_session()`, `python()` and `code_execution()`. Best effort. |
 | `path_matches(path, patterns, cwd=None, home=None)` | Whether a path matches a glob once `..`, `.` and repeated slashes are resolved, so `/work/../etc/passwd` matches `/etc/**`. Wildcards match dotfiles but never a `..`. |
-| `path_resolves(path, cwd=None, home=None)` | Whether a path resolves without a `..` left over, as `~/../etc` does not when `home` is not given. |
+| `path_resolves(path, cwd=None, home=None)` | Whether a path resolves to an absolute or `~/` path, as `passwd` does not without `cwd`, nor `~/../etc` without `home`. |
 | `result_text(step)` | After a call: its result as text, or `Error (<type>): <message>` when it failed. |
 
 For example, a rule that keeps file tools and commands out of protected directories:
@@ -71,7 +71,7 @@ def protected_paths() -> Protocol:
     return decide
 ```
 
-`cwd` resolves relative paths, such as `text_editor()`'s, against the agent's working directory, and `home` expands `~` in paths and patterns alike, so `~/.ssh/**` here also matches `/root/.ssh/id_rsa`. Without `home`, `~` is kept as written: `~/x` matches only `~/` patterns, and a path that climbs out of `~` (`~/../etc`) cannot be resolved and matches no pattern with a wildcard. A rule that denies, as this one does, should then also reject the paths that `path_resolves()` says it cannot resolve; with `home` and an absolute `cwd`, as here, every path resolves.
+`cwd` resolves relative paths, such as `text_editor()`'s, against the agent's working directory, and `home` expands `~` in paths and patterns alike, so `~/.ssh/**` here also matches `/root/.ssh/id_rsa`. Patterns are not joined to `cwd`, so write them absolute or begin them with `**/`. Without `home`, `~` is kept as written: `~/x` matches only `~/` patterns, and a path that climbs out of `~` (`~/../etc`) cannot be resolved and matches no pattern with a wildcard; nor can a relative path without `cwd`. A rule that denies, as this one does, should then also reject the paths that `path_resolves()` says it cannot place; with `home` and an absolute `cwd`, as here, every path resolves.
 
 To unit-test a rule, `before_tool_call()` and `after_tool_call()` build the steps to pass to its function, without running an agent:
 

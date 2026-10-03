@@ -85,10 +85,21 @@ def test_paths_in(call: ToolCall, expected: list[str]) -> None:
     assert paths_in(call) == expected
 
 
-def test_a_wildcard_found_in_a_command_is_compared_as_text() -> None:
-    [path] = paths_in(_bash("cat /etc/pass*"))
-    assert not path_matches(path, ["/etc/passwd"])
-    assert path_matches(path, ["/etc/**"])
+@pytest.mark.parametrize(
+    "command, matches",
+    [
+        ("cat /etc/pass*", True),
+        ("cat /e?c/passwd", False),
+        ("cat /e*/shadow", False),
+        ("cat /[e]tc/passwd", False),
+    ],
+)
+def test_a_wildcard_found_in_a_command_is_compared_as_text(
+    command: str, matches: bool
+) -> None:
+    [path] = paths_in(_bash(command))
+    assert not path_matches(path, ["/etc/passwd", "/etc/shadow"])
+    assert path_matches(path, ["/etc/**"]) is matches
 
 
 @pytest.mark.parametrize(
@@ -155,6 +166,18 @@ def test_a_wildcard_found_in_a_command_is_compared_as_text() -> None:
         ("/", ["/."], None, True),
         ("", ["."], None, True),
         ("", ["./"], None, True),
+        # `..` in a pattern resolves after a segment without wildcards
+        ("/etc/passwd", ["/work/../etc/**"], None, True),
+        ("/etc/passwd", ["/a/b/../../etc/passwd"], None, True),
+        ("/etc", ["/../etc"], None, True),
+        ("/etc", ["/a/../../etc"], None, True),
+        ("/etc/passwd", ["/*/../etc/passwd"], None, False),
+        ("/etc/passwd", ["/**/../etc/passwd"], None, False),
+        ("/etc/passwd", ["/[w]/../etc/passwd"], None, False),
+        ("/x/../etc", ["/*/../etc"], None, False),
+        ("a/../../etc", ["../etc"], None, True),
+        ("../etc", ["a/../../etc"], None, True),
+        ("../../etc", ["../../etc"], None, True),
         # root
         ("/", ["/"], None, True),
         ("/a", ["/"], None, False),
@@ -173,6 +196,8 @@ def test_a_wildcard_found_in_a_command_is_compared_as_text() -> None:
         ("w/f.py", ["/work/**"], "/work", True),
         ("f.py", ["*.py"], None, True),
         ("f.py", ["*.py"], "/work", False),
+        ("secrets/k", ["secrets/**"], "/work", False),
+        ("secrets/k", ["**/secrets/**"], "/work", True),
         ("f.py", ["/work/*.py"], "/work", True),
         ("f.py", ["/work/f.py"], "/work/", True),
         ("f.py", ["/work/f.py"], "/work/./sub/..", True),
@@ -306,6 +331,11 @@ def test_path_matches(
         ("~user/x", ["/root/**"], None, "/root", False),
         ("~user/x", ["/w/~user/x"], "/w", "/root", True),
         ("x/~/y", ["/w/x/~/y"], "/w", "/root", True),
+        ("~/.ssh/id", ["~/.ssh/**"], None, "/home/u/../u", True),
+        ("~/.ssh/id", ["/home/u/.ssh/**"], None, "/home/u/../u", True),
+        ("/home/u/.ssh/id", ["~/.ssh/**"], None, "/home/./u/", True),
+        ("/x", ["~/x"], None, "/root/..", True),
+        ("~/x", ["/x"], None, "//", True),
     ],
 )
 def test_path_matches_with_home(
@@ -333,8 +363,15 @@ def test_home_must_be_absolute(home: str) -> None:
         ("~/../etc", None, None, False),
         ("~/a/../../etc", None, None, False),
         ("~/../etc", None, "/root", True),
-        ("a/b", None, None, True),
-        ("a/../b", None, None, True),
+        ("a/b", None, None, False),
+        ("a/b", "/w", None, True),
+        ("a/../b", None, None, False),
+        ("a/../b", "/w", None, True),
+        ("passwd", None, None, False),
+        ("~root/.ssh/id", None, None, False),
+        ("~root/.ssh/id", "/w", None, True),
+        ("~root/.ssh/id", None, "/root", False),
+        ("../etc/passwd", "work", None, False),
         ("..", None, None, False),
         ("../etc", None, None, False),
         ("a/../../etc", None, None, False),
@@ -344,8 +381,10 @@ def test_home_must_be_absolute(home: str) -> None:
         ("../etc", "~/w", None, True),
         ("../etc", "~", "/root", True),
         ("/a/..b", None, None, True),
-        ("..b/c", None, None, True),
-        ("", None, None, True),
+        ("..b/c", None, None, False),
+        ("..b/c", "/w", None, True),
+        ("", None, None, False),
+        ("", "/w", None, True),
     ],
 )
 def test_path_resolves(
@@ -366,6 +405,9 @@ def test_a_deny_list_rejects_paths_it_cannot_resolve() -> None:
     assert not allowed("~/.ssh/id_rsa")
     assert not allowed("~/../etc/passwd")
     assert not allowed("../etc/passwd")
+    assert not allowed("passwd")
+    assert not allowed("etc/passwd")
+    assert not allowed("~root/.ssh/id")
 
 
 # Properties. A path is built from segments; `_SEGMENT` holds no `.` or `..`.
@@ -471,22 +513,22 @@ def test_a_home_path_resolves_into_home_or_not_at_all(
 
 
 @_PROPERTY_SETTINGS
-@given(
-    st.lists(_PART, max_size=8), st.lists(_SEGMENT, min_size=1, max_size=3), _SEGMENT
-)
+@given(st.lists(_PART, max_size=8), st.lists(_PART, max_size=4), _SEGMENT)
 def test_home_resolves_a_home_path_as_an_absolute_one(
-    parts: list[str], home_parts: list[str], root: str
+    parts: list[str], home_written: list[str], root: str
 ) -> None:
-    home = "/" + "/".join(home_parts)
+    home = "/" + "/".join(home_written)
+    home_parts = _resolve(home_written, [])
     path = "~/" + "/".join(parts)
     resolved = _resolve(parts, home_parts)
     assert path_resolves(path, home=home)
     assert path_matches(path, [f"/{escape(root)}/**"], home=home) == (
         resolved[:1] == [root]
     )
-    assert path_matches(path, [escape(home) + "/**"], home=home) == (
-        resolved[: len(home_parts)] == home_parts
-    )
+    under_home = resolved[: len(home_parts)] == home_parts
+    assert path_matches(path, ["~/**"], home=home) == under_home
+    clean_home = "/" + "/".join(escape(part) for part in home_parts)
+    assert path_matches(path, [clean_home + "/**"], home=home) == under_home
 
 
 @_PROPERTY_SETTINGS
@@ -494,7 +536,8 @@ def test_home_resolves_a_home_path_as_an_absolute_one(
 def test_a_relative_path_that_climbs_out_matches_no_wildcard(parts: list[str]) -> None:
     path = "/".join(parts)
     climbs_out = _climbs_out(parts)
-    assert path_resolves(path) is not climbs_out
+    assert not path_resolves(path)
+    assert path_resolves(path, cwd="/w")
     if climbs_out:
         assert not path_matches(path, ["**", "/**", "*/**", "~/**"])
 
