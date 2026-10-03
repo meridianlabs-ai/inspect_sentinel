@@ -89,7 +89,7 @@ def message_as_str(
 def call_as_str(call: ToolCall) -> str:
     """Render a tool call as text, in the form of a Python call.
 
-    For example, `bash(command="ls -la /etc", timeout=30)`. String arguments are double-quoted, with double quotes and backslashes escaped and newlines kept, so a multi-line script stays readable; other arguments are rendered as JSON, falling back to `str()` for values JSON cannot represent. When the model's arguments could not be parsed, the parse error follows the call.
+    For example, `bash(command="ls -la /etc", timeout=30)`. String arguments are double-quoted, with double quotes and backslashes escaped and newlines kept, so a multi-line script stays readable; other arguments are rendered as JSON, with values JSON cannot represent rendered by `str()` (e.g. a date) or, when that fails too (e.g. non-string keys or a circular reference), by `repr()` with line breaks escaped. An argument name that is not a Python identifier is written as `**{"name": value}`. When the model's arguments could not be parsed, they are shown as `bash(<arguments did not parse>)`; the parse error is in the tool message that follows.
 
     Args:
         call: The call to render, e.g. `step.call`.
@@ -97,13 +97,15 @@ def call_as_str(call: ToolCall) -> str:
     Returns:
         The call as one string.
     """
-    arguments = ", ".join(
-        f"{name}={_argument_as_str(value)}" for name, value in call.arguments.items()
-    )
-    rendered = f"{call.function}({arguments})"
     if call.parse_error:
-        rendered += f" [parse error: {call.parse_error}]"
-    return rendered
+        return f"{call.function}(<arguments did not parse>)"
+    arguments = ", ".join(
+        f"{name}={_argument_as_str(value)}"
+        if name.isidentifier()
+        else f"**{{{json.dumps(name, ensure_ascii=False)}: {_argument_as_str(value)}}}"
+        for name, value in call.arguments.items()
+    )
+    return f"{call.function}({arguments})"
 
 
 def last_turns(messages: Sequence[ChatMessage], n: int) -> list[ChatMessage]:
@@ -193,4 +195,7 @@ def _content_as_str(
 def _argument_as_str(value: Any) -> str:
     if isinstance(value, str):
         return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return json.dumps(value, ensure_ascii=False, default=str)
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return "\\n".join(repr(value).splitlines())

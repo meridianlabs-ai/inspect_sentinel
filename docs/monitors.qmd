@@ -45,7 +45,7 @@ Tool Call: bash(command="tail -n +2 data.csv | wc -l")
 | `call_as_str(call)` | a call as `bash(command="ls", timeout=30)` |
 | `last_turns(messages, n)` | not text: the messages of the last `n` turns, to pass to `messages_as_str()` |
 
-The format is Inspect Scout's, so a monitor prompt reads like a scanner prompt. Everything these render came from the agent or its tools, and message content is not delimited, so it can imitate a role header or a tool call: put it in the prompt as data to judge, apart from your instructions.
+The format follows Inspect Scout's, except that a tool call is rendered on one line, so a monitor prompt reads like a scanner prompt. Everything these render came from the agent or its tools, and message content is not delimited, so it can imitate a role header or a tool call: put it in the prompt as data to judge, apart from your instructions.
 
 ## Planned Sections
 
