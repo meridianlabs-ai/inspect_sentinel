@@ -16,6 +16,7 @@ from wcmatch.glob import (
     NODOTDIR,
     escape,
     globmatch,
+    is_magic,
 )
 
 from ._step import AfterToolCall, BeforeToolCall
@@ -234,7 +235,7 @@ def paths_in(call: ToolCall) -> list[str]:
 
     Two sources, in this order: the path arguments of inspect_ai's built-in file tools (`text_editor()`'s and `list_files()`'s `path`, `memory()`'s `path`, `old_path` and `new_path`, `read_file()`'s `file_path`, `grep()`'s `path`); and, in the text of `bash()`, `bash_session()`, `python()` and `code_execution()` calls, tokens that begin with `/` or `~/`, or are `~` alone, ending at whitespace, quotes or shell punctuation.
 
-    It misses some paths and misreads others. Not found: relative paths in commands (`cat a/b`, `./x`), `~user` paths, paths glued to an option (`-f/x`), paths built from variables or substitutions (`$HOME/x`, `${HOME}/x`, `$(pwd)/x`), paths inside URLs (`file:///etc/passwd`), and paths in the arguments of any other tool. Misread: a quoted path with a space is cut at the space (`"/a b"` as `/a`), a quoted variable followed by a path is found as its tail (`"$HOME"/x` as `/x`), a `/` or `//` used as an operator is found as a path, and a shell wildcard is kept as written (`/etc/pass*`), which `path_matches()` then compares as literal text, so it does not match `/etc/passwd`.
+    It misses some paths and misreads others. Not found: relative paths in commands (`cat a/b`, `./x`), `~user` paths, paths glued to an option (`-f/x`), paths built from variables or substitutions (`$HOME/x`, `${HOME}/x`, `$(pwd)/x`), paths inside URLs (`file:///etc/passwd`), and paths in the arguments of any other tool. Misread: a quoted path with a space is cut at the space (`"/a b"` as `/a`), a quoted variable followed by a path is found as its tail (`"$HOME"/x` as `/x`), a `/` or `//` used as an operator is found as a path, and a shell wildcard is kept as written (`/etc/pass*`, `/e?c/passwd`), which `path_matches()` then compares as literal text, so it does not match `/etc/passwd`, and a wildcard in a directory (`/e*/passwd`) gets past `/etc/**` too.
 
     Args:
         call: The tool call.
@@ -261,11 +262,11 @@ def path_matches(
 ) -> bool:
     r"""Whether a path, once normalised, matches any of the glob patterns.
 
-    The path is normalised first, by its text alone (symlinks are not followed): repeated slashes collapse, and `.` and `..` resolve, so `/work/../etc/passwd` is `/etc/passwd` and `/..` is `/`. A relative path is joined to `cwd` when given. With `home`, a leading `~` is replaced by it, in the path, in `cwd` and in each pattern, so `~/.ssh/**` matches `/root/.ssh/id_rsa` when `home="/root"`. Without `home`, `~` is kept as written: `~/x` matches `~/**` and not `/root/**`. `~user` is never expanded.
+    The path is normalised first, by its text alone (symlinks are not followed): repeated slashes collapse, and `.` and `..` resolve, so `/work/../etc/passwd` is `/etc/passwd` and `/..` is `/`. A relative path is joined to `cwd` when given. With `home`, a leading `~` is replaced by it, in the path, in `cwd` and in each pattern, so `~/.ssh/**` matches `/root/.ssh/id_rsa` when `home="/root"`. Without `home`, `~` is kept as written: `~/x` matches `~/**` and not `/root/**`. `~user` is never expanded. Patterns are not joined to `cwd`: a relative pattern such as `secrets/**` matches only a relative path, so with `cwd` write patterns absolute, or begin them with `**/`.
 
-    A path can keep a `..` after normalising: a relative one without `cwd` (`../etc`), or one that climbs out of `~` without `home` (`~/../etc`). Wildcards never match a `.` or `..` segment, so such a path matches only a pattern that spells its `..` segments out, never `/etc/**`, `~/**` or `**`. An allow-list therefore rejects it. A deny-list would let it through, so a rule that denies should also reject paths that `path_resolves()` cannot resolve, or pass `home` and an absolute `cwd`, with which every path resolves.
+    A path can keep a `..` after normalising: a relative one without `cwd` (`../etc`), or one that climbs out of `~` without `home` (`~/../etc`). Wildcards never match a `.` or `..` segment, so such a path matches only a pattern that spells its `..` segments out, never `/etc/**`, `~/**` or `**`. An allow-list therefore rejects it. A deny-list would let it through, so a rule that denies should also reject paths that `path_resolves()` cannot place, which includes every relative path when `cwd` is not given, or pass `home` and an absolute `cwd`, with which every path resolves.
 
-    Patterns are globs: `*` matches any characters within one segment, `?` one character other than `/`, `[seq]` and `[!seq]` one character in or not in `seq`, and `\` escapes the next character. All of these match a leading `.`, so `/home/*/.ssh` and `/etc/*` see dotfiles. `**` as a whole segment matches any number of segments, and a pattern ending in `/**` also matches the directory itself: `"/etc/**"` matches `/etc` and everything under it, and `"**/*.env"` matches `.env` files anywhere, absolute paths included. Matching is case-sensitive. Braces and `!` at the start of a pattern have no special meaning. A pattern's repeated and trailing slashes and its `.` segments are removed; its `..` segments are kept.
+    Patterns are globs: `*` matches any characters within one segment, `?` one character other than `/`, `[seq]` one character in `seq` (ranges such as `a-z` and POSIX classes such as `[:alpha:]` included), `[!seq]` or `[^seq]` one character not in it, and `\` escapes the next character. All of these match a leading `.`, so `/home/*/.ssh` and `/etc/*` see dotfiles. `**` as a whole segment matches any number of segments, and a pattern ending in `/**` also matches the directory itself: `"/etc/**"` matches `/etc` and everything under it, and `"**/*.env"` matches `.env` files anywhere, absolute paths included. Matching is case-sensitive. Braces and `!` at the start of a pattern have no special meaning. A pattern is normalised too: repeated and trailing slashes and `.` segments are removed, and a `..` resolves against the segment before it when that segment has no wildcard (`/work/../etc/**` is `/etc/**`); other `..` segments are kept.
 
     Args:
         path: The path, such as one from `paths_in()`.
@@ -279,6 +280,7 @@ def path_matches(
     Raises:
         ValueError: If `home` is not an absolute path.
     """
+    home = _resolve_home(home)
     normalized = _normalize(path, cwd, home)
     return any(
         globmatch(normalized, form, flags=_GLOB_FLAGS)
@@ -290,9 +292,9 @@ def path_matches(
 def path_resolves(
     path: str, *, cwd: str | None = None, home: str | None = None
 ) -> bool:
-    """Whether a path normalises to one without a `..` segment.
+    """Whether a path normalises to a place: an absolute path, or one under `~`, with no `..` left.
 
-    The path is normalised as `path_matches()` does. One that keeps a `..`, such as `../etc` without `cwd` or `~/../etc` without `home`, cannot be placed: it matches only a pattern that spells its `..` segments out. A rule that denies paths should reject these too:
+    The path is normalised as `path_matches()` does. It cannot be placed when it is relative and there is no `cwd` (`passwd`, `../etc`, `~user/x`), or when it climbs out of `~` and there is no `home` (`~/../etc`). Such a path matches no absolute or `~/` pattern, so a rule that denies paths should reject these too:
 
     ```python
     if not path_resolves(path) or path_matches(path, DENIED):
@@ -305,12 +307,14 @@ def path_resolves(
         home: The agent's home directory, an absolute path, to expand `~` to.
 
     Returns:
-        True if no `..` segment is left.
+        True if the path is absolute or under `~` once normalised, with no `..` segment.
 
     Raises:
         ValueError: If `home` is not an absolute path.
     """
-    return ".." not in _normalize(path, cwd, home).split("/")
+    normalized = _normalize(path, cwd, _resolve_home(home))
+    anchored = normalized.startswith("/") or _is_home(normalized)
+    return anchored and ".." not in normalized.split("/")
 
 
 _GLOB_FLAGS = GLOBSTAR | DOTGLOB | NODOTDIR | FORCEUNIX | CASE
@@ -319,13 +323,37 @@ _GLOB_FLAGS = GLOBSTAR | DOTGLOB | NODOTDIR | FORCEUNIX | CASE
 def _pattern_forms(pattern: str, home: str | None) -> Iterable[str]:
     if home is not None:
         pattern = _expand_home(pattern, escape(home))
-    segments = [segment for segment in pattern.split("/") if segment not in ("", ".")]
     anchor = "/" if pattern.startswith("/") else ""
+    segments: list[str] = []
+    for segment in pattern.split("/"):
+        if segment in ("", "."):
+            continue
+        if segment == ".." and (anchor or segments) and _resolvable(segments):
+            segments = segments[:-1]
+        else:
+            segments.append(segment)
     pattern = anchor + "/".join(segments) or ("." if pattern else "")
     yield pattern
     while pattern.endswith("/**"):
         pattern = pattern[:-3] or "/"
         yield pattern
+
+
+def _resolvable(segments: list[str]) -> bool:
+    if not segments:
+        return True
+    last = segments[-1]
+    if last == ".." or (last == "~" and len(segments) == 1):
+        return False
+    return not is_magic(last, flags=_GLOB_FLAGS)
+
+
+def _resolve_home(home: str | None) -> str | None:
+    if home is None:
+        return None
+    if not home.startswith("/"):
+        raise ValueError(f"home must be an absolute path, not {home!r}")
+    return posixpath.normpath(_collapse(home))
 
 
 def _collapse(path: str) -> str:
@@ -342,8 +370,6 @@ def _expand_home(path: str, home: str) -> str:
 
 def _normalize(path: str, cwd: str | None, home: str | None) -> str:
     if home is not None:
-        if not home.startswith("/"):
-            raise ValueError(f"home must be an absolute path, not {home!r}")
         path = _expand_home(path, home)
         cwd = None if cwd is None else _expand_home(cwd, home)
     if cwd is not None and not (path.startswith("/") or _is_home(path)):
