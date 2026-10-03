@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 from inspect_ai.model import (
     ChatMessage,
@@ -59,6 +61,14 @@ def _tool(call: ToolCall, text: str) -> ChatMessageTool:
 )
 def test_call_as_str(call: ToolCall, expected: str) -> None:
     assert call_as_str(call) == expected
+
+
+def test_call_as_str_unusual_arguments() -> None:
+    assert call_as_str(_call(when=date(2026, 10, 3))) == 'bash(when="2026-10-03")'
+    malformed = ToolCall(
+        id="c1", function="bash", arguments={}, parse_error="invalid JSON"
+    )
+    assert call_as_str(malformed) == "bash() [parse error: invalid JSON]"
 
 
 LS = _call(command="ls")

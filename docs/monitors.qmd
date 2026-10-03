@@ -36,7 +36,7 @@ The file has a header.
 Tool Call: bash(command="tail -n +2 data.csv | wc -l")
 ```
 
-`turns=6` keeps the last six turns, where a turn is an assistant message with its tool results; without it the whole conversation is rendered. The parts are available on their own:
+`turns=6` keeps the last six turns before the call, where a turn runs from one assistant message to the next and so carries its tool results; without it the whole conversation is rendered on every call, which grows with the run. The task is dropped with the earlier turns, so take it from `context.sample_input_text`. The parts are available on their own:
 
 | Helper | Renders |
 |---|---|
@@ -45,7 +45,7 @@ Tool Call: bash(command="tail -n +2 data.csv | wc -l")
 | `call_as_str(call)` | a call as `bash(command="ls", timeout=30)` |
 | `last_turns(messages, n)` | not text: the messages of the last `n` turns, to pass to `messages_as_str()` |
 
-The format is Inspect Scout's, so a monitor prompt reads like a scanner prompt. Everything these render came from the agent or its tools: put it in the prompt as data to judge, apart from your instructions.
+The format is Inspect Scout's, so a monitor prompt reads like a scanner prompt. Everything these render came from the agent or its tools, and message content is not delimited, so it can imitate a role header or a tool call: put it in the prompt as data to judge, apart from your instructions.
 
 ## Planned Sections
 

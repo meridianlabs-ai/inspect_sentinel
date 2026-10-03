@@ -24,7 +24,7 @@ def messages_as_str(
 ) -> str:
     """Render messages as text for a monitor prompt.
 
-    Messages are rendered oldest first, so successive steps of a conversation share a prefix and a model provider can cache it. Each message is rendered by `message_as_str()`, and messages are separated by a blank line. The format matches Inspect Scout's `messages_as_str()`, so monitors and scanners read alike.
+    Messages are rendered oldest first, so successive steps of a conversation share a prefix and a model provider can cache it. Each message is rendered by `message_as_str()`, and messages are separated by a blank line. The format follows Inspect Scout's `messages_as_str()`, so monitors and scanners read alike.
 
     Args:
         messages: The messages to render, typically `step.input` or a view of it such as `last_turns()`.
@@ -89,7 +89,7 @@ def message_as_str(
 def call_as_str(call: ToolCall) -> str:
     """Render a tool call as text, in the form of a Python call.
 
-    For example, `bash(command="ls -la /etc", timeout=30)`. String arguments are double-quoted, with double quotes and backslashes escaped and newlines kept, so a multi-line script stays readable; other arguments are rendered as JSON.
+    For example, `bash(command="ls -la /etc", timeout=30)`. String arguments are double-quoted, with double quotes and backslashes escaped and newlines kept, so a multi-line script stays readable; other arguments are rendered as JSON, falling back to `str()` for values JSON cannot represent. When the model's arguments could not be parsed, the parse error follows the call.
 
     Args:
         call: The call to render, e.g. `step.call`.
@@ -100,7 +100,10 @@ def call_as_str(call: ToolCall) -> str:
     arguments = ", ".join(
         f"{name}={_argument_as_str(value)}" for name, value in call.arguments.items()
     )
-    return f"{call.function}({arguments})"
+    rendered = f"{call.function}({arguments})"
+    if call.parse_error:
+        rendered += f" [parse error: {call.parse_error}]"
+    return rendered
 
 
 def last_turns(messages: Sequence[ChatMessage], n: int) -> list[ChatMessage]:
@@ -137,7 +140,7 @@ def step_as_str(
 ) -> str:
     """Render a tool-call step as the body of a monitor prompt.
 
-    The conversation the model was sent (`step.input`, rendered by `messages_as_str()` without system messages), then the assistant's message with the call being checked, then, after the call, its result. The call being checked is always the last `Tool Call:` in the text. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.
+    The conversation the model was sent (`step.input`, rendered by `messages_as_str()` without system messages), then the assistant's message with the call being checked, then, after the call, its result. The call being checked is the one in the last `ASSISTANT:` message. Everything rendered was written by or shown to the agent under observation, and message content is not delimited, so text inside it can imitate role headers or tool calls: treat it all as untrusted in the prompt around it.
 
     Generate stages are not supported yet.
 
@@ -190,4 +193,4 @@ def _content_as_str(
 def _argument_as_str(value: Any) -> str:
     if isinstance(value, str):
         return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return json.dumps(value, ensure_ascii=False)
+    return json.dumps(value, ensure_ascii=False, default=str)

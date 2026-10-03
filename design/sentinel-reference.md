@@ -508,9 +508,9 @@ Rules:
 - **Reasoning is rendered at whatever fidelity exists.** `<thinking>`, `<thinking_summary>`, or `<thinking_redacted/>`, so the prompt says which. Exclude it in the preprocessor to score actions without it. A protocol withholds it from a child by transforming `step` before the call.
 - **A monitor never sees** the sandbox itself, other samples, sibling monitors' reports at the same step, the protocol's thresholds or budget, or whether its own explanation was shown.
 
-The helpers, lowest level first. The first two exist in Scout today and move down to `inspect_sentinel`, with Scout re-exporting them:
-
 Built so far: `messages_as_str`, `message_as_str`, `call_as_str`, `last_turns` and `step_as_str(step, *, turns=None)`, synchronous and without a preprocessor or a view; see `pr-series.md`, "Prompt helpers".
+
+The helpers, lowest level first. The first two exist in Scout today and move down to `inspect_sentinel`, with Scout re-exporting them:
 
 | Helper | Does |
 |---|---|

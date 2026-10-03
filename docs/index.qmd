@@ -222,7 +222,7 @@ def untrusted(text: str) -> str:
     return text.replace("<", "&lt;").replace(">", "&gt;")
 ```
 
-The prompt separates the task, which the monitor can trust, from the conversation, which it should not: `step_as_str()` renders what the model was sent and then the call (see [Prompt Helpers](monitors.qmd#prompt-helpers)), and it carries what the agent under observation wrote and what its tools returned, either of which may try to talk the monitor out of flagging the call.
+The prompt separates the task, which the monitor can trust, from the conversation, which it should not: `step_as_str()` renders what the model was sent and then the call (see [Prompt Helpers](monitors.qmd#prompt-helpers)), and it carries what the agent under observation wrote and what its tools returned, either of which may try to talk the monitor out of flagging the call. On a long run, `step_as_str(step, turns=6)` keeps the prompt to the last six turns.
 
 The monitor itself:
 
