@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
-from typing import cast, runtime_checkable
 
 from inspect_ai.model import ChatMessage, GenerateConfig, Model, ModelOutput
 from inspect_ai.tool import ToolCall, ToolInfo
 
-from ._context import Context
 from ._report import Decision, Failed, Report, Reported
 from ._step import Step
+
+if TYPE_CHECKING:
+    from ._context import Context
 
 
 @dataclass(frozen=True)
@@ -167,8 +169,8 @@ class RunState:
 
 
 def run_state(context: Context) -> RunState:
-    # vars(): `_run` is hidden from authors, not from the runner
-    run: RunState | None = vars(context).get("_run")
+    # getattr: `_run` is hidden from authors, not from the runner
+    run: RunState | None = getattr(context, "_run", None)
     if run is None:
         raise TypeError(
             "The runner needs a Context it built and passed to this monitor or protocol; a Context constructed elsewhere cannot record reports."

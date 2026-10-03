@@ -23,7 +23,8 @@ src/inspect_sentinel/
   __init__.py       author-facing exports
   _step.py          BeforeToolCall, AfterToolCall, Step
   _report.py        Suspicion, Action, Observation, Decision, Report, Reported
-  _context.py       Host, Recorder, Context, RunnerContext
+  _context.py       Context, validate_instance_name
+  _host.py          Host, HumanAnswer, Recorder, HostContext, RunState
   _types.py         Monitor, Protocol, Monitors, Protocols, Sentinel, Sentinels,
                     MonitorGroup, ProtocolGroup
   _decorators.py    @monitor, @protocol, registration, signature validation,
@@ -353,12 +354,12 @@ Decided by the maintainer on 2026-10-02, before the first release, so nothing is
 | inspect_ai `_context()` | `_host_context()` | It builds the `HostContext`, and `_context` also names inspect_ai's `_sentinel/_context.py`, which holds the active sentinel. |
 | `Recorder` | kept | It says what it does; the host implements it beside `Host`, so a `Host` prefix adds nothing. |
 | `_runner.py` | kept | It holds the runner (`run_root`, `run_children`, `run_monitors`, `run_protocols`). |
-| `_host.py` | added | It holds what the host implements or builds: `Host`, `HumanAnswer`, `Recorder` and `HostContext`, moved out of `_context.py`, which keeps `Context` and `validate_instance_name`. |
+| `_host.py` | added | It holds what the host implements or builds: `Host`, `HumanAnswer`, `Recorder` and `HostContext`, moved out of `_context.py`, and the runner's private `RunState`, which keeps `Context` and `validate_instance_name`. |
 | `run_root` | kept | It matches `run_children`, `run_monitors` and `run_protocols`: it runs the root. |
 | `_integration.py` | kept | It is the contract inspect_ai imports, and re-exports `HostContext` and `Recorder` from `_host.py`. |
 | inspect_ai `_Host`, `_Recorder` | kept | Each is the inspect_ai implementation of the protocol it is named for. |
 
-- **`HostContext` wraps a `Context` instead of subclassing it.** Decided by the maintainer on 2026-10-03. `HostContext(context, recorder)` is what the host builds and passes to `run_root(protocol, host_context, step)`. The runner keeps its per-layer state, the recorder and the factory of the instance at `path`, in a private `_run` field of `Context` (unset in the context the host builds), sets it on the root's context and on each child's, and `run_children`, `run_monitors` and `run_protocols` read it from the context a protocol passes them; a `Context` the runner did not build raises `TypeError`. `HostContext.child()` is replaced by a private runner helper that keeps `validate_instance_name`. The `Recorder` methods take the instance's `Context` and its factory's registry name, `record(context, factory, step, reported)` and likewise for `failed`, `cancelled`, `bypassed` and `superseded`, and `Final`'s origin carries the deciding protocol's `Context`. Why: the `Context` an author is given no longer hides a subclass carrying the recorder, the runner no longer recovers the `HostContext` with `isinstance` and `cast`, and the host contract is a `Context` wrapped in a `HostContext`.
+- **`HostContext` wraps a `Context` instead of subclassing it.** Decided by the maintainer on 2026-10-03. `HostContext(context=..., recorder=...)` is what the host builds and passes to `run_root(protocol, host_context, step)`. The runner keeps its per-layer state, the recorder and the factory of the instance at `path`, in a private `_run` field of `Context` (unset in the context the host builds), sets it on the root's context and on each child's, and `run_children`, `run_monitors` and `run_protocols` read it from the context a protocol passes them; a `Context` the runner did not build raises `TypeError`. `HostContext.child()` is replaced by a private runner helper that keeps `validate_instance_name`. The `Recorder` methods take the instance's `Context` and its factory's registry name, `record(context, factory, step, reported)` and likewise for `failed`, `cancelled`, `bypassed` and `superseded`, and `Final`'s origin carries the deciding protocol's `Context`. Why: the `Context` an author is given no longer hides a subclass carrying the recorder, the runner no longer recovers the `HostContext` with `isinstance` and `cast`, and the host contract is a `Context` wrapped in a `HostContext`.
 
 "The dispatcher" in inspect_sentinel's docstrings, where it meant whatever builds the context and invokes the root, is now "the host"; the design keeps "dispatcher" for inspect_ai's in-process host.
 

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import Any, TypeVar
 
 from inspect_ai.model import ChatMessage
 from inspect_ai.scorer import Target
 from inspect_ai.util import Store, StoreModel
 
-if TYPE_CHECKING:
-    from ._host import Host, RunState
+from ._host import Host, RunState
 
 SMT = TypeVar("SMT", bound=StoreModel)
 

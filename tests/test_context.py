@@ -1,5 +1,5 @@
 from dataclasses import FrozenInstanceError, replace
-from typing import Any, cast
+from typing import Any, cast, get_type_hints
 
 import pytest
 from inspect_ai.model import ChatMessage, ChatMessageSystem, ChatMessageUser
@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from inspect_sentinel import (
     BeforeToolCall,
     Context,
+    Host,
     Monitor,
     Observation,
     monitor,
@@ -35,6 +36,10 @@ def test_root_store_does_not_share_the_ambient_namespace() -> None:
     store = Store()
     layer_context("", store=store).store_as(Trajectory).calls = 5
     assert Trajectory(store=store).calls == 0
+
+
+def test_the_contexts_annotations_resolve_at_runtime() -> None:
+    assert get_type_hints(Context)["host"] is Host
 
 
 def test_the_context_exposes_no_store_and_cannot_be_reassigned() -> None:

@@ -3,6 +3,7 @@ from collections.abc import Callable
 
 import anyio
 import pytest
+from inspect_ai._util.registry import registry_info
 from inspect_ai.util import LimitExceededError
 
 from inspect_sentinel import (
@@ -82,7 +83,9 @@ async def test_a_raising_monitor_is_recorded_as_failed_and_its_siblings_report()
     )
     assert isinstance(failed.error, ValueError)
     assert recorder.failures == [failed]
-    assert [c.path for c in recorder.failed_instances] == ["layer/broken"]
+    assert [(c.path, c.factory) for c in recorder.failed_instances] == [
+        ("layer/broken", registry_info(fails).name)
+    ]
     assert [r.reported.name for r in recorder.records] == ["ok"]
     assert [o.name for o in observations.succeeded] == ["ok"]
 

@@ -126,7 +126,7 @@ Known limits of inspect_ai's surfaces: ACP cannot withdraw a permission request 
 
 The same surface whether the host is Envoy via proxy-wasm, a Go runtime, or ordinary Python in-process where these are normal implementations.
 
-Recording is not on the ABI. The runner records every report, failure, cancellation, bypass and supersession through a separate `Recorder` that the host implements and authors never see (`sentinel-reference.md`, "Context"), so a protocol cannot skip recording by not calling it. The host builds the top layer's `Context` and hands it to `run_root` wrapped with its recorder in a `HostContext`; the `Context` a monitor or protocol is given carries no recorder it can reach.
+Recording is not on the ABI. The runner records every report, failure, cancellation, bypass and supersession through a separate `Recorder` that the host implements and authors never see (`sentinel-reference.md`, "Context"), so a protocol cannot skip recording by not calling it. The host builds the top layer's `Context` and hands it to `run_root` wrapped with its recorder in a `HostContext`; the `Context` a monitor or protocol is given carries the recorder only in a private field that the runner reads.
 
 A monitor reaches it as `context.host` (`sentinel.md`, "The context"), never by import. That is what keeps a monitor a pure function of its two arguments, and it is why the ABI is small enough to be worth specifying: everything a portable monitor can do to the outside world is enumerable from one interface.
 
