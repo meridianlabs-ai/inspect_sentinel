@@ -38,6 +38,10 @@ dependencies = [
     # _runner.py imports the ExceptionGroup backport on 3.10; anyio depends on
     # it too, but a transitive dependency is not a promise.
     "exceptiongroup>=1.0; python_version < '3.11'",
+    # Path globs in _rules.py (path_matches): a well-tested matcher for `**`,
+    # character classes and `.`/`..` handling, rather than a hand-rolled one;
+    # pure Python, so monitors stay portable.
+    "wcmatch>=10.0",
 ]
 
 [project.urls]
@@ -63,6 +67,8 @@ dev = [
     "exceptiongroup>=1.0",
     # async tests run on both anyio backends (tests/conftest.py)
     "trio",
+    # property-based tests of the path helpers (tests/test_paths.py)
+    "hypothesis>=6.100",
     {include-group = "doc"},
 ]
 doc = [
