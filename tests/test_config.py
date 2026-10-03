@@ -18,7 +18,7 @@ from inspect_sentinel._decorators import (
 from inspect_sentinel._integration import (
     config_from_sentinel,
     resolve_sentinel,
-    run_root,
+    run_sentinel,
     sentinel_from_config,
 )
 from inspect_sentinel._protocols import concurrent, threshold
@@ -143,7 +143,7 @@ async def test_nested_entries_become_the_parameter_and_compose_paths() -> None:
         }
     )
     recorder = ListRecorder()
-    await run_root(
+    await run_sentinel(
         resolve_sentinel(built), host_context(recorder=recorder), before_step()
     )
     assert sorted(r.reported.path for r in recorder.records) == [
@@ -413,8 +413,8 @@ def test_config_to_sentinel_to_config_is_equal(raw: Any) -> None:
 async def _paths(sentinels: Sentinels) -> list[tuple[str, str]]:
     recorder = ListRecorder()
     context = host_context(recorder=recorder)
-    await run_root(resolve_sentinel(sentinels), context, before_step())
-    await run_root(resolve_sentinel(sentinels), context, after_step())
+    await run_sentinel(resolve_sentinel(sentinels), context, before_step())
+    await run_sentinel(resolve_sentinel(sentinels), context, after_step())
     return sorted((r.reported.path, r.reported.function) for r in recorder.records)
 
 

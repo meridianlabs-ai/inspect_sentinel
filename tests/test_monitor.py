@@ -23,7 +23,7 @@ from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._runner import (
     run_monitors,
-    run_root,
+    run_sentinel,
 )
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import (
@@ -533,13 +533,13 @@ def calls_through_runner(child: Monitor) -> Protocol:
 async def test_a_direct_call_during_a_run_is_rejected() -> None:
     root = concurrent(calls_directly(watched()))
     with pytest.raises(RuntimeError, match="run_monitors/run_protocols/run_children"):
-        await run_root(root, host_context(), before_step())
+        await run_sentinel(root, host_context(), before_step())
 
 
 @pytest.mark.anyio
 async def test_a_call_through_the_runner_during_a_run_is_allowed() -> None:
     root = concurrent(calls_through_runner(watched()))
-    decision = await run_root(root, host_context(), before_step())
+    decision = await run_sentinel(root, host_context(), before_step())
     assert decision is not None and decision.action == "reject"
 
 

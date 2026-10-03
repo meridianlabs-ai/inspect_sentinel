@@ -112,10 +112,10 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
         raise first
 
 
-async def run_root(
+async def run_sentinel(
     protocol: Protocol, host_context: HostContext, step: Step
 ) -> Decision | None:
-    """Invoke the resolved root protocol for one step and return the step's outcome.
+    """Run the sentinel `resolve_sentinel` returned for one step and return the step's outcome.
 
     The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its full registry name is the `factory` its records carry. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 

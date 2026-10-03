@@ -16,7 +16,7 @@ from inspect_sentinel._integration import (
 )
 from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import Action, Decision, Observation
-from inspect_sentinel._runner import run_root
+from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup, Sentinels
 from tests._fakes import ListRecorder, after_step, before_step, host_context
@@ -117,7 +117,7 @@ async def _root(
     recorder = recorder or ListRecorder()
     store = Store()
     context = host_context(recorder=recorder, store=store)
-    decision = await run_root(instance, context, step or before_step())
+    decision = await run_sentinel(instance, context, step or before_step())
     return _Rooted(decision, recorder, store)
 
 
@@ -314,7 +314,7 @@ def test_a_chain_round_trips_through_config() -> None:
 @pytest.mark.anyio
 async def test_a_configured_chain_records_its_links_under_its_path() -> None:
     recorder = ListRecorder()
-    decision = await run_root(
+    decision = await run_sentinel(
         resolve_sentinel(sentinel_from_config(RAW)),
         host_context(recorder=recorder),
         before_step(),

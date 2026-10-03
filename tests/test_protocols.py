@@ -18,7 +18,7 @@ from inspect_sentinel._protocols import concurrent, observe_only, threshold
 from inspect_sentinel._report import Action, Decision, Observation, Suspicion
 from inspect_sentinel._runner import (
     run_protocols,
-    run_root,
+    run_sentinel,
 )
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import (
@@ -250,7 +250,7 @@ async def test_a_panel_of_advisory_votes_has_the_last_word(
 ) -> None:
     recorder = ListRecorder()
     children = {f"v{index}": says(vote) for index, vote in enumerate(votes)}
-    decision = await run_root(
+    decision = await run_sentinel(
         wrapper(panel(children)), host_context(recorder=recorder), before_step()
     )
     assert decision is not None and decision.action == expected

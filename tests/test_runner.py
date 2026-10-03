@@ -25,7 +25,7 @@ from inspect_sentinel._runner import (
     run_children,
     run_monitors,
     run_protocols,
-    run_root,
+    run_sentinel,
 )
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import (
@@ -809,7 +809,7 @@ async def test_final_ends_the_step_past_every_layer_above() -> None:
 
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        decision = await run_root(
+        decision = await run_sentinel(
             wrapper(concurrent({"slow": slow(), "leaf": leaf()})),
             host_context(recorder=recorder),
             before_step(),
@@ -873,7 +873,7 @@ async def test_the_loser_of_a_final_race_is_recorded_as_superseded() -> None:
 
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        decision = await run_root(
+        decision = await run_sentinel(
             concurrent({"opens": opens(), "follows": follows()}),
             host_context(recorder=recorder),
             before_step(),
@@ -974,7 +974,7 @@ async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -
 
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        decision = await run_root(
+        decision = await run_sentinel(
             custom(), host_context(recorder=recorder), before_step()
         )
     assert decision == Decision.reject("fanned out")
@@ -1021,7 +1021,7 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
 
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        decision = await run_root(
+        decision = await run_sentinel(
             wrapper(custom()), host_context(recorder=recorder), before_step()
         )
     assert decision is not None
@@ -1046,7 +1046,7 @@ async def test_a_final_propagating_through_a_monitor_names_the_protocol() -> Non
         return check
 
     recorder = ListRecorder()
-    decision = await run_root(
+    decision = await run_sentinel(
         concurrent([consults()]), host_context(recorder=recorder), before_step()
     )
     assert decision is not None and decision.action == "reject"
@@ -1055,11 +1055,11 @@ async def test_a_final_propagating_through_a_monitor_names_the_protocol() -> Non
 
 
 @pytest.mark.anyio
-async def test_run_root_returns_a_final_decision_and_records_the_root_bypassed() -> (
+async def test_run_sentinel_returns_a_final_decision_and_records_the_root_bypassed() -> (
     None
 ):
     recorder = ListRecorder()
-    decision = await run_root(
+    decision = await run_sentinel(
         resolve_sentinel([finalizes("reject")]),
         host_context(recorder=recorder),
         before_step(),
@@ -1072,9 +1072,9 @@ async def test_run_root_returns_a_final_decision_and_records_the_root_bypassed()
 
 
 @pytest.mark.anyio
-async def test_run_root_records_the_roots_own_decision_at_the_empty_path() -> None:
+async def test_run_sentinel_records_the_roots_own_decision_at_the_empty_path() -> None:
     recorder = ListRecorder()
-    decision = await run_root(
+    decision = await run_sentinel(
         resolve_sentinel([decides("reject")]),
         host_context(recorder=recorder),
         before_step(),
@@ -1087,9 +1087,9 @@ async def test_run_root_records_the_roots_own_decision_at_the_empty_path() -> No
 
 
 @pytest.mark.anyio
-async def test_run_root_returns_an_escalate_with_nobody_to_hand_it_to() -> None:
+async def test_run_sentinel_returns_an_escalate_with_nobody_to_hand_it_to() -> None:
     recorder = ListRecorder()
-    decision = await run_root(
+    decision = await run_sentinel(
         decides("escalate"), host_context(recorder=recorder), before_step()
     )
     assert decision == Decision(action="escalate")
@@ -1099,7 +1099,7 @@ async def test_run_root_returns_an_escalate_with_nobody_to_hand_it_to() -> None:
 
 
 @pytest.mark.anyio
-async def test_run_root_checks_the_roots_decision_shape() -> None:
+async def test_run_sentinel_checks_the_roots_decision_shape() -> None:
     @protocol
     def illegal() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
@@ -1108,13 +1108,13 @@ async def test_run_root_checks_the_roots_decision_shape() -> None:
         return decide
 
     with pytest.raises(ValueError, match="'illegal'"):
-        await run_root(illegal(), host_context(), before_step())
+        await run_sentinel(illegal(), host_context(), before_step())
 
 
 @pytest.mark.anyio
-async def test_run_root_needs_the_top_layer_context() -> None:
+async def test_run_sentinel_needs_the_top_layer_context() -> None:
     with pytest.raises(ValueError, match="path"):
-        await run_root(
+        await run_sentinel(
             resolve_sentinel([decides()]), host_context(path="x"), before_step()
         )
 
@@ -1180,7 +1180,7 @@ async def test_an_error_beside_a_claimed_final_in_a_protocols_own_group_surfaces
 
     recorder = ListRecorder()
     with anyio.fail_after(5), pytest.raises(RuntimeError, match="boom"):
-        await run_root(
+        await run_sentinel(
             wrapper(custom()), host_context(recorder=recorder), before_step()
         )
     assert recorder.records == []
@@ -1219,7 +1219,7 @@ async def test_an_illegal_own_final_supersedes_the_claimed_finals_beside_it() ->
 
     recorder = ListRecorder()
     with anyio.fail_after(5), pytest.raises(ValueError, match="'custom'"):
-        await run_root(
+        await run_sentinel(
             wrapper(custom()), host_context(recorder=recorder), before_step()
         )
     assert recorder.records == []
@@ -1257,7 +1257,7 @@ async def test_a_monitors_own_final_supersedes_the_claimed_finals_beside_it() ->
 
     recorder = ListRecorder()
     with anyio.fail_after(5), pytest.raises(TypeError, match="meddles"):
-        await run_root(
+        await run_sentinel(
             concurrent([meddles()]), host_context(recorder=recorder), before_step()
         )
     assert recorder.records == []
@@ -1273,7 +1273,7 @@ async def test_a_terminate_outrun_by_a_siblings_final_is_superseded(
     if not terminate_first:
         children = {"f": children["f"], "t": children["t"]}
     recorder = ListRecorder()
-    decision = await run_root(
+    decision = await run_sentinel(
         concurrent(children), host_context(recorder=recorder), before_step()
     )
     assert decision == Decision(action="continue")
@@ -1310,7 +1310,7 @@ async def test_an_ill_shaped_own_final_supersedes_nothing_it_made_itself(
 
     recorder = ListRecorder()
     with pytest.raises(ValueError, match="twice"):
-        await run_root(twice(), host_context(recorder=recorder), after_step())
+        await run_sentinel(twice(), host_context(recorder=recorder), after_step())
     assert recorder.supersessions == []
     assert recorder.records == []
 
@@ -1384,7 +1384,7 @@ async def test_a_report_names_the_function_that_made_it() -> None:
 @pytest.mark.anyio
 async def test_a_final_decision_names_the_function_that_made_it() -> None:
     recorder = ListRecorder()
-    await run_root(
+    await run_sentinel(
         concurrent([finalizes("reject")]),
         host_context(recorder=recorder),
         before_step(),
@@ -1481,7 +1481,7 @@ async def test_a_group_member_calling_final_ends_the_step() -> None:
         return ProtocolGroup(screen, later)
 
     recorder = ListRecorder()
-    decision = await run_root(
+    decision = await run_sentinel(
         concurrent([gatekeeper()]), host_context(recorder=recorder), before_step()
     )
     assert decision == Decision.reject("screened")
@@ -1544,7 +1544,7 @@ async def test_the_root_is_one_function() -> None:
         return ProtocolGroup(one, two)
 
     with pytest.raises(TypeError, match="root"):
-        await run_root(cast(Any, pair()), host_context(), before_step())
+        await run_sentinel(cast(Any, pair()), host_context(), before_step())
 
 
 @pytest.mark.anyio
@@ -1575,7 +1575,7 @@ async def test_a_members_terminate_stops_the_group() -> None:
 
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        decision = await run_root(
+        decision = await run_sentinel(
             concurrent({"g": stops(), "slow": slow()}),
             host_context(recorder=recorder),
             before_step(),
@@ -1684,7 +1684,7 @@ async def test_records_and_cancellations_name_the_factory_apart_from_the_instanc
 @pytest.mark.anyio
 async def test_bypassed_and_root_records_name_the_factory() -> None:
     recorder = ListRecorder()
-    await run_root(
+    await run_sentinel(
         concurrent({"outer": wrapper(finalizes("reject"))}),
         host_context(recorder=recorder),
         before_step(),
@@ -1701,7 +1701,7 @@ async def test_bypassed_and_root_records_name_the_factory() -> None:
 @pytest.mark.anyio
 async def test_the_roots_own_decision_names_its_factory() -> None:
     recorder = ListRecorder()
-    await run_root(
+    await run_sentinel(
         resolve_sentinel({"rule": decides("reject")}),
         host_context(recorder=recorder),
         before_step(),
@@ -1738,7 +1738,7 @@ async def test_superseded_decisions_name_the_factory() -> None:
     factories = {"a": registry_info(opens).name, "b": registry_info(follows).name}
     recorder = ListRecorder()
     with anyio.fail_after(5):
-        await run_root(
+        await run_sentinel(
             concurrent({"a": opens(), "b": follows()}),
             host_context(recorder=recorder),
             before_step(),
@@ -1750,7 +1750,7 @@ async def test_superseded_decisions_name_the_factory() -> None:
 @pytest.mark.anyio
 async def test_a_terminate_superseded_by_a_final_names_its_factory() -> None:
     recorder = ListRecorder()
-    await run_root(
+    await run_sentinel(
         concurrent({"t": decides("terminate"), "f": finalizes("continue")}),
         host_context(recorder=recorder),
         before_step(),

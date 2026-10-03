@@ -143,7 +143,7 @@ class Recorder(TypingProtocol):
 
 @dataclass(frozen=True, kw_only=True)
 class HostContext:
-    """What the host passes to `run_root`: the top layer's `Context`, and where the runner records reports.
+    """What the host passes to `run_sentinel`: the top layer's `Context`, and where the runner records reports.
 
     The host builds the `Context` with an empty `path` and the sample store as `_store`; monitors and protocols reach the store only through `store_as()`.
     """

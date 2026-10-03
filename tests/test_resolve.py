@@ -15,7 +15,7 @@ from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._resolve import resolve_sentinel
 from inspect_sentinel._runner import (
     run_protocols,
-    run_root,
+    run_sentinel,
 )
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import (
@@ -140,7 +140,7 @@ async def test_the_root_records_at_the_empty_path_and_its_children_bare(
     spec: Callable[[], Sentinels], expected: list[tuple[str, str]]
 ) -> None:
     recorder = ListRecorder()
-    await run_root(
+    await run_sentinel(
         resolve_sentinel(spec()), host_context(recorder=recorder), before_step()
     )
     recorded = [(r.reported.name, r.reported.path) for r in recorder.records]

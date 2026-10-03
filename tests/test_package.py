@@ -73,7 +73,7 @@ def test_integration_names_are_not_exported() -> None:
         "validate_instance_name",
         "PRECEDENCE",
         "named_children",
-        "run_root",
+        "run_sentinel",
     ):
         assert name not in inspect_sentinel.__all__
 
@@ -94,7 +94,7 @@ def test_integration_module_exports_the_host_surface() -> None:
         "validate_instance_name",
         "resolve_sentinel",
         "step_types",
-        "run_root",
+        "run_sentinel",
     }
 
 

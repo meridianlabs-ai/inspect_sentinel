@@ -248,7 +248,7 @@ class Context:
     """The expected answer. None unless explicitly opted into; the opt-in is not built."""
 ```
 
-The host (inspect_ai's dispatcher, or a proxy) builds the top layer's `Context`, with an empty `path` and the sample store as the private `_store` that `store_as()` namespaces into, and wraps it with its recorder in a `HostContext` for `run_root`. Authors never see a `HostContext`: every monitor and protocol is given a plain `Context`. The runner keeps its per-layer state (the recorder and the factory of the instance at `path`) in a second private field of `Context`, which `run_root` sets on the root's context and the runner sets on each child's; `run_monitors`, `run_protocols` and `run_children` read it from the context a protocol passes them, and raise `TypeError` for a `Context` the runner did not build.
+The host (inspect_ai's dispatcher, or a proxy) builds the top layer's `Context`, with an empty `path` and the sample store as the private `_store` that `store_as()` namespaces into, and wraps it with its recorder in a `HostContext` for `run_sentinel`. Authors never see a `HostContext`: every monitor and protocol is given a plain `Context`. The runner keeps its per-layer state (the recorder and the factory of the instance at `path`) in a second private field of `Context`, which `run_sentinel` sets on the root's context and the runner sets on each child's; `run_monitors`, `run_protocols` and `run_children` read it from the context a protocol passes them, and raise `TypeError` for a `Context` the runner did not build.
 
 ```python
 @dataclass(frozen=True, kw_only=True)
@@ -257,7 +257,7 @@ class HostContext:
     recorder: Recorder
 
 
-async def run_root(protocol: Protocol, host_context: HostContext, step: Step) -> Decision | None: ...
+async def run_sentinel(protocol: Protocol, host_context: HostContext, step: Step) -> Decision | None: ...
 
 
 class Recorder(typing.Protocol):
@@ -716,7 +716,7 @@ Shape checks raise. Each is a deterministic bug in a protocol, not agent input, 
 
 `decide_final()` is the mechanism for a decision no layer above may weaken. It replaces an earlier design in which a `binding` flag set a floor that the runner clamped each layer's return up to, recording the override. A value-level rule requires every layer to carry or compare the property, and each patch to it leaked where a middle layer built a new decision; control flow cannot be dropped by a middle layer, because that layer's code does not run. It reuses `terminate`'s cancellation, and the first `decide_final()` wins, as with two `terminate`s. Ordering several authorities is a `sequential`, or a panel that collects advisory votes and calls `decide_final()` itself.
 
-The host invokes the resolved root through `run_root`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `decide_final()` from below records the root as `bypassed`, and `run_root` returns the final decision as the step's outcome, so the dispatcher never catches `Final`. A lone protocol is the root itself; a list, a mapping or a lone `ProtocolGroup` is wrapped in `concurrent`, and monitors alone in `observe_only`.
+The host invokes the resolved root through `run_sentinel`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `decide_final()` from below records the root as `bypassed`, and `run_sentinel` returns the final decision as the step's outcome, so the dispatcher never catches `Final`. A lone protocol is the root itself; a list, a mapping or a lone `ProtocolGroup` is wrapped in `concurrent`, and monitors alone in `observe_only`.
 
 An `escalate` that reaches the root has nobody to hand it to: the host proceeds as for `continue`, the escalate stays recorded as the root's decision, and the host warns once per eval that `sequential([..., human()])` sends escalations to a person. This is the current behaviour and is under review (see [Open questions](#open-questions) item 24); rejecting instead would fail closed, as approval does when every approver escalates, but would turn every unsure rule into a blocked call.
 
