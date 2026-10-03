@@ -28,7 +28,13 @@ from inspect_sentinel._types import (
     ProtocolGroup,
     Protocols,
 )
-from tests._fakes import ListRecorder, after_step, before_step, host_context
+from tests._fakes import (
+    ListRecorder,
+    after_step,
+    before_step,
+    host_context,
+    layer_context,
+)
 
 
 @monitor
@@ -87,7 +93,7 @@ def wrapper(child: Protocol) -> Protocol:
 async def _run(
     instance: Protocol, step: Step, recorder: ListRecorder
 ) -> Decision | None:
-    decisions = await run_protocols(instance, host_context(recorder=recorder), step)
+    decisions = await run_protocols(instance, layer_context(recorder=recorder), step)
     return decisions[0].report if decisions else None
 
 

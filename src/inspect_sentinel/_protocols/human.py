@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from .._context import Context, HumanAnswer
+from .._context import Context
 from .._decorators import protocol
+from .._host import HumanAnswer
 from .._report import Decision
 from .._step import AfterToolCall, BeforeToolCall, Step
 from .._types import Protocol, ProtocolGroup

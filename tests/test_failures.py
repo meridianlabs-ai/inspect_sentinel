@@ -21,7 +21,7 @@ from inspect_sentinel._report import Action, Decision, Observation
 from inspect_sentinel._runner import run_monitors, run_root
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
-from tests._fakes import ListRecorder, before_step, host_context
+from tests._fakes import ListRecorder, before_step, host_context, layer_context
 
 _ERRORS: dict[str, type[Exception]] = {"value": ValueError, "os": OSError}
 
@@ -71,7 +71,7 @@ async def test_a_raising_monitor_is_recorded_as_failed_and_its_siblings_report()
     recorder = ListRecorder()
     observations = await run_monitors(
         {"broken": fails(), "ok": scores(0.3)},
-        host_context(path="layer", recorder=recorder),
+        layer_context(path="layer", recorder=recorder),
         before_step(),
     )
     [failed] = observations.failed
@@ -82,7 +82,7 @@ async def test_a_raising_monitor_is_recorded_as_failed_and_its_siblings_report()
     )
     assert isinstance(failed.error, ValueError)
     assert recorder.failures == [failed]
-    assert [c.path for c in recorder.failed_contexts] == ["layer/broken"]
+    assert [c.path for c in recorder.failed_instances] == ["layer/broken"]
     assert [r.reported.name for r in recorder.records] == ["ok"]
     assert [o.name for o in observations.succeeded] == ["ok"]
 
@@ -125,7 +125,7 @@ async def test_a_failing_function_of_a_group_does_not_stop_the_others() -> None:
 
         return MonitorGroup(first, second)
 
-    observations = await run_monitors([half_failing()], host_context(), before_step())
+    observations = await run_monitors([half_failing()], layer_context(), before_step())
     assert [f.function for f in observations.failed] == ["first"]
     assert [o.function for o in observations.succeeded] == ["second"]
 
@@ -175,7 +175,7 @@ async def test_a_limit_reached_in_a_monitor_ends_the_step() -> None:
     recorder = ListRecorder()
     with pytest.raises(LimitExceededError):
         await run_monitors(
-            [over_budget()], host_context(recorder=recorder), before_step()
+            [over_budget()], layer_context(recorder=recorder), before_step()
         )
     assert recorder.failures == []
 
@@ -207,7 +207,7 @@ async def test_a_monitor_that_turns_its_cancellation_into_an_error_is_cancelled(
                 returned.append(
                     await run_monitors(
                         {"c": monitor_converts_cancellation()},
-                        host_context(recorder=recorder),
+                        layer_context(recorder=recorder),
                         before_step(),
                     )
                 )
@@ -242,7 +242,9 @@ async def test_a_limit_beside_another_error_in_a_monitors_own_group_ends_the_ste
 
     recorder = ListRecorder()
     with pytest.raises(LimitExceededError):
-        await run_monitors([fans_out()], host_context(recorder=recorder), before_step())
+        await run_monitors(
+            [fans_out()], layer_context(recorder=recorder), before_step()
+        )
     assert recorder.failures == []
 
 

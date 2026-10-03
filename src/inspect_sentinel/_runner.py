@@ -11,9 +11,10 @@ from anyio.abc import TaskGroup
 from inspect_ai._util.registry import registry_info, registry_unqualified_name
 from inspect_ai.util import LimitExceededError
 
-from ._context import Context, HostContext, validate_instance_name
+from ._context import Context, validate_instance_name
 from ._decorators import invoke, members
 from ._final import Final, Origin
+from ._host import HostContext, Recorder, RunState, run_state
 from ._report import Decision, Failed, Observation, Report, Reported
 from ._results import Decisions, Observations, Reports
 from ._step import Step
@@ -69,7 +70,10 @@ def _supersede(finals: Sequence[Final]) -> None:
             raise RuntimeError(
                 f"Runner invariant violated: Final({ex.decision.action!r}) reached a task group without an origin; every Final leaving a child is given one by the runner."
             )
-        origin.context.recorder.superseded(origin.context, origin.step, origin.reported)
+        run = run_state(origin.context)
+        run.recorder.superseded(
+            origin.context, run.factory, origin.step, origin.reported
+        )
 
 
 def _surface(errors: Sequence[BaseException], finals: Sequence[Final]) -> BaseException:
@@ -108,16 +112,18 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
         raise first
 
 
-async def run_root(protocol: Protocol, context: Context, step: Step) -> Decision | None:
+async def run_root(
+    protocol: Protocol, host_context: HostContext, step: Step
+) -> Decision | None:
     """Invoke the resolved root protocol for one step and return the step's outcome.
 
-    The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its context's `factory` is set to its full registry name. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
+    The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its full registry name is the `factory` its records carry. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 
     An `escalate` is returned like any other decision, though at the root there is nobody to hand it to; the host decides what an unresolved escalate means.
 
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.
-        context: The top layer's context, whose `path` is empty.
+        host_context: The top layer's context, whose `path` is empty, and the recorder.
         step: The step being examined.
     """
     if isinstance(protocol, Group):
@@ -127,7 +133,16 @@ async def run_root(protocol: Protocol, context: Context, step: Step) -> Decision
     found: list[Reported[Decision]] = []
     try:
         await _run_child(
-            protocol, "protocol", Decision, context, step, None, found, [], root=True
+            protocol,
+            "protocol",
+            Decision,
+            host_context.context,
+            host_context.recorder,
+            step,
+            None,
+            found,
+            [],
+            root=True,
         )
     except Final as ex:
         origin = ex.origin
@@ -135,7 +150,8 @@ async def run_root(protocol: Protocol, context: Context, step: Step) -> Decision
             raise RuntimeError(
                 f"Runner invariant violated: Final({ex.decision.action!r}) left the root without an origin."
             ) from ex
-        origin.context.recorder.record(origin.context, origin.step, origin.reported)
+        run = run_state(origin.context)
+        run.recorder.record(origin.context, run.factory, origin.step, origin.reported)
         return ex.decision
     return found[0].report if found else None
 
@@ -193,6 +209,7 @@ async def run_children(children: Sentinels, context: Context, step: Step) -> Rep
 async def _run_named(
     named: Sequence[tuple[str, Sentinel]], context: Context, step: Step
 ) -> Reports:
+    recorder = run_state(context).recorder
     observations: list[tuple[int, Reported[Observation]]] = []
     failures: list[tuple[int, Failed]] = []
     decisions: list[tuple[int, Reported[Decision]]] = []
@@ -215,6 +232,7 @@ async def _run_named(
                     "monitor",
                     Observation,
                     context,
+                    recorder,
                     step,
                     name,
                     observed,
@@ -231,6 +249,7 @@ async def _run_named(
                     "protocol",
                     Decision,
                     context,
+                    recorder,
                     step,
                     name,
                     decided,
@@ -253,9 +272,12 @@ async def _run_named(
     except Final:
         # a decide_final() outran a terminate already recorded as a decision
         for factory, reported in terminated:
-            # _run_child accepted this context, so it is a HostContext
-            child_context = cast(HostContext, context).child(reported.name, factory)
-            child_context.recorder.superseded(child_context, step, reported)
+            recorder.superseded(
+                _child_context(context, reported.name, recorder, factory),
+                factory,
+                step,
+                reported,
+            )
         raise
 
     return Reports(
@@ -272,6 +294,7 @@ async def _run_child(
     kind: Literal["monitor", "protocol"],
     report_type: type[R],
     context: Context,
+    recorder: Recorder,
     step: Step,
     name: str | None,
     found: list[Reported[R]],
@@ -279,10 +302,6 @@ async def _run_child(
     *,
     root: bool = False,
 ) -> None:
-    if not isinstance(context, HostContext):
-        raise TypeError(
-            "The runner needs the HostContext the host provided; a Context constructed elsewhere cannot record reports."
-        )
     info, _ = check_child(child, kind)
     if root:
         if context.path != "":
@@ -299,9 +318,9 @@ async def _run_child(
     if not running:
         return
     child_context = (
-        replace(context, factory=info.name)
+        replace(context, _run=RunState(recorder, info.name))
         if root
-        else context.child(child_name, info.name)
+        else _child_context(context, child_name, recorder, info.name)
     )
     try:
         # sequential, since a group's members share one store
@@ -328,7 +347,7 @@ async def _run_child(
         # a recorder that raises here fails the layer, like one that raises
         # from record(); a cancellation record that cannot be written is not
         # something to paper over
-        child_context.recorder.cancelled(child_context, step, child_name)
+        recorder.cancelled(child_context, info.name, step, child_name)
         raise
 
 
@@ -336,11 +355,12 @@ async def _run_member(
     function: SentinelFunction,
     kind: Literal["monitor", "protocol"],
     report_type: type[R],
-    child_context: HostContext,
+    child_context: Context,
     step: Step,
     child_name: str,
     grouped: bool,
 ) -> Reported[R] | Failed | None:
+    run = run_state(child_context)
     label = describe(child_name, function.__name__, grouped)
     report: Report | None = None
     finals: list[Final] = []
@@ -376,7 +396,7 @@ async def _run_member(
                 function=function.__name__,
                 error=failure,
             )
-            child_context.recorder.failed(child_context, step, failed)
+            run.recorder.failed(child_context, run.factory, step, failed)
             return failed
         raise failure
     if finals:
@@ -397,19 +417,20 @@ async def _run_member(
         report=report,
         function=function.__name__,
     )
-    child_context.recorder.record(child_context, step, reported)
+    run.recorder.record(child_context, run.factory, step, reported)
     return reported
 
 
 def _on_final(
     finals: Sequence[Final],
     kind: Literal["monitor", "protocol"],
-    child_context: HostContext,
+    child_context: Context,
     step: Step,
     child_name: str,
     function: str,
     label: str,
 ) -> Final:
+    run = run_state(child_context)
     winner = finals[0]
     unclaimed = [ex for ex in finals if ex.origin is None]
     if kind == "monitor" and unclaimed:
@@ -437,8 +458,19 @@ def _on_final(
             ),
         )
     if not own:
-        child_context.recorder.bypassed(child_context, step, child_name)
+        run.recorder.bypassed(child_context, run.factory, step, child_name)
     return cast(Final, _surface([], finals))
+
+
+def _child_context(
+    context: Context, name: str, recorder: Recorder, factory: str
+) -> Context:
+    validate_instance_name(name)
+    return replace(
+        context,
+        path=f"{context.path}/{name}" if context.path else name,
+        _run=RunState(recorder, factory),
+    )
 
 
 def describe(name: str, function: str, grouped: bool) -> str:

@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import NamedTuple
 
 from inspect_ai.model import (
@@ -12,7 +13,8 @@ from inspect_ai.model import (
 from inspect_ai.tool import ToolCall, ToolCallView, ToolInfo
 from inspect_ai.util import Store
 
-from inspect_sentinel._context import HostContext, HumanAnswer
+from inspect_sentinel._context import Context
+from inspect_sentinel._host import HostContext, HumanAnswer, RunState
 from inspect_sentinel._report import Decision, Failed, Report, Reported
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 
@@ -44,43 +46,51 @@ class FakeHost:
 
 
 class Recorded(NamedTuple):
-    context: HostContext
+    context: Context
+    factory: str
     step: Step
     reported: Reported[Report]
+
+
+class Instance(NamedTuple):
+    path: str
+    factory: str
 
 
 class ListRecorder:
     def __init__(self) -> None:
         self.records: list[Recorded] = []
         self.cancellations: list[tuple[str, str]] = []
-        self.cancelled_contexts: list[HostContext] = []
+        self.cancelled_instances: list[Instance] = []
         self.bypassed_layers: list[tuple[str, str]] = []
-        self.bypassed_contexts: list[HostContext] = []
+        self.bypassed_instances: list[Instance] = []
         self.supersessions: list[Recorded] = []
         self.failures: list[Failed] = []
-        self.failed_contexts: list[HostContext] = []
+        self.failed_instances: list[Instance] = []
 
     def record(
-        self, context: HostContext, step: Step, reported: Reported[Report]
+        self, context: Context, factory: str, step: Step, reported: Reported[Report]
     ) -> None:
-        self.records.append(Recorded(context, step, reported))
+        self.records.append(Recorded(context, factory, step, reported))
 
-    def failed(self, context: HostContext, step: Step, failed: Failed) -> None:
+    def failed(
+        self, context: Context, factory: str, step: Step, failed: Failed
+    ) -> None:
         self.failures.append(failed)
-        self.failed_contexts.append(context)
+        self.failed_instances.append(Instance(context.path, factory))
 
-    def cancelled(self, context: HostContext, step: Step, name: str) -> None:
+    def cancelled(self, context: Context, factory: str, step: Step, name: str) -> None:
         self.cancellations.append((context.path, name))
-        self.cancelled_contexts.append(context)
+        self.cancelled_instances.append(Instance(context.path, factory))
 
-    def bypassed(self, context: HostContext, step: Step, name: str) -> None:
+    def bypassed(self, context: Context, factory: str, step: Step, name: str) -> None:
         self.bypassed_layers.append((context.path, name))
-        self.bypassed_contexts.append(context)
+        self.bypassed_instances.append(Instance(context.path, factory))
 
     def superseded(
-        self, context: HostContext, step: Step, reported: Reported[Decision]
+        self, context: Context, factory: str, step: Step, reported: Reported[Decision]
     ) -> None:
-        self.supersessions.append(Recorded(context, step, reported))
+        self.supersessions.append(Recorded(context, factory, step, reported))
 
 
 def host_context(
@@ -90,18 +100,31 @@ def host_context(
     store: Store | None = None,
 ) -> HostContext:
     return HostContext(
-        task="t",
-        task_description=None,
-        sample_id=1,
-        epoch=1,
-        sample_description=None,
-        sample_input="prompt",
-        metadata={},
-        path=path,
-        _store=store or Store(),
-        host=host or FakeHost(),
+        context=Context(
+            task="t",
+            task_description=None,
+            sample_id=1,
+            epoch=1,
+            sample_description=None,
+            sample_input="prompt",
+            metadata={},
+            path=path,
+            _store=store or Store(),
+            host=host or FakeHost(),
+        ),
         recorder=recorder or ListRecorder(),
     )
+
+
+def layer_context(
+    path: str = "",
+    recorder: ListRecorder | None = None,
+    host: FakeHost | None = None,
+    store: Store | None = None,
+    factory: str = "",
+) -> Context:
+    built = host_context(path, recorder, host, store)
+    return replace(built.context, _run=RunState(built.recorder, factory))
 
 
 def before_step() -> BeforeToolCall:

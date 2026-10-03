@@ -248,25 +248,28 @@ class Context:
     """The expected answer. None unless explicitly opted into; the opt-in is not built."""
 ```
 
-The host (inspect_ai's dispatcher, or a proxy) hands the top layer a `HostContext`, which the runner requires and preserves down the layers. Authors never see its extra fields. The host also passes the sample store, as the private `_store` that `store_as()` namespaces into.
+The host (inspect_ai's dispatcher, or a proxy) builds the top layer's `Context`, with an empty `path` and the sample store as the private `_store` that `store_as()` namespaces into, and wraps it with its recorder in a `HostContext` for `run_root`. Authors never see a `HostContext`: every monitor and protocol is given a plain `Context`. The runner keeps its per-layer state (the recorder and the factory of the instance at `path`) in a second private field of `Context`, which `run_root` sets on the root's context and the runner sets on each child's; `run_monitors`, `run_protocols` and `run_children` read it from the context a protocol passes them, and raise `TypeError` for a `Context` the runner did not build.
 
 ```python
-@dataclass(frozen=True)
-class HostContext(Context):
+@dataclass(frozen=True, kw_only=True)
+class HostContext:
+    context: Context      # the top layer's context
     recorder: Recorder
-    factory: str = ""   # registry name of the instance's factory; run_root sets the root's
-    def child(self, name: str, factory: str) -> HostContext: ...   # context for a child under this path
+
+
+async def run_root(protocol: Protocol, host_context: HostContext, step: Step) -> Decision | None: ...
 
 
 class Recorder(typing.Protocol):
     """Where the runner records; the host implements it, authors never call it."""
-    def record(self, context: HostContext, step: Step, reported: Reported[Report]) -> None: ...
-    def cancelled(self, context: HostContext, step: Step, name: str) -> None: ...
-    def bypassed(self, context: HostContext, step: Step, name: str) -> None: ...
-    def superseded(self, context: HostContext, step: Step, reported: Reported[Decision]) -> None: ...
+    def record(self, context: Context, factory: str, step: Step, reported: Reported[Report]) -> None: ...
+    def failed(self, context: Context, factory: str, step: Step, failed: Failed) -> None: ...
+    def cancelled(self, context: Context, factory: str, step: Step, name: str) -> None: ...
+    def bypassed(self, context: Context, factory: str, step: Step, name: str) -> None: ...
+    def superseded(self, context: Context, factory: str, step: Step, reported: Reported[Decision]) -> None: ...
 ```
 
-Every `Recorder` call gets the `HostContext` of the instance it concerns, so the host reads `SentinelEvent.factory` from `context.factory` and `path` from `context.path`. `factory` is the full registry name, package prefix included (`inspect_sentinel/concurrent`), where the instance name is a mapping key or the unqualified registry name.
+Every `Recorder` call gets the `Context` of the instance it concerns and the registry name of its factory, so the host reads `SentinelEvent.factory` from `factory` and `path` from `context.path`. `factory` is the full registry name, package prefix included (`inspect_sentinel/concurrent`), where the instance name is a mapping key or the unqualified registry name.
 
 Rules:
 
@@ -1026,7 +1029,7 @@ Whether a monitor that fails on 3 samples in 500 should fail the eval is open; s
 ```python
 class SentinelEvent(BaseEvent):
     event: Literal["sentinel"] = "sentinel"
-    factory: str          # registry name of the factory, monitor or protocol: HostContext.factory
+    factory: str          # registry name of the factory, monitor or protocol, as the runner passes it to the Recorder
     path: str             # instance path, e.g. "attempt/internet_attempt"
     function: str | None  # __name__ of the reporting (or failing) function; None for cancelled and bypassed, which are per instance
     step_id: str          # triggering message id, assistant message id, or tool call id
