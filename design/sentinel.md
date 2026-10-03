@@ -1503,6 +1503,8 @@ Things a monitor never sees at any view, so that nobody designs around them: the
 
 Lowest level first. The first three exist in Scout today and move down unchanged; the rest are new.
 
+Built so far (see `pr-series.md`, "Prompt helpers"): `messages_as_str`, `message_as_str`, `call_as_str`, `last_turns` and `step_as_str(step, *, turns=None)`, synchronous and without a preprocessor. They reimplement Scout's format rather than moving Scout's code, and an assistant message's tool calls render with `call_as_str()` rather than Scout's argument list. The rest of this section is the design for what is still to come.
+
 **`messages_as_str(messages, *, preprocessor=None, format="text")`** and **`message_as_str`.** Scout's message rendering: role labels, tool calls with arguments, tool results with errors, `<thinking>` blocks at whatever fidelity was returned, and `<image/>`-style placeholders for media. `MessagesPreprocessor` carries the exclusions (`exclude_system`, `exclude_reasoning`, `exclude_tool_usage`) and a free-form `transform`. These depend only on `ChatMessage` and `Content`, so they belong in `inspect_sentinel`, with Scout re-exporting them. The `Transcript` overload and `Reference` extraction stay in Scout. Inspect's own `analysis/_dataframe/extract.py::messages_as_str` is a third copy today and should consolidate onto the same one.
 
 **`message_numbering(preprocessor=None)`.** Scout's `[M1]`-style numbering with a paired `extract_refs`. `sentinel-development.md` already assumes an LLM monitor uses it so that citations in an explanation resolve to messages for free; making it available to monitors is what makes that true.

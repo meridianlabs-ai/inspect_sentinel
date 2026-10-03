@@ -7,6 +7,13 @@ from ._context import Context
 from ._decorators import monitor, protocol
 from ._final import decide_final
 from ._host import Host, HumanAnswer
+from ._prompt import (
+    call_as_str,
+    last_turns,
+    message_as_str,
+    messages_as_str,
+    step_as_str,
+)
 from ._protocols import concurrent, human, observe_only, sequential, threshold
 from ._report import (
     Action,
@@ -63,9 +70,13 @@ __all__ = [
     "Sentinels",
     "Step",
     "Suspicion",
+    "call_as_str",
     "concurrent",
     "decide_final",
     "human",
+    "last_turns",
+    "message_as_str",
+    "messages_as_str",
     "monitor",
     "observe_only",
     "protocol",
@@ -73,6 +84,7 @@ __all__ = [
     "run_monitors",
     "run_protocols",
     "sequential",
+    "step_as_str",
     "threshold",
     "__version__",
 ]

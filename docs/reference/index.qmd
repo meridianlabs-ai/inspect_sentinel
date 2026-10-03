@@ -45,6 +45,14 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 ### human
 ### threshold
 
+## Prompt helpers
+
+### step_as_str
+### messages_as_str
+### message_as_str
+### call_as_str
+### last_turns
+
 ## Runner
 
 ### run_monitors

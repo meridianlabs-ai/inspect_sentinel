@@ -51,6 +51,11 @@ def test_author_facing_names_are_exported() -> None:
         "human",
         "threshold",
         "decide_final",
+        "messages_as_str",
+        "message_as_str",
+        "call_as_str",
+        "last_turns",
+        "step_as_str",
     }
     assert expected <= set(inspect_sentinel.__all__)
     for name in expected:

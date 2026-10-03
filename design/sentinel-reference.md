@@ -510,6 +510,8 @@ Rules:
 
 The helpers, lowest level first. The first two exist in Scout today and move down to `inspect_sentinel`, with Scout re-exporting them:
 
+Built so far: `messages_as_str`, `message_as_str`, `call_as_str`, `last_turns` and `step_as_str(step, *, turns=None)`, synchronous and without a preprocessor or a view; see `pr-series.md`, "Prompt helpers".
+
 | Helper | Does |
 |---|---|
 | `messages_as_str`, `message_as_str`, `MessagesPreprocessor` | Scout's message rendering: roles, tool calls and results, `<thinking>` blocks, media placeholders; exclusions and a `transform` via the preprocessor |

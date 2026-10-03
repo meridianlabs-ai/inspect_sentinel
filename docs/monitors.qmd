@@ -5,12 +5,47 @@ description: "Writing monitors: functions that observe a step and report a suspi
 
 ::: {.callout-warning}
 ## Outline
-This page is an outline: a summary and the sections planned for it, not yet the documentation. See [Getting Started](index.qmd) for a worked example.
+This page is mostly an outline: a summary and the sections planned for it. Only [Prompt Helpers](#prompt-helpers) is written. See [Getting Started](index.qmd) for a worked example.
 :::
 
 ## Overview
 
 How to write a monitor: a `@monitor` factory returning a function that takes a `Context` and a step and returns an `Observation`, or `None` to abstain. Covers the stages a monitor can watch and what each step carries, scalar and structured suspicion, writing explanations and references, when to write a monitor rather than a protocol, and grouping several functions into one monitor that shares state.
+
+## Prompt Helpers
+
+An LLM monitor puts the step in its prompt as text. `step_as_str()` renders a tool-call step: the conversation the model was sent (`step.input`), then the agent's message with the call being checked, then, after the call, its result:
+
+```python
+prompt = PROMPT.format(conversation=step_as_str(step, turns=6))
+```
+
+```text
+USER:
+Count the rows in data.csv.
+
+ASSISTANT:
+Tool Call: bash(command="wc -l data.csv")
+
+TOOL:
+151 data.csv
+
+ASSISTANT:
+The file has a header.
+
+Tool Call: bash(command="tail -n +2 data.csv | wc -l")
+```
+
+`turns=6` keeps the last six turns, where a turn is an assistant message with its tool results; without it the whole conversation is rendered. The parts are available on their own:
+
+| Helper | Renders |
+|---|---|
+| `messages_as_str(messages)` | messages, oldest first, without system messages unless `exclude_system=False`; `exclude_reasoning` and `exclude_tool_usage` leave out more |
+| `message_as_str(message)` | one message, e.g. `step.result` |
+| `call_as_str(call)` | a call as `bash(command="ls", timeout=30)` |
+| `last_turns(messages, n)` | not text: the messages of the last `n` turns, to pass to `messages_as_str()` |
+
+The format is Inspect Scout's, so a monitor prompt reads like a scanner prompt. Everything these render came from the agent or its tools: put it in the prompt as data to judge, apart from your instructions.
 
 ## Planned Sections
 
@@ -22,6 +57,6 @@ How to write a monitor: a `@monitor` factory returning a function that takes a `
 - Abstaining with `None`
 - Monitor or protocol? Keeping thresholds out of monitors
 - Several functions in one monitor: `MonitorGroup`
-- Prompting an LLM monitor safely: separating instructions from evidence; prompt helpers such as `monitor_prompt()` (planned)
+- Prompting an LLM monitor safely: separating instructions from evidence; `monitor_prompt()` (planned)
 - Failures: a monitor that raises is recorded as failed and the step goes on; a protocol that reads its scores fails unless it checks `observations.failed`
 - Testing a monitor

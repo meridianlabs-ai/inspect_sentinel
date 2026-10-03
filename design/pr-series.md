@@ -34,6 +34,8 @@ src/inspect_sentinel/
   _validate.py      run-time checks: validate_decision_shape, per-child checks,
                     named_children
   _final.py         decide_final, Final
+  _prompt.py        messages_as_str, message_as_str, call_as_str, last_turns,
+                    step_as_str
   _protocols/       observe, concurrent, threshold, one module each
   _resolve.py       resolve_sentinel
   _config.py        sentinel_from_config, config_from_sentinel
@@ -367,6 +369,26 @@ Decided by the maintainer on 2026-10-02, before the first release, so nothing is
 
 "The dispatcher" in inspect_sentinel's docstrings, where it meant whatever builds the context and invokes the root, is now "the host"; the design keeps "dispatcher" for inspect_ai's in-process host.
 
+## Prompt helpers
+
+Text rendering for LLM monitor prompts, decided with the maintainer on 2026-10-03, in `_prompt.py` and exported from the top level. Names follow Inspect Scout's public helpers so monitors and scanners read alike; sentinel does not import Scout, so a sentinel stays portable.
+
+```python
+def messages_as_str(messages: Sequence[ChatMessage], *, exclude_system: bool = True, exclude_reasoning: bool = False, exclude_tool_usage: bool = False) -> str
+def message_as_str(message: ChatMessage, *, exclude_reasoning: bool = False, exclude_tool_usage: bool = False) -> str
+def call_as_str(call: ToolCall) -> str
+def last_turns(messages: Sequence[ChatMessage], n: int) -> list[ChatMessage]
+def step_as_str(step: BeforeToolCall | AfterToolCall, *, turns: int | None = None) -> str
+```
+
+- **Scout's format, Scout's option semantics.** Role headers (`USER:`), `<thinking>` at whatever fidelity was returned, `<image />` placeholders, `Error in tool call '...'`. Synchronous, with no `preprocessor`, `include_ids` or list format; `exclude_*` are keyword arguments instead of a `MessageFormatOptions`. Dropped from Scout: the `metadata["role_label"]` override and the `<prefill>` wrapper.
+- **Tool calls render as `call_as_str()`**, `Tool Call: bash(command="ls -la /etc", timeout=30)`, where Scout lists arguments one per line. Strings are double-quoted with quotes and backslashes escaped and newlines kept, so a script stays readable and its end is unambiguous; other values are JSON. Text only.
+- **`message_as_str` always renders.** It takes no `exclude_system`, and a tool message renders even with `exclude_tool_usage`; leaving messages out is `messages_as_str`'s job. So it returns `str`, not Scout's `str | None`.
+- **Oldest first.** Successive steps of a conversation then share a prefix a provider can cache.
+- **A turn starts at an assistant message** and runs to the next one, so a call is never separated from its result. `last_turns` drops the system message and the task unless the conversation has no more than `n` turns; render with `exclude_system` to drop the system message from a full conversation.
+- **`step_as_str` is tool-stage only**: `step.input` (or its last `turns` turns), then the assistant's `step.message` with the call being checked, then after the call `step.result`. The generate stages extend it when they land.
+- `examples/llm_suspicion.py` and Getting Started now build the prompt with `step_as_str()`, so the monitor sees the conversation and not just the call.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands. Grouped by priority, decided by the maintainer on 2026-10-02, in the order to take them.
@@ -379,7 +401,7 @@ Do as soon as possible.
 
 ### Then: helpers for tool-stage rules
 
-- **Views and prompt helpers** (`monitor_prompt` and the view helpers): designed, not yet built. Add with them a structured-verdict helper, since today a structured verdict takes a pydantic model, a `GenerateConfig` with `ResponseSchema` and `json_schema`, `model_validate_json` and `Observation.score`; and helpers for escaping untrusted agent text and laying out a trusted/untrusted prompt, which `examples/llm_suspicion.py` writes by hand. Raised by the maintainer on 2026-10-02: views of the messages (for example the last six), and a helper rendering a call's arguments as text (`Sequence[str]`), so rules are shorter; the model-facing helpers are [workstreams.md](workstreams.md), workstream 3. The tool-stage parts, the message views and the arguments as text, come first.
+- **Views and prompt helpers.** The message rendering, `call_as_str()`, `last_turns()` and `step_as_str()` landed in [Prompt helpers](#prompt-helpers); helpers for tool-stage rules, such as a call's arguments as text, are in a parallel PR (`feat/rule-helpers`). Still to build: `monitor_prompt` and the other view helpers in `sentinel.md` (`message_numbering`, `new_since_last_report`, `result_as_str`, `briefing_as_str`); a structured-verdict helper, since today a structured verdict takes a pydantic model, a `GenerateConfig` with `ResponseSchema` and `json_schema`, `model_validate_json` and `Observation.score`; and helpers for escaping untrusted agent text and laying out a trusted/untrusted prompt, which `examples/llm_suspicion.py` writes by hand. The model-facing helpers are [workstreams.md](workstreams.md), workstream 3.
 
 ### Then: design decisions
 
