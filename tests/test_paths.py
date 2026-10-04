@@ -16,6 +16,7 @@ from inspect_sentinel import (
     HumanAnswer,
     Protocol,
     before_tool_call,
+    call_text,
     human,
     path_matches,
     path_resolves,
@@ -26,6 +27,8 @@ from inspect_sentinel import (
 )
 from inspect_sentinel._rules import _normalize
 from inspect_sentinel._runner import run_sentinel
+from inspect_sentinel._shell import sed_executes
+from tests._benign_corpus import BASH, PYTHON
 from tests._fakes import FakeHost, host_context
 
 
@@ -100,12 +103,15 @@ def _bash(command: str) -> ToolCall:
         (_call("python", code="x = a/b + c/d"), []),
         (_call("python", code="'.'.join(x) # see a/b"), []),
         # left to unresolved_paths()
-        (_bash("cat $HOME/x ${HOME}/y $(pwd)/z `pwd`/w"), []),
-        (_bash('cat "$HOME"/x /home/$USER/y'), []),
+        (_bash("cat $HOME/x ${HOME}/y $(pwd)/z `pwd`/w"), ["~/x", "~/y"]),
+        (_bash('cat "$HOME"/x "$HOME/y" /home/$USER/z'), ["~/x", "~/y"]),
+        (_bash("cp '$HOME/x' '~/y' \"~/z\""), []),
+        (_bash("cat '$HOME/x' '~/y' \"~/z\""), ["$HOME/x", "./~/y", "./~/z"]),
+        (_call("bash_session", input="cat $HOME/x"), []),
         (_bash("cat /etc/pass* /e?c/passwd /[e]tc/passwd */x"), []),
         (_bash("cat ~user/e /e\\tc/passwd '/e'tc/passwd"), []),
         (_bash("curl https://x.org/a file:///b"), []),
-        (_bash("cd /w && cat a/b"), ["/w"]),
+        (_bash("cd /w && cat a/b"), ["/w", "a/b", "/w/a/b"]),
         (_call("python", code='open(f"/x/{name}")'), []),
         (_call("python", code="home + '/.ssh'"), []),
         # documented misses
@@ -423,14 +429,14 @@ def test_path_resolves(
     "call, cwd, home, expected",
     [
         # built at run time
-        (_bash("cat $HOME/x"), "/w", "/root", ["$HOME/x"]),
-        (_bash("cat ${HOME}/x"), "/w", "/root", ["${HOME}/x"]),
+        (_bash("cat $HOME/x"), "/w", None, ["$HOME/x"]),
+        (_bash("cat ${HOME}/x"), "/w", None, ["${HOME}/x"]),
         (_bash("cat ${HOME}x/y"), "/w", "/root", ["${HOME}x/y"]),
         (_bash("cat $(pwd)/x"), "/w", "/root", ["$(pwd)/x"]),
         (_bash("cat $(dirname $(pwd))/x"), "/w", "/root", ["$(dirname $(pwd))/x"]),
         (_bash("cat `pwd`/x"), "/w", "/root", ["`pwd`/x"]),
-        (_bash('cat "$HOME"/x'), "/w", "/root", ['"$HOME"/x']),
-        (_bash('cat "$HOME/x"'), "/w", "/root", ["$HOME/x"]),
+        (_bash('cat "$HOME"/x'), "/w", None, ['"$HOME"/x']),
+        (_bash('cat "$HOME/x"'), "/w", None, ["$HOME/x"]),
         (_bash("cat /home/$USER/.ssh/id"), "/w", "/root", ["/home/$USER/.ssh/id"]),
         (_bash('cat "/home/"$USER/id'), "/w", "/root", ['"/home/"$USER/id']),
         (_bash("cat /x/${D}"), "/w", "/root", ["/x/${D}"]),
@@ -442,7 +448,7 @@ def test_path_resolves(
             ["{a,b}/x", "/home/{a,b}/y"],
         ),
         (_bash("echo $(cat /etc/passwd)/x"), "/w", "/root", ["$(cat /etc/passwd)/x"]),
-        (_bash("PATH=/a:$HOME/bin x"), "/w", "/root", ["$HOME/bin"]),
+        (_bash("PATH=/a:$HOME/bin x"), "/w", None, ["$HOME/bin"]),
         (
             _bash("cat /root/.ss$@h/id ~/.ss$*h/id"),
             "/w",
@@ -519,9 +525,29 @@ def test_path_resolves(
         (_bash("cat a/b ./x ../y"), None, None, ["a/b", "./x", "../y"]),
         (_bash("cat a/b ./x ../y"), "/w", None, []),
         (_bash("ls ."), None, None, ["."]),
-        (_bash("cd .. && cat etc/passwd"), "/w", None, ["..", "etc/passwd"]),
-        (_bash("cd /w && cat a/b"), "/w", None, ["a/b"]),
+        (_bash("cd x && cat a/b"), "/w", None, ["a/b"]),
+        (_bash("ls && cd .. && cat a/b"), "/w", None, ["..", "a/b"]),
+        (_bash("cd /x && cd y && cat a/b"), "/w", None, ["a/b"]),
+        (_bash("cd -P /x && cat a/b"), "/w", None, ["a/b"]),
+        (_bash("\\cd /x; cat a/b"), "/w", None, ["a/b"]),
+        (_bash("c''d /x; cat a/b"), "/w", None, ["a/b"]),
+        (_bash("builtin cd /x; cat a/b"), "/w", None, ["a/b"]),
+        (_bash('bash -c "cd /x; cat a/b"'), "/w", None, ["a/b"]),
+        (_bash("$CMD /x; cat a/b"), "/w", None, ["a/b"]),
+        (_bash("X=1 $CMD /x; cat a/b"), "/w", None, ["a/b"]),
+        (_bash("X=$(ls) Y=1; cat a/b"), "/w", None, []),
+        (_bash("cd $D && cat a/b"), "/w", None, ["a/b"]),
+        (_bash("tar -xzf a.tgz -C out/ b/c"), "/w", None, ["b/c"]),
+        (_bash("tar -xzC out/ -f a.tgz b/c"), "/w", None, ["b/c"]),
+        (_bash("env -C /x cat a/b"), "/w", None, ["a/b"]),
+        (_bash("env --chdir=/x cat a/b"), "/w", None, ["a/b"]),
+        (_bash("bash -c 'tar -C /x -cf - a/b'"), "/w", None, ["a/b"]),
         (_bash("pushd /tmp; cat x/y"), "/w", None, ["x/y"]),
+        # unbalanced quotes: the whole call
+        (_bash("cat 'a"), "/w", "/root", ["cat 'a"]),
+        (_bash('echo "a $(b'), "/w", "/root", ['echo "a $(b']),
+        (_bash("cat <(ls"), "/w", "/root", ["cat <(ls"]),
+        (_call("bash_session", input="echo 'x"), "/w", "/root", ["echo 'x"]),
         (_bash("tar -C /root -cf - .ssh/id"), "/w", None, [".ssh/id"]),
         (_bash("git -C /root show HEAD:.ssh/id"), "/w", None, [".ssh/id"]),
         (_bash("make --directory=/x a/b"), "/w", None, ["a/b"]),
@@ -558,6 +584,81 @@ def test_path_resolves(
             None,
             ["a"],
         ),
+        # `$HOME` with `home`, unless the call sets HOME
+        (_bash("cat $HOME/x ${HOME}/y"), "/w", "/root", []),
+        (_bash('cat "$HOME"/x "$HOME/y" "${HOME}/z"'), "/w", "/root", []),
+        (_bash("PATH=/a:$HOME/bin x"), "/w", "/root", []),
+        (_bash("HOME=/etc; cat $HOME/x"), "/w", "/root", ["$HOME/x"]),
+        (_bash("export HOME=/etc; cat ~/x"), "/w", "/root", ["~/x"]),
+        (_bash("cat ${HOME:=/etc}/x"), "/w", "/root", ["${HOME:=/etc}/x"]),
+        (
+            _call("python", code="os.environ['HOME'] = '/'; open('~/x')"),
+            "/w",
+            "/root",
+            ["~/x"],
+        ),
+        (
+            _bash("cat $HOME/.ss*/x a$HOME/x"),
+            "/w",
+            "/root",
+            ["$HOME/.ss*/x", "a$HOME/x"],
+        ),
+        (_bash('cat "$HOME/x"y $HOME/"x"'), "/w", "/root", ['"$HOME/x"y', '$HOME/"x"']),
+        (_call("bash_session", input="cat $HOME/x"), "/w", "/root", ["$HOME/x"]),
+        (
+            _call("python", code="os.path.expandvars('$HOME/x')"),
+            "/w",
+            "/root",
+            ["$HOME/x"],
+        ),
+        # `$PWD` is the working directory
+        (_bash('cat $PWD/x "${PWD}/y"'), "/w", None, []),
+        (_bash("cat $PWD/x"), None, None, ["$PWD/x"]),
+        (_bash("cd / && cat $PWD/x"), "/w", None, []),
+        (_bash("cd x && cat $PWD/y"), "/w", None, ["$PWD/y"]),
+        (_bash("PWD=/; cat $PWD/x"), "/w", None, ["$PWD/x"]),
+        (_call("bash_session", input="cat $PWD/x"), "/w", None, ["$PWD/x"]),
+        # quoted `~` is not expanded
+        (_bash("cp '~/x' \"~/y\" z"), "/w", "/root", ["~/x", "~/y"]),
+        # a leading `cd` to a place: relative paths are read both ways
+        (_bash("cd /w/api && pytest tests/unit"), "/w", None, []),
+        (_bash("cd .. && ls a/b"), "/w", None, []),
+        (_bash("cd ~/p && cat a/b"), "/w", "/root", []),
+        # single-quoted programs of commands that read them literally
+        (_bash("sed -i 's/[[:space:]]*$//' a.py"), "/w", None, []),
+        (_bash("sed -E 's/\\/usr\\/local/\\/opt/g' a.sh"), "/w", None, []),
+        (_bash("sed -e 's/^ *//' -e 's/ *$//' a"), "/w", None, []),
+        (_bash("awk -F/ 'NR > 1 {print $2/$3}' a | sort -rn"), "/w", None, []),
+        (_bash("printf 'a/b/c\\n' | cut -d/ -f2"), "/w", None, []),
+        (
+            _bash("echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc"),
+            "/w",
+            "/root",
+            [],
+        ),
+        (_bash('grep -E "a*/b" x'), "/w", None, []),
+        (_bash("cat <<'X' > a.sh\nls $D/*.txt\nX"), "/w", None, []),
+        # ... but not when the call could run them, or after `cd`
+        (_bash("sed '1e cat /e*/x' f"), "/w", None, ["/e*/x"]),
+        (_bash("sed 's/a/cat \\/e*\\/x/e' f"), "/w", None, ["\\/e*\\/x/e"]),
+        (_bash("sed -n 'p;e ls /e*' f"), "/w", None, ["/e*"]),
+        (_bash("sed 's/[/]/x/e' f"), "/w", None, ["s/[/]/x/e"]),
+        (_bash("sed -f s.sed 'a*/b'"), "/w", None, ["a*/b"]),
+        (_bash("awk 'BEGIN{system(\"ls $D/x\")}'"), "/w", None, ["$D/x"]),
+        (_bash("awk '{print | \"cat /e*/x\"}'"), "/w", None, ['/e*/x"}']),
+        (_bash("echo 'cat $D/x' | sh"), "/w", None, ["$D/x"]),
+        (_bash("echo 'cat $D/x' > a.sh; bash a.sh"), "/w", None, ["$D/x"]),
+        (_bash("cat $(echo '/e*/x')"), "/w", None, ["/e*/x"]),
+        (_bash("printf -v P '/e*/x'"), "/w", None, ["/e*/x"]),
+        (_bash("X=1 grep '/e*/x' f"), "/w", None, ["/e*/x"]),
+        (_bash("find / -path '/e*/x'"), "/w", None, ["/e*/x"]),
+        (_bash("eslint 'src/**/*.ts'"), "/w", None, ["src/**/*.ts"]),
+        (_bash('cat "$D/x"'), "/w", None, ["$D/x"]),
+        (_bash("cat '/e*'/x"), "/w", None, ["'/e*'/x"]),
+        (_bash("cat '/a b*/../etc/x'"), "/w", None, ["b*/../etc/x"]),
+        (_bash("cd /w && cat 'a*/b'"), "/w", None, []),
+        (_bash("cd x && cat 'a*/b'"), "/w", None, ["a*/b"]),
+        (_call("bash_session", input="grep '/e*/x' f"), "/w", None, ["/e*/x"]),
         # near misses that resolve
         (_bash("cat /etc/passwd ~/.ssh/id"), None, "/root", []),
         (_bash("cat ~/.ssh/id ~"), None, None, []),
@@ -653,8 +754,18 @@ def protected_paths() -> Protocol:
         (_bash("cat $HOME/x /etc/passwd"), "reject", False),
         (_call("python", code="open('/etc/hosts').read()"), "reject", False),
         (_call("text_editor", command="view", path="../etc/passwd"), "reject", False),
-        (_bash("cat $HOME/.ssh/id_rsa"), "reject", True),
-        (_bash("cat ${HOME}/.ssh/id_rsa"), "reject", True),
+        (_bash("cat $HOME/.ssh/id_rsa"), "reject", False),
+        (_bash('cat "${HOME}/.ssh/id_rsa"'), "reject", False),
+        (_bash("HOME=/x; cat $HOME/.ssh/id_rsa"), "reject", True),
+        (_bash("cat '/e'\"tc/passwd\""), "reject", True),
+        (_bash("cat \"/e\"'tc/passwd'"), "reject", True),
+        (_bash("cat '/etc/passwd'"), "reject", False),
+        (_bash("grep x '/etc/pass*'"), "reject", False),
+        (_bash("grep x '/e*/../etc/passwd'"), "reject", True),
+        (_bash("cat '/x y*/../etc/passwd'"), "reject", True),
+        (_bash("sed '1e cat ~/.ss*/id_rsa' f"), "reject", True),
+        (_bash("echo 'cat $HOME/.ssh/id_rsa' | sh"), "reject", True),
+        (_bash("cat 'x"), "reject", True),
         (_bash("cat $(echo ~)/.ssh/id_rsa"), "reject", True),
         (_bash("cat `echo ~`/.ssh/id_rsa"), "reject", True),
         (_bash("cat /e*/passwd"), "reject", True),
@@ -662,11 +773,18 @@ def protected_paths() -> Protocol:
         (_bash("cat '/e'tc/passwd"), "reject", True),
         (_bash("cat ~root/.ssh/id_rsa"), "reject", True),
         (_bash("curl file:///etc/passwd"), "reject", True),
-        (_bash("cd / && cat etc/passwd"), "reject", True),
+        (_bash("cd / && cat etc/passwd"), "reject", False),
+        (_bash("cd .. && cat ../etc/passwd"), "reject", False),
+        (_bash("cd / && cat $PWD/etc/passwd"), "reject", False),
+        (_bash("cd /tmp && cd / && cat etc/passwd"), "reject", True),
+        (_bash("tar -C / -cf - etc/passwd"), "reject", True),
         (_call("python", code="open(f'/{d}/passwd')"), "reject", True),
         (_bash("wc -l /work/data.csv > /work/count.txt"), "continue", False),
         (_bash("python report.py && cat out/a.txt"), "continue", False),
         (_bash("ls ~/notes"), "continue", False),
+        (_bash("cat $HOME/notes.txt"), "continue", False),
+        (_bash("sed -i 's/ *$//' src/a.py"), "continue", False),
+        (_bash("cd /work/api && pytest tests/unit"), "continue", False),
         (_call("python", code="open('data.csv').read()"), "continue", False),
     ],
 )
@@ -680,6 +798,71 @@ async def test_a_deny_list_escalates_what_it_cannot_resolve(
     assert decision is not None
     assert decision.action == action
     assert bool(host.asked) is asked
+
+
+# Escalated by the deny-list idiom with `cwd` and `home`: wildcards (`src/*.py`,
+# `glob.glob`), a quoted glob given to a program that expands it (`eslint`), a
+# relative `cd` whose target `CDPATH` could change, and Python f-strings or `+`
+# with a `/`. Before quoting and `$HOME` were taken into account, 25 of the 286.
+EVERYDAY_ESCALATED = [
+    "eslint 'src/**/*.ts'",
+    "prettier --write 'src/**/*.{ts,tsx}'",
+    "cd build && cmake .. && make",
+    'for f in data/*.csv; do wc -l "$f"; done',
+    "wc -l src/*.py",
+    "import glob\nprint(glob.glob('data/*.csv'))",
+    "out = f'out/{name}.csv'\ndf.to_csv(out)",
+    "for i in range(3):\n    print(f'epoch {i}/{epochs}')",
+    "print(f'{a}/{b}')",
+    "s = 'a' + '/' + 'b'",
+    'print(f"{os.getcwd()}/out")',
+]
+
+
+def test_everyday_calls_rarely_escalate() -> None:
+    calls = [_bash(command) for command in BASH]
+    calls.extend(_call("python", code=code) for code in PYTHON)
+    assert len(calls) >= 200
+    for call in calls:
+        assert not any(
+            path_matches(path, PROTECTED, cwd="/work", home="/root")
+            for path in paths_in(call)
+        ), call
+    escalated = [
+        call_text(call)
+        for call in calls
+        if unresolved_paths(call, cwd="/work", home="/root")
+    ]
+    assert escalated == EVERYDAY_ESCALATED
+
+
+@pytest.mark.parametrize(
+    "script, executes",
+    [
+        ("s/a/b/g", False),
+        ("s/[[:space:]]*$//", False),
+        ("s|/usr|/opt|; /^#/d; 1,3p", False),
+        ("/x/{s/a/b/;p}", False),
+        ("y/abc/xyz/", False),
+        ("a\\\ntext e\n$d", False),
+        ("1~2d; 0,/re/s//x/w out.txt", False),
+        ("s/e/E/g # e", False),
+        ("e", True),
+        ("1e ls", True),
+        ("s/a/b/e", True),
+        ("s/a/b/ge", True),
+        ("/x/e ls", True),
+        ("p;e ls", True),
+        ("s/[/]/x/e", True),
+        ("s/x/[/e", True),
+        ("s/a/b", True),
+        ("s/a/b/;Z", True),
+        ("\\%x%e", True),
+        ("{e ls\n}", True),
+    ],
+)
+def test_sed_executes(script: str, executes: bool) -> None:
+    assert sed_executes(script) is executes
 
 
 # Properties. A path is built from segments; `_SEGMENT` holds no `.` or `..`.

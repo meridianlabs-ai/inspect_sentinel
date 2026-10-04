@@ -20,6 +20,7 @@ from wcmatch.glob import (
     is_magic,
 )
 
+from ._shell import LITERAL, UNQUOTED, Command, Shell, lex, literal_spans
 from ._step import AfterToolCall, BeforeToolCall
 
 
@@ -109,9 +110,21 @@ _URL = re.compile(r"(?<![\w+.-])[A-Za-z][\w+.-]*://[^\s'\"`<>]*")
 _USER_PATH = re.compile(rf"(?<![^\s'\"(=:,;|&<>])~[^/{_STOP}]+/[^{_STOP}]*")
 _FILE_URL = re.compile(r"(?<![\w+.-])file:/[^\s'\"`<>;|&()]*", re.IGNORECASE)
 _CHANGES_DIRECTORY = re.compile(
-    r"(?:^|[;&|({\n]|\b(?:then|do|else)\b)\s*(?:cd|pushd|popd)(?![\w.-])"
-    r"|\b(?:git|tar|make)\b[^;&|\n]*\s-C|--directory\b|\bchdir\b|\bcwd\s*="
+    r"(?:^|[;&|({\n\"'`]|\b(?:then|do|else)\b)\s*(?:cd|pushd|popd)(?![\w.-])"
+    r"|\b(?:git|tar|make|env)\b[^;&|\n]*\s-[A-Za-z]*C|--directory\b|--chdir\b"
+    r"|\bchdir\b|\bcwd\s*="
 )
+_SHELL_DIRECTORY = re.compile(
+    r"(?:^|[;&|({\n\"'`]|\b(?:then|do|else)\b)\s*(?:cd|pushd|popd)(?![\w.-])"
+    r"|\bchdir\b|\bcwd\s*="
+)
+_SCOPED_DIRECTORY = re.compile(r"(?<![^\s'\"=])(?:-[A-Za-z]*C|--directory\b|--chdir\b)")
+_SCOPING_PROGRAM = re.compile(r"\b(?:git|tar|make|env)\b")
+_SCOPING_PROGRAMS = frozenset({"git", "tar", "make", "env"})
+_DIRECTORY_COMMANDS = frozenset({"cd", "pushd", "popd"})
+_VARIABLE_WORD = {name: re.compile(rf"(?<!\w){name}(?!\w)") for name in ("HOME", "PWD")}
+_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*\+?=")
+_PATH_START = frozenset(" \t\n=:;|&<>(")
 _STRING_LITERAL = re.compile(r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"")
 _GLUED_AFTER = re.compile(
     r"""["']*(?:\$[\w{(@*#?$!-]|\{)|(['"])(?!\1\1)[\w/$~*?\\+`'"-]"""
@@ -267,7 +280,9 @@ def paths_in(call: ToolCall) -> list[str]:
 
     Two sources, in this order: the path arguments of inspect_ai's built-in file tools (`text_editor()`'s and `list_files()`'s `path`, `memory()`'s `path`, `old_path` and `new_path`, `read_file()`'s `file_path`, `grep()`'s `path`); and paths in the text of `bash()`, `bash_session()`, `python()` and `code_execution()` calls. In that text a path is a token that begins with `/` or `~/`, or is `~` alone, or is glued to a short option (`-C/etc`); or a relative one with a `/` in it (`a/b`, `./x`, `../x`), which in `python()` and `code_execution()` counts only inside a string literal, and in `bash()` and `bash_session()` includes `.` and `..` alone. A token ends at whitespace, quotes or shell punctuation.
 
-    A reference whose path cannot be read from the text is left out, and `unresolved_paths()` reports it instead: one built at run time (`$HOME/x`, `/home/$USER/x`, `$(pwd)/x`, backticks, `f"/x/{name}"`, `{a,b}/x`, `"/x/" + name`, `Path.home() / ".ssh"`), one with a shell wildcard (`/etc/pass*`, `/e*/passwd`, `@(x)`) or a backslash in it, a `~` prefix other than `~/` (`~user/x`, `~+/x`), `file://` URLs, and relative paths in code that changes directory (`cd`, `pushd`, `chdir`, `git -C`, `cwd=`). In a shell, a backslash at the end of a line joins it to the next, as the shell does.
+    A reference whose path cannot be read from the text is left out, and `unresolved_paths()` reports it instead: one built at run time (`/home/$USER/x`, `$(pwd)/x`, backticks, `f"/x/{name}"`, `{a,b}/x`, `"/x/" + name`, `Path.home() / ".ssh"`), one with a shell wildcard (`/etc/pass*`, `/e*/passwd`, `@(x)`) or a backslash in it, a `~` prefix other than `~/` (`~user/x`, `~+/x`), a quoted `~` (`'~/x'`), `file://` URLs, and relative paths in code that changes directory (`cd`, `pushd`, `chdir`, `git -C`, `cwd=`). In a shell, a backslash at the end of a line joins it to the next, as the shell does.
+
+    In `bash()` text, `$HOME/x`, `${HOME}/x` and `"$HOME"/x` are given as `~/x`, and `$PWD/x` as `./x`, unless the call names the variable another way (`HOME=/etc`). After a `cd` that `unresolved_paths()` can follow, a relative path is given both as written and joined to the new directory (`cd /w && cat a/b` gives `a/b` and `/w/a/b`). A quoted argument that the shell and its command both read literally is given as written, wildcards and `$` included (`cat '/e*c/x'` gives `/e*c/x`); `unresolved_paths()` says when.
 
     Not found at all: a path with no `/` in a command (`cat passwd`), a path held whole in a variable (`cat $F`), a path built by a function (`os.path.join(home, ".ssh")`), a path whose `/` is written as an escape (`"\x2fetc\x2fpasswd"`), and paths in the arguments of any other tool. Misread: a quoted path with a space is cut at the space (`"/a b"` as `/a`), and a `/` or `//` used as an operator is found as a path (`$((4 / 2))` as `/`).
 
@@ -290,7 +305,7 @@ def unresolved_paths(
 ) -> list[str]:
     r"""References to paths in the tool call that cannot be resolved to a place.
 
-    These are the paths from `paths_in()` that `path_resolves()` cannot place with this `cwd` and `home`, and the references `paths_in()` leaves out because no path can be read from them: those built at run time (`$HOME/x`, `${HOME}/x`, `/home/$USER/x`, `$(pwd)/x`, `` `pwd`/x ``, `"$HOME"/x`, `f"/x/{name}"`, `{a,b}/x`, `"/x/" + name`, `Path.home() / ".ssh"`), those with a shell wildcard (`/etc/pass*`, `/e*/passwd`, `/[e]tc/passwd`, `@(x)`) or a backslash, `~user/x` and `~+/x`, `file://` URLs, and relative paths in code that changes directory (`cd`, `git -C`, `cwd=`), which `cwd` no longer places. A rule that denies paths escalates or rejects a call with any of them, since a deny-list cannot see where they lead:
+    These are the paths from `paths_in()` that `path_resolves()` cannot place with this `cwd` and `home`, and the references `paths_in()` leaves out because no path can be read from them: those built at run time (`/home/$USER/x`, `$D/x`, `$(pwd)/x`, `` `pwd`/x ``, `f"/x/{name}"`, `{a,b}/x`, `"/x/" + name`, `Path.home() / ".ssh"`), those with a shell wildcard (`/etc/pass*`, `/e*/passwd`, `/[e]tc/passwd`, `@(x)`) or a backslash, `~user/x`, `~+/x` and a quoted `~` (`'~/x'`), `file://` URLs, and relative paths in code that changes directory (`cd`, `git -C`, `cwd=`), which `cwd` no longer places. A shell call whose quotes or brackets do not close is reported whole. A rule that denies paths escalates or rejects a call with any of them, since a deny-list cannot see where they lead:
 
     ```python
     for path in paths_in(step.call):
@@ -301,7 +316,13 @@ def unresolved_paths(
         return Decision.escalate(f"cannot resolve {', '.join(unresolved)}")
     ```
 
-    Without `cwd`, every relative path is unresolved, including the operands of `/` in a shell's arithmetic and words such as `origin/main`, so pass the agent's working directory. Quoting is not taken into account, so a single-quoted `sed` or `awk` program with a `/` next to `$`, `\` or a wildcard is reported, and a heredoc's body is read as shell. `$HOME` is not expanded, even with `home`. What `paths_in()` does not find at all, this does not report either.
+    In `bash()`, `$HOME/x`, `${HOME}/x` and `"$HOME"/x` are read as `~/x`, so they are reported without `home` and resolved with it, and `$PWD/x` is read as `./x`. They are reported as written when the call names the variable another way (`HOME=/etc; cat $HOME/x`), and in `bash_session()`, whose shell keeps variables from earlier calls.
+
+    A `cd` to an absolute path or `~`, or a leading `cd` to a path that begins with `.` or `..`, leaves later relative paths resolved: `paths_in()` gives each both as written and joined to the new directory, in case the `cd` fails. Any other change of directory makes them unresolved, as does `cd name` (which `CDPATH` can redirect), a second `cd`, and a command whose name is not written out (`$CMD`). `-C` and `--directory` of `tar`, `git`, `make` and `env` affect only the rest of that command.
+
+    Quoting is taken into account in `bash()`. A whole argument in single quotes, or in double quotes without `$`, `` ` `` or `\`, is not expanded by the shell. When it is an argument of a command that also reads it literally (`awk`, `cat`, `cut`, `diff`, `echo`, `egrep`, `fgrep`, `grep`, `head`, `jq`, `ls`, `nl`, `printf`, `rg`, `sed`, `sort`, `tail`, `tee`, `tr`, `uniq`, `wc`), its tokens are paths as written rather than unresolved references, so `sed 's/ *$//' f` and `cat '/e*c/x'` resolve. The same holds for a heredoc body with a quoted delimiter given to such a command. This applies only when nothing in the call could run the text: no command or process substitution; only those commands, `cd`, `true`, `false` and `:`; no variable assignment; no `sed` script with `e` or read from a file; no `awk` program with `system`, `|` or `@`, or read from a file; and none of `printf -v`, `sort --compress-program`, `--files0-from` and `rg --pre`. An argument with a `..` in it is not read this way, since a quoted path cut at a space could climb anywhere. A quoted glob given to any other program, such as `find -path '/e*'` or `eslint 'src/**/*.ts'`, is reported, since that program expands it.
+
+    Without `cwd`, every relative path is unresolved, including the operands of `/` in a shell's arithmetic and words such as `origin/main`, so pass the agent's working directory. Other quoted text, a heredoc's body and a variable are read as shell, so a wildcard in a path (`wc -l src/*.py`), a variable in a path (`cp $f out/$f`) and a Python f-string or `+` with a `/` are reported. What `paths_in()` does not find at all, this does not report either.
 
     Args:
         call: The tool call.
@@ -321,11 +342,10 @@ def unresolved_paths(
         if not path_resolves(path, cwd=cwd, home=home)
     ]
     if call.function in _CODE_TOOLS:
-        references.extend(
-            ref.text
-            for ref in _scan(call.function, call_text(call))
-            if not (ref.readable and path_resolves(ref.text, cwd=cwd, home=home))
-        )
+        for ref in _scan(call.function, call_text(call)):
+            resolved = ref.readable and path_resolves(ref.text, cwd=cwd, home=home)
+            if not resolved or (ref.variable == "HOME" and home is None):
+                references.append(ref.written or ref.text)
     return list(dict.fromkeys(references))
 
 
@@ -342,6 +362,9 @@ class _Reference(NamedTuple):
     start: int
     text: str
     readable: bool
+    end: int = 0
+    variable: str | None = None
+    written: str | None = None
 
 
 class _Span(NamedTuple):
@@ -353,20 +376,42 @@ def _scan(function: str, text: str) -> list[_Reference]:
     shell = function in _SHELL_TOOLS
     if shell:
         text = text.replace("\\\n", "")
+    lexed = lex(text) if shell else None
+    bash = lexed is not None and function == "bash"
+    home_mentioned = _mentioned(text, "HOME")
+    pwd_mentioned = _mentioned(text, "PWD")
+    literal = _Spans(literal_spans(text, lexed) if lexed is not None and bash else [])
     unreadable: list[_Span] = []
     blocked: list[_Span] = []
+    found: list[_Reference] = []
+    homes: list[_Span] = []
     urls = _Spans(
         m.span() for m in _URL.finditer(text) if not _FILE_URL.match(m.group())
     )
 
     def mark(start: int, end: int, block_from: int | None = None) -> None:
         span = _Span(_word_start(text, start), _word_end(text, end))
-        unreadable.append(span)
+        content = literal.enclosing(start, end)
+        if content is None:
+            unreadable.append(span)
+        else:
+            begin, finish = max(span.start, content[0]), min(span.end, content[1])
+            found.append(
+                _Reference(begin, _literal(text[begin:finish]), True, end=finish)
+            )
         blocked.append(span if block_from is None else _Span(block_from, span.end))
 
     for match in (_SHELL_BUILT_PATH if shell else _BUILT_PATH).finditer(text):
-        if not urls.contains(match.start()):
+        if urls.contains(match.start()):
+            continue
+        home = None
+        if lexed is not None and bash:
+            home = _variable_path(text, match, lexed, home_mentioned, pwd_mentioned)
+        if home is None:
             mark(match.start(), match.end(), block_from=match.end("expansion"))
+        else:
+            found.append(home)
+            homes.append(_Span(home.start, match.end()))
     for pattern in (_USER_PATH, _FILE_URL):
         for match in pattern.finditer(text):
             mark(*match.span())
@@ -376,25 +421,51 @@ def _scan(function: str, text: str) -> list[_Reference]:
     literals = _Spans(
         [] if shell else (m.span() for m in _STRING_LITERAL.finditer(text))
     )
-    changes_directory = _CHANGES_DIRECTORY.search(text) is not None
+    changes = _directory_changes(text, lexed, home_mentioned)
+    relative: list[_Span] = []
     for match in _RELATIVE_TOKEN.finditer(text):
         token, start = match.group(), match.start()
         if shell:
-            relative = "/" in token or token in (".", "..")
+            is_relative = "/" in token or token in (".", "..")
         else:
-            relative = "/" in token and literals.contains(start)
-        if relative:
+            is_relative = "/" in token and literals.contains(start)
+        if is_relative:
             candidates.append(match.span())
-            if changes_directory:
-                mark(*match.span())
+            relative.append(_Span(*match.span()))
 
+    blocked.extend(homes)
+    home_spans = _Spans(homes)
     readable: list[_Span] = []
     for start, end in candidates:
+        if home_spans.overlaps(start, end):
+            continue
         token_end = _readable_end(text, start, end, shell)
-        if token_end is None or _glued(text, start, token_end, shell):
+        if (
+            token_end is None
+            or _glued(text, start, token_end, shell)
+            or (text.startswith("~", start) and home_mentioned)
+            or (
+                lexed is not None
+                and lexed.quoting[start] != UNQUOTED
+                and text.startswith("~", start)
+            )
+        ):
             mark(start, end)
         else:
             readable.append(_Span(start, token_end))
+
+    for span in relative:
+        if changes.moved(span.start):
+            unreadable.append(
+                _Span(_word_start(text, span.start), _word_end(text, span.end))
+            )
+            blocked.append(unreadable[-1])
+    kept: list[_Reference] = []
+    for ref in found:
+        if _is_relative(ref.text) and changes.moved(ref.start):
+            unreadable.append(_Span(ref.start, ref.end))
+        else:
+            kept.append(ref)
 
     unreachable = _Spans(_merge(blocked))
     references = [
@@ -402,11 +473,194 @@ def _scan(function: str, text: str) -> list[_Reference]:
         for start, end in readable
         if not unreachable.overlaps(start, end)
     ]
+    references.extend(kept)
+    if changes.target is not None:
+        target = changes.target
+        references.extend(
+            [
+                _Reference(ref.start, posixpath.join(target, ref.text), True)
+                for ref in references
+                if _is_relative(ref.text) and ref.start != changes.target_start
+            ]
+        )
     references.extend(
         _Reference(start, _unquote(text[start:end]), False)
         for start, end in _merge(unreadable)
     )
+    if shell and lexed is None and text.strip():
+        references.append(_Reference(0, text.strip(), False))
     return sorted(references, key=lambda ref: ref.start)
+
+
+def _is_relative(path: str) -> bool:
+    return not (path.startswith("/") or _is_home(path))
+
+
+def _literal(text: str) -> str:
+    return f"./{text}" if text.startswith("~") else text
+
+
+def _mentioned(text: str, name: str) -> bool:
+    for match in _VARIABLE_WORD[name].finditer(text):
+        start = match.start()
+        if text.endswith("$", 0, start) and not text.endswith("$$", 0, start):
+            continue
+        if text.endswith("${", 0, start) and text.startswith("}", match.end()):
+            continue
+        return True
+    return False
+
+
+def _variable_path(
+    text: str,
+    match: re.Match[str],
+    lexed: Shell,
+    home_mentioned: bool,
+    pwd_mentioned: bool,
+) -> _Reference | None:
+    variable = match.group("expansion").strip("${}")
+    if match.group("expansion") not in (f"${variable}", f"${{{variable}}}"):
+        return None
+    if not (
+        (variable == "HOME" and not home_mentioned)
+        or (variable == "PWD" and not pwd_mentioned)
+    ):
+        return None
+    start, after, end = match.start("expansion"), match.end("expansion"), match.end()
+    quoting = lexed.quoting[start]
+    if quoting == LITERAL:
+        return None
+    begin = start
+    if quoting != UNQUOTED:
+        if not text.endswith('"', 0, start) or lexed.quoting[start - 1] != UNQUOTED:
+            return None
+        begin = start - 1
+        if text.startswith('"/', after):
+            after += 1
+        elif not (text.startswith("/", after) and text.startswith('"', end)):
+            return None
+    elif not text.startswith("/", after):
+        return None
+    if begin > 0 and text[begin - 1] not in _PATH_START:
+        return None
+    if _readable_end(text, after, end, True) != end or _glued_after(text, after, end):
+        return None
+    if text.startswith('"', end) and quoting == UNQUOTED:
+        return None
+    finish = end + (1 if text.startswith('"', end) else 0)
+    path = ("~" if variable == "HOME" else ".") + text[after:end]
+    return _Reference(begin, path, True, finish, variable, _unquote(text[begin:finish]))
+
+
+class _Changes(NamedTuple):
+    everywhere: bool
+    scopes: list[_Span]
+    target: str | None = None
+    target_start: int | None = None
+
+    def moved(self, position: int) -> bool:
+        return self.everywhere or any(
+            span.start <= position < span.end for span in self.scopes
+        )
+
+
+def _directory_changes(
+    text: str, lexed: Shell | None, home_mentioned: bool
+) -> _Changes:
+    if lexed is None:
+        return _Changes(_CHANGES_DIRECTORY.search(text) is not None, [])
+    words = {
+        word.start: (command, index)
+        for command in lexed.commands
+        for index, word in enumerate(command.words)
+        if word.plain
+    }
+    everywhere = False
+    scopes: list[_Span] = []
+    for count, match in enumerate(_SCOPED_DIRECTORY.finditer(text)):
+        position = match.start()
+        owner = words.get(position)
+        long = match.group().startswith("--")
+        if count >= 64:
+            everywhere = True
+            break
+        if owner is not None:
+            command, index = owner
+            if long or command.words[0].value in _SCOPING_PROGRAMS:
+                start = _scope_start(command, index)
+                scopes.append(_Span(start, _command_end(command)))
+        elif long or _SCOPING_PROGRAM.search(
+            text, _segment_start(text, position), position
+        ):
+            everywhere = True
+    hits = list(_SHELL_DIRECTORY.finditer(text))
+    changes = [
+        (command, index)
+        for command in lexed.commands
+        for index, word in enumerate(command.words)
+        if word.unquoted in _DIRECTORY_COMMANDS
+    ]
+    unknown = any(_name_unknown(text, command) for command in lexed.commands)
+    if not hits and not changes and not unknown:
+        return _Changes(everywhere, scopes)
+    if unknown:
+        return _Changes(True, scopes)
+    if everywhere or len(hits) != 1 or len(changes) != 1:
+        return _Changes(True, scopes)
+    command, index = changes[0]
+    target = _cd_target(command, index, home_mentioned)
+    if target is None or not (
+        hits[0].start() <= command.words[0].start < hits[0].end()
+    ):
+        return _Changes(True, scopes)
+    if _is_relative(target):
+        first = min(c.words[0].start for c in lexed.commands if c.words)
+        if first != command.words[0].start:
+            return _Changes(True, scopes)
+    return _Changes(False, scopes, target, command.words[1].start)
+
+
+def _name_unknown(text: str, command: Command) -> bool:
+    for word in command.words:
+        if not _ASSIGNMENT.match(text, word.start, word.end):
+            return word.unquoted is None
+    return False
+
+
+def _cd_target(command: Command, index: int, home_mentioned: bool) -> str | None:
+    name = command.words[0]
+    if index != 0 or len(command.words) != 2 or not (name.plain and name.value == "cd"):
+        return None
+    target = command.words[1].value
+    if target is None or not command.words[1].plain:
+        return None
+    if (
+        target.startswith("/")
+        or target in (".", "..")
+        or target.startswith(("./", "../"))
+    ):
+        return target
+    if _is_home(target) and not home_mentioned:
+        return target
+    return None
+
+
+def _scope_start(command: Command, index: int) -> int:
+    option = command.words[index]
+    takes_next = re.fullmatch(r"-[A-Za-z]*C|--directory|--chdir", option.value or "")
+    if takes_next and index + 1 < len(command.words):
+        return command.words[index + 1].end
+    return option.end
+
+
+def _command_end(command: Command) -> int:
+    ends = [word.end for word in command.words]
+    ends.extend(heredoc.end for heredoc in command.heredocs)
+    return max(ends)
+
+
+def _segment_start(text: str, position: int) -> int:
+    return max(text.rfind(c, 0, position) for c in ";&|\n") + 1
 
 
 class _Spans:
@@ -420,6 +674,12 @@ class _Spans:
     def overlaps(self, start: int, end: int) -> bool:
         index = bisect.bisect_left(self._starts, end) - 1
         return index >= 0 and self._spans[index][1] > start
+
+    def enclosing(self, start: int, end: int) -> tuple[int, int] | None:
+        index = bisect.bisect_right(self._starts, start) - 1
+        if index >= 0 and end <= self._spans[index][1]:
+            return self._spans[index]
+        return None
 
 
 def _readable_end(text: str, start: int, end: int, shell: bool) -> int | None:
@@ -442,10 +702,14 @@ def _readable_end(text: str, start: int, end: int, shell: bool) -> int | None:
     return end
 
 
-def _glued(text: str, start: int, end: int, shell: bool) -> bool:
+def _glued_after(text: str, start: int, end: int) -> bool:
     if _GLUED_AFTER.match(text, end):
         return True
-    if text.startswith("`", end) and text.count("`", 0, start) % 2 == 0:
+    return text.startswith("`", end) and text.count("`", 0, start) % 2 == 0
+
+
+def _glued(text: str, start: int, end: int, shell: bool) -> bool:
+    if _glued_after(text, start, end):
         return True
     if not shell and _concatenated(text, start, end):
         return True
