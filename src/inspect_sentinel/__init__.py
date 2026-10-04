@@ -28,6 +28,7 @@ from ._rules import (
     paths_in,
     result_text,
     tool_matches,
+    unresolved_paths,
 )
 from ._runner import run_children, run_monitors, run_protocols
 from ._step import AfterToolCall, BeforeToolCall, Step
@@ -94,5 +95,6 @@ __all__ = [
     "sequential",
     "threshold",
     "tool_matches",
+    "unresolved_paths",
     "__version__",
 ]
