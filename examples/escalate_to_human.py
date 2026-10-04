@@ -1,6 +1,6 @@
 """Escalation: a rule settles the clear cases and hands the rest to a person.
 
-The rule rejects calls that touch a protected path, escalates calls whose paths it cannot resolve, such as `$HOME/.ssh` or `/var/log/*`, and lets everything else proceed. `human()` at the end of the `sequential()` is asked only about the escalated calls.
+The rule rejects calls that touch a protected path, escalates calls whose paths it cannot resolve, such as `$DIR/.ssh` or `/var/log/*`, and lets everything else proceed. `human()` at the end of the `sequential()` is asked only about the escalated calls.
 """
 
 from example_samples import ADD_HOST, CLEANUP, COUNT_ROWS
