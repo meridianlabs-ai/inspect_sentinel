@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 import fnmatch
 import posixpath
 import re
@@ -91,23 +92,37 @@ _CODE_TOOLS = {"bash", "python", "code_execution", "bash_session"}
 
 _STOP = r"\s'\"`;|&<>(){}\[\],:=$"
 _PATH_TOKEN = re.compile(
-    rf"(?<![\w.~/\-}})*?])(?:~(?=/|[{_STOP}]|$)|(?!(?<=:)//)(?=/))[^{_STOP}]*"
+    rf"(?<![\w.~/\-+}})*?])(?:~(?=/|[{_STOP}]|$)|(?!(?<=:)//)(?=/))[^{_STOP}]*"
 )
 _OPTION_PATH = re.compile(rf"(?<![^\s'\"])-[A-Za-z]+(/[^{_STOP}]*)")
 _RELATIVE_TOKEN = re.compile(rf"(?<![^\s'\"(=:,;|&<>\[{{])[\w.*?][^{_STOP}]*")
-_EXPANSION = r"\$\w+|\$\{[^}]*\}|\$\((?:[^()]|\([^()]*\))*\)|`[^`]*`|\{[^{}\s]*\}"
-_BUILT_PATH = re.compile(rf"(?P<expansion>{_EXPANSION})[\"'\w.~-]*/[^{_STOP}]*")
-_USER_PATH = re.compile(rf"(?<![^\s'\"(=:,;|&<>])~[A-Za-z_][\w.-]*/[^{_STOP}]*")
+_EXPANSION = (
+    r"\$[\w@*#?$!-]+|\$\{[^}]{0,256}\}|\$\((?:[^()]|\([^()]*\)){0,256}\)|`[^`]{0,256}`"
+)
+_BUILT_PATH = re.compile(
+    rf"(?P<expansion>{_EXPANSION}|\{{[^{{}}\s]*\}})[\"'\w.~-]*/[^{_STOP}]*"
+)
+_SHELL_BUILT_PATH = re.compile(
+    rf"(?P<expansion>{_EXPANSION}|\{{[^{{}}\s]*(?:,|\.\.)[^{{}}\s]*\}})[\"'\w.~-]*/[^{_STOP}]*"
+)
+_URL = re.compile(r"(?<![\w+.-])[A-Za-z][\w+.-]*://[^\s'\"`<>]*")
+_USER_PATH = re.compile(rf"(?<![^\s'\"(=:,;|&<>])~[^/{_STOP}]+/[^{_STOP}]*")
 _FILE_URL = re.compile(r"(?<![\w+.-])file:/[^\s'\"`<>;|&()]*", re.IGNORECASE)
-_CHANGES_DIRECTORY = re.compile(r"(?<![\w.-])(?:cd|pushd|popd)(?![\w.-])|\bchdir\b")
+_CHANGES_DIRECTORY = re.compile(
+    r"(?:^|[;&|({\n]|\b(?:then|do|else)\b)\s*(?:cd|pushd|popd)(?![\w.-])"
+    r"|\b(?:git|tar|make)\b[^;&|\n]*\s-C|--directory\b|\bchdir\b|\bcwd\s*="
+)
 _STRING_LITERAL = re.compile(r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"")
-_GLUED_AFTER = re.compile(r"""["']*(?:\$[\w{(]|\{)|(['"])(?!\1\1)[\w/$~*?\\+`'"-]""")
+_GLUED_AFTER = re.compile(
+    r"""["']*(?:\$[\w{(@*#?$!-]|\{)|(['"])(?!\1\1)[\w/$~*?\\+`'"-]"""
+)
 _GLUE_BEFORE = frozenset("/.$~*?+)}]`'\"-")
 _STRING_PREFIX = re.compile(r"""(?<!\w)[rRbBuUfF]{1,2}['"]$""")
-_CONCATENATED_AFTER = re.compile(r"""['"]\s*\+""")
-_CONCATENATED_BEFORE = re.compile(r"""\+\s*[rRbBuUfF]{0,2}['"]$""")
+_CONCATENATED_AFTER = re.compile(r"""(['"])\s*(?:[+/]|[rRbBuUfF]{0,2}['"])""")
+_CONCATENATED_BEFORE = re.compile(r"""(?:[+/]|['"])\s*[rRbBuUfF]{0,2}['"]$""")
+_BRACKET_DIRECTORY = re.compile(r"\[[^\]/\s]*\]/")
 _WORD_STOPS = frozenset(" \t\n\r;|&<>(),=:")
-_WORD_END = re.compile(r"(?:\$\((?:[^()]|\([^()]*\))*\)|[^\s;|&<>(),=:])*")
+_WORD_END = re.compile(r"(?:\$\((?:[^()]|\([^()]*\)){0,256}\)|[^\s;|&<>(),=:]){0,256}")
 _UNPLACEABLE = re.compile(r"^(?:file:|~[^/])", re.IGNORECASE)
 _SHELL_TOOLS = {"bash", "bash_session"}
 
@@ -248,13 +263,13 @@ def result_text(step: AfterToolCall) -> str:
 
 
 def paths_in(call: ToolCall) -> list[str]:
-    """Paths the tool call names, as best it can tell.
+    r"""Paths the tool call names, as best it can tell.
 
     Two sources, in this order: the path arguments of inspect_ai's built-in file tools (`text_editor()`'s and `list_files()`'s `path`, `memory()`'s `path`, `old_path` and `new_path`, `read_file()`'s `file_path`, `grep()`'s `path`); and paths in the text of `bash()`, `bash_session()`, `python()` and `code_execution()` calls. In that text a path is a token that begins with `/` or `~/`, or is `~` alone, or is glued to a short option (`-C/etc`); or a relative one with a `/` in it (`a/b`, `./x`, `../x`), which in `python()` and `code_execution()` counts only inside a string literal, and in `bash()` and `bash_session()` includes `.` and `..` alone. A token ends at whitespace, quotes or shell punctuation.
 
-    A reference whose path cannot be read from the text is left out, and `unresolved_paths()` reports it instead: one built at run time (`$HOME/x`, `/home/$USER/x`, `$(pwd)/x`, backticks, `f"/x/{name}"`, `{a,b}/x`), one with a shell wildcard (`/etc/pass*`, `/e*/passwd`) or a backslash, `~user/x`, `file://` URLs, and relative paths in code that changes directory (`cd`, `pushd`, `chdir`).
+    A reference whose path cannot be read from the text is left out, and `unresolved_paths()` reports it instead: one built at run time (`$HOME/x`, `/home/$USER/x`, `$(pwd)/x`, backticks, `f"/x/{name}"`, `{a,b}/x`, `"/x/" + name`, `Path.home() / ".ssh"`), one with a shell wildcard (`/etc/pass*`, `/e*/passwd`, `@(x)`) or a backslash in it, a `~` prefix other than `~/` (`~user/x`, `~+/x`), `file://` URLs, and relative paths in code that changes directory (`cd`, `pushd`, `chdir`, `git -C`, `cwd=`). In a shell, a backslash at the end of a line joins it to the next, as the shell does.
 
-    Not found at all: a path with no `/` in a command (`cat passwd`), a path held whole in a variable (`cat $F`), a path built by a function (`os.path.join(home, ".ssh")`), and paths in the arguments of any other tool. Misread: a quoted path with a space is cut at the space (`"/a b"` as `/a`), and a `/` or `//` used as an operator is found as a path (`$((4 / 2))` as `/`).
+    Not found at all: a path with no `/` in a command (`cat passwd`), a path held whole in a variable (`cat $F`), a path built by a function (`os.path.join(home, ".ssh")`), a path whose `/` is written as an escape (`"\x2fetc\x2fpasswd"`), and paths in the arguments of any other tool. Misread: a quoted path with a space is cut at the space (`"/a b"` as `/a`), and a `/` or `//` used as an operator is found as a path (`$((4 / 2))` as `/`).
 
     Args:
         call: The tool call.
@@ -273,9 +288,9 @@ def paths_in(call: ToolCall) -> list[str]:
 def unresolved_paths(
     call: ToolCall, *, cwd: str | None = None, home: str | None = None
 ) -> list[str]:
-    """References to paths in the tool call that cannot be resolved to a place.
+    r"""References to paths in the tool call that cannot be resolved to a place.
 
-    These are the paths from `paths_in()` that `path_resolves()` cannot place with this `cwd` and `home`, and the references `paths_in()` leaves out because no path can be read from them: those built at run time (`$HOME/x`, `${HOME}/x`, `/home/$USER/x`, `$(pwd)/x`, `` `pwd`/x ``, `"$HOME"/x`, `f"/x/{name}"`, `{a,b}/x`), those with a shell wildcard (`/etc/pass*`, `/e*/passwd`, `/[e]tc/passwd`) or a backslash, `~user/x`, `file://` URLs, and relative paths in code that changes directory, which `cwd` no longer places. A rule that denies paths escalates or rejects a call with any of them, since a deny-list cannot see where they lead:
+    These are the paths from `paths_in()` that `path_resolves()` cannot place with this `cwd` and `home`, and the references `paths_in()` leaves out because no path can be read from them: those built at run time (`$HOME/x`, `${HOME}/x`, `/home/$USER/x`, `$(pwd)/x`, `` `pwd`/x ``, `"$HOME"/x`, `f"/x/{name}"`, `{a,b}/x`, `"/x/" + name`, `Path.home() / ".ssh"`), those with a shell wildcard (`/etc/pass*`, `/e*/passwd`, `/[e]tc/passwd`, `@(x)`) or a backslash, `~user/x` and `~+/x`, `file://` URLs, and relative paths in code that changes directory (`cd`, `git -C`, `cwd=`), which `cwd` no longer places. A rule that denies paths escalates or rejects a call with any of them, since a deny-list cannot see where they lead:
 
     ```python
     for path in paths_in(step.call):
@@ -286,7 +301,7 @@ def unresolved_paths(
         return Decision.escalate(f"cannot resolve {', '.join(unresolved)}")
     ```
 
-    Without `cwd`, every relative path is unresolved, including the operands of `/` in a shell's arithmetic and words such as `origin/main`, so pass the agent's working directory. What `paths_in()` does not find at all, this does not report either.
+    Without `cwd`, every relative path is unresolved, including the operands of `/` in a shell's arithmetic and words such as `origin/main`, so pass the agent's working directory. Quoting is not taken into account, so a single-quoted `sed` or `awk` program with a `/` next to `$`, `\` or a wildcard is reported, and a heredoc's body is read as shell. `$HOME` is not expanded, even with `home`. What `paths_in()` does not find at all, this does not report either.
 
     Args:
         call: The tool call.
@@ -336,30 +351,38 @@ class _Span(NamedTuple):
 
 def _scan(function: str, text: str) -> list[_Reference]:
     shell = function in _SHELL_TOOLS
+    if shell:
+        text = text.replace("\\\n", "")
     unreadable: list[_Span] = []
     blocked: list[_Span] = []
+    urls = _Spans(
+        m.span() for m in _URL.finditer(text) if not _FILE_URL.match(m.group())
+    )
 
     def mark(start: int, end: int, block_from: int | None = None) -> None:
         span = _Span(_word_start(text, start), _word_end(text, end))
         unreadable.append(span)
         blocked.append(span if block_from is None else _Span(block_from, span.end))
 
-    for match in _BUILT_PATH.finditer(text):
-        mark(match.start(), match.end(), block_from=match.end("expansion"))
+    for match in (_SHELL_BUILT_PATH if shell else _BUILT_PATH).finditer(text):
+        if not urls.contains(match.start()):
+            mark(match.start(), match.end(), block_from=match.end("expansion"))
     for pattern in (_USER_PATH, _FILE_URL):
         for match in pattern.finditer(text):
             mark(*match.span())
 
     candidates = [match.span() for match in _PATH_TOKEN.finditer(text)]
     candidates.extend(match.span(1) for match in _OPTION_PATH.finditer(text))
-    literals = [] if shell else [m.span() for m in _STRING_LITERAL.finditer(text)]
+    literals = _Spans(
+        [] if shell else (m.span() for m in _STRING_LITERAL.finditer(text))
+    )
     changes_directory = _CHANGES_DIRECTORY.search(text) is not None
     for match in _RELATIVE_TOKEN.finditer(text):
         token, start = match.group(), match.start()
         if shell:
             relative = "/" in token or token in (".", "..")
         else:
-            relative = "/" in token and any(a < start < b - 1 for a, b in literals)
+            relative = "/" in token and literals.contains(start)
         if relative:
             candidates.append(match.span())
             if changes_directory:
@@ -373,10 +396,11 @@ def _scan(function: str, text: str) -> list[_Reference]:
         else:
             readable.append(_Span(start, token_end))
 
+    unreachable = _Spans(_merge(blocked))
     references = [
         _Reference(start, text[start:end], True)
         for start, end in readable
-        if not any(start < b and a < end for a, b in blocked)
+        if not unreachable.overlaps(start, end)
     ]
     references.extend(
         _Reference(start, _unquote(text[start:end]), False)
@@ -385,16 +409,35 @@ def _scan(function: str, text: str) -> list[_Reference]:
     return sorted(references, key=lambda ref: ref.start)
 
 
+class _Spans:
+    def __init__(self, spans: Iterable[tuple[int, int]]) -> None:
+        self._spans = sorted(spans)
+        self._starts = [start for start, _ in self._spans]
+
+    def contains(self, position: int) -> bool:
+        return self.overlaps(position, position + 1)
+
+    def overlaps(self, start: int, end: int) -> bool:
+        index = bisect.bisect_left(self._starts, end) - 1
+        return index >= 0 and self._spans[index][1] > start
+
+
 def _readable_end(text: str, start: int, end: int, shell: bool) -> int | None:
     token = text[start:end]
     if shell and token.endswith("\\"):
         end -= 1
     elif not shell and (escape := re.search(r"\\[ntr]", token)):
         end = start + escape.start()
-    unreadable = "\\*?" if shell else "\\*?%"
-    if any(c in text[start:end] for c in unreadable):
+    token = text[start:end]
+    if any(c in token for c in ("\\*?" if shell else "\\*?%")):
         return None
     if shell and text.startswith("[", end):
+        if "/" in token or _BRACKET_DIRECTORY.match(text, end):
+            return None
+        return end
+    if shell and text.endswith("]", 0, start):
+        return None
+    if shell and text.startswith("(", end) and token[-1:] in ("@", "!", "+"):
         return None
     return end
 
@@ -404,10 +447,7 @@ def _glued(text: str, start: int, end: int, shell: bool) -> bool:
         return True
     if text.startswith("`", end) and text.count("`", 0, start) % 2 == 0:
         return True
-    if not shell and (
-        _CONCATENATED_AFTER.match(text, end)
-        or _CONCATENATED_BEFORE.search(text, max(0, start - 64), start)
-    ):
+    if not shell and _concatenated(text, start, end):
         return True
     if start < 2 or text[start - 1] not in "'\"":
         return False
@@ -418,7 +458,18 @@ def _glued(text: str, start: int, end: int, shell: bool) -> bool:
     return prefix is None and not text.endswith(quote * 3, 0, start)
 
 
+def _concatenated(text: str, start: int, end: int) -> bool:
+    after = _CONCATENATED_AFTER.match(text, end)
+    if after and not text.startswith(after.group(1) * 3, end):
+        return True
+    before = _CONCATENATED_BEFORE.search(text, max(0, start - 64), start)
+    return before is not None and not text.endswith(text[start - 1] * 3, 0, start)
+
+
 def _unquote(word: str) -> str:
+    for quote in ("'", '"'):
+        if word.count(quote) % 2 and (word.startswith(quote) or word.endswith(quote)):
+            word = word[1:] if word.startswith(quote) else word[:-1]
     quote = word[:1]
     if quote in ("'", '"') and len(word) > 1 and word.find(quote, 1) == len(word) - 1:
         return word[1:-1]
@@ -426,7 +477,8 @@ def _unquote(word: str) -> str:
 
 
 def _word_start(text: str, start: int) -> int:
-    while start > 0 and text[start - 1] not in _WORD_STOPS:
+    limit = max(0, start - 256)
+    while start > limit and text[start - 1] not in _WORD_STOPS:
         start -= 1
     return start
 
