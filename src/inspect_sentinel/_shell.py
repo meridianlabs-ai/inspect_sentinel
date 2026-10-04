@@ -151,6 +151,8 @@ class _Lexer:
             elif c == "(":
                 if frame.word_start is not None:
                     i = self.extglob(frame, i)
+                elif text.startswith("(", i + 1):
+                    i = self.arithmetic(i)
                 else:
                     self.end_command(frame, i)
                     frame.parens += 1
@@ -232,6 +234,24 @@ class _Lexer:
             frame.parts.append("bare")
         return i + 1
 
+    def arithmetic(self, i: int) -> int:
+        text = self.text
+        depth = 0
+        while i < len(text):
+            c = text[i]
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+            elif c in "'\"\\":
+                raise LexError
+            elif c == "`" or text.startswith("$(", i):
+                self.substitution = True
+            i += 1
+        raise LexError
+
     def piece(self, frame: _Code, piece: str) -> None:
         if frame.pieces is not None:
             frame.pieces.append(piece)
@@ -267,9 +287,10 @@ class _Lexer:
         if text[i] == "`":
             self.substitution = True
             return self.code(i + 1, _Code("`"))
+        if text.startswith("((", i + 1):
+            return self.arithmetic(i + 1)
         if text.startswith("(", i + 1):
-            if not text.startswith("(", i + 2):
-                self.substitution = True
+            self.substitution = True
             return self.code(i + 2, _Code(")"))
         if text.startswith("{", i + 1):
             depth = 0
@@ -379,7 +400,7 @@ def sed_executes(script: str) -> bool:
     return _sed_executes(script, True) or _sed_executes(script, False)
 
 
-_SED_SIMPLE = set("=dDgGhHlnNpPxzF")
+_SED_SIMPLE = set("=dDgGhHnNpPxzF")
 
 
 def _sed_executes(script: str, brackets: bool) -> bool:
