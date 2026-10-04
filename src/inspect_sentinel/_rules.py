@@ -91,8 +91,25 @@ _CODE_TOOLS = {"bash", "python", "code_execution", "bash_session"}
 
 _STOP = r"\s'\"`;|&<>(){}\[\],:=$"
 _PATH_TOKEN = re.compile(
-    rf"(?<![\w.~/\-}})])(?:~(?=/|[{_STOP}]|$)|(?!(?<=:)//)(?=/))[^{_STOP}]*"
+    rf"(?<![\w.~/\-}})*?])(?:~(?=/|[{_STOP}]|$)|(?!(?<=:)//)(?=/))[^{_STOP}]*"
 )
+_OPTION_PATH = re.compile(rf"(?<![^\s'\"])-[A-Za-z]+(/[^{_STOP}]*)")
+_RELATIVE_TOKEN = re.compile(rf"(?<![^\s'\"(=:,;|&<>\[{{])[\w.*?][^{_STOP}]*")
+_EXPANSION = r"\$\w+|\$\{[^}]*\}|\$\((?:[^()]|\([^()]*\))*\)|`[^`]*`|\{[^{}\s]*\}"
+_BUILT_PATH = re.compile(rf"(?P<expansion>{_EXPANSION})[\"'\w.~-]*/[^{_STOP}]*")
+_USER_PATH = re.compile(rf"(?<![^\s'\"(=:,;|&<>])~[A-Za-z_][\w.-]*/[^{_STOP}]*")
+_FILE_URL = re.compile(r"(?<![\w+.-])file:/[^\s'\"`<>;|&()]*", re.IGNORECASE)
+_CHANGES_DIRECTORY = re.compile(r"(?<![\w.-])(?:cd|pushd|popd)(?![\w.-])|\bchdir\b")
+_STRING_LITERAL = re.compile(r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"")
+_GLUED_AFTER = re.compile(r"""["']*(?:\$[\w{(]|\{)|(['"])(?!\1\1)[\w/$~*?\\+`'"-]""")
+_GLUE_BEFORE = frozenset("/.$~*?+)}]`'\"-")
+_STRING_PREFIX = re.compile(r"""(?<!\w)[rRbBuUfF]{1,2}['"]$""")
+_CONCATENATED_AFTER = re.compile(r"""['"]\s*\+""")
+_CONCATENATED_BEFORE = re.compile(r"""\+\s*[rRbBuUfF]{0,2}['"]$""")
+_WORD_STOPS = frozenset(" \t\n\r;|&<>(),=:")
+_WORD_END = re.compile(r"(?:\$\((?:[^()]|\([^()]*\))*\)|[^\s;|&<>(),=:])*")
+_UNPLACEABLE = re.compile(r"^(?:file:|~[^/])", re.IGNORECASE)
+_SHELL_TOOLS = {"bash", "bash_session"}
 
 
 def call_text(call: ToolCall) -> str:
@@ -233,9 +250,11 @@ def result_text(step: AfterToolCall) -> str:
 def paths_in(call: ToolCall) -> list[str]:
     """Paths the tool call names, as best it can tell.
 
-    Two sources, in this order: the path arguments of inspect_ai's built-in file tools (`text_editor()`'s and `list_files()`'s `path`, `memory()`'s `path`, `old_path` and `new_path`, `read_file()`'s `file_path`, `grep()`'s `path`); and, in the text of `bash()`, `bash_session()`, `python()` and `code_execution()` calls, tokens that begin with `/` or `~/`, or are `~` alone, ending at whitespace, quotes or shell punctuation.
+    Two sources, in this order: the path arguments of inspect_ai's built-in file tools (`text_editor()`'s and `list_files()`'s `path`, `memory()`'s `path`, `old_path` and `new_path`, `read_file()`'s `file_path`, `grep()`'s `path`); and paths in the text of `bash()`, `bash_session()`, `python()` and `code_execution()` calls. In that text a path is a token that begins with `/` or `~/`, or is `~` alone, or is glued to a short option (`-C/etc`); or a relative one with a `/` in it (`a/b`, `./x`, `../x`), which in `python()` and `code_execution()` counts only inside a string literal, and in `bash()` and `bash_session()` includes `.` and `..` alone. A token ends at whitespace, quotes or shell punctuation.
 
-    It misses some paths and misreads others. Not found: relative paths in commands (`cat a/b`, `./x`), `~user` paths, paths glued to an option (`-f/x`), paths built from variables or substitutions (`$HOME/x`, `${HOME}/x`, `$(pwd)/x`), paths inside URLs (`file:///etc/passwd`), and paths in the arguments of any other tool. Misread: a quoted path with a space is cut at the space (`"/a b"` as `/a`), a quoted variable followed by a path is found as its tail (`"$HOME"/x` as `/x`), a `/` or `//` used as an operator is found as a path, and a shell wildcard is kept as written (`/etc/pass*`, `/e?c/passwd`), which `path_matches()` then compares as literal text, so it does not match `/etc/passwd`, and a wildcard in a directory (`/e*/passwd`) gets past `/etc/**` too.
+    A reference whose path cannot be read from the text is left out, and `unresolved_paths()` reports it instead: one built at run time (`$HOME/x`, `/home/$USER/x`, `$(pwd)/x`, backticks, `f"/x/{name}"`, `{a,b}/x`), one with a shell wildcard (`/etc/pass*`, `/e*/passwd`) or a backslash, `~user/x`, `file://` URLs, and relative paths in code that changes directory (`cd`, `pushd`, `chdir`).
+
+    Not found at all: a path with no `/` in a command (`cat passwd`), a path held whole in a variable (`cat $F`), a path built by a function (`os.path.join(home, ".ssh")`), and paths in the arguments of any other tool. Misread: a quoted path with a space is cut at the space (`"/a b"` as `/a`), and a `/` or `//` used as an operator is found as a path (`$((4 / 2))` as `/`).
 
     Args:
         call: The tool call.
@@ -243,14 +262,188 @@ def paths_in(call: ToolCall) -> list[str]:
     Returns:
         The paths, as written and without duplicates, in order.
     """
+    paths = _argument_paths(call)
+    if call.function in _CODE_TOOLS:
+        paths.extend(
+            ref.text for ref in _scan(call.function, call_text(call)) if ref.readable
+        )
+    return list(dict.fromkeys(paths))
+
+
+def unresolved_paths(
+    call: ToolCall, *, cwd: str | None = None, home: str | None = None
+) -> list[str]:
+    """References to paths in the tool call that cannot be resolved to a place.
+
+    These are the paths from `paths_in()` that `path_resolves()` cannot place with this `cwd` and `home`, and the references `paths_in()` leaves out because no path can be read from them: those built at run time (`$HOME/x`, `${HOME}/x`, `/home/$USER/x`, `$(pwd)/x`, `` `pwd`/x ``, `"$HOME"/x`, `f"/x/{name}"`, `{a,b}/x`), those with a shell wildcard (`/etc/pass*`, `/e*/passwd`, `/[e]tc/passwd`) or a backslash, `~user/x`, `file://` URLs, and relative paths in code that changes directory, which `cwd` no longer places. A rule that denies paths escalates or rejects a call with any of them, since a deny-list cannot see where they lead:
+
+    ```python
+    for path in paths_in(step.call):
+        if path_matches(path, PROTECTED, cwd="/work", home="/root"):
+            return Decision.reject(f"call touches {path}")
+    unresolved = unresolved_paths(step.call, cwd="/work", home="/root")
+    if unresolved:
+        return Decision.escalate(f"cannot resolve {', '.join(unresolved)}")
+    ```
+
+    Without `cwd`, every relative path is unresolved, including the operands of `/` in a shell's arithmetic and words such as `origin/main`, so pass the agent's working directory. What `paths_in()` does not find at all, this does not report either.
+
+    Args:
+        call: The tool call.
+        cwd: Directory that a relative path is relative to.
+        home: The agent's home directory, an absolute path, to expand `~` to.
+
+    Returns:
+        The references, as written and without duplicates, in order.
+
+    Raises:
+        ValueError: If `home` is not an absolute path.
+    """
+    home = _resolve_home(home)
+    references = [
+        path
+        for path in _argument_paths(call)
+        if not path_resolves(path, cwd=cwd, home=home)
+    ]
+    if call.function in _CODE_TOOLS:
+        references.extend(
+            ref.text
+            for ref in _scan(call.function, call_text(call))
+            if not (ref.readable and path_resolves(ref.text, cwd=cwd, home=home))
+        )
+    return list(dict.fromkeys(references))
+
+
+def _argument_paths(call: ToolCall) -> list[str]:
     paths: list[str] = []
     for name in _PATH_ARGUMENTS.get(call.function, ()):
         value = call.arguments.get(name)
         if isinstance(value, str) and value:
             paths.append(value)
-    if call.function in _CODE_TOOLS:
-        paths.extend(_PATH_TOKEN.findall(call_text(call)))
-    return list(dict.fromkeys(paths))
+    return paths
+
+
+class _Reference(NamedTuple):
+    start: int
+    text: str
+    readable: bool
+
+
+class _Span(NamedTuple):
+    start: int
+    end: int
+
+
+def _scan(function: str, text: str) -> list[_Reference]:
+    shell = function in _SHELL_TOOLS
+    unreadable: list[_Span] = []
+    blocked: list[_Span] = []
+
+    def mark(start: int, end: int, block_from: int | None = None) -> None:
+        span = _Span(_word_start(text, start), _word_end(text, end))
+        unreadable.append(span)
+        blocked.append(span if block_from is None else _Span(block_from, span.end))
+
+    for match in _BUILT_PATH.finditer(text):
+        mark(match.start(), match.end(), block_from=match.end("expansion"))
+    for pattern in (_USER_PATH, _FILE_URL):
+        for match in pattern.finditer(text):
+            mark(*match.span())
+
+    candidates = [match.span() for match in _PATH_TOKEN.finditer(text)]
+    candidates.extend(match.span(1) for match in _OPTION_PATH.finditer(text))
+    literals = [] if shell else [m.span() for m in _STRING_LITERAL.finditer(text)]
+    changes_directory = _CHANGES_DIRECTORY.search(text) is not None
+    for match in _RELATIVE_TOKEN.finditer(text):
+        token, start = match.group(), match.start()
+        if shell:
+            relative = "/" in token or token in (".", "..")
+        else:
+            relative = "/" in token and any(a < start < b - 1 for a, b in literals)
+        if relative:
+            candidates.append(match.span())
+            if changes_directory:
+                mark(*match.span())
+
+    readable: list[_Span] = []
+    for start, end in candidates:
+        token_end = _readable_end(text, start, end, shell)
+        if token_end is None or _glued(text, start, token_end, shell):
+            mark(start, end)
+        else:
+            readable.append(_Span(start, token_end))
+
+    references = [
+        _Reference(start, text[start:end], True)
+        for start, end in readable
+        if not any(start < b and a < end for a, b in blocked)
+    ]
+    references.extend(
+        _Reference(start, _unquote(text[start:end]), False)
+        for start, end in _merge(unreadable)
+    )
+    return sorted(references, key=lambda ref: ref.start)
+
+
+def _readable_end(text: str, start: int, end: int, shell: bool) -> int | None:
+    token = text[start:end]
+    if shell and token.endswith("\\"):
+        end -= 1
+    elif not shell and (escape := re.search(r"\\[ntr]", token)):
+        end = start + escape.start()
+    unreadable = "\\*?" if shell else "\\*?%"
+    if any(c in text[start:end] for c in unreadable):
+        return None
+    if shell and text.startswith("[", end):
+        return None
+    return end
+
+
+def _glued(text: str, start: int, end: int, shell: bool) -> bool:
+    if _GLUED_AFTER.match(text, end):
+        return True
+    if text.startswith("`", end) and text.count("`", 0, start) % 2 == 0:
+        return True
+    if not shell and (
+        _CONCATENATED_AFTER.match(text, end)
+        or _CONCATENATED_BEFORE.search(text, max(0, start - 64), start)
+    ):
+        return True
+    if start < 2 or text[start - 1] not in "'\"":
+        return False
+    quote, glue = text[start - 1], text[start - 2]
+    if not (glue.isalnum() or glue == "_" or glue in _GLUE_BEFORE):
+        return False
+    prefix = _STRING_PREFIX.search(text, max(0, start - 3), start)
+    return prefix is None and not text.endswith(quote * 3, 0, start)
+
+
+def _unquote(word: str) -> str:
+    quote = word[:1]
+    if quote in ("'", '"') and len(word) > 1 and word.find(quote, 1) == len(word) - 1:
+        return word[1:-1]
+    return word
+
+
+def _word_start(text: str, start: int) -> int:
+    while start > 0 and text[start - 1] not in _WORD_STOPS:
+        start -= 1
+    return start
+
+
+def _word_end(text: str, end: int) -> int:
+    match = _WORD_END.match(text, end)
+    return end if match is None else match.end()
+
+
+def _merge(spans: list[_Span]) -> list[_Span]:
+    merged: list[_Span] = []
+    for span in sorted(spans):
+        if merged and span.start <= merged[-1].end:
+            merged[-1] = _Span(merged[-1].start, max(merged[-1].end, span.end))
+        else:
+            merged.append(span)
+    return merged
 
 
 def path_matches(
@@ -264,7 +457,7 @@ def path_matches(
 
     The path is normalised first, by its text alone (symlinks are not followed): repeated slashes collapse, and `.` and `..` resolve, so `/work/../etc/passwd` is `/etc/passwd` and `/..` is `/`. A relative path is joined to `cwd` when given. With `home`, a leading `~` is replaced by it, in the path, in `cwd` and in each pattern, so `~/.ssh/**` matches `/root/.ssh/id_rsa` when `home="/root"`. Without `home`, `~` is kept as written: `~/x` matches `~/**` and not `/root/**`. `~user` is never expanded. Patterns are not joined to `cwd`: a relative pattern such as `secrets/**` matches only a relative path, so with `cwd` write patterns absolute, or begin them with `**/`.
 
-    A path can keep a `..` after normalising: a relative one without `cwd` (`../etc`), or one that climbs out of `~` without `home` (`~/../etc`). Wildcards never match a `.` or `..` segment, so such a path matches only a pattern that spells its `..` segments out, never `/etc/**`, `~/**` or `**`. An allow-list therefore rejects it. A deny-list would let it through, so a rule that denies should also reject paths that `path_resolves()` cannot place, which includes every relative path when `cwd` is not given, or pass `home` and an absolute `cwd`, with which every path resolves.
+    A path can keep a `..` after normalising: a relative one without `cwd` (`../etc`), or one that climbs out of `~` without `home` (`~/../etc`). Wildcards never match a `.` or `..` segment, so such a path matches only a pattern that spells its `..` segments out, never `/etc/**`, `~/**` or `**`. An allow-list therefore rejects it. A deny-list would let it through, so a rule that denies should also escalate or reject a call for which `unresolved_paths()` reports anything.
 
     Patterns are globs: `*` matches any characters within one segment, `?` one character other than `/`, `[seq]` one character in `seq` (ranges such as `a-z` and POSIX classes such as `[:alpha:]` included), `[!seq]` or `[^seq]` one character not in it, and `\` escapes the next character. All of these match a leading `.`, so `/home/*/.ssh` and `/etc/*` see dotfiles. `**` as a whole segment matches any number of segments, and a pattern ending in `/**` also matches the directory itself: `"/etc/**"` matches `/etc` and everything under it, and `"**/*.env"` matches `.env` files anywhere, absolute paths included. Matching is case-sensitive. Braces and `!` at the start of a pattern have no special meaning. A pattern is normalised too: repeated and trailing slashes and `.` segments are removed, and a `..` resolves against the segment before it when that segment has no wildcard (`/work/../etc/**` is `/etc/**`); other `..` segments are kept.
 
@@ -292,14 +485,9 @@ def path_matches(
 def path_resolves(
     path: str, *, cwd: str | None = None, home: str | None = None
 ) -> bool:
-    """Whether a path normalises to a place: an absolute path, or one under `~`, with no `..` left.
+    r"""Whether a path normalises to a place: an absolute path, or one under `~`, with no `..` left.
 
-    The path is normalised as `path_matches()` does. It cannot be placed when it is relative and there is no `cwd` (`passwd`, `../etc`, `~user/x`), or when it climbs out of `~` and there is no `home` (`~/../etc`). Such a path matches no absolute or `~/` pattern, so a rule that denies paths should reject these too:
-
-    ```python
-    if not path_resolves(path) or path_matches(path, DENIED):
-        return Decision.reject(f"call touches {path}")
-    ```
+    The path is normalised as `path_matches()` does. It cannot be placed when it is relative and there is no `cwd` (`passwd`, `../etc`), when it climbs out of `~` and there is no `home` (`~/../etc`), or when it is `~user/x` or a `file:` URL. The path is otherwise taken literally, as a file tool's argument is: `$`, `*` and `\` are characters of a name. For a call, `unresolved_paths()` reports the paths from `paths_in()` that this cannot place, together with the references in code that name no single path, such as `$HOME/x` or `/etc/pass*`.
 
     Args:
         path: The path.
@@ -312,7 +500,10 @@ def path_resolves(
     Raises:
         ValueError: If `home` is not an absolute path.
     """
-    normalized = _normalize(path, cwd, _resolve_home(home))
+    home = _resolve_home(home)
+    if _UNPLACEABLE.search(path):
+        return False
+    normalized = _normalize(path, cwd, home)
     anchored = normalized.startswith("/") or _is_home(normalized)
     return anchored and ".." not in normalized.split("/")
 

@@ -1,6 +1,6 @@
 """Escalation: a rule settles the clear cases and hands the rest to a person.
 
-The rule rejects `bash()` commands that mention `/etc`, escalates commands that delete files, and lets everything else proceed. `human()` at the end of the `sequential()` is asked only about the escalated calls.
+The rule rejects calls that touch a protected path, escalates calls whose paths it cannot resolve, such as `$HOME/.ssh` or `/var/log/*`, and lets everything else proceed. `human()` at the end of the `sequential()` is asked only about the escalated calls.
 """
 
 from example_samples import ADD_HOST, CLEANUP, COUNT_ROWS
@@ -13,32 +13,31 @@ from inspect_sentinel import (
     Context,
     Decision,
     Protocol,
-    call_text,
-    find_words,
     human,
+    path_matches,
+    paths_in,
     protocol,
     sequential,
+    unresolved_paths,
 )
 
-DELETE_WORDS = ["rm", "rmdir", "-delete"]
+PROTECTED = ["/etc/**", "~/.ssh/**"]
 
 
 @protocol
 def triage() -> Protocol:
-    """Reject `bash()` commands that mention `/etc`, escalate ones that delete files, and let the rest proceed."""
+    """Reject calls that touch a protected path, escalate calls with paths it cannot resolve, and let the rest proceed."""
 
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
-        if step.call.function != "bash":
-            return Decision.proceed()
-        command = call_text(step.call)
-        if "/etc" in command:
-            return Decision.reject(
-                "command mentions /etc",
-                message="`/etc` is off limits; work only under /work.",
-            )
-        deletes = find_words(command, DELETE_WORDS)
-        if deletes:
-            return Decision.escalate(f"command deletes files ({', '.join(deletes)})")
+        for path in paths_in(step.call):
+            if path_matches(path, PROTECTED, cwd="/work", home="/root"):
+                return Decision.reject(
+                    f"call touches {path}",
+                    message=f"`{path}` is off limits; work only under /work.",
+                )
+        unresolved = unresolved_paths(step.call, cwd="/work", home="/root")
+        if unresolved:
+            return Decision.escalate(f"cannot resolve {', '.join(unresolved)}")
         return Decision.proceed()
 
     return decide

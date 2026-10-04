@@ -8,8 +8,25 @@ from hypothesis import strategies as st
 from inspect_ai.tool import ToolCall
 from wcmatch.glob import escape
 
-from inspect_sentinel import path_matches, path_resolves, paths_in
+from inspect_sentinel import (
+    Action,
+    BeforeToolCall,
+    Context,
+    Decision,
+    HumanAnswer,
+    Protocol,
+    before_tool_call,
+    human,
+    path_matches,
+    path_resolves,
+    paths_in,
+    protocol,
+    sequential,
+    unresolved_paths,
+)
 from inspect_sentinel._rules import _normalize
+from inspect_sentinel._runner import run_sentinel
+from tests._fakes import FakeHost, host_context
 
 
 def _call(function: str, **arguments: Any) -> ToolCall:
@@ -51,55 +68,59 @@ def _bash(command: str) -> ToolCall:
         (_bash("cmd 2>/e </f"), ["/e", "/f"]),
         (_bash("ls {/a,/b}"), ["/a", "/b"]),
         (_bash("tar --file=/x.tar a"), ["/x.tar"]),
+        (_bash("tar -C/etc -xf a.tar"), ["/etc"]),
         (_bash("PATH=/usr/bin:/bin x"), ["/usr/bin", "/bin"]),
-        (_bash("scp host:/etc/x ."), ["/etc/x"]),
+        (_bash("scp host:/etc/x /w"), ["/etc/x", "/w"]),
         (_bash("cat //etc/passwd"), ["//etc/passwd"]),
         (_bash("cat /a /a"), ["/a"]),
         (_bash("cat /données/été.txt"), ["/données/été.txt"]),
+        (_bash('bash -c "cat \\"/etc/x\\""'), ["/etc/x"]),
+        (_bash("cat /x\\\n /y"), ["/x", "/y"]),
+        (_bash("awk '{print $1}' /w/x"), ["/w/x"]),
+        (_bash("grep -E '^/usr/bin$' /w/x"), ["/usr/bin", "/w/x"]),
         (_call("bash", cmd="cat /x"), ["/x"]),
         (_call("python", code="open('/etc/hosts').read()"), ["/etc/hosts"]),
         (_call("python", code='Path("~/.ssh").expanduser()'), ["~/.ssh"]),
-        (_call("python", code='open(f"/x/{name}")'), ["/x/"]),
+        (_call("python", code='open(f"/etc/hosts")'), ["/etc/hosts"]),
+        (_call("python", code="Path(r'/etc/x'), b'/y'"), ["/etc/x", "/y"]),
+        (_call("python", code='p = """/etc/x"""'), ["/etc/x"]),
+        (_call("python", code="d = {'/a': 1, \"/b\": [2]}"), ["/a", "/b"]),
+        (_call("python", code='print("/w/out\\n")'), ["/w/out"]),
+        (_call("python", code='"/".join(parts)'), ["/"]),
         (_call("code_execution", code="open('/w/f')"), ["/w/f"]),
         (_call("bash_session", action="type_submit", input="ls /w"), ["/w"]),
         (_call("bash_session", action="read"), []),
-        # documented misses
-        (_bash("cat ./a ../b c/d"), []),
-        (_bash("cat ~user/e"), []),
-        (_bash("cat a~/x"), []),
-        (_bash("cat -f/x"), []),
-        (_bash("cat $HOME/x ${HOME}/y $(pwd)/z"), []),
+        # relative paths: words with a `/` in a shell, string literals in Python
+        (_bash("cat ./a ../b c/d"), ["./a", "../b", "c/d"]),
+        (_bash("ls . .. .x"), [".", ".."]),
+        (_bash("git diff origin/main"), ["origin/main"]),
+        (_bash("cat a~/x"), ["a~/x"]),
+        (_call("python", code="open('data/x.csv')"), ["data/x.csv"]),
+        (_call("python", code="x = a/b + c/d"), []),
+        (_call("python", code="'.'.join(x) # see a/b"), []),
+        # left to unresolved_paths()
+        (_bash("cat $HOME/x ${HOME}/y $(pwd)/z `pwd`/w"), []),
+        (_bash('cat "$HOME"/x /home/$USER/y'), []),
+        (_bash("cat /etc/pass* /e?c/passwd /[e]tc/passwd */x"), []),
+        (_bash("cat ~user/e /e\\tc/passwd '/e'tc/passwd"), []),
         (_bash("curl https://x.org/a file:///b"), []),
+        (_bash("cd /w && cat a/b"), ["/w"]),
+        (_call("python", code='open(f"/x/{name}")'), []),
+        (_call("python", code="home + '/.ssh'"), []),
+        # documented misses
+        (_bash("cat passwd"), []),
+        (_bash("cat $F"), []),
         (_call("think", thought="look at /etc"), []),
         (_call("web_search", query="/etc/passwd"), []),
         (_call("mine", path="/w"), []),
         # documented misreads
         (_bash('cat "/a b"'), ["/a"]),
-        (_bash('cat "$HOME"/x'), ["/x"]),
         (_bash("echo $((4 / 2))"), ["/"]),
         (_call("python", code="x = 1 // 2"), ["//"]),
-        (_bash("cat /etc/pass*"), ["/etc/pass*"]),
     ],
 )
 def test_paths_in(call: ToolCall, expected: list[str]) -> None:
     assert paths_in(call) == expected
-
-
-@pytest.mark.parametrize(
-    "command, matches",
-    [
-        ("cat /etc/pass*", True),
-        ("cat /e?c/passwd", False),
-        ("cat /e*/shadow", False),
-        ("cat /[e]tc/passwd", False),
-    ],
-)
-def test_a_wildcard_found_in_a_command_is_compared_as_text(
-    command: str, matches: bool
-) -> None:
-    [path] = paths_in(_bash(command))
-    assert not path_matches(path, ["/etc/passwd", "/etc/shadow"])
-    assert path_matches(path, ["/etc/**"]) is matches
 
 
 @pytest.mark.parametrize(
@@ -369,7 +390,11 @@ def test_home_must_be_absolute(home: str) -> None:
         ("a/../b", "/w", None, True),
         ("passwd", None, None, False),
         ("~root/.ssh/id", None, None, False),
-        ("~root/.ssh/id", "/w", None, True),
+        ("~root/.ssh/id", "/w", None, False),
+        ("~", None, None, True),
+        ("file:///etc/passwd", "/w", None, False),
+        ("/w/$x", None, None, True),
+        ("/w/a*b", None, None, True),
         ("~root/.ssh/id", None, "/root", False),
         ("../etc/passwd", "work", None, False),
         ("..", None, None, False),
@@ -393,21 +418,223 @@ def test_path_resolves(
     assert path_resolves(path, cwd=cwd, home=home) is expected
 
 
-def test_a_deny_list_rejects_paths_it_cannot_resolve() -> None:
-    denied = ["/etc/**", "~/.ssh/**"]
+@pytest.mark.parametrize(
+    "call, cwd, home, expected",
+    [
+        # built at run time
+        (_bash("cat $HOME/x"), "/w", "/root", ["$HOME/x"]),
+        (_bash("cat ${HOME}/x"), "/w", "/root", ["${HOME}/x"]),
+        (_bash("cat ${HOME}x/y"), "/w", "/root", ["${HOME}x/y"]),
+        (_bash("cat $(pwd)/x"), "/w", "/root", ["$(pwd)/x"]),
+        (_bash("cat $(dirname $(pwd))/x"), "/w", "/root", ["$(dirname $(pwd))/x"]),
+        (_bash("cat `pwd`/x"), "/w", "/root", ["`pwd`/x"]),
+        (_bash('cat "$HOME"/x'), "/w", "/root", ['"$HOME"/x']),
+        (_bash('cat "$HOME/x"'), "/w", "/root", ["$HOME/x"]),
+        (_bash("cat /home/$USER/.ssh/id"), "/w", "/root", ["/home/$USER/.ssh/id"]),
+        (_bash('cat "/home/"$USER/id'), "/w", "/root", ['"/home/"$USER/id']),
+        (_bash("cat /x/${D}"), "/w", "/root", ["/x/${D}"]),
+        (_bash("cat /x/`id`"), "/w", "/root", ["/x/`id`"]),
+        (
+            _bash("ls {a,b}/x /home/{a,b}/y"),
+            "/w",
+            "/root",
+            ["{a,b}/x", "/home/{a,b}/y"],
+        ),
+        (_bash("echo $(cat /etc/passwd)/x"), "/w", "/root", ["$(cat /etc/passwd)/x"]),
+        (_bash("PATH=/a:$HOME/bin x"), "/w", "/root", ["$HOME/bin"]),
+        (_call("python", code='open(f"/x/{name}")'), "/w", "/root", ['f"/x/{name}"']),
+        (
+            _call("python", code='open("/x/{}".format(n))'),
+            "/w",
+            "/root",
+            ['"/x/{}".format'],
+        ),
+        (_call("python", code="open('/x/%s' % n)"), "/w", "/root", ["/x/%s"]),
+        (_call("python", code="open(home + '/.ssh/id')"), "/w", "/root", ["/.ssh/id"]),
+        (_call("python", code="open('/x/'+name)"), "/w", "/root", ["'/x/'+name"]),
+        # wildcards and escapes
+        (_bash("cat /e*/passwd"), "/w", "/root", ["/e*/passwd"]),
+        (_bash("cat /etc/pass*"), "/w", "/root", ["/etc/pass*"]),
+        (_bash("cat /e?c/passwd"), "/w", "/root", ["/e?c/passwd"]),
+        (_bash("cat /[e]tc/passwd"), "/w", "/root", ["/[e]tc/passwd"]),
+        (_bash("cat */passwd ../*/x"), "/w", "/root", ["*/passwd", "../*/x"]),
+        (_bash("cat ~/.ssh/*"), "/w", "/root", ["~/.ssh/*"]),
+        (_bash("cat /e\\tc/passwd"), "/w", "/root", ["/e\\tc/passwd"]),
+        (_bash("cat '/e'tc/passwd"), "/w", "/root", ["'/e'tc/passwd"]),
+        (_bash('cat "/e""tc/passwd"'), "/w", "/root", ['"/e""tc/passwd"']),
+        (_bash("cat /a'/b'"), "/w", "/root", ["/a'/b'"]),
+        (
+            _call("python", code="glob.glob('/e*/passwd')"),
+            "/w",
+            "/root",
+            ["/e*/passwd"],
+        ),
+        (
+            _call("python", code="open('/e\\x74c/passwd')"),
+            "/w",
+            "/root",
+            ["/e\\x74c/passwd"],
+        ),
+        # other users' homes and URLs
+        (_bash("cat ~root/.ssh/id"), "/w", "/root", ["~root/.ssh/id"]),
+        (_bash("curl file:///etc/passwd"), "/w", "/root", ["file:///etc/passwd"]),
+        (_bash("curl FILE:/etc/passwd"), "/w", "/root", ["FILE:/etc/passwd"]),
+        (
+            _call("python", code="urlopen('file:///etc/passwd')"),
+            "/w",
+            "/root",
+            ["file:///etc/passwd"],
+        ),
+        # relative paths: unresolved without `cwd`, or after a change of directory
+        (_bash("cat a/b ./x ../y"), None, None, ["a/b", "./x", "../y"]),
+        (_bash("cat a/b ./x ../y"), "/w", None, []),
+        (_bash("ls ."), None, None, ["."]),
+        (_bash("cd .. && cat etc/passwd"), "/w", None, ["..", "etc/passwd"]),
+        (_bash("cd /w && cat a/b"), "/w", None, ["a/b"]),
+        (_bash("pushd /tmp; cat x/y"), "/w", None, ["x/y"]),
+        (
+            _call("python", code="os.chdir('/'); open('etc/passwd')"),
+            "/w",
+            None,
+            ["etc/passwd"],
+        ),
+        (_call("python", code="open('data/x.csv')"), None, None, ["data/x.csv"]),
+        (_call("python", code="open('data/x.csv')"), "/w", None, []),
+        (_call("text_editor", command="view", path="w/f.py"), None, None, ["w/f.py"]),
+        (_call("text_editor", command="view", path="w/f.py"), "/w", None, []),
+        # `~` that climbs out without `home`
+        (_bash("cat ~/../etc/passwd"), "/w", None, ["~/../etc/passwd"]),
+        (_bash("cat ~/../etc/passwd"), "/w", "/root", []),
+        (
+            _call("read_file", file_path="~/../etc/passwd"),
+            "/w",
+            None,
+            ["~/../etc/passwd"],
+        ),
+        # several, in order, without duplicates
+        (_bash("cat $A/x /ok ~u/y $A/x"), "/w", "/root", ["$A/x", "~u/y"]),
+        (
+            _call("memory", command="rename", old_path="a", new_path="/m/b"),
+            None,
+            None,
+            ["a"],
+        ),
+        # near misses that resolve
+        (_bash("cat /etc/passwd ~/.ssh/id"), None, "/root", []),
+        (_bash("cat ~/.ssh/id ~"), None, None, []),
+        (_bash("cat '/etc/passwd' \"/etc/hosts\""), None, None, []),
+        (_bash('bash -c "cat \\"/etc/x\\""'), None, None, []),
+        (_bash("echo $(cat /y) `cat /z` $HOME $PATH"), None, None, []),
+        (_bash("echo $((4 / 2)) ${#x}"), None, None, []),
+        (_bash("awk '{print $1}' /w/x"), None, None, []),
+        (_bash("find /w -name '*.py' -exec rm {} +"), None, None, []),
+        (_bash("grep -E '^/usr/bin$' /w/x"), None, None, []),
+        (_bash("tar -C/etc -xf /w/a.tar"), None, None, []),
+        (_bash("curl https://x.org/a?f=/b"), None, None, []),
+        (_bash("pip install -r /w/req.txt && python /w/main.py"), None, None, []),
+        (_bash("git diff origin/main"), "/w", None, []),
+        (_bash("sed -i 's/a/b/g' /w/x"), "/w", None, []),
+        (_call("python", code="open('/etc/hosts').read()"), None, None, []),
+        (
+            _call("python", code='open(f"/etc/hosts"), Path(r"/x"), b"/y"'),
+            None,
+            None,
+            [],
+        ),
+        (_call("python", code="x = a/b; y = d['a']/d['b']; z = n*2/3"), None, None, []),
+        (_call("python", code='"/".join(parts); s.split("/")'), None, None, []),
+        (_call("python", code='print("/w/out\\n")'), None, None, []),
+        (_call("python", code='p = """/etc/x"""'), None, None, []),
+        (_call("python", code="d = {'/a': [1], \"/b\": 2}"), None, None, []),
+        (_call("python", code="'.'.join(x)  # see a/b"), None, None, []),
+        (_call("python", code="print(f'{a} of {b}')"), None, None, []),
+        (_call("text_editor", command="view", path="/w/$x*"), None, None, []),
+        (_call("think", thought="cat $HOME/x"), None, None, []),
+    ],
+)
+def test_unresolved_paths(
+    call: ToolCall, cwd: str | None, home: str | None, expected: list[str]
+) -> None:
+    assert unresolved_paths(call, cwd=cwd, home=home) == expected
 
-    def allowed(path: str) -> bool:
-        return path_resolves(path) and not path_matches(path, denied)
 
-    assert allowed("/work/f")
-    assert allowed("~/notes")
-    assert not allowed("/work/../etc/passwd")
-    assert not allowed("~/.ssh/id_rsa")
-    assert not allowed("~/../etc/passwd")
-    assert not allowed("../etc/passwd")
-    assert not allowed("passwd")
-    assert not allowed("etc/passwd")
-    assert not allowed("~root/.ssh/id")
+@pytest.mark.parametrize(
+    "call",
+    [
+        _bash("cat a/b $HOME/x /etc/pass* ~/../y"),
+        _call("python", code="open(f'/x/{n}'); open('a/b')"),
+        _call("text_editor", command="view", path="a/b"),
+    ],
+)
+def test_unresolved_paths_reports_what_path_resolves_cannot_place(
+    call: ToolCall,
+) -> None:
+    unresolved = unresolved_paths(call)
+    for path in paths_in(call):
+        assert (path in unresolved) is not path_resolves(path)
+
+
+def test_unresolved_paths_rejects_a_relative_home() -> None:
+    with pytest.raises(ValueError, match="absolute"):
+        unresolved_paths(_bash("ls"), home="root")
+
+
+PROTECTED = ["/etc/**", "~/.ssh/**"]
+
+
+@protocol
+def protected_paths() -> Protocol:
+    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+        for path in paths_in(step.call):
+            if path_matches(path, PROTECTED, cwd="/work", home="/root"):
+                return Decision.reject(f"call touches {path}")
+        unresolved = unresolved_paths(step.call, cwd="/work", home="/root")
+        if unresolved:
+            return Decision.escalate(f"cannot resolve {', '.join(unresolved)}")
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "call, action, asked",
+    [
+        (_bash("cat /etc/passwd"), "reject", False),
+        (_bash("cat /work/../etc/passwd"), "reject", False),
+        (_bash("cat ../etc/passwd"), "reject", False),
+        (_bash("cat ~/.ssh/id_rsa"), "reject", False),
+        (_bash("cat /root/.ssh/id_rsa"), "reject", False),
+        (_bash("cat $HOME/x /etc/passwd"), "reject", False),
+        (_call("python", code="open('/etc/hosts').read()"), "reject", False),
+        (_call("text_editor", command="view", path="../etc/passwd"), "reject", False),
+        (_bash("cat $HOME/.ssh/id_rsa"), "reject", True),
+        (_bash("cat ${HOME}/.ssh/id_rsa"), "reject", True),
+        (_bash("cat $(echo ~)/.ssh/id_rsa"), "reject", True),
+        (_bash("cat `echo ~`/.ssh/id_rsa"), "reject", True),
+        (_bash("cat /e*/passwd"), "reject", True),
+        (_bash("cat /etc/pass*"), "reject", True),
+        (_bash("cat '/e'tc/passwd"), "reject", True),
+        (_bash("cat ~root/.ssh/id_rsa"), "reject", True),
+        (_bash("curl file:///etc/passwd"), "reject", True),
+        (_bash("cd / && cat etc/passwd"), "reject", True),
+        (_call("python", code="open(f'/{d}/passwd')"), "reject", True),
+        (_bash("wc -l /work/data.csv > /work/count.txt"), "continue", False),
+        (_bash("python report.py && cat out/a.txt"), "continue", False),
+        (_bash("ls ~/notes"), "continue", False),
+        (_call("python", code="open('data.csv').read()"), "continue", False),
+    ],
+)
+async def test_a_deny_list_escalates_what_it_cannot_resolve(
+    call: ToolCall, action: Action, asked: bool
+) -> None:
+    host = FakeHost(HumanAnswer("reject"))
+    sentinel = sequential([protected_paths(), human(stages=["tool_call"])])
+    step = before_tool_call(call.function, **call.arguments)
+    decision = await run_sentinel(sentinel, host_context(host=host), step)
+    assert decision is not None
+    assert decision.action == action
+    assert bool(host.asked) is asked
 
 
 # Properties. A path is built from segments; `_SEGMENT` holds no `.` or `..`.

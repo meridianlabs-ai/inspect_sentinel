@@ -29,19 +29,20 @@ How to write a protocol: a `@protocol` factory returning a function that returns
 
 ## Helpers for Rules
 
-A rule usually reads a tool call as text and looks for something in it. These functions do the common parts. They are plain functions of their arguments, so a rule built on them is easy to test. Rules on text catch an agent's mistakes, not an adversary: a command built at run time, or a tool the rule does not know, gets past them.
+A rule usually reads a tool call as text and looks for something in it. These functions do the common parts. They are plain functions of their arguments, so a rule built on them is easy to test. Rules are cheap and run without a model call, but they cannot prove a call safe: a command built at run time, or a tool the rule does not know, gets past them. Use a rule to reject what is clearly bad, and escalate what it cannot resolve to a model or a person, typically `sequential([rule(), llm_monitor(), human()])`, where `llm_monitor()` stands for a protocol that asks a model and escalates what it is unsure of.
 
 | Function | Returns |
 |---|---|
 | `call_text(call)` | The call's text whichever tool it is: `bash()`'s `command`, `python()`'s `code`, `text_editor()`'s path and text, and so on; for any other tool, its string arguments. |
 | `tool_matches(call, *patterns)` | Whether the tool's name matches a glob, as an approval policy's `tools` do: `"bash"` also matches `bash_session`, and `"web_browser*"` every browser tool. |
 | `find_words(text, words)` | The words that appear in the text as whole words, in the order they appear, so an explanation can name them. `rm` does not match `platform`; `-delete` and `pip install` work as written. |
-| `paths_in(call)` | The paths a call names: a file tool's path arguments, and absolute and `~/` paths in the code of `bash()`, `bash_session()`, `python()` and `code_execution()`. Best effort. |
+| `paths_in(call)` | The paths a call names: a file tool's path arguments, and absolute, `~/` and relative paths in the code of `bash()`, `bash_session()`, `python()` and `code_execution()`. Best effort. |
+| `unresolved_paths(call, cwd=None, home=None)` | The path references in a call that cannot be resolved to a place: those built at run time (`$HOME/x`, `$(pwd)/x`, `f"/x/{name}"`), with a wildcard (`/e*/passwd`), `~user/x`, `file://` URLs, and relative paths without `cwd`. |
 | `path_matches(path, patterns, cwd=None, home=None)` | Whether a path matches a glob once `..`, `.` and repeated slashes are resolved, so `/work/../etc/passwd` matches `/etc/**`. Wildcards match dotfiles but never a `..`. |
 | `path_resolves(path, cwd=None, home=None)` | Whether a path resolves to an absolute or `~/` path, as `passwd` does not without `cwd`, nor `~/../etc` without `home`. |
 | `result_text(step)` | After a call: its result as text, or `Error (<type>): <message>` when it failed. |
 
-For example, a rule that keeps file tools and commands out of protected directories:
+For example, a rule that keeps file tools and commands out of protected directories, and escalates the calls it cannot check:
 
 ```python
 from inspect_sentinel import (
@@ -52,6 +53,7 @@ from inspect_sentinel import (
     path_matches,
     paths_in,
     protocol,
+    unresolved_paths,
 )
 
 PROTECTED = ["/etc/**", "~/.ssh/**"]
@@ -66,12 +68,17 @@ def protected_paths() -> Protocol:
                     f"call touches {path}",
                     message=f"`{path}` is off limits; work only under /work.",
                 )
+        unresolved = unresolved_paths(step.call, cwd="/work", home="/root")
+        if unresolved:
+            return Decision.escalate(f"cannot resolve {', '.join(unresolved)}")
         return Decision.proceed()
 
     return decide
 ```
 
-`cwd` resolves relative paths, such as `text_editor()`'s, against the agent's working directory, and `home` expands `~` in paths and patterns alike, so `~/.ssh/**` here also matches `/root/.ssh/id_rsa`. Patterns are not joined to `cwd`, so write them absolute or begin them with `**/`. Without `home`, `~` is kept as written: `~/x` matches only `~/` patterns, and a path that climbs out of `~` (`~/../etc`) cannot be resolved and matches no pattern with a wildcard; nor can a relative path without `cwd`. A rule that denies, as this one does, should then also reject the paths that `path_resolves()` says it cannot place; with `home` and an absolute `cwd`, as here, every path resolves.
+`cwd` resolves relative paths, such as `text_editor()`'s, against the agent's working directory, and `home` expands `~` in paths and patterns alike, so `~/.ssh/**` here also matches `/root/.ssh/id_rsa`. Patterns are not joined to `cwd`, so write them absolute or begin them with `**/`.
+
+A deny-list passes whatever it cannot see, so the rule escalates a call with any path it cannot resolve rather than letting it through: `cat $HOME/.ssh/id_rsa`, `cat /e*/passwd` and `cd / && cat etc/passwd` all name a protected file that no pattern can match as written. Put the rule ahead of a `human()` or a model in a `sequential()` to have someone else decide them. Without `cwd` every relative path is unresolved, and without `home` so is a path that climbs out of `~` (`~/../etc`), so pass both. `unresolved_paths()` reports only what `paths_in()` can see: a path with no `/` in a command (`cat passwd`), a path held whole in a variable (`cat $F`) and a path built by a function (`os.path.join(home, ".ssh")`) are not found at all.
 
 To unit-test a rule, `before_tool_call()` and `after_tool_call()` build the steps to pass to its function, without running an agent:
 
