@@ -1,6 +1,6 @@
 # Workstreams
 
-Areas of sentinel that can be owned separately, as of 2026-10-02. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 4), next (5 to 9), lower priority (10 and 11), then done. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred".
+Areas of sentinel that can be owned separately, as of 2026-10-05. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 6), next (7 to 11), lower priority (12 and 13), then done; 5 and 6 were added on 2026-10-05. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred".
 
 Work on your own branches and open PRs into `feature/sentinel`, in inspect_ai and in ts-mono alike. Pushing directly to the shared branch collides.
 
@@ -31,22 +31,64 @@ Lives in inspect_ai's model path and sentinel's step types. Best after inspect_c
 
 **Priority:** high. **Owner:** epatey. **Design:** [sentinel.md](sentinel.md), "Views" and "Inference, budget, and injection".
 
-Raised by the maintainer on 2026-10-02, as a peer to workstream 5: what a monitor that calls a model needs, so each author does not rebuild it. Scope:
+Raised by the maintainer on 2026-10-02, as a peer to workstream 7: what a monitor that calls a model needs, so each author does not rebuild it. Scope:
 
 - Model interaction as in Inspect Scout's LLM scanner: prompt templates, structured answers, and parsing with retries.
 - Chunking inputs that exceed the monitor model's context window (the conversation, long tool output) and reducing the chunks to one result.
 - Prompt caching: keep a stable prefix across steps and avoid changes that break the cache.
 - Helpers that build views for the model, turning the conversation and the call into a prompt.
 
-Prior art: Kai's structured-approval approver in Petri, built on the LLM scanner. Lives in inspect_sentinel over `Host.generate`; shares the view helpers with workstream 5.
+Prior art: Kai's structured-approval approver in Petri, built on the LLM scanner. Lives in inspect_sentinel over `Host.generate`; shares the view helpers with workstream 7.
 
 ## 4. Host in a proxy
 
 **Priority:** high. **Owner:** Pete. **Design:** [sentinel-deployment.md](sentinel-deployment.md); spike plan in [proxy-host.md](proxy-host.md).
 
-Raised by the maintainer on 2026-10-02: a technical spike implementing a monitor host in a proxy, WASM hosting in Envoy first, then an RPC-based interface in another proxy that supports one. Includes the changes to the `Host` interface, `Context` and the rest that proxy deployment needs. It is the later, larger project in workstream 7; coordinate with the bridged-agent work there and with workstream 9.
+Raised by the maintainer on 2026-10-02: a technical spike implementing a monitor host in a proxy, WASM hosting in Envoy first, then an RPC-based interface in another proxy that supports one. Includes the changes to the `Host` interface, `Context` and the rest that proxy deployment needs. It is the later, larger project in workstream 9; coordinate with the bridged-agent work there and with workstream 11.
 
-## 5. Shipped protocols and helpers
+## 5. Landing and the first release
+
+**Priority:** high. **Design:** [pr-series.md](pr-series.md).
+
+Raised by the maintainer on 2026-10-05: land the open work and ship inspect_sentinel to PyPI. Before the release the public names are settled, since they cannot change freely afterwards. Release Please is paused (inspect_sentinel #4) until then.
+
+Decide first, as a short review of the public surface:
+
+- The package and the concept: `inspect_sentinel`, "sentinel", and `Task(sentinel=)` / `eval(sentinel=)` / `--sentinel` in inspect_ai.
+- The two kinds and their decorators: `Monitor` / `@monitor` and `Protocol` / `@protocol` (the clash with `typing.Protocol` was accepted on 2026-09-30), and `MonitorGroup` / `ProtocolGroup`.
+- The shipped protocols: `observe_only`, `concurrent`, `sequential`, `threshold`, `human`.
+- The report and decision types: `Observation`, `Decision` and its constructors (`proceed`, `reject`, `terminate`, `escalate`), `Action`, `Suspicion`, `Reported`, `Decisions`, `Observations`, `Reports`, `decide_final` (its own revisit is under "Then: design decisions" in pr-series.md "Deferred").
+- The step and context types: `Step`, `BeforeToolCall`, `AfterToolCall` (and the generate stages if they ship), `Context` and its fields, `Host`, `HostContext`, `Recorder`, `HumanAnswer`.
+- The log contract in inspect_ai: `SentinelEvent` and its fields, `SentinelConfig` / `SentinelEntry`, and the stage names recorded in logs.
+- What is public and what is the integration contract (`inspect_sentinel._integration`).
+
+Then land, in order:
+
+1. The open sentinel PRs, and any renames the review decides.
+2. ts-mono `feature/sentinel` (#716) into ts-mono `main`.
+3. inspect_ai #5514: point the submodule at the merged ts-mono commit and rebuild the viewer (the land-ts-mono flow), un-dark-launch it (the `--sentinel` option visible, the experimental notes on the API revisited, the sentinel docs pages and a CHANGELOG entry), and merge.
+4. Release inspect_ai with the sentinel hooks, so sentinel can depend on a released version.
+5. Release inspect_sentinel: replace the git dependency on inspect_ai with a version floor (release-pin-deps.yml does this on the Release Please PR, and release-dep-guard.yml blocks a git ref), unpause Release Please, publish to PyPI, and publish the docs.
+6. In inspect_ai, replace the temporary pinned `--no-deps` CI install of sentinel with the released package.
+
+Touches both repositories and ts-mono; every rename it decides touches the log contract, so it needs the compatibility and round-trip coverage AGENTS.md asks for before the first release fixes it.
+
+## 6. Completing the docs
+
+**Priority:** high. **Design:** the outline pages in `docs/`.
+
+Raised by the maintainer on 2026-10-05: finish the user documentation before the first release. Today Getting Started (`docs/index.qmd`) is written, and the other pages are outlines with a few real sections: `monitors.qmd` (prompt helpers are planned there), `protocols.qmd` (Helpers for Rules), `composition.qmd`, `final-decisions.qmd`, `approval.qmd`, `configuration.qmd`, `state.qmd`, `host.qmd`, `transcript.qmd`, `calibration.qmd` and `deployment.qmd`.
+
+Scope:
+
+- Write each outline page, using inspect_ai's docs as the model for structure and tone, with examples that teach one idea each.
+- The reference (`docs/reference/`) complete for the public surface that workstream 5 settles.
+- The inspect_ai side: the sentinel pages and the `Task`/`eval` docs that are hidden while #5514 is dark-launched, written for when workstream 5 un-dark-launches it.
+- An examples index that runs end to end, and a check in CI that the documented examples still run.
+
+Depends on workstream 5's naming review, so it follows it page by page rather than waiting for all of it.
+
+## 7. Shipped protocols and helpers
 
 **Priority:** next. **Design:** [sentinel.md](sentinel.md), the shipped protocols, views and "Failure semantics".
 
@@ -57,7 +99,7 @@ Many small, independent tasks, good for onboarding:
 - A helper that renders a call's arguments as text (`Sequence[str]`), and similar conveniences that make rules shorter (maintainer, 2026-10-02).
 - The prompt helpers, such as `monitor_prompt`, unless they move to workstream 3.
 
-## 6. Auto-mode approvers
+## 8. Auto-mode approvers
 
 **Priority:** next.
 
@@ -65,13 +107,13 @@ Support approvers in inspect modelled on the auto modes of Claude Code and Codex
 
 Open questions: which model judges by default, and how its policy is configured; whether the result is a binary allow/deny or a score that `threshold` calibrates; how it maps to approval's vocabulary (`approve`) and sentinel's (`continue`); and, where an existing product's prompt or policy is reused, whether its terms allow that.
 
-## 7. Bridged agents and deployment
+## 9. Bridged agents and deployment
 
 **Priority:** next. **Design:** [sentinel-deployment.md](sentinel-deployment.md).
 
 **Known gap today:** a sentinel never runs for a bridged agent's tool calls; only tool calls that go through `execute_tools` are checked. First step: the before-call hook in `bridge_generate`, next to `apply_bridge_tool_approval`, so bridged agents get sentinel checks on their tool calls. With it, verify that handoff and bridged agents open agent spans consistently, so conversation ids link as designed, with tests. The proxy deployment (a sentinel at the network boundary, the host ABI, sidecar and WASM modes) is a later, larger project.
 
-## 8. Building good, validated monitors
+## 10. Building good, validated monitors
 
 **Priority:** next. **Design:** [sentinel-development.md](sentinel-development.md).
 
@@ -85,13 +127,13 @@ The development loop: build a monitor, measure it over transcripts, calibrate it
 
 Lives mostly in inspect_sentinel, with inspect_scout where Scout does the scanning, and consumes the sentinel API without changing it, so it rarely collides with core work. Uses `references` on reports (inspect_ai's `scorer.Reference`, as Scout's `Result` does) and the decorators' `version=`, which calibration records.
 
-## 9. Portability linter
+## 11. Portability linter
 
 **Priority:** next. **Design:** [sentinel-deployment.md](sentinel-deployment.md), "Keeping monitors portable" and "What gets bundled".
 
 Raised by the maintainer on 2026-10-02: an AST-based linter that checks a monitor is portable to the proxy, with no captured state and only imports that can be bundled. It is the static pass that document's mitigations call for, and what a `portable=False` declaration would exempt a monitor from. Consumes the decorators and the module layout without changing them; the proxy work in workstream 4 decides what counts as bundleable.
 
-## 10. Monitoring the monitors
+## 12. Monitoring the monitors
 
 **Priority:** lower. **Owner:** Pete.
 
@@ -101,9 +143,9 @@ Raised by the maintainer on 2026-10-02 and not well defined yet: reporting on wh
 - A job that reads many logs and summarises each protocol's behaviour.
 - A sentinel-activity JSON file inside the `.eval` file.
 
-Reads `SentinelEvent`s and the recorded configuration, so it overlaps the read-mode scanner in workstream 8.
+Reads `SentinelEvent`s and the recorded configuration, so it overlaps the read-mode scanner in workstream 10.
 
-## 11. Remote human surfaces
+## 13. Remote human surfaces
 
 **Priority:** lower.
 
