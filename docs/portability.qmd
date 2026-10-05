@@ -1,0 +1,76 @@
+---
+title: "Portable Monitors"
+description: "Monitors and protocols that can run outside an eval, and the check that keeps them that way."
+---
+
+::: {.callout-warning}
+## Outline
+This page is partly an outline. The check described under "What a portable function may do", "When the check runs" and "Opting out" is built; the sections marked planned are not yet written.
+:::
+
+## Overview
+
+A monitor or protocol is portable when it can run outside an Inspect eval, for example in a proxy in front of a model API, without changes. Portable is the default: `@monitor` and `@protocol` take `portable=True` unless told otherwise, and sentinel checks a portable factory's code when the factory is called. The default pulls toward monitors that travel, and opting out is one visible keyword.
+
+## What a portable function may do
+
+A portable function computes anything, and affects the outside world only through `context`:
+
+- `context.host.generate()` to call a model, and `context.host.ask_human()` to ask a person.
+- `context.store_as()` to keep state across a sample's steps.
+- Outbound HTTP through `context.host.fetch()` and named endpoints is planned; until then a monitor that needs an HTTP API is not portable.
+
+Configuration comes through the factory's parameters, which the log records, not the environment.
+
+## What it may reference
+
+The check reads the factory's source, including the functions it returns, and resolves every name they reference to the object it names. Each object is judged by the module that defines it:
+
+- **Allowed:** the standard library, except modules with effects; `inspect_ai.core` (inspect_ai's wire types: messages, tool calls, `GenerateConfig`, `ModelOutput`) and its dependencies `pydantic`, `pydantic_core`, `typing_extensions` and `shortuuid`; `inspect_sentinel`; and `StoreModel` and `Reference`, which sentinel's API takes.
+- **Not allowed, in the standard library:** `os` and `sys` themselves (`os.path` is allowed), `socket`, `ssl`, `http.client`, `urllib.request`, `subprocess`, `multiprocessing`, `threading`, `signal`, `ctypes`, `sqlite3`, `shutil` and `importlib`.
+- **Not allowed, builtins:** `open`, `input`, `exec`, `eval`, `compile`, `__import__` and `breakpoint`.
+- **Not allowed, packages:** the rest of inspect_ai, such as `get_model()` and `sandbox()`, and every other third-party package (`requests`, `openai`, `numpy`). Models are reached through `context.host.generate()`.
+
+Functions and classes from your own modules that the code references are checked the same way, wherever they are defined. What is checked is what the monitor references, not what its file imports: a `@task` that calls `get_model()` beside a portable monitor does not affect the monitor.
+
+Names that are parameters or local variables are not resolved, so a factory parameter holding a model or client passes; keep effects out of the function rather than passing them in.
+
+## When the check runs
+
+When the factory is called: in Python when you configure the monitor, and from a configuration file when it is resolved, so the error comes before the eval starts. Importing a module that defines a monitor does not run the check. A factory is checked once, the first time it is called. Without source, as for a monitor defined in a notebook or the REPL, the check is skipped.
+
+A failure raises `PortabilityError`, which lists every disallowed reference: the file and line, the function, the name, what it resolved to, and why it is not allowed.
+
+``` default
+PortabilityError: monitor suspicion is portable, but its code references what a portable monitor cannot use:
+- llm_suspicion.py:75 in suspicion.<locals>.score: `VERDICT` is a `GenerateConfig` from `inspect_ai.model._generate_config`, and inspect_ai is portable only through `inspect_ai.core`
+```
+
+A protocol's children are passed in as arguments and are checked by their own factories, not as part of the protocol. The shipped protocols pass the check.
+
+## Opting out
+
+Declare a monitor or protocol that only runs in an eval with `portable=False`:
+
+``` python
+@monitor(portable=False)
+def sandbox_state() -> Monitor:
+    ...
+```
+
+`portable` is recorded in the factory's registry metadata. Use it for monitors that need the eval itself, such as one that reads the sandbox, or a library that is not a portable dependency.
+
+## Known limits
+
+- Dynamic access is not followed: `getattr()` with a computed name, `globals()`, `vars()`, and the contents of containers such as a list of functions.
+- Standard-library modules outside the list above pass, even when they have effects, such as `pathlib` and `io` file access or `asyncio` subprocesses.
+- Referencing a class checks all of its methods, not only the ones called.
+- There is no runtime guard: a portable function is checked by its source, not watched while it runs.
+
+## Per function and per module (planned)
+
+The check is per function, by what it references. Whether a module can be bundled, given everything it imports, is a separate verdict that belongs to the deploy step.
+
+## Deploying portable monitors (planned)
+
+Running the portable set in a proxy, and building it into a bundle: see [Deployment](deployment.qmd).

@@ -50,6 +50,7 @@ inspect-docs:
       contents:
         - href: calibration.qmd
         - href: deployment.qmd
+        - href: portability.qmd
   sidebar: unified
   external_refs:
     inspect_ai: https://inspect.aisi.org.uk

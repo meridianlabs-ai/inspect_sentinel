@@ -152,7 +152,7 @@ def raises() -> Protocol:
     return decide
 
 
-@protocol
+@protocol(portable=False)
 def decides(action: Action = "continue") -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(
@@ -348,7 +348,7 @@ async def test_concurrent_siblings_record_under_their_own_layers() -> None:
     }
 
 
-@protocol
+@protocol(portable=False)
 def fans_out_itself() -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         async with anyio.create_task_group() as tg:
@@ -370,7 +370,7 @@ async def test_a_protocols_own_task_group_can_run_children() -> None:
     assert sorted(r.context.path for r in recorder.records) == ["", "p/x", "p/y"]
 
 
-@monitor
+@monitor(portable=False)
 def nests_a_step() -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         await run_sentinel(
@@ -381,7 +381,7 @@ def nests_a_step() -> Monitor:
     return check
 
 
-@protocol
+@protocol(portable=False)
 def runs_after_a_nested_step() -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         await run_monitors({"n": nests_a_step()}, context, step)
@@ -400,7 +400,7 @@ async def test_a_nested_step_leaves_the_outer_step_running() -> None:
     assert [r.context.path for r in recorder.records] == ["n", "after"]
 
 
-@protocol
+@protocol(portable=False)
 def waits_forever() -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         await anyio.sleep_forever()
@@ -510,7 +510,7 @@ async def test_run_monitors_is_concurrent() -> None:
     first_started = anyio.Event()
     second_started = anyio.Event()
 
-    @monitor
+    @monitor(portable=False)
     def waits_for_second() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             first_started.set()
@@ -519,7 +519,7 @@ async def test_run_monitors_is_concurrent() -> None:
 
         return check
 
-    @monitor
+    @monitor(portable=False)
     def waits_for_first() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             second_started.set()
@@ -543,7 +543,7 @@ async def test_terminate_cancels_siblings() -> None:
     started = anyio.Event()
     finished = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def slow() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             started.set()
@@ -553,7 +553,7 @@ async def test_terminate_cancels_siblings() -> None:
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def terminates() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
@@ -701,7 +701,7 @@ async def test_iterators_are_rejected_rather_than_exhausted() -> None:
 async def test_a_raising_child_surfaces_while_a_sibling_is_mid_await() -> None:
     started = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def waits() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             started.set()
@@ -710,7 +710,7 @@ async def test_a_raising_child_surfaces_while_a_sibling_is_mid_await() -> None:
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def explodes_after_start() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
@@ -734,7 +734,7 @@ async def test_a_raising_child_surfaces_while_a_sibling_is_mid_await() -> None:
 async def test_external_cancellation_propagates_through_the_runner() -> None:
     entered = anyio.Event()
 
-    @monitor
+    @monitor(portable=False)
     def hangs() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             entered.set()
@@ -774,7 +774,7 @@ async def test_terminate_keeps_results_collected_before_it() -> None:
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def slow() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             started.set()
@@ -783,7 +783,7 @@ async def test_terminate_keeps_results_collected_before_it() -> None:
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def terminates() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
@@ -845,7 +845,7 @@ class FailingRecorder(ListRecorder):
 async def test_a_recorder_failure_during_cancellation_fails_loud() -> None:
     started = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def slow() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             started.set()
@@ -854,7 +854,7 @@ async def test_a_recorder_failure_during_cancellation_fails_loud() -> None:
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def terminates() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
@@ -882,7 +882,7 @@ async def test_terminate_cancels_monitors_at_their_next_await() -> None:
 
         return check
 
-    @monitor
+    @monitor(portable=False)
     def hangs() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             started.set()
@@ -891,7 +891,7 @@ async def test_terminate_cancels_monitors_at_their_next_await() -> None:
 
         return check
 
-    @protocol
+    @protocol(portable=False)
     def terminates() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
@@ -931,7 +931,7 @@ async def test_a_child_error_alongside_a_cancellation_surfaces_on_both_backends(
 ):
     entered = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def converts_cancellation() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             entered.set()
@@ -943,7 +943,7 @@ async def test_a_child_error_alongside_a_cancellation_surfaces_on_both_backends(
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def hangs_on() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await anyio.sleep_forever()
@@ -1023,7 +1023,7 @@ async def test_an_illegal_decision_fails_the_layer_that_returned_it() -> None:
 async def test_final_ends_the_step_past_every_layer_above() -> None:
     started = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def slow() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             started.set()
@@ -1032,7 +1032,7 @@ async def test_final_ends_the_step_past_every_layer_above() -> None:
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def leaf() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
@@ -1088,7 +1088,7 @@ async def test_the_loser_of_a_final_race_is_recorded_as_superseded() -> None:
     waiting = anyio.Event()
     gate = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def opens() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
@@ -1097,7 +1097,7 @@ async def test_the_loser_of_a_final_race_is_recorded_as_superseded() -> None:
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def follows() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             waiting.set()
@@ -1130,7 +1130,7 @@ async def test_an_error_beside_a_final_decision_is_not_hidden_by_it() -> None:
     waiting = anyio.Event()
     gate = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def opens() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
@@ -1139,7 +1139,7 @@ async def test_an_error_beside_a_final_decision_is_not_hidden_by_it() -> None:
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def explodes() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             waiting.set()
@@ -1180,7 +1180,7 @@ async def test_a_monitor_that_calls_final_is_a_bug() -> None:
 async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -> None:
     started = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def slow() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             started.set()
@@ -1189,7 +1189,7 @@ async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def leaf() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
@@ -1197,7 +1197,7 @@ async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def custom() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             async with anyio.create_task_group() as tg:
@@ -1226,7 +1226,7 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
     waiting = anyio.Event()
     gate = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def opens() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
@@ -1235,7 +1235,7 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def follows() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             waiting.set()
@@ -1244,7 +1244,7 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def custom() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             async with anyio.create_task_group() as tg:
@@ -1368,7 +1368,7 @@ async def test_an_error_beside_a_protocols_own_final_in_its_task_group_surfaces(
         gate.set()
         raise RuntimeError("boom")
 
-    @protocol
+    @protocol(portable=False)
     def custom() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             async with anyio.create_task_group() as tg:
@@ -1390,7 +1390,7 @@ async def test_an_error_beside_a_claimed_final_in_a_protocols_own_group_surfaces
     waiting = anyio.Event()
     gate = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def leaf() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
@@ -1404,7 +1404,7 @@ async def test_an_error_beside_a_claimed_final_in_a_protocols_own_group_surfaces
         await gate.wait()
         raise RuntimeError("boom")
 
-    @protocol
+    @protocol(portable=False)
     def custom() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             async with anyio.create_task_group() as tg:
@@ -1429,7 +1429,7 @@ async def test_an_illegal_own_final_supersedes_the_claimed_finals_beside_it() ->
     waiting = anyio.Event()
     gate = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def leaf() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
@@ -1443,7 +1443,7 @@ async def test_an_illegal_own_final_supersedes_the_claimed_finals_beside_it() ->
         await gate.wait()
         decide_final(Decision(action="modify"))
 
-    @protocol
+    @protocol(portable=False)
     def custom() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             async with anyio.create_task_group() as tg:
@@ -1467,7 +1467,7 @@ async def test_a_monitors_own_final_supersedes_the_claimed_finals_beside_it() ->
     waiting = anyio.Event()
     gate = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def leaf() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
@@ -1481,7 +1481,7 @@ async def test_a_monitors_own_final_supersedes_the_claimed_finals_beside_it() ->
         await gate.wait()
         decide_final(Decision.reject("own"))
 
-    @monitor
+    @monitor(portable=False)
     def meddles() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             async with anyio.create_task_group() as tg:
@@ -1527,7 +1527,7 @@ async def test_a_terminate_outrun_by_a_siblings_final_is_superseded(
 async def test_an_ill_shaped_own_final_supersedes_nothing_it_made_itself(
     valid_first: bool,
 ) -> None:
-    @protocol
+    @protocol(portable=False)
     def twice() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             async def valid() -> None:
@@ -1681,7 +1681,7 @@ async def test_two_instances_of_a_group_keep_separate_state() -> None:
 
 @pytest.mark.anyio
 async def test_members_on_one_stage_report_in_factory_order() -> None:
-    @monitor
+    @monitor(portable=False)
     def twins() -> MonitorGroup:
         async def second(context: Context, step: BeforeToolCall) -> Observation | None:
             await anyio.sleep(0)
@@ -1735,7 +1735,7 @@ async def test_a_group_member_calling_final_ends_the_step() -> None:
 async def test_a_cancelled_group_is_recorded_once() -> None:
     started = anyio.Event()
 
-    @monitor
+    @monitor(portable=False)
     def quick_then_slow() -> MonitorGroup:
         async def quick(context: Context, step: BeforeToolCall) -> Observation | None:
             return Observation.score(0.1)
@@ -1747,7 +1747,7 @@ async def test_a_cancelled_group_is_recorded_once() -> None:
 
         return MonitorGroup(quick, slow)
 
-    @protocol
+    @protocol(portable=False)
     def terminates() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
@@ -1792,7 +1792,7 @@ async def test_a_members_terminate_stops_the_group() -> None:
     ran: list[str] = []
     started = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def stops() -> ProtocolGroup:
         async def stop(context: Context, step: BeforeToolCall) -> Decision | None:
             await started.wait()
@@ -1804,7 +1804,7 @@ async def test_a_members_terminate_stops_the_group() -> None:
 
         return ProtocolGroup(stop, overrule)
 
-    @protocol
+    @protocol(portable=False)
     def slow() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             started.set()
@@ -1886,7 +1886,7 @@ async def test_records_and_cancellations_name_the_factory_apart_from_the_instanc
 ):
     started = anyio.Event()
 
-    @monitor
+    @monitor(portable=False)
     def quick_then_slow() -> MonitorGroup:
         async def quick(context: Context, step: BeforeToolCall) -> Observation | None:
             return Observation.score(0.1)
@@ -1898,7 +1898,7 @@ async def test_records_and_cancellations_name_the_factory_apart_from_the_instanc
 
         return MonitorGroup(quick, slow)
 
-    @protocol
+    @protocol(portable=False)
     def terminates() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
@@ -1961,7 +1961,7 @@ async def test_superseded_decisions_name_the_factory() -> None:
     waiting = anyio.Event()
     gate = anyio.Event()
 
-    @protocol
+    @protocol(portable=False)
     def opens() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await waiting.wait()
@@ -1970,7 +1970,7 @@ async def test_superseded_decisions_name_the_factory() -> None:
 
         return decide
 
-    @protocol
+    @protocol(portable=False)
     def follows() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             waiting.set()

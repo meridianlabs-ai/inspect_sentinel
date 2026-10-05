@@ -69,7 +69,7 @@ def says(action: Action = "continue", explanation: str | None = None) -> Protoco
     return decide
 
 
-@protocol
+@protocol(portable=False)
 def rewrites(explanation: str | None = None) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(
@@ -802,7 +802,7 @@ def test_threshold_rejects_a_group_with_a_member_that_never_watches_a_tool_call(
 def _edits(first: Action, second: Action) -> ProtocolGroup:
     modified = ToolCall(id="call_1", function="bash", arguments={"cmd": "echo hi"})
 
-    @protocol
+    @protocol(portable=False)
     def edits() -> ProtocolGroup:
         async def rewrite(context: Context, step: BeforeToolCall) -> Decision | None:
             return Decision(

@@ -139,7 +139,7 @@ async def test_a_failing_function_of_a_group_does_not_stop_the_others() -> None:
 async def test_a_cancelled_monitor_is_not_recorded_as_failed() -> None:
     started = anyio.Event()
 
-    @monitor
+    @monitor(portable=False)
     def slow_monitor() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             started.set()
@@ -148,7 +148,7 @@ async def test_a_cancelled_monitor_is_not_recorded_as_failed() -> None:
 
         return check
 
-    @protocol
+    @protocol(portable=False)
     def stops() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
@@ -170,7 +170,7 @@ async def test_a_cancelled_monitor_is_not_recorded_as_failed() -> None:
 
 @pytest.mark.anyio
 async def test_a_limit_reached_in_a_monitor_ends_the_step() -> None:
-    @monitor
+    @monitor(portable=False)
     def over_budget() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             raise LimitExceededError("cost", value=2.0, limit=1.0)
@@ -190,7 +190,7 @@ async def test_a_monitor_that_turns_its_cancellation_into_an_error_is_cancelled(
 ):
     entered = anyio.Event()
 
-    @monitor
+    @monitor(portable=False)
     def monitor_converts_cancellation() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             entered.set()
@@ -235,7 +235,7 @@ async def test_a_limit_beside_another_error_in_a_monitors_own_group_ends_the_ste
     async def broken() -> None:
         raise ValueError("model unavailable")
 
-    @monitor
+    @monitor(portable=False)
     def fans_out() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             async with anyio.create_task_group() as tg:
