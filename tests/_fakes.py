@@ -1,20 +1,20 @@
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from inspect_ai.model import (
     ChatMessage,
+    ChatMessageTool,
     GenerateConfig,
     Model,
     ModelOutput,
 )
-from inspect_ai.tool import ToolInfo
+from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolInfo
 from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step
 from inspect_sentinel._report import Decision, Failed, Report, Reported
-from inspect_sentinel._rules import after_tool_call, before_tool_call
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 
 
@@ -135,3 +135,40 @@ def before_step() -> BeforeToolCall:
 
 def after_step() -> AfterToolCall:
     return after_tool_call("bash", "out", cmd="ls")
+
+
+def before_tool_call(function: str, /, **arguments: Any) -> BeforeToolCall:
+    return BeforeToolCall(
+        conversation="conversation",
+        message="",
+        call=ToolCall(id="call_1", function=function, arguments=arguments),
+        view=ToolCallView(),
+        input=[],
+        history=[],
+    )
+
+
+def after_tool_call(
+    function: str,
+    /,
+    result: str = "",
+    *,
+    error: ToolCallError | None = None,
+    **arguments: Any,
+) -> AfterToolCall:
+    before = before_tool_call(function, **arguments)
+    return AfterToolCall(
+        conversation=before.conversation,
+        message=before.message,
+        call=before.call,
+        result=ChatMessageTool(
+            content=result,
+            tool_call_id=before.call.id,
+            function=function,
+            error=error,
+        ),
+        output=result,
+        view=before.view,
+        input=before.input,
+        history=before.history,
+    )

@@ -7,13 +7,12 @@ from inspect_ai.tool import ToolCall, ToolCallError
 
 from inspect_sentinel import (
     AfterToolCall,
-    after_tool_call,
-    before_tool_call,
     call_text,
     find_words,
     result_text,
     tool_matches,
 )
+from tests._fakes import after_tool_call
 
 
 def _call(function: str, **arguments: Any) -> ToolCall:
@@ -126,29 +125,3 @@ def test_result_text_names_content_that_is_not_text() -> None:
         ),
     )
     assert result_text(step) == "shot\n[image]"
-
-
-def test_before_tool_call_builds_a_call() -> None:
-    step = before_tool_call("bash", command="ls")
-    assert step.call == ToolCall(
-        id="call_1", function="bash", arguments={"command": "ls"}
-    )
-    assert (step.message, step.input, step.history) == ("", [], [])
-
-
-def test_after_tool_call_builds_a_result() -> None:
-    step = after_tool_call("bash", "out", command="ls")
-    assert step.call == before_tool_call("bash", command="ls").call
-    assert (step.result.text, step.result.tool_call_id, step.output) == (
-        "out",
-        "call_1",
-        "out",
-    )
-    assert step.result.error is None
-
-
-def test_after_tool_call_builds_a_failure() -> None:
-    error = ToolCallError("permission", "denied")
-    step = after_tool_call("bash", error=error, command="cat /x")
-    assert step.result.error == error
-    assert step.call.arguments == {"command": "cat /x"}

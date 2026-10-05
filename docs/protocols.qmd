@@ -80,11 +80,3 @@ def protected_files() -> Protocol:
 `cwd` resolves relative paths against the agent's working directory, and `home` expands `~` in paths and patterns alike, so `~/.ssh/**` here also matches `/root/.ssh/id_rsa`. Patterns are not joined to `cwd`, so write them absolute or begin them with `**/`. A deny-list passes a path it cannot place, such as `~user/x`, so the rule escalates it rather than letting it through.
 
 `tool_matches()` matches the whole name. An approval policy's `tools` in inspect_ai differ: there `"bash"` also matches `bash_session`, and a comma separates several names.
-
-To unit-test a rule, `before_tool_call()` and `after_tool_call()` build the steps to pass to its function, without running an agent:
-
-```python
-from inspect_sentinel import before_tool_call
-
-step = before_tool_call("text_editor", command="view", path="../etc/passwd")
-```

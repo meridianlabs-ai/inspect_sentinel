@@ -4,10 +4,9 @@ import fnmatch
 import posixpath
 import re
 from collections.abc import Iterable
-from typing import Any, cast
+from typing import cast
 
-from inspect_ai.model import ChatMessageTool
-from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView
+from inspect_ai.tool import ToolCall
 from wcmatch.glob import (
     CASE,
     DOTGLOB,
@@ -19,7 +18,7 @@ from wcmatch.glob import (
     is_magic,
 )
 
-from ._step import AfterToolCall, BeforeToolCall
+from ._step import AfterToolCall
 
 _UNPLACEABLE = re.compile(r"^(?:file:|~[^/])", re.IGNORECASE)
 
@@ -235,64 +234,3 @@ def _normalize(path: str, cwd: str | None, home: str | None) -> str:
         rest = posixpath.normpath(path[2:] or ".")
         return "~" if rest == "." else f"~/{rest}"
     return posixpath.normpath(path)
-
-
-def before_tool_call(function: str, /, **arguments: Any) -> BeforeToolCall:
-    """A `BeforeToolCall` for unit-testing a rule.
-
-    The call has id `"call_1"` and the conversation id `"conversation"`; the other fields are empty: no message, an empty view, and no input or history.
-
-    Args:
-        function: The tool's name.
-        **arguments: The call's arguments.
-
-    Returns:
-        The step.
-    """
-    return BeforeToolCall(
-        conversation="conversation",
-        message="",
-        call=ToolCall(id="call_1", function=function, arguments=arguments),
-        view=ToolCallView(),
-        input=[],
-        history=[],
-    )
-
-
-def after_tool_call(
-    function: str,
-    /,
-    result: str = "",
-    *,
-    error: ToolCallError | None = None,
-    **arguments: Any,
-) -> AfterToolCall:
-    """An `AfterToolCall` for unit-testing a rule.
-
-    The call is built as `before_tool_call()` builds it, and `result` is both the tool's output and what the model sees. A tool with an argument named `result` or `error` cannot be built this way.
-
-    Args:
-        function: The tool's name.
-        result: The tool's output.
-        error: The error the call failed with, if it failed.
-        **arguments: The call's arguments.
-
-    Returns:
-        The step.
-    """
-    before = before_tool_call(function, **arguments)
-    return AfterToolCall(
-        conversation=before.conversation,
-        message=before.message,
-        call=before.call,
-        result=ChatMessageTool(
-            content=result,
-            tool_call_id=before.call.id,
-            function=function,
-            error=error,
-        ),
-        output=result,
-        view=before.view,
-        input=before.input,
-        history=before.history,
-    )

@@ -72,5 +72,3 @@ Pure functions for rules that check tool calls, and builders of steps for testin
 ### path_matches
 ### path_resolves
 ### result_text
-### before_tool_call
-### after_tool_call
