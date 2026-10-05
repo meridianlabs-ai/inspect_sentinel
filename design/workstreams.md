@@ -127,11 +127,25 @@ The development loop: build a monitor, measure it over transcripts, calibrate it
 
 Lives mostly in inspect_sentinel, with inspect_scout where Scout does the scanning, and consumes the sentinel API without changing it, so it rarely collides with core work. Uses `references` on reports (inspect_ai's `scorer.Reference`, as Scout's `Result` does) and the decorators' `version=`, which calibration records.
 
-## 11. Portability linter
+## 11. Portability check (`portable=True`)
 
-**Priority:** next. **Design:** [sentinel-deployment.md](sentinel-deployment.md), "Keeping monitors portable" and "What gets bundled".
+**Priority:** next. **Design:** [sentinel-deployment.md](sentinel-deployment.md), "Keeping monitors portable", "Where the protocol runs" and "What gets bundled".
 
-Raised by the maintainer on 2026-10-02: an AST-based linter that checks a monitor is portable to the proxy, with no captured state and only imports that can be bundled. It is the static pass that document's mitigations call for, and what a `portable=False` declaration would exempt a monitor from. Consumes the decorators and the module layout without changing them; the proxy work in workstream 4 decides what counts as bundleable.
+Raised by the maintainer on 2026-10-02 as an AST-based linter. Decided by the maintainer on 2026-10-05: it is a runtime check, triggered by `portable=True`, the default on `@monitor` and `@protocol`, not a separate lint step a user runs. `@monitor(portable=False)` and `@protocol(portable=False)` opt out, visibly in code review and the registry. Scope:
+
+- **The check.** When a portable monitor or protocol is registered or configured, sentinel checks the import closure of its defining module against the allowlist of bundleable dependencies (the dependency half, per module), and that its body does not reach the ambient escapes: `get_model()`, `sandbox()`, inspect_ai's `store()` and similar (the affordance half, per function). A failure is an error naming the function, the offending import or call, and `portable=False`.
+- **The restricted host.** While it runs, a portable function runs through the same restricted host a proxy would use ([sentinel-deployment.md](sentinel-deployment.md), "Keeping monitors portable", mitigation 1), so a banned call raises at runtime too, in every eval. The property is exercised continuously rather than asserted.
+- **Compositions.** A composition is as portable as its least portable member: a leaf monitor calling `get_model()` disqualifies the protocol that wraps it.
+- **Per function and per module.** The flag is per function, but the dependency half is per module, so a `portable=False` function does not excuse its module: the module cannot be bundled, and the portable functions beside it go with it. The check says so rather than let it be discovered at build time.
+- **CI and deployment.** Enumerating the portable set and building it (the WASM build as a CI target, mitigation 3, and the proxy bundle in [proxy-host.md](proxy-host.md), section 5) consume the same check. There is no separate linter.
+
+Adds `portable=` to the decorators and otherwise consumes them and the module layout without changing them; the proxy work in workstream 4 decides what counts as bundleable.
+
+Open questions:
+
+- Where each half runs: at decoration, when the factory is called (configuration), or on first run. The design does not settle it.
+- What the check reports when the per-function flag and the per-module verdict disagree ([sentinel-deployment.md](sentinel-deployment.md), open question 9).
+- Whether it also checks for captured state, which the 2026-10-02 framing included.
 
 ## 12. Monitoring the monitors
 
