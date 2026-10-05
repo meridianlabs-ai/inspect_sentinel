@@ -42,7 +42,7 @@ Prior art: Kai's structured-approval approver in Petri, built on the LLM scanner
 
 ## 4. Host in a proxy
 
-**Priority:** high. **Owner:** Pete. **Design:** [sentinel-deployment.md](sentinel-deployment.md).
+**Priority:** high. **Owner:** Pete. **Design:** [sentinel-deployment.md](sentinel-deployment.md); spike plan in [proxy-host.md](proxy-host.md).
 
 Raised by the maintainer on 2026-10-02: a technical spike implementing a monitor host in a proxy, WASM hosting in Envoy first, then an RPC-based interface in another proxy that supports one. Includes the changes to the `Host` interface, `Context` and the rest that proxy deployment needs. It is the later, larger project in workstream 7; coordinate with the bridged-agent work there and with workstream 9.
 
