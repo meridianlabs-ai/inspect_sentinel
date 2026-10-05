@@ -65,6 +65,33 @@ def test_tool_matches(function: str, patterns: list[str], expected: bool) -> Non
     assert tool_matches(_call(function, x="1"), *patterns) is expected
 
 
+@pytest.mark.parametrize(
+    "function, patterns, case_sensitive, expected",
+    [
+        ("Bash", ["bash"], True, False),
+        ("Bash", ["bash"], False, True),
+        ("bash", ["Bash"], False, True),
+        ("BASH_SESSION", ["bash*"], False, True),
+        ("Bash", ["[b]ash"], False, True),
+        ("Bash", ["bash_session"], False, False),
+        ("Read", ["text_editor"], False, False),
+    ],
+)
+def test_tool_matches_case(
+    function: str, patterns: list[str], case_sensitive: bool, expected: bool
+) -> None:
+    call = _call(function, x="1")
+    assert tool_matches(call, *patterns, case_sensitive=case_sensitive) is expected
+
+
+def test_tool_matches_is_the_same_on_every_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # fnmatch.fnmatch folds case on Windows through os.path.normcase
+    monkeypatch.setattr("os.path.normcase", str.lower)
+    assert not tool_matches(_call("Bash", x="1"), "bash")
+
+
 def test_tool_matches_ignores_arguments() -> None:
     assert not tool_matches(_call("bash", command="python x"), "python")
 

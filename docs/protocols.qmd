@@ -34,7 +34,7 @@ A rule usually reads a tool call's arguments and looks for something in them. Th
 | Function | Returns |
 |---|---|
 | `call_text(call)` | Every string in the call's arguments, in order, joined with newlines. It knows nothing about particular tools: for `bash()` it is the command, and for `text_editor()` the command name, the path and the text. |
-| `tool_matches(call, *patterns)` | Whether the tool's name matches one of the names or globs: `"bash"` matches only `bash`, and `"web_browser*"` every browser tool. |
+| `tool_matches(call, *patterns, case_sensitive=True)` | Whether the tool's name matches one of the names or globs: `"bash"` matches only `bash`, and `"web_browser*"` every browser tool. `case_sensitive=False` also matches a bridged agent's `Bash`. |
 | `find_words(text, words)` | The words that appear in the text as whole words, in the order they appear, so an explanation can name them. `rm` does not match `platform`; `-delete` and `pip install` work as written. |
 | `path_matches(path, patterns, cwd=None, home=None)` | Whether a path matches a glob once `..`, `.` and repeated slashes are resolved, so `/work/../etc/passwd` matches `/etc/**`. Wildcards match dotfiles but never a `..`. |
 | `path_resolves(path, cwd=None, home=None)` | Whether a path resolves to an absolute or `~/` path, as `passwd` does not without `cwd`, nor `~/../etc` without `home`. |

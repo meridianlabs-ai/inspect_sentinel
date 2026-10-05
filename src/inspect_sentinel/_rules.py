@@ -48,19 +48,24 @@ def _strings(value: object) -> Iterable[str]:
             yield from _strings(item)
 
 
-def tool_matches(call: ToolCall, *patterns: str) -> bool:
+def tool_matches(call: ToolCall, *patterns: str, case_sensitive: bool = True) -> bool:
     """Whether the call's tool name matches any of the patterns.
 
-    A pattern is a tool name or a glob (`*`, `?`, `[seq]`) that must match the whole name, case-sensitively: `"bash"` matches `bash` and not `bash_session`, while `"bash*"` matches both. Unlike the `tools` of an `ApprovalPolicy` in inspect_ai, a pattern is not extended with a trailing `*` and is not split on commas.
+    A pattern is a tool name or a glob (`*`, `?`, `[seq]`) that must match the whole name: `"bash"` matches `bash` and not `bash_session`, while `"bash*"` matches both. Matching is case-sensitive by default and the same on every platform; pass `case_sensitive=False` for tools whose names differ only in case, such as inspect_ai's `bash` and a bridged agent's `Bash`. Unlike the `tools` of an `ApprovalPolicy` in inspect_ai, a pattern is not extended with a trailing `*` and is not split on commas.
 
     Args:
         call: The tool call.
         *patterns: Tool names or globs.
+        case_sensitive: Whether case must match.
 
     Returns:
         True if any pattern matches.
     """
-    return any(fnmatch.fnmatchcase(call.function, pattern) for pattern in patterns)
+    function = call.function if case_sensitive else call.function.casefold()
+    return any(
+        fnmatch.fnmatchcase(function, pattern if case_sensitive else pattern.casefold())
+        for pattern in patterns
+    )
 
 
 def find_words(
