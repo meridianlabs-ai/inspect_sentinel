@@ -8,7 +8,7 @@ from tests._fakes import after_step, before_step
 
 
 def _call() -> ToolCall:
-    return ToolCall(id="c1", function="bash", arguments={"cmd": "ls"})
+    return ToolCall(id="call_1", function="bash", arguments={"cmd": "ls"})
 
 
 def _decision(action: Action) -> Decision:
@@ -48,7 +48,7 @@ def test_only_a_modify_may_carry_a_replacement() -> None:
 @pytest.mark.parametrize(
     "replacement",
     [
-        ToolCall(id="c1", function="python", arguments={"code": "1"}),
+        ToolCall(id="call_1", function="python", arguments={"code": "1"}),
         ToolCall(id="other", function="bash", arguments={"cmd": "ls"}),
     ],
 )
@@ -60,7 +60,7 @@ def test_a_modify_may_change_only_the_arguments(replacement: ToolCall) -> None:
 
 
 def test_a_modify_may_rewrite_the_arguments() -> None:
-    replacement = ToolCall(id="c1", function="bash", arguments={"cmd": "pwd"})
+    replacement = ToolCall(id="call_1", function="bash", arguments={"cmd": "pwd"})
     validate_decision_shape(
         Decision(action="modify", modified=replacement), before_step()
     )

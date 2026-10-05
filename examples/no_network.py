@@ -13,6 +13,8 @@ from inspect_sentinel import (
     Context,
     Decision,
     Protocol,
+    call_text,
+    find_words,
     protocol,
 )
 
@@ -24,15 +26,14 @@ def no_network() -> Protocol:
     """Reject `bash()` commands that use `curl`, `wget` or `pip install`."""
 
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
-        command = step.call.arguments.get("command")
-        if step.call.function != "bash" or not isinstance(command, str):
+        if step.call.function != "bash":
             return None
-        for name in NETWORK_COMMANDS:
-            if name in command:
-                return Decision.reject(
-                    f"command uses {name}",
-                    message=f"`{name}` needs the network, which this task does not allow.",
-                )
+        used = find_words(call_text(step.call), NETWORK_COMMANDS)
+        if used:
+            return Decision.reject(
+                f"command uses {', '.join(used)}",
+                message=f"`{used[0]}` needs the network, which this task does not allow.",
+            )
         return Decision.proceed()
 
     return decide

@@ -18,6 +18,12 @@ from ._report import (
     Suspicion,
 )
 from ._results import Decisions, MonitorFailedError, Observations, Reports
+from ._rules import (
+    call_text,
+    find_words,
+    result_text,
+    tool_matches,
+)
 from ._runner import run_children, run_monitors, run_protocols
 from ._step import AfterToolCall, BeforeToolCall, Step
 from ._types import (
@@ -63,16 +69,20 @@ __all__ = [
     "Sentinels",
     "Step",
     "Suspicion",
+    "call_text",
     "concurrent",
     "decide_final",
+    "find_words",
     "human",
     "monitor",
     "observe_only",
     "protocol",
+    "result_text",
     "run_children",
     "run_monitors",
     "run_protocols",
     "sequential",
     "threshold",
+    "tool_matches",
     "__version__",
 ]

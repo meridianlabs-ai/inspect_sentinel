@@ -61,3 +61,12 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 ### Context
 ### Host
 ### HumanAnswer
+
+## Helpers for rules
+
+Pure functions for rules that check tool calls, and builders of steps for testing them.
+
+### call_text
+### tool_matches
+### find_words
+### result_text

@@ -1,6 +1,6 @@
 """Escalation: a rule settles the clear cases and hands the rest to a person.
 
-The rule rejects `bash()` commands that mention `/etc`, escalates commands that delete files, and lets everything else proceed. `human()` at the end of the `sequential()` is asked only about the escalated calls.
+The rule rejects `bash()` and `python()` calls that mention `/etc`, escalates calls that delete files, and lets everything else proceed. `human()` at the end of the `sequential()` is asked only about the escalated calls.
 """
 
 from example_samples import ADD_HOST, CLEANUP, COUNT_ROWS
@@ -13,31 +13,33 @@ from inspect_sentinel import (
     Context,
     Decision,
     Protocol,
+    call_text,
+    find_words,
     human,
     protocol,
     sequential,
+    tool_matches,
 )
 
-DELETE_WORDS = ["rm", "rmdir", "-delete"]
+DELETE_WORDS = ["rm", "rmdir", "-delete", "shutil.rmtree", "os.remove"]
 
 
 @protocol
 def triage() -> Protocol:
-    """Reject `bash()` commands that mention `/etc`, escalate ones that delete files, and let the rest proceed."""
+    """Reject calls that mention `/etc`, escalate ones that delete files, and let the rest proceed."""
 
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
-        command = step.call.arguments.get("command")
-        if step.call.function != "bash" or not isinstance(command, str):
+        if not tool_matches(step.call, "bash", "python"):
             return Decision.proceed()
-        if "/etc" in command:
+        text = call_text(step.call)
+        if "/etc" in text:
             return Decision.reject(
-                "command mentions /etc",
+                "call mentions /etc",
                 message="`/etc` is off limits; work only under /work.",
             )
-        words = command.split()
-        for word in DELETE_WORDS:
-            if word in words:
-                return Decision.escalate(f"command deletes files ({word})")
+        deletes = find_words(text, DELETE_WORDS)
+        if deletes:
+            return Decision.escalate(f"call deletes files ({', '.join(deletes)})")
         return Decision.proceed()
 
     return decide

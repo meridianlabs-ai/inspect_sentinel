@@ -47,21 +47,28 @@ from inspect_ai.agent import react
 from inspect_ai.dataset import Sample
 from inspect_ai.tool import bash
 
-from inspect_sentinel import BeforeToolCall, Context, Decision, Protocol, protocol
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Decision,
+    Protocol,
+    call_text,
+    find_words,
+    protocol,
+)
 
 
 @protocol
 def no_network() -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
-        command = step.call.arguments.get("command")
-        if step.call.function != "bash" or not isinstance(command, str):
+        if step.call.function != "bash":
             return None  # not a bash() call: abstain
-        for name in ["curl", "wget"]:
-            if name in command:
-                return Decision.reject(
-                    f"command uses {name}",  # for the log
-                    message=f"`{name}` is not allowed in this task.",  # for the agent
-                )
+        used = find_words(call_text(step.call), ["curl", "wget"])
+        if used:
+            return Decision.reject(
+                f"command uses {', '.join(used)}",  # for the log
+                message=f"`{used[0]}` is not allowed in this task.",  # for the agent
+            )
         return Decision.proceed()
 
     return decide
@@ -117,7 +124,15 @@ from inspect_ai import Task, task
 from inspect_ai.agent import react
 from inspect_ai.tool import bash, python
 
-from inspect_sentinel import BeforeToolCall, Context, Decision, Protocol, protocol
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Decision,
+    Protocol,
+    call_text,
+    find_words,
+    protocol,
+)
 
 NETWORK_COMMANDS = ["curl", "wget", "pip install"]
 
@@ -125,16 +140,15 @@ NETWORK_COMMANDS = ["curl", "wget", "pip install"]
 @protocol
 def no_network() -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None: # <1>
-        command = step.call.arguments.get("command")
-        if step.call.function != "bash" or not isinstance(command, str):
+        if step.call.function != "bash":
             return None # <2>
-        for name in NETWORK_COMMANDS:
-            if name in command:
-                return Decision.reject(
-                    f"command uses {name}", # <3>
-                    message=f"`{name}` needs the network, which this task does not allow.", # <4>
-                )
-        return Decision.proceed() # <5>
+        used = find_words(call_text(step.call), NETWORK_COMMANDS) # <3>
+        if used:
+            return Decision.reject(
+                f"command uses {', '.join(used)}", # <4>
+                message=f"`{used[0]}` needs the network, which this task does not allow.", # <5>
+            )
+        return Decision.proceed() # <6>
 
     return decide
 
@@ -146,16 +160,17 @@ def network_rule() -> Task:
         solver=react(tools=[bash(timeout=60), python(timeout=60)]),
         sandbox=("docker", "compose.yaml"),
         message_limit=20,
-        sentinel=no_network(), # <6>
+        sentinel=no_network(), # <7>
     )
 ```
 
 1. The type of `step` says when the function runs. `BeforeToolCall` runs before each tool call executes, and `step.call` is the call the agent is about to make.
 2. Returning `None` abstains: the rule has nothing to say about calls other than `bash()`, so it does not take part.
-3. The first argument is the `explanation`. It is recorded in the log for you, and the agent never sees it.
-4. The `message` is what the agent is told: it receives it as the tool call's error, and carries on.
-5. `Decision.proceed()` records that the rule looked at the call and found nothing wrong.
-6. The rule is the whole sentinel.
+3. `call_text()` is every string in the call's arguments, here the command, and `find_words()` returns the listed words that appear in it as whole words, so `curl` does not match `libcurl`. See [Helpers for Rules](protocols.qmd#helpers-for-rules) for the others.
+4. The first argument is the `explanation`. It is recorded in the log for you, and the agent never sees it.
+5. The `message` is what the agent is told: it receives it as the tool call's error, and carries on.
+6. `Decision.proceed()` records that the rule looked at the call and found nothing wrong.
+7. The rule is the whole sentinel.
 
 `@protocol` decorates a *factory*: a function that returns the function that decides. The factory's parameters, if it has any, are recorded in the log and can be set from configuration, as they are for Inspect's solvers and scorers.
 
@@ -167,7 +182,7 @@ inspect eval examples/no_network.py --model openai/gpt-5-mini
 
 In the `fetch_data` sample the agent reaches for `curl` to download the dataset, the rule rejects the call, and the agent is told why.
 
-The rule is deliberately simple. It is easy to evade: the agent could use `python()` instead of `bash()`, a tool not on the list, or a command built at run time. What actually keeps the agent off the network here is the container's `network_mode: none` in `examples/compose.yaml`. A rule catches the obvious cases cheaply; the next step adds a monitor that judges each call on its merits.
+The rule is deliberately simple. Rules are cheap and run without a model call. They match a call's text and structured arguments, and they cannot prove a call safe: the agent could use `python()` instead of `bash()`, a tool not on the list, or a command built at run time. Anything that needs an understanding of shell or code goes to an LLM monitor, or is escalated to a person. What keeps the agent off the network here is the container's `network_mode: none` in `examples/compose.yaml`. The next step adds a monitor that judges each call on its merits.
 
 ## An LLM Monitor
 

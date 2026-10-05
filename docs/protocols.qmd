@@ -5,7 +5,7 @@ description: "Writing protocols, which decide what happens at a step, and rules,
 
 ::: {.callout-warning}
 ## Outline
-This page is an outline: a summary and the sections planned for it, not yet the documentation. See [Getting Started](index.qmd) for a worked example.
+This page is an outline: a summary and the sections planned for it, not yet the documentation, apart from [Helpers for Rules](#helpers-for-rules). See [Getting Started](index.qmd) for a worked example.
 :::
 
 ## Overview
@@ -26,3 +26,48 @@ How to write a protocol: a `@protocol` factory returning a function that returns
 - The boundary check: shape errors raised before a decision takes effect
 - Running at every stage with `Step`
 - Shipping protocols in a package
+
+## Helpers for Rules
+
+A rule usually reads a tool call's arguments and looks for something in them. These functions do the common parts. They are plain functions of their arguments, so a rule built on them is easy to test. Rules are cheap and run without a model call. They match a call's text and its structured arguments, and they cannot prove a call safe: a command built at run time, or a tool the rule does not know, gets past them. Anything that needs an understanding of shell or code, such as which files a command touches, goes to an LLM monitor or is escalated, typically `sequential([rule(), llm_monitor(), human()])`, where `llm_monitor()` stands for a protocol that asks a model and escalates what it is unsure of.
+
+| Function | Returns |
+|---|---|
+| `call_text(call)` | Every string in the call's arguments, in order, joined with newlines. It knows nothing about particular tools: for `bash()` it is the command, and for `text_editor()` the command name, the path and the text. |
+| `tool_matches(call, *patterns, case_sensitive=True)` | Whether the tool's name matches one of the names or globs: `"bash"` matches only `bash`, and `"web_browser*"` every browser tool. `case_sensitive=False` also matches a bridged agent's `Bash`. |
+| `find_words(text, words)` | The words that appear in the text as whole words, in the order they appear, so an explanation can name them. `rm` does not match `platform`; `-delete` and `pip install` work as written. |
+| `result_text(step)` | After a call: its result as text, or `Error (<type>): <message>` when it failed. |
+
+For example, a rule that escalates package installs in shell commands, so a person or a monitor can look at them:
+
+```python
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Decision,
+    Protocol,
+    call_text,
+    find_words,
+    protocol,
+    tool_matches,
+)
+
+INSTALL_WORDS = ["pip install", "npm install", "apt-get install"]
+
+
+@protocol
+def installs() -> Protocol:
+    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+        if not tool_matches(step.call, "bash", case_sensitive=False):
+            return None
+        found = find_words(call_text(step.call), INSTALL_WORDS)
+        if found:
+            return Decision.escalate(f"call installs packages ({', '.join(found)})")
+        return Decision.proceed()
+
+    return decide
+```
+
+The rule sees only the words as written: `python -m pip install` matches, but a command assembled from variables does not.
+
+`tool_matches()` matches the whole name. An approval policy's `tools` in inspect_ai differ: there `"bash"` also matches `bash_session`, and a comma separates several names.

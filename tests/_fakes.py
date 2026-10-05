@@ -1,16 +1,15 @@
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from inspect_ai.model import (
     ChatMessage,
     ChatMessageTool,
-    ChatMessageUser,
     GenerateConfig,
     Model,
     ModelOutput,
 )
-from inspect_ai.tool import ToolCall, ToolCallView, ToolInfo
+from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolInfo
 from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context
@@ -131,24 +130,45 @@ def in_step(
 
 
 def before_step() -> BeforeToolCall:
-    return BeforeToolCall(
-        conversation="c",
-        message="",
-        call=ToolCall(id="c1", function="bash", arguments={"cmd": "ls"}),
-        view=ToolCallView(),
-        input=[ChatMessageUser(content="go")],
-        history=[ChatMessageUser(content="go")],
-    )
+    return before_tool_call("bash", cmd="ls")
 
 
 def after_step() -> AfterToolCall:
-    return AfterToolCall(
-        conversation="c",
+    return after_tool_call("bash", "out", cmd="ls")
+
+
+def before_tool_call(function: str, /, **arguments: Any) -> BeforeToolCall:
+    return BeforeToolCall(
+        conversation="conversation",
         message="",
-        call=ToolCall(id="c1", function="bash", arguments={"cmd": "ls"}),
-        result=ChatMessageTool(content="out", tool_call_id="c1"),
-        output="out",
+        call=ToolCall(id="call_1", function=function, arguments=arguments),
         view=ToolCallView(),
-        input=[ChatMessageUser(content="go")],
-        history=[ChatMessageUser(content="go")],
+        input=[],
+        history=[],
+    )
+
+
+def after_tool_call(
+    function: str,
+    /,
+    result: str = "",
+    *,
+    error: ToolCallError | None = None,
+    **arguments: Any,
+) -> AfterToolCall:
+    before = before_tool_call(function, **arguments)
+    return AfterToolCall(
+        conversation=before.conversation,
+        message=before.message,
+        call=before.call,
+        result=ChatMessageTool(
+            content=result,
+            tool_call_id=before.call.id,
+            function=function,
+            error=error,
+        ),
+        output=result,
+        view=before.view,
+        input=before.input,
+        history=before.history,
     )

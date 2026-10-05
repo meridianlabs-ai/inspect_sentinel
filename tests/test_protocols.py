@@ -74,7 +74,9 @@ def rewrites(explanation: str | None = None) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(
             action="modify",
-            modified=ToolCall(id="c1", function="bash", arguments={"cmd": "echo hi"}),
+            modified=ToolCall(
+                id="call_1", function="bash", arguments={"cmd": "echo hi"}
+            ),
             explanation=explanation,
         )
 
@@ -798,7 +800,7 @@ def test_threshold_rejects_a_group_with_a_member_that_never_watches_a_tool_call(
 
 
 def _edits(first: Action, second: Action) -> ProtocolGroup:
-    modified = ToolCall(id="c1", function="bash", arguments={"cmd": "echo hi"})
+    modified = ToolCall(id="call_1", function="bash", arguments={"cmd": "echo hi"})
 
     @protocol
     def edits() -> ProtocolGroup:

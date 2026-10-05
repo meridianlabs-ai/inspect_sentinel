@@ -157,7 +157,9 @@ def decides(action: Action = "continue") -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(
             action=action,
-            modified=ToolCall(id="c1", function="bash", arguments={"cmd": "echo hi"})
+            modified=ToolCall(
+                id="call_1", function="bash", arguments={"cmd": "echo hi"}
+            )
             if action == "modify"
             else None,
         )
