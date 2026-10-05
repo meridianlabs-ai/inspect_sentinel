@@ -21,8 +21,6 @@ from ._results import Decisions, MonitorFailedError, Observations, Reports
 from ._rules import (
     call_text,
     find_words,
-    path_matches,
-    path_resolves,
     result_text,
     tool_matches,
 )
@@ -78,8 +76,6 @@ __all__ = [
     "human",
     "monitor",
     "observe_only",
-    "path_matches",
-    "path_resolves",
     "protocol",
     "result_text",
     "run_children",

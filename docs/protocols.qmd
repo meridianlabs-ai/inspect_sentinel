@@ -36,11 +36,9 @@ A rule usually reads a tool call's arguments and looks for something in them. Th
 | `call_text(call)` | Every string in the call's arguments, in order, joined with newlines. It knows nothing about particular tools: for `bash()` it is the command, and for `text_editor()` the command name, the path and the text. |
 | `tool_matches(call, *patterns, case_sensitive=True)` | Whether the tool's name matches one of the names or globs: `"bash"` matches only `bash`, and `"web_browser*"` every browser tool. `case_sensitive=False` also matches a bridged agent's `Bash`. |
 | `find_words(text, words)` | The words that appear in the text as whole words, in the order they appear, so an explanation can name them. `rm` does not match `platform`; `-delete` and `pip install` work as written. |
-| `path_matches(path, patterns, cwd=None, home=None)` | Whether a path matches a glob once `..`, `.` and repeated slashes are resolved, so `/work/../etc/passwd` matches `/etc/**`. Wildcards match dotfiles but never a `..`. |
-| `path_resolves(path, cwd=None, home=None)` | Whether a path resolves to an absolute or `~/` path, as `passwd` does not without `cwd`, nor `~/../etc` without `home`. |
 | `result_text(step)` | After a call: its result as text, or `Error (<type>): <message>` when it failed. |
 
-For example, a rule that keeps `text_editor()` out of protected directories. It checks the tool's `path` argument, a structured argument holding one path; it does not try to find paths in `bash()` commands.
+For example, a rule that escalates package installs in shell commands, so a person or a monitor can look at them:
 
 ```python
 from inspect_sentinel import (
@@ -48,35 +46,28 @@ from inspect_sentinel import (
     Context,
     Decision,
     Protocol,
-    path_matches,
-    path_resolves,
+    call_text,
+    find_words,
     protocol,
     tool_matches,
 )
 
-PROTECTED = ["/etc/**", "~/.ssh/**"]
+INSTALL_WORDS = ["pip install", "npm install", "apt-get install"]
 
 
 @protocol
-def protected_files() -> Protocol:
+def installs() -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
-        if not tool_matches(step.call, "text_editor"):
+        if not tool_matches(step.call, "bash", case_sensitive=False):
             return None
-        path = step.call.arguments.get("path")
-        if not (
-            isinstance(path, str) and path_resolves(path, cwd="/work", home="/root")
-        ):
-            return Decision.escalate(f"cannot resolve the path {path!r}")
-        if path_matches(path, PROTECTED, cwd="/work", home="/root"):
-            return Decision.reject(
-                f"call touches {path}",
-                message=f"`{path}` is off limits; work only under /work.",
-            )
+        found = find_words(call_text(step.call), INSTALL_WORDS)
+        if found:
+            return Decision.escalate(f"call installs packages ({', '.join(found)})")
         return Decision.proceed()
 
     return decide
 ```
 
-`cwd` resolves relative paths against the agent's working directory, and `home` expands `~` in paths and patterns alike, so `~/.ssh/**` here also matches `/root/.ssh/id_rsa`. Patterns are not joined to `cwd`, so write them absolute or begin them with `**/`. A deny-list passes a path it cannot place, such as `~user/x`, so the rule escalates it rather than letting it through.
+The rule sees only the words as written: `python -m pip install` matches, but a command assembled from variables does not.
 
 `tool_matches()` matches the whole name. An approval policy's `tools` in inspect_ai differ: there `"bash"` also matches `bash_session`, and a comma separates several names.

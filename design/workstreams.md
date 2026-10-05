@@ -1,6 +1,6 @@
 # Workstreams
 
-Areas of sentinel that can be owned separately, as of 2026-10-05. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 6), next (7 to 11), lower priority (12 and 13), then done; 5 and 6 were added on 2026-10-05. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred".
+Areas of sentinel that can be owned separately, as of 2026-10-05. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 6), next (7 to 11), lower priority (12 to 14), then done; 5 and 6 were added on 2026-10-05. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred".
 
 Work on your own branches and open PRs into `feature/sentinel`, in inspect_ai and in ts-mono alike. Pushing directly to the shared branch collides.
 
@@ -96,7 +96,7 @@ Many small, independent tasks, good for onboarding:
 
 - `resample`. `defer_to_trusted` was removed from the plan by the maintainer on 2026-10-02: an eval has no trusted model to defer to.
 - Views: helpers that give a monitor author views of the messages and the step, such as the last six messages (maintainer, 2026-10-02).
-- A helper that renders a call's arguments as text, and similar conveniences that make rules shorter (maintainer, 2026-10-02). The first set is done (`call_text`, `tool_matches`, `find_words`, `path_matches`, `path_resolves`, `result_text` and step builders; [pr-series.md](pr-series.md), "Helpers for rules"); `urls_in`, `host_matches` and `secrets_in` follow.
+- A helper that renders a call's arguments as text, and similar conveniences that make rules shorter (maintainer, 2026-10-02). The first set is done (`call_text`, `tool_matches`, `find_words` and `result_text`; [pr-series.md](pr-series.md), "Helpers for rules"); `urls_in`, `host_matches` and `secrets_in` follow. The path helpers are workstream 14.
 - The prompt helpers, such as `monitor_prompt`, unless they move to workstream 3.
 
 ## 8. Auto-mode approvers
@@ -166,6 +166,30 @@ Reads `SentinelEvent`s and the recorded configuration, so it overlaps the read-m
 Let a person decide from outside the eval process: a request with the call, the escalations and the choices, and the answer flowing back to the waiting sample. Decided by the maintainer on 2026-10-02: put human requests on a message queue that other tools consume (Slack, a review app) rather than building the interface ourselves. Inspect's human surfaces today (the panel, ACP and the console) all assume someone at the eval's terminal or client; long-running and remote evals have nobody there. `notify()` already covers telling someone a decision is waiting (see `sequential()` and `human()`, under "Done"); this is answering it.
 
 Open questions: how the reply reaches the sample (a callback endpoint, polling, a relay service); how long a sample waits and what happens when nobody answers (proceed, reject, or the escalate default from pr-series.md "Deferred"); who may answer and how that is authenticated and recorded in the log; and whether the same surface serves inspect's existing human approver as well as `human()`.
+
+## 14. Path matching helpers
+
+**Priority:** lower. **Design:** [pr-series.md](pr-series.md), "Helpers for rules" and Deferred "Finding paths in shell and code text".
+
+Raised by the maintainer on 2026-10-05, when the path helpers were split out of sentinel PR #49.
+
+What exists: `path_matches(path, patterns, *, cwd=None, home=None)` and `path_resolves(path, *, cwd=None, home=None)`, built on wcmatch (`GLOBSTAR`, `DOTGLOB`, `NODOTDIR`, `FORCEUNIX`, `CASE`) and `posixpath`, with 299 tests including Hypothesis properties against `PurePosixPath.full_match`, on the branch `archive/rule-helpers-path-matching`. The earlier `paths_in`, `unresolved_paths` and shell lexer are on `archive/rule-helpers-shell-paths`.
+
+Why it was split out: the matcher is correct for strings, but authors will read it as being about files. Probed gaps:
+
+- `/proc/self/root/etc/passwd`, and a symlink such as `/tmp/link/passwd` with `link` pointing to `/etc`, pass a `/etc/**` deny-list while `path_resolves` is True.
+- `/ETC/passwd` passes on a case-insensitive filesystem.
+- A leading `//` (a network path) collapses to `/`.
+- Windows forms (drive letters, backslashes, UNC paths) are escalated only because they look relative: by accident, and untested.
+
+Scope for the PR:
+
+- State the scope: the path as written, POSIX, in the agent's sandbox, not which file is opened. Real protection is the sandbox's (read-only mounts, permissions); a rule is a first line.
+- Fail safe explicitly, with `path_resolves` False, on Windows forms, a leading `//`, and known alias prefixes such as `/proc/*/root`, `/proc/*/cwd` and `/dev/fd`, each tested.
+- An option for case-insensitive matching.
+- A decision on Windows sandboxes: unsupported and escalated, or a later Windows mode.
+- A short threat-model section in the docs.
+- One review focused on bypasses. Agent reviewers have declined bypass-hunting, so plan for a human reviewer.
 
 ## Done: `sequential()` and `human()`
 
