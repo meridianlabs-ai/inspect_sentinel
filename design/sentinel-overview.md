@@ -76,22 +76,22 @@ A monitor never returns an action. It records an `Observation` for a protocol to
 
 ### Context
 
-In addition to the data associated with a tool call or generation, monitors and protocols are passed a `Context` that includes task and sample information, a place to store state, and an interface to the sentinel host (which could either be Inspect AI or a proxy server):
+In addition to the data associated with a tool call or generation, monitors and protocols are passed a `Context` that includes a place to store state, an interface to the sentinel host (which could either be Inspect AI or a proxy server), and, in an eval, task and sample information under `eval`. A proxy answers requests that have no task, sample or epoch, so there `eval` is None:
 
 ``` python
 @dataclass(frozen=True, kw_only=True)
-class Context:
-    task: str | None
-    """Task name, or the deployed agent's identifier."""
+class EvalContext:
+    task: str
+    """Task name."""
 
     task_description: str | None
     """What agents in this setting are asked to do. None until inspect_ai has `Task(description=)`."""
 
-    sample_id: str | int | None
+    sample_id: str | int
     """Dataset sample identifier."""
 
-    epoch: int | None
-    """Epoch of the sample, when the task runs several."""
+    epoch: int
+    """Epoch of the sample: 1 unless the task runs several."""
 
     sample_description: str | None
     """What is distinctive about this instance. None until inspect_ai has `Sample(description=)`."""
@@ -102,8 +102,20 @@ class Context:
     metadata: dict[str, Any]
     """Task metadata merged with sample metadata."""
 
+    target: Target | None = None
+    """The expected answer (opt-in, not built yet; always None for now)."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class Context:
     path: str
     """Instance path, e.g. `attempt/internet_attempt`. Empty at the top layer."""
+
+    host: Host
+    """Interface to the host; inference and asking a person for now, `fetch` planned."""
+
+    eval: EvalContext | None
+    """The task and sample being run. None outside an Inspect eval."""
 
     def store_as(
         self,
@@ -112,13 +124,6 @@ class Context:
         scope: Scope = "sample"  # "task" is not built
     ) -> SMT:
         """Typed view of this instance's state, namespaced by its path."""
-
-    # -- effects
-    host: Host
-    """Interface to the host; inference and asking a person for now, `fetch` planned."""
-
-    target: Target | None = None
-    """The expected answer (opt-in, not built yet; always None for now)."""
 ```
 
 ## Protocols {#protocols}

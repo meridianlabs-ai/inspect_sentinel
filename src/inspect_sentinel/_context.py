@@ -13,20 +13,20 @@ SMT = TypeVar("SMT", bound=StoreModel)
 
 
 @dataclass(frozen=True, kw_only=True)
-class Context:
-    """What a monitor or protocol is given. Constant for a sample; nothing in it came from the agent."""
+class EvalContext:
+    """The Inspect eval sample a monitor or protocol is running in. Constant for the sample; nothing in it came from the agent."""
 
-    task: str | None
-    """Task name, or the deployed agent's identifier."""
+    task: str
+    """Task name."""
 
     task_description: str | None
     """What agents in this setting are asked to do. None until inspect_ai has `Task(description=)`."""
 
-    sample_id: str | int | None
+    sample_id: str | int
     """Dataset sample identifier."""
 
-    epoch: int | None
-    """Epoch of the sample, when the task runs several."""
+    epoch: int
+    """Epoch of the sample: 1 unless the task runs several."""
 
     sample_description: str | None
     """What is distinctive about this instance. None until inspect_ai has `Sample(description=)`."""
@@ -37,12 +37,6 @@ class Context:
     metadata: dict[str, Any]
     """Task metadata merged with sample metadata."""
 
-    path: str
-    """Instance path, e.g. `attempt/internet_attempt`. Empty at the top layer."""
-
-    host: Host
-    """Inference through the host's models, and asking a person. See `Host`."""
-
     target: Target | None = None
     """The expected answer. None until monitors and protocols can opt in with `target=True`."""
 
@@ -52,6 +46,20 @@ class Context:
         if isinstance(self.sample_input, str):
             return self.sample_input
         return "\n".join(message.text for message in self.sample_input)
+
+
+@dataclass(frozen=True, kw_only=True)
+class Context:
+    """What a monitor or protocol is given. Constant for a sample; nothing in it came from the agent."""
+
+    path: str
+    """Instance path, e.g. `attempt/internet_attempt`. Empty at the top layer."""
+
+    host: Host
+    """Inference through the host's models, and asking a person. See `Host`."""
+
+    eval: EvalContext | None
+    """The task and sample being run, in an Inspect eval. None outside an eval, for example when a proxy runs the sentinel on requests that have no task, sample or epoch."""
 
     def store_as(self, model_cls: type[SMT]) -> SMT:
         """Typed view of this instance's state, namespaced by `path`.

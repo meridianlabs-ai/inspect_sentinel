@@ -196,7 +196,7 @@ Three notes:
 
 ## State
 
-A proxy has no ContextVar, no sample identity and no `Store`. Two mechanisms replace them, and they are complementary.
+A proxy has no ContextVar, no sample identity and no `Store`. It passes `Context.eval=None`, since a request has no task, sample or epoch. Two mechanisms replace the store, and they are complementary.
 
 **The conversation is state.** Every request carries the entire history, so a monitor that is a pure function of the request needs no storage: "has this agent reached the internet" is recomputable by scanning messages. Nothing to key, evict, or forge.
 

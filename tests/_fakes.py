@@ -12,7 +12,7 @@ from inspect_ai.model import (
 from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolInfo
 from inspect_ai.util import Store
 
-from inspect_sentinel._context import Context
+from inspect_sentinel._context import Context, EvalContext
 from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step
 from inspect_sentinel._report import Decision, Failed, Report, Reported
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
@@ -92,6 +92,18 @@ class ListRecorder:
         self.supersessions.append(Recorded(context, factory, step, reported))
 
 
+def eval_context() -> EvalContext:
+    return EvalContext(
+        task="t",
+        task_description=None,
+        sample_id=1,
+        epoch=1,
+        sample_description=None,
+        sample_input="prompt",
+        metadata={},
+    )
+
+
 def host_context(
     path: str = "",
     recorder: ListRecorder | None = None,
@@ -99,17 +111,7 @@ def host_context(
     store: Store | None = None,
 ) -> HostContext:
     return HostContext(
-        context=Context(
-            task="t",
-            task_description=None,
-            sample_id=1,
-            epoch=1,
-            sample_description=None,
-            sample_input="prompt",
-            metadata={},
-            path=path,
-            host=host or FakeHost(),
-        ),
+        context=Context(path=path, host=host or FakeHost(), eval=eval_context()),
         recorder=recorder or ListRecorder(),
         store=store or Store(),
     )

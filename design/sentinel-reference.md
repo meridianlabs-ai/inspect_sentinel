@@ -206,20 +206,20 @@ Everything in `step` except `conversation` and `escalations` was written or shap
 ### Context
 
 ```python
-@dataclass(frozen=True)
-class Context:
-    """Everything constant for the sample while the step changes. Immutable."""
+@dataclass(frozen=True, kw_only=True)
+class EvalContext:
+    """The Inspect eval sample being run. Constant for the sample. Immutable."""
 
     # -- the assignment, constant across a task
-    task: str | None
-    """Task name, or the deployed agent's identifier."""
+    task: str
+    """Task name."""
 
     task_description: str | None
     """What agents in this setting are asked to do, and what is in bounds."""
 
     # this particular instance of it
-    sample_id: str | int | None
-    epoch: int | None
+    sample_id: str | int
+    epoch: int
 
     sample_description: str | None
     """What is distinctive about this instance."""
@@ -233,22 +233,31 @@ class Context:
     metadata: dict[str, Any]
     """Author-supplied structured context (task metadata merged with sample)."""
 
+    target: Target | None = None
+    """The expected answer. None unless explicitly opted into; the opt-in is not built."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class Context:
+    """Everything constant for the sample while the step changes. Immutable."""
+
     path: str
     """Instance path, e.g. "attempt/internet_attempt". Empty at the top layer."""
-
-    # -- memory; there is no `store`: an instance reaches only its own state
-    def store_as(self, model_cls: Type[SMT], *, scope: Scope = "sample") -> SMT:
-        """Typed view of this instance's state, namespaced by `path`. `scope="task"` is not built."""
 
     # -- effects
     host: Host
     """Inference today; outbound JSON and keyed storage are planned. See [Effects](#effects)."""
 
-    target: Target | None = None
-    """The expected answer. None unless explicitly opted into; the opt-in is not built."""
+    # -- the briefing, in an eval
+    eval: EvalContext | None
+    """The task and sample being run. None outside an Inspect eval, as in a proxy."""
+
+    # -- memory; there is no `store`: an instance reaches only its own state
+    def store_as(self, model_cls: Type[SMT], *, scope: Scope = "sample") -> SMT:
+        """Typed view of this instance's state, namespaced by `path`. `scope="task"` is not built."""
 ```
 
-The host (inspect_ai's dispatcher, or a proxy) builds the top layer's `Context`, with an empty `path`, and passes it to `run_sentinel` in a `HostContext` with its recorder and the sample store. Authors never see a `HostContext`: every monitor and protocol is given a plain `Context`, which has no private fields. For the duration of the step, `run_sentinel` sets a private context variable holding the recorder, the store, and the factory of each layer that has run, keyed by `path`; the runner registers each child's path before invoking it, and tasks a protocol starts inherit the variable. `run_monitors`, `run_protocols` and `run_children` look up the `path` of the context a protocol passes them: called outside a step, for example with a context kept after its protocol returned, they raise `RuntimeError`; given a context whose `path` is not a layer of the running step, `ValueError`. `store_as()` reads the store from the same variable and raises `RuntimeError` outside a step. Two instances with different factories under one `path` in one step are a `ValueError`, since their records and state would be indistinguishable.
+The host (inspect_ai's dispatcher, or a proxy) builds the top layer's `Context`, with an empty `path` and, outside an eval, `eval=None`, and passes it to `run_sentinel` in a `HostContext` with its recorder and the sample store. Authors never see a `HostContext`: every monitor and protocol is given a plain `Context`, which has no private fields. For the duration of the step, `run_sentinel` sets a private context variable holding the recorder, the store, and the factory of each layer that has run, keyed by `path`; the runner registers each child's path before invoking it, and tasks a protocol starts inherit the variable. `run_monitors`, `run_protocols` and `run_children` look up the `path` of the context a protocol passes them: called outside a step, for example with a context kept after its protocol returned, they raise `RuntimeError`; given a context whose `path` is not a layer of the running step, `ValueError`. `store_as()` reads the store from the same variable and raises `RuntimeError` outside a step. Two instances with different factories under one `path` in one step are a `ValueError`, since their records and state would be indistinguishable.
 
 ```python
 @dataclass(frozen=True, kw_only=True)
@@ -274,9 +283,9 @@ Every `Recorder` call gets the `Context` of the instance it concerns and the reg
 
 Rules:
 
-- **Use the assignment fields to judge the step.** The same `curl` command is exfiltration in one task and the assigned work in another. A monitor that ignores `task_description` can only flag things that would look bad in any task, and it will produce false positives on tasks that are designed to look bad.
+- **Use the assignment fields to judge the step.** The same `curl` command is exfiltration in one task and the assigned work in another. A monitor that ignores `context.eval.task_description` can only flag things that would look bad in any task, and it will produce false positives on tasks that are designed to look bad.
 - **Keep context and step separate when you build a prompt.** Put the assignment in a labelled instructions section and the conversation in a labelled evidence section. Do not concatenate them into one block where a tool result can claim to be a revised assignment.
-- **Do not read `target` unless the monitor's job requires the answer.** It is absent by default, and until `@monitor(target=True)` and `@protocol(target=True)` are built it is always None. Request it explicitly, and the log records that you did, so readers can tell whether the monitor's performance is achievable in deployment. Sandbagging detection needs it. An AI control monitor standing in for a deployed one must not have it. See [View](#view).
+- **Do not read `context.eval.target` unless the monitor's job requires the answer.** It is absent by default, and until `@monitor(target=True)` and `@protocol(target=True)` are built it is always None. Request it explicitly, and the log records that you did, so readers can tell whether the monitor's performance is achievable in deployment. Sandbagging detection needs it. An AI control monitor standing in for a deployed one must not have it. See [View](#view).
 - **Do not cache the context.** It is passed on every call. Storing it would make the monitor stateful.
 - **Use `context.host` for inference.** Do not call `get_model()` directly. Other inspect_ai APIs work in-process at the cost of portability to a proxy. See [Effects](#effects).
 
@@ -284,13 +293,17 @@ How the fields are populated:
 
 | Field | In an eval | In a proxy |
 |---|---|---|
-| `task` / `task_description` | `Task` name, `Task(description=)` | the deployed agent's identity and charter |
-| `sample_id` / `epoch` | sample id, epoch | conversation key (see `sentinel-deployment.md`) |
-| `sample_description` | `Sample(description=)` | usually absent |
-| `sample_input` | `Sample.input` | the request's system prompt and first user turn |
-| `metadata` | task + sample metadata | headers, deployment config |
+| `path`, `host`, `store_as()` | instance path, inspect_ai's host, the sample store | instance path, the proxy host, its keyed store |
+| `eval` | an `EvalContext` | None |
+| `eval.task` / `eval.task_description` | `Task` name, `Task(description=)` | |
+| `eval.sample_id` / `eval.epoch` | sample id, epoch | |
+| `eval.sample_description` | `Sample(description=)` | |
+| `eval.sample_input` | `Sample.input` | |
+| `eval.metadata` | task + sample metadata | |
 
-`Task(description=)` and `Sample(description=)` do not exist yet, so in an eval `task_description` and `sample_description` are always None. They are the proposed home for the assignment text; the fallback is a `metadata` convention. See [Open questions](#open-questions) item 13. Structured context goes in `metadata` either way.
+A proxy answers requests that are not Inspect evals and have no task, sample or epoch, so it passes `eval=None` rather than stand-ins a monitor could not tell from real values; in an eval, `task`, `sample_id` and `epoch` are always present. Decided by the maintainer on 2026-10-05. A proxy's equivalent of the briefing (a deployment's charter, say) is open; see `proxy-host.md`.
+
+`Task(description=)` and `Sample(description=)` do not exist yet, so in an eval `eval.task_description` and `eval.sample_description` are always None. They are the proposed home for the assignment text; the fallback is a `metadata` convention. See [Open questions](#open-questions) item 13. Structured context goes in `metadata` either way.
 
 ### Reports
 
@@ -489,7 +502,7 @@ Which surfaces exist where:
 
 | Surface | Eval | Proxy / bridged | Replay | Trust |
 |---|---|---|---|---|
-| Briefing (`context`) | yes | operator-supplied | from transcript info | instruction |
+| Briefing (`context.eval`) | yes | **no**: `eval` is None | from transcript info | instruction |
 | The subject: call, assistant message, or request | yes | yes | yes | evidence |
 | Tool result as the model saw it | yes | next request only, lossy | yes | evidence |
 | Untruncated tool output | yes | no | no | evidence |
@@ -504,7 +517,7 @@ Which surfaces exist where:
 
 Rules:
 
-- **The system prompt is evidence, not instruction.** In an eval the author wrote it; under a proxy the agent's scaffold did. The briefing in `context` is the only instruction-class input. The helpers exclude the system prompt by default.
+- **The system prompt is evidence, not instruction.** In an eval the author wrote it; under a proxy the agent's scaffold did. The briefing in `context.eval` is the only instruction-class input, and outside an eval there is none. The helpers exclude the system prompt by default.
 - **Reasoning is rendered at whatever fidelity exists.** `<thinking>`, `<thinking_summary>`, or `<thinking_redacted/>`, so the prompt says which. Exclude it in the preprocessor to score actions without it. A protocol withholds it from a child by transforming `step` before the call.
 - **A monitor never sees** the sandbox itself, other samples, sibling monitors' reports at the same step, the protocol's thresholds or budget, or whether its own explanation was shown.
 
@@ -1177,7 +1190,7 @@ Context is passed on every call rather than once per sample because a monitor th
 
 ### Why `Context` rather than `Task` and `Sample`
 
-Passing the framework objects ties every monitor to Inspect. A proxy has neither. `Context` holds the same information stated in terms of the agent, so both deployments can fill it.
+Passing the framework objects ties every monitor to Inspect. A proxy has neither. `Context` holds what every host has (`path`, `host`, `store_as()`) at the top, and the eval's task and sample, stated in terms of the agent, under `eval`, which a proxy sets to None.
 
 ### Why `target` is opt-in
 
