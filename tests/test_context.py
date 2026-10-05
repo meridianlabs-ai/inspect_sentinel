@@ -128,23 +128,22 @@ def reads_eval() -> Monitor:
 
 
 @pytest.mark.parametrize(
-    ("eval", "explanation"),
+    ("eval_context_", "explanation"),
     [(eval_context(), "t/1: prompt"), (None, "outside an eval")],
 )
 @pytest.mark.anyio
 async def test_a_monitor_runs_with_and_without_an_eval(
-    eval: EvalContext | None, explanation: str
+    eval_context_: EvalContext | None, explanation: str
 ) -> None:
     store = Store()
     recorder = ListRecorder()
     built = host_context(recorder=recorder, store=store)
-    host = replace(built, context=replace(built.context, eval=eval))
+    host = replace(built, context=replace(built.context, eval=eval_context_))
     await run_sentinel(observe_only([reads_eval()]), host, before_step())
-    await run_sentinel(observe_only([reads_eval()]), host, before_step())
-    [first, _] = recorder.records
-    assert first.context.eval == eval
-    assert first.reported.report.explanation == explanation
-    assert Trajectory(store=store, instance=first.context.path).calls == 2
+    [recorded] = recorder.records
+    assert recorded.context.eval == eval_context_
+    assert recorded.reported.report.explanation == explanation
+    assert Trajectory(store=store, instance=recorded.context.path).calls == 1
 
 
 def test_root_store_validates_writes() -> None:

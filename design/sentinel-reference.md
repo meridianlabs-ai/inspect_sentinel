@@ -502,7 +502,7 @@ Which surfaces exist where:
 
 | Surface | Eval | Proxy / bridged | Replay | Trust |
 |---|---|---|---|---|
-| Briefing (`context`) | yes | operator-supplied | from transcript info | instruction |
+| Briefing (`context.eval`) | yes | **no**: `eval` is None | from transcript info | instruction |
 | The subject: call, assistant message, or request | yes | yes | yes | evidence |
 | Tool result as the model saw it | yes | next request only, lossy | yes | evidence |
 | Untruncated tool output | yes | no | no | evidence |
@@ -517,7 +517,7 @@ Which surfaces exist where:
 
 Rules:
 
-- **The system prompt is evidence, not instruction.** In an eval the author wrote it; under a proxy the agent's scaffold did. The briefing in `context` is the only instruction-class input. The helpers exclude the system prompt by default.
+- **The system prompt is evidence, not instruction.** In an eval the author wrote it; under a proxy the agent's scaffold did. The briefing in `context.eval` is the only instruction-class input, and outside an eval there is none. The helpers exclude the system prompt by default.
 - **Reasoning is rendered at whatever fidelity exists.** `<thinking>`, `<thinking_summary>`, or `<thinking_redacted/>`, so the prompt says which. Exclude it in the preprocessor to score actions without it. A protocol withholds it from a child by transforming `step` before the call.
 - **A monitor never sees** the sandbox itself, other samples, sibling monitors' reports at the same step, the protocol's thresholds or budget, or whether its own explanation was shown.
 
