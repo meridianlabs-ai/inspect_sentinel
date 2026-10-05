@@ -1,12 +1,9 @@
 from dataclasses import replace
 from typing import Any
 
-import anyio
 import pytest
-from inspect_ai.approval import Approval, ApprovalPolicy, Approver, approver
-from inspect_ai.approval._policy import policy_approver
-from inspect_ai.model import ChatMessage, ChatMessageTool, ContentImage, ContentText
-from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView
+from inspect_ai.model import ChatMessageTool, ContentImage, ContentText
+from inspect_ai.tool import ToolCall, ToolCallError
 
 from inspect_sentinel import (
     AfterToolCall,
@@ -27,135 +24,50 @@ def _call(function: str, **arguments: Any) -> ToolCall:
     "call, expected",
     [
         (_call("bash", command="ls /work"), "ls /work"),
-        (_call("python", code="print(1)"), "print(1)"),
-        (_call("code_execution", code="1 + 1"), "1 + 1"),
-        (_call("bash_session", action="type_submit", input="ls"), "ls"),
-        (_call("bash_session", action="read"), ""),
-        (
-            _call(
-                "text_editor",
-                command="str_replace",
-                new_str="b",
-                path="/w/f.py",
-                old_str="a",
-            ),
-            "/w/f.py\na\nb",
-        ),
-        (
-            _call("text_editor", command="create", path="/w/f", file_text="x"),
-            "/w/f\nx",
-        ),
-        (
-            _call(
-                "text_editor",
-                command="insert",
-                path="/w/f",
-                insert_line=2,
-                insert_text="y",
-            ),
-            "/w/f\ny",
-        ),
-        (
-            _call("memory", command="rename", old_path="/m/a", new_path="/m/b"),
-            "/m/a\n/m/b",
-        ),
-        (_call("read_file", file_path="/w/f", offset=3), "/w/f"),
-        (_call("list_files", path="/w", depth=1), "/w"),
-        (_call("grep", pattern="TODO", path="/w", glob="*.py"), "TODO\n/w\n*.py"),
-        (_call("skill", command="pdf"), "pdf"),
-        (_call("think", thought="hmm"), "hmm"),
-        (_call("web_search", query="weather"), "weather"),
-        (_call("web_browser_go", url="https://x.org"), "https://x.org"),
-        (_call("web_browser_type", element_id=3, text="hi"), "hi"),
-        (_call("web_browser_type_submit", element_id=3, text="hi"), "hi"),
-        (_call("computer", action="type", text="hello"), "hello"),
-        (_call("computer", action="left_click", coordinate=[1, 2]), ""),
-        (
-            _call(
-                "computer",
-                actions=[
-                    {"action": "left_click", "coordinate": [1, 2]},
-                    {"action": "type", "text": "rm -rf /"},
-                    "junk",
-                ],
-            ),
-            "rm -rf /",
-        ),
-        (_call("ask_user", message="ok?", schema={"type": "string"}), "ok?"),
-        (_call("notify_user", title="t", message="m"), "t\nm"),
-        (_call("submit", answer="42"), "42"),
-        (_call("mine", b="x", n=3, items=["y", {"k": "z"}], a=""), "x\ny\nz"),
         (_call("bash", cmd="rm x", timeout=5), "rm x"),
         (_call("bash"), ""),
+        (
+            _call("text_editor", command="create", path="/w/f", file_text="x"),
+            "create\n/w/f\nx",
+        ),
+        (_call("read_file", offset=3, file_path="/w/f"), "/w/f"),
+        (_call("mine", b="x", n=3, items=["y", {"k": "z"}], a=""), "x\ny\nz"),
+        (_call("mine", d={"b": "1", "a": ["2", ("3",)]}, flag=True), "1\n2\n3"),
+        (_call("mine", s="two\nlines", t="z"), "two\nlines\nz"),
     ],
 )
 def test_call_text(call: ToolCall, expected: str) -> None:
     assert call_text(call) == expected
 
 
-@approver(name="sentinel_test_approve_all")
-def _approve_all() -> Approver:
-    async def approve(
-        message: str,
-        call: ToolCall,
-        view: ToolCallView,
-        history: list[ChatMessage],
-    ) -> Approval:
-        return Approval(decision="approve")
-
-    return approve
-
-
-def _approval_matches(function: str, pattern: str) -> bool:
-    policy = policy_approver([ApprovalPolicy(_approve_all(), pattern)])
-
-    async def decide() -> bool:
-        approval = await policy("", _call(function, x="1"), ToolCallView(), [])
-        return approval.decision == "approve"
-
-    return anyio.run(decide)
-
-
 @pytest.mark.parametrize(
-    "function, pattern, expected",
+    "function, patterns, expected",
     [
-        ("bash", "bash", True),
-        ("bash_session", "bash", True),
-        ("python", "bash", False),
-        ("python", "bash, python", True),
-        ("python", "bash,python", True),
-        ("web_browser_go", "web_browser*", True),
-        ("web_browser_go", "web_*_go", True),
-        ("web_search", "web_*_go", False),
-        ("text_editor", "*", True),
-        ("bash", "b?sh", True),
-        ("bash", "[bc]ash", True),
-        ("dash", "[bc]ash", False),
-        ("mybash", "bash", False),
-        ("bash", "Bash", False),
+        ("bash", ["bash"], True),
+        ("bash_session", ["bash"], False),
+        ("bash_session", ["bash*"], True),
+        ("bash", ["bash*"], True),
+        ("mybash", ["bash"], False),
+        ("bash", ["Bash"], False),
+        ("bash", ["b?sh"], True),
+        ("bash", ["[bc]ash"], True),
+        ("dash", ["[bc]ash"], False),
+        ("web_browser_go", ["web_*_go"], True),
+        ("web_search", ["web_*_go"], False),
+        ("text_editor", ["*"], True),
+        ("python", ["bash", "python"], True),
+        ("python", ["bash", "think"], False),
+        ("python", [], False),
+        ("python", ["bash,python"], False),
+        ("python", ["bash, python"], False),
     ],
 )
-def test_tool_matches_as_an_approval_policy_does(
-    function: str, pattern: str, expected: bool
-) -> None:
-    assert tool_matches(_call(function, x="1"), pattern) is expected
-    assert _approval_matches(function, pattern) is expected
+def test_tool_matches(function: str, patterns: list[str], expected: bool) -> None:
+    assert tool_matches(_call(function, x="1"), *patterns) is expected
 
 
-def test_tool_matches_any_of_several_patterns() -> None:
-    assert tool_matches(_call("python"), "bash", "python")
-    assert not tool_matches(_call("python"), "bash", "think")
-    assert not tool_matches(_call("python"))
-
-
-def test_tool_matches_ignores_arguments_where_approval_does_not() -> None:
+def test_tool_matches_ignores_arguments() -> None:
     assert not tool_matches(_call("bash", command="python x"), "python")
-    assert not tool_matches(_call("bash", x="1"), "*1'")
-    assert _approval_matches("bash", "*1'")
-
-
-def test_tool_matches_patterns_with_spaces_around_commas() -> None:
-    assert tool_matches(_call("think"), " bash , think ", "python")
 
 
 @pytest.mark.parametrize(

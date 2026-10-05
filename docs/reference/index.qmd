@@ -69,10 +69,8 @@ Pure functions for rules that check tool calls, and builders of steps for testin
 ### call_text
 ### tool_matches
 ### find_words
-### paths_in
 ### path_matches
 ### path_resolves
-### unresolved_paths
 ### result_text
 ### before_tool_call
 ### after_tool_call

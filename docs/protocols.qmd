@@ -29,20 +29,18 @@ How to write a protocol: a `@protocol` factory returning a function that returns
 
 ## Helpers for Rules
 
-A rule usually reads a tool call as text and looks for something in it. These functions do the common parts. They are plain functions of their arguments, so a rule built on them is easy to test. Rules are cheap and run without a model call, but they cannot prove a call safe: a command built at run time, or a tool the rule does not know, gets past them. Use a rule to reject what is clearly bad, and escalate what it cannot resolve to a model or a person, typically `sequential([rule(), llm_monitor(), human()])`, where `llm_monitor()` stands for a protocol that asks a model and escalates what it is unsure of.
+A rule usually reads a tool call's arguments and looks for something in them. These functions do the common parts. They are plain functions of their arguments, so a rule built on them is easy to test. Rules are cheap and run without a model call. They match a call's text and its structured arguments, and they cannot prove a call safe: a command built at run time, or a tool the rule does not know, gets past them. Anything that needs an understanding of shell or code, such as which files a command touches, goes to an LLM monitor or is escalated, typically `sequential([rule(), llm_monitor(), human()])`, where `llm_monitor()` stands for a protocol that asks a model and escalates what it is unsure of.
 
 | Function | Returns |
 |---|---|
-| `call_text(call)` | The call's text whichever tool it is: `bash()`'s `command`, `python()`'s `code`, `text_editor()`'s path and text, and so on; for any other tool, its string arguments. |
-| `tool_matches(call, *patterns)` | Whether the tool's name matches a glob, as an approval policy's `tools` do: `"bash"` also matches `bash_session`, and `"web_browser*"` every browser tool. |
+| `call_text(call)` | Every string in the call's arguments, in order, joined with newlines. It knows nothing about particular tools: for `bash()` it is the command, and for `text_editor()` the command name, the path and the text. |
+| `tool_matches(call, *patterns)` | Whether the tool's name matches one of the names or globs: `"bash"` matches only `bash`, and `"web_browser*"` every browser tool. |
 | `find_words(text, words)` | The words that appear in the text as whole words, in the order they appear, so an explanation can name them. `rm` does not match `platform`; `-delete` and `pip install` work as written. |
-| `paths_in(call)` | The paths a call names: a file tool's path arguments, and absolute, `~/` and relative paths in the code of `bash()`, `bash_session()`, `python()` and `code_execution()`. Best effort. |
-| `unresolved_paths(call, cwd=None, home=None)` | The path references in a call that cannot be resolved to a place: those built at run time (`$D/x`, `$(pwd)/x`, `f"/x/{name}"`), with a wildcard (`/e*/passwd`), `~user/x`, `file://` URLs, and relative paths without `cwd` or after a change of directory it cannot follow. |
 | `path_matches(path, patterns, cwd=None, home=None)` | Whether a path matches a glob once `..`, `.` and repeated slashes are resolved, so `/work/../etc/passwd` matches `/etc/**`. Wildcards match dotfiles but never a `..`. |
 | `path_resolves(path, cwd=None, home=None)` | Whether a path resolves to an absolute or `~/` path, as `passwd` does not without `cwd`, nor `~/../etc` without `home`. |
 | `result_text(step)` | After a call: its result as text, or `Error (<type>): <message>` when it failed. |
 
-For example, a rule that keeps file tools and commands out of protected directories, and escalates the calls it cannot check:
+For example, a rule that keeps `text_editor()` out of protected directories. It checks the tool's `path` argument, a structured argument holding one path; it does not try to find paths in `bash()` commands.
 
 ```python
 from inspect_sentinel import (
@@ -51,36 +49,37 @@ from inspect_sentinel import (
     Decision,
     Protocol,
     path_matches,
-    paths_in,
+    path_resolves,
     protocol,
-    unresolved_paths,
+    tool_matches,
 )
 
 PROTECTED = ["/etc/**", "~/.ssh/**"]
 
 
 @protocol
-def protected_paths() -> Protocol:
+def protected_files() -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
-        for path in paths_in(step.call):
-            if path_matches(path, PROTECTED, cwd="/work", home="/root"):
-                return Decision.reject(
-                    f"call touches {path}",
-                    message=f"`{path}` is off limits; work only under /work.",
-                )
-        unresolved = unresolved_paths(step.call, cwd="/work", home="/root")
-        if unresolved:
-            return Decision.escalate(f"cannot resolve {', '.join(unresolved)}")
+        if not tool_matches(step.call, "text_editor"):
+            return None
+        path = step.call.arguments.get("path")
+        if not (
+            isinstance(path, str) and path_resolves(path, cwd="/work", home="/root")
+        ):
+            return Decision.escalate(f"cannot resolve the path {path!r}")
+        if path_matches(path, PROTECTED, cwd="/work", home="/root"):
+            return Decision.reject(
+                f"call touches {path}",
+                message=f"`{path}` is off limits; work only under /work.",
+            )
         return Decision.proceed()
 
     return decide
 ```
 
-`cwd` resolves relative paths, such as `text_editor()`'s, against the agent's working directory, and `home` expands `~` in paths and patterns alike, so `~/.ssh/**` here also matches `/root/.ssh/id_rsa`. Patterns are not joined to `cwd`, so write them absolute or begin them with `**/`.
+`cwd` resolves relative paths against the agent's working directory, and `home` expands `~` in paths and patterns alike, so `~/.ssh/**` here also matches `/root/.ssh/id_rsa`. Patterns are not joined to `cwd`, so write them absolute or begin them with `**/`. A deny-list passes a path it cannot place, such as `~user/x`, so the rule escalates it rather than letting it through.
 
-A deny-list passes whatever it cannot see, so the rule escalates a call with any path it cannot resolve rather than letting it through: `cat /e*/passwd`, `cat $D/passwd` and `cd $D && cat passwd/x` can all name a protected file that no pattern can match as written. Put the rule ahead of a `human()` or a model in a `sequential()` to have someone else decide them. Without `cwd` every relative path is unresolved, and without `home` so is a path that climbs out of `~` (`~/../etc`), so pass both. `unresolved_paths()` reports only what `paths_in()` can see: a path with no `/` in a command (`cat passwd`), a path held whole in a variable (`cat $F`) and a path built by a function (`os.path.join(home, ".ssh")`) are not found at all. 
-
-So that ordinary commands are not escalated, `unresolved_paths()` follows some of what the shell does in `bash()`. `$HOME/x` reads as `~/x` and `$PWD/x` as `./x`. After `cd /work/api`, a relative path is checked both where it was and in the new directory. A quoted argument that neither the shell nor its command expands, such as the program in `sed 's/ *$//' f` or `awk '{print $2/$3}' f`, is read literally. The docstring lists the conditions; when any one fails, the reference is escalated as before. On a set of 286 everyday commands and Python snippets in the tests, the idiom above escalates 11 (it escalated 25 before quoting, `$HOME` and `cd` were taken into account). Those still escalated are wildcards (`wc -l src/*.py`), a quoted glob given to a program that expands it (`eslint 'src/**/*.ts'`), `cd name` followed by a relative path, and a Python f-string or `+` with a `/` in it.
+`tool_matches()` matches the whole name. An approval policy's `tools` in inspect_ai differ: there `"bash"` also matches `bash_session`, and a comma separates several names.
 
 To unit-test a rule, `before_tool_call()` and `after_tool_call()` build the steps to pass to its function, without running an agent:
 

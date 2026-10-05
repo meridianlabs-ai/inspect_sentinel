@@ -25,10 +25,8 @@ from ._rules import (
     find_words,
     path_matches,
     path_resolves,
-    paths_in,
     result_text,
     tool_matches,
-    unresolved_paths,
 )
 from ._runner import run_children, run_monitors, run_protocols
 from ._step import AfterToolCall, BeforeToolCall, Step
@@ -86,7 +84,6 @@ __all__ = [
     "observe_only",
     "path_matches",
     "path_resolves",
-    "paths_in",
     "protocol",
     "result_text",
     "run_children",
@@ -95,6 +92,5 @@ __all__ = [
     "sequential",
     "threshold",
     "tool_matches",
-    "unresolved_paths",
     "__version__",
 ]
