@@ -17,6 +17,6 @@ How the same monitor runs outside an Inspect eval: for agents that run their own
 - Bridged agents (`claude_code`, `codex`): sentinel checks on their tool calls (planned)
 - A proxy in front of a model API: sidecar and embedded modes (planned)
 - What each stage sees under a proxy, and what is lost
-- Portable monitors: `context.host`, `context.store_as()`, light imports, `portable=False` (planned)
+- Portable monitors: `context.host`, `context.store_as()`, light imports; portable is the default and is checked at runtime, `portable=False` opts out (planned)
 - `terminate` and `reject` under a proxy
 - `inspect_core`: the wire types without the rest of Inspect (planned)

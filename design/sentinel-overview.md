@@ -195,7 +195,7 @@ The goal is to enable two deployment modes for proxy servers:
 
 Both modes depend on sentinels being lightweight. `inspect_sentinel` is to depend only on `inspect_core`, a new package holding the wire types (`ChatMessage`, `ModelOutput`, `ToolCall`, `ToolInfo`) and the registry primitives, so that a monitor author, a proxy, or a WASM build never pulls in the full Inspect framework. Today it depends on `inspect_ai`.
 
-Even if you are deploying sentinels inside Inspect AI to start with, the API will verify that your code will travel well to a proxy without Inspect dependencies, and `@monitor(portable=False)` will opt out of this checking. Neither is built yet.
+Even if you are deploying sentinels inside Inspect AI to start with, sentinel will check that your code travels well to a proxy without Inspect dependencies. Monitors and protocols are portable by default, which is checked when they are registered and while they run, and `@monitor(portable=False)` opts out. Neither is built yet.
 
 ## Development
 
