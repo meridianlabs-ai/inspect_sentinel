@@ -141,11 +141,22 @@ Raised by the maintainer on 2026-10-02 as an AST-based linter. Decided by the ma
 
 Adds `portable=` to the decorators and otherwise consumes them and the module layout without changing them; the proxy work in workstream 4 decides what counts as bundleable.
 
-Open questions:
+Decided by the maintainer on 2026-10-05:
 
-- Where each half runs: at decoration, when the factory is called (configuration), or on first run. The design does not settle it.
-- What the check reports when the per-function flag and the per-module verdict disagree ([sentinel-deployment.md](sentinel-deployment.md), open question 9).
-- Whether it also checks for captured state, which the 2026-10-02 framing included.
+- **What a portable function may do.** Compute anything, and affect the outside world only through `context`: `context.host.generate()`, `context.host.ask_human()`, `context.store_as()`, and `context.host.fetch()` once it exists. It reads the step, the `Context` and its factory's parameters (configuration comes through parameters, which the log records, not the environment), and may return any decision.
+- **Imports allowed.** The standard library except modules with effects; `inspect_core` and its declared dependencies (read from its package metadata, so the list cannot drift); `inspect_sentinel`'s public API. Not inspect_ai at all, and no other third-party package (no `requests`, `openai`, `anthropic`, `numpy`): models are reached through `context.host.generate()`.
+- **Standard-library modules not allowed:** `socket`, `ssl`, `http.client`, `urllib.request`, `subprocess`, `multiprocessing`, `threading`, `signal`, `ctypes`, `sqlite3`, `shutil`, `importlib`, and `os` and `sys` themselves; `os.path` and `posixpath` are allowed.
+- **Builtins not allowed:** `open`, `input`, `exec`, `eval`, `compile`, `__import__`, `breakpoint` (`exec` and `eval` would defeat the check).
+- **When it runs: when the factory is called** (configuration), so only instances someone configures are checked, the error comes before the eval starts and names the configuration, and importing a module stays harmless. Checks are cached per module. Without source (a notebook or the REPL) the check is skipped.
+- **Each instance is checked on its own.** A monitor's or protocol's own module imports and function body; children are passed in as arguments, not imported, so they play no part in their parent's check. Deployment requires every configured instance to be portable; there is no separate composition verdict.
+- **A portable function in a module with a disallowed import is an error**, naming the import, whatever the module's other functions are marked; the message suggests moving the import or the function, or `portable=False`.
+- **No runtime guard to start.** A runtime guard (for example an audit hook raising on effects while a portable function runs) was considered: authors are not adversaries, the allowed libraries do effectful things lazily (`datetime.strptime` importing `_strptime`, pydantic's lazy imports, locale and timezone files), so it would need its own allowlists and would raise confusing errors in ordinary evals, and in a proxy the environment (WASM, a sandboxed sidecar) enforces the same thing anyway. Revisit once the proxy host exists and real portable monitors show which effects are legitimate; a strict mode limited to tests or CI is the cheap middle ground.
+- **`fetch` is in scope here.** `Host.fetch` through named endpoints, as designed in [sentinel-deployment.md](sentinel-deployment.md) ("The host ABI", "Named endpoints, not URLs"), built in sentinel and in inspect_ai's host, with endpoints configured per task or deployment. It is a portable function's only network route, so a monitor that needs an HTTP API is not portable until it exists; the proxy host implements the same method (workstream 4).
+- **The shipped protocols** (`observe_only`, `concurrent`, `sequential`, `threshold`, `human`) must pass the check themselves.
+
+Later:
+
+- **Captured state.** A factory's closure holding a mutable object that its function mutates keeps state in process memory rather than `store_as()`: shared across samples in an eval, and divergent across instances in a proxy. Telling it apart from a closure over parameters needs more design; for now the docs say to keep state in `store_as()`.
 
 ## 12. Monitoring the monitors
 
