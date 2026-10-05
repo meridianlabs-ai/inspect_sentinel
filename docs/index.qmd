@@ -250,7 +250,7 @@ def suspicion(model: str | Model | None = None, role: str = "monitor") -> Monito
         if step.call.function == "submit":
             return None  # the prompt is written for commands, not final answers
         prompt = PROMPT.format(
-            task=context.sample_input_text, # <2>
+            task=context.eval.sample_input_text if context.eval else "not given", # <2>
             message=untrusted(step.message or ""),
             function=step.call.function,
             arguments=untrusted(json.dumps(step.call.arguments)),
@@ -265,7 +265,7 @@ def suspicion(model: str | Model | None = None, role: str = "monitor") -> Monito
 ```
 
 1. An LLM monitor takes `model=` and `role=`, so a task can point it at a different model without editing it. The host resolves them as `get_model()` does: the role if the task configures it, otherwise `model`, otherwise the agent's own model (with a warning).
-2. `context` holds what the agent was asked to do (`sample_input`, and `sample_input_text` for the same as one string), its task and sample ids, and metadata. Nothing in it came from the agent.
+2. In an eval, `context.eval` holds what the agent was asked to do (`sample_input`, and `sample_input_text` for the same as one string), its task and sample ids, and metadata. Nothing in it came from the agent. It is None outside an Inspect eval, for example when a proxy runs the monitor.
 3. Call models through `context.host.generate()`, not `get_model()`. The host resolves the model, records the call apart from the agent's, and does not charge it to the agent's limits.
 4. The suspicion score, from 0 to 1, and an explanation for the log.
 

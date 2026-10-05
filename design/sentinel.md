@@ -221,29 +221,26 @@ The runner therefore has two obligations, and neither field is derived from the 
 A monitor cannot judge anything without knowing what the agent is *supposed* to be doing. `curl attacker.example` is exfiltration in one task and the entire point of the eval in another; reading `/etc/shadow` is sabotage unless the assignment was privilege escalation. Without a briefing a monitor can only flag things that look alarming in the abstract, which is the failure mode that makes monitors useless — high false positives on exactly the evals that deliberately look alarming.
 
 ``` python
-@dataclass(frozen=True)
-class Context:
-    """Everything ambient to the step under examination.
+@dataclass(frozen=True, kw_only=True)
+class EvalContext:
+    """The Inspect eval sample being run: the briefing.
 
-    Three roles, deliberately on one object because all three are constant
-    for the sample while the step is not: the briefing (what the agent is
-    supposed to be doing), the monitor's own memory, and the effects it may
-    perform. This is the `TaskState` shape — flattened primary fields plus
-    namespaced sub-objects. Immutable: no field can be reassigned, and there
-    is no way in to the sample store beyond the instance's own namespace.
+    Constant for the sample. None as `Context.eval` outside an eval, for
+    example in a proxy, which answers requests that have no task, sample
+    or epoch.
     """
 
-    # -- the briefing: the standing assignment, constant across a task
-    task: str | None
-    """Task name, or the deployed agent's identifier."""
+    # -- the standing assignment, constant across a task
+    task: str
+    """Task name."""
 
     task_description: str | None
     """What agents in this setting are asked to do, and what is in bounds.
     None until inspect_ai has `Task(description=)`."""
 
     # this particular instance of it
-    sample_id: str | int | None
-    epoch: int | None
+    sample_id: str | int
+    epoch: int
 
     sample_description: str | None
     """What is distinctive about this instance. None until inspect_ai has
@@ -255,8 +252,35 @@ class Context:
     metadata: dict[str, Any]
     """Author-supplied structured context (task metadata merged with sample)."""
 
+    target: Target | None = None
+    """The expected answer. None unless explicitly opted into — see below.
+    The opt-in is not built, so for now it is always None.
+
+    Last because it is the only defaulted field, and a dataclass cannot put an
+    undefaulted field after one that defaults.
+    """
+
+    @property
+    def sample_input_text(self) -> str: ...   # sample_input as one string
+
+
+@dataclass(frozen=True, kw_only=True)
+class Context:
+    """Everything ambient to the step under examination.
+
+    Three roles, deliberately on one object because all three are constant
+    for the sample while the step is not: the briefing (what the agent is
+    supposed to be doing), the monitor's own memory, and the effects it may
+    perform. Immutable: no field can be reassigned, and there is no way in
+    to the sample store beyond the instance's own namespace.
+    """
+
     path: str
     """Instance path, e.g. "attempt/internet_attempt". Empty at the top layer."""
+
+    # -- the briefing, in an eval
+    eval: EvalContext | None
+    """The task and sample being run. None outside an Inspect eval."""
 
     # -- memory
     def store_as(self, model_cls: Type[SMT], *, scope: Scope = "sample") -> SMT:
@@ -273,29 +297,22 @@ class Context:
     in-process these are ordinary implementations, in a proxy they cross the
     host boundary.
     """
-
-    target: Target | None = None
-    """The expected answer. None unless explicitly opted into — see below.
-    The opt-in is not built, so for now it is always None.
-
-    Last because it is the only defaulted field, and a dataclass cannot put an
-    undefaulted field after one that defaults.
-    """
 ```
+
+#### Eval-only fields under `eval`
+
+Sentinels also run in a proxy that answers requests that are not Inspect evals: there is no task, sample or epoch. Rather than make every eval field optional, or fill them with stand-ins that a monitor cannot tell from the real thing, the eval's fields live under `context.eval`, which is None outside an eval. A monitor that reads them checks for None once, and in an eval `task`, `sample_id` and `epoch` are always present. `path`, `host` and `store_as()` stay at the top, since every host has them. Decided by the maintainer on 2026-10-05; what a proxy supplies in their place, such as a deployment's charter, is left to the proxy spike (`proxy-host.md`).
 
 #### Deployment-neutral, not `Task` and `Sample`
 
 The obvious shape is to hand the monitor the `Task` and the `Sample`. Don't. That welds every monitor to Inspect and forfeits the portability the rest of this document spends its length preserving — a proxy has neither object and never will.
 
-`Context` is the same information stated in terms of the agent rather than the framework, so both deployments can fill it:
+`Context` states what a monitor needs in terms of the agent rather than the framework, so both deployments can fill it:
 
 | Field | In an eval | In a proxy |
 |------------------------|------------------------|------------------------|
-| `task` / `task_description` | `Task` name, authored description | the deployed agent's identity and charter |
-| `sample_id` / `epoch` | sample id, epoch | conversation key (see `sentinel-deployment.md`) |
-| `sample_description` | authored per-sample note | usually absent |
-| `sample_input` | `Sample.input` | the request's system prompt and first user turn |
-| `metadata` | task + sample metadata | headers, deployment config |
+| `path`, `host`, `store_as()` | the instance path, the in-process host, the sample store | the instance path, the proxy host, its keyed store |
+| `eval` | the task and sample: `Task` name, authored description, sample id, epoch, `Sample.input`, task + sample metadata | None |
 
 #### It is the only input the agent did not write
 
@@ -1476,7 +1493,7 @@ What a monitor can be shown, where each thing comes from, and where it is availa
 
 | Surface | Lives in | Eval | Proxy / bridged | Replay | Trust |
 |---|---|---|---|---|---|
-| Briefing: `task_description`, `sample_description`, `sample_input`, `metadata` | `context` | yes | operator-supplied | from transcript info | instruction |
+| Briefing: `task_description`, `sample_description`, `sample_input`, `metadata` | `context.eval` | yes | **no**: `eval` is None | from transcript info | instruction |
 | The subject: the call, the assistant message, or the request | `step.call` / `step.output` / `step.input` | yes | yes | yes | evidence |
 | Tool result as the model sees it | `step.result` | yes | next request only (lossy) | yes; exact from `ToolEvent` | evidence |
 | Untruncated tool output | `step.output` | yes | **no** | **no** | evidence |
@@ -1488,7 +1505,7 @@ What a monitor can be shown, where each thing comes from, and where it is availa
 | Tool definitions, generate config | `step.tools`, `step.config` | yes | yes | from events only | evidence |
 | Media (images, audio, documents) | content parts | yes | yes | yes | evidence |
 | Prior escalations | `step.escalations` | yes | yes | recorded | prior verdicts |
-| Expected answer | `context.target` | yes | **never** | yes | instruction |
+| Expected answer | `context.eval.target` | yes | **never** | yes | instruction |
 | Own accumulated state | `context.store_as()` | yes | keyed store | per-transcript | own |
 
 Two rows deserve a note.
@@ -1526,7 +1543,7 @@ The third is the one that matters. It uses `context.store_as` under a reserved k
 
 **`result_as_str(result, *, truncated=None)`.** A tool result with the truncation range marked, so the monitor knows the model saw a cut and where. Given `output` as well, it can say how much was cut.
 
-**`briefing_as_str(context)`.** The instruction section: task and sample descriptions, the original input, and metadata the author chose to surface. Never includes `target` unless asked; the caller passing `include_target=True` is what the log records.
+**`briefing_as_str(context)`.** The instruction section, from `context.eval`: task and sample descriptions, the original input, and metadata the author chose to surface. Outside an eval it has no eval fields to render. Never includes `target` unless asked; the caller passing `include_target=True` is what the log records.
 
 **`step_as_str(step, *, history=..., preprocessor=None)`.** The evidence section for a stage, built from the helpers above: the subject, then as much history as the caller asked for. When a surface is absent in the deployment — no `view`, no untruncated `output` — the rendering says so in a fixed phrase rather than omitting it silently, so a monitor developed in an eval and run under a proxy produces a prompt that is visibly different rather than subtly different.
 

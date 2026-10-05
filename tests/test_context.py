@@ -9,14 +9,23 @@ from pydantic import ValidationError
 from inspect_sentinel import (
     BeforeToolCall,
     Context,
+    EvalContext,
     Host,
     Monitor,
     Observation,
     monitor,
+    observe_only,
     run_monitors,
 )
 from inspect_sentinel._host import HostContext
-from tests._fakes import before_step, host_context, in_step
+from inspect_sentinel._runner import run_sentinel
+from tests._fakes import (
+    ListRecorder,
+    before_step,
+    eval_context,
+    host_context,
+    in_step,
+)
 
 
 class Trajectory(StoreModel):
@@ -53,6 +62,10 @@ def test_the_context_exposes_no_store_and_cannot_be_reassigned() -> None:
     assert not hasattr(context, "store")
     with pytest.raises(FrozenInstanceError):
         cast(Any, context).path = "elsewhere"
+    with pytest.raises(FrozenInstanceError):
+        cast(Any, context).eval = None
+    with pytest.raises(FrozenInstanceError):
+        cast(Any, context.eval).task = "other"
 
 
 @pytest.mark.anyio
@@ -93,12 +106,45 @@ async def test_a_child_is_given_a_plain_context_under_its_layer() -> None:
 def test_sample_input_text_joins_the_messages(
     input: str | list[ChatMessage], expected: str
 ) -> None:
-    context = replace(host_context().context, sample_input=input)
-    assert context.sample_input_text == expected
+    assert replace(eval_context(), sample_input=input).sample_input_text == expected
 
 
 def test_target_is_absent_by_default() -> None:
-    assert host_context().context.target is None
+    assert eval_context().target is None
+
+
+@monitor
+def reads_eval() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        context.store_as(Trajectory).calls += 1
+        if context.eval is None:
+            return Observation.score(0.0, "outside an eval")
+        return Observation.score(
+            0.5,
+            f"{context.eval.task}/{context.eval.sample_id}: {context.eval.sample_input_text}",
+        )
+
+    return check
+
+
+@pytest.mark.parametrize(
+    ("eval", "explanation"),
+    [(eval_context(), "t/1: prompt"), (None, "outside an eval")],
+)
+@pytest.mark.anyio
+async def test_a_monitor_runs_with_and_without_an_eval(
+    eval: EvalContext | None, explanation: str
+) -> None:
+    store = Store()
+    recorder = ListRecorder()
+    built = host_context(recorder=recorder, store=store)
+    host = replace(built, context=replace(built.context, eval=eval))
+    await run_sentinel(observe_only([reads_eval()]), host, before_step())
+    await run_sentinel(observe_only([reads_eval()]), host, before_step())
+    [first, _] = recorder.records
+    assert first.context.eval == eval
+    assert first.reported.report.explanation == explanation
+    assert Trajectory(store=store, instance=first.context.path).calls == 2
 
 
 def test_root_store_validates_writes() -> None:

@@ -37,7 +37,7 @@ Buffering first, since it gives a complete `ModelOutput`; streaming, which means
 
 The host interface after sentinel #47 is `HostContext(context, recorder, store)` passed to `run_sentinel`, with `Host.generate` and `Host.ask_human` on `context.host`. A proxy host provides:
 
-- **`Context`**: what the proxy knows. `task` is the agent or deployment id, `sample_id` the conversation key, `sample_input` the first user turn, `metadata` from headers, `task_description` from deployment config. Document which fields may be `None` in a proxy.
+- **`Context`**: `path` and `host` as in an eval, and `eval=None`: a proxy request is not an Inspect eval and has no task, sample or epoch, so the eval's fields (`context.eval.task`, `sample_id`, `sample_input`, `metadata`, `task_description`) are absent rather than filled with stand-ins. Decided by the maintainer on 2026-10-05. Whether a proxy needs its own equivalents (a deployment id, a conversation key, a charter from deployment config) is for this spike to find out; the conversation key backs the store, below.
 - **`Host.generate`**: routes to models with a recursion guard, so a monitor's own model call does not pass back through the proxy it runs in (deployment doc, open question 5). Model roles come from deployment config.
 - **`Host.ask_human`**: the audit queue; ties into workstream 13's message queue.
 - **`Recorder`**: `SentinelEvent`s to a sink (structured logs, OpenTelemetry, or files a viewer or workstream 12 can read).
