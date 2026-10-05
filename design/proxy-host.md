@@ -39,8 +39,8 @@ The host interface after sentinel #47 is `HostContext(context, recorder, store)`
 
 - **`Context`**: what the proxy knows. `task` is the agent or deployment id, `sample_id` the conversation key, `sample_input` the first user turn, `metadata` from headers, `task_description` from deployment config. Document which fields may be `None` in a proxy.
 - **`Host.generate`**: routes to models with a recursion guard, so a monitor's own model call does not pass back through the proxy it runs in (deployment doc, open question 5). Model roles come from deployment config.
-- **`Host.ask_human`**: the audit queue; ties into workstream 11's message queue.
-- **`Recorder`**: `SentinelEvent`s to a sink (structured logs, OpenTelemetry, or files a viewer or workstream 10 can read).
+- **`Host.ask_human`**: the audit queue; ties into workstream 13's message queue.
+- **`Recorder`**: `SentinelEvent`s to a sink (structured logs, OpenTelemetry, or files a viewer or workstream 12 can read).
 - **The store**: a keyed store, keyed by a session header verified against a fingerprint of the conversation's start (deployment doc, "Making the key trustworthy"), behind `store_as()`.
 - **`step.history`** across compaction, from the keyed store's accumulation for the conversation.
 - **New host methods**: `fetch` through named endpoints (designed in the deployment doc, not built), and possibly an out-of-band `terminate()`.
@@ -56,7 +56,7 @@ The workstream says WASM first. Run the `ext_proc` sidecar beside it as the vehi
 ## 5. Packaging and configuration
 
 - **Bundling**: the monitor modules and a manifest (deployment doc, "What gets bundled"), and configuration through `sentinel_from_config` (YAML), with the `version` and `meta` each entry records.
-- **The `portable=True` check** (workstream 9), the runtime check a portable monitor or protocol gets when registered or configured, run at deploy time over the bundled set as well: only bundleable imports in each module's closure, no `get_model()` or `sandbox()` in each function. A module that fails is dropped and named.
+- **The `portable=True` check** (workstream 11), the runtime check a portable monitor or protocol gets when registered or configured, run at deploy time over the bundled set as well: only bundleable imports in each module's closure, no `get_model()` or `sandbox()` in each function. A module that fails is dropped and named.
 - **Dependencies**: `inspect_core`, pydantic and anyio; not inspect_ai.
 
 ## 6. Changes to the sentinel interface
