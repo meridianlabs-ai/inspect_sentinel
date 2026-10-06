@@ -17,7 +17,6 @@ from collections.abc import Callable, Iterable, Iterator
 from typing import NamedTuple, TypeGuard, cast
 
 import inspect_ai.core
-from inspect_ai.util import StoreModel
 
 _CORE = "inspect_ai.core"
 
@@ -421,7 +420,7 @@ def _is_code(value: object) -> bool:
 
 
 def _allowed(value: object) -> bool:
-    return value is StoreModel or id(value) in _core_values()
+    return id(value) in _core_values()
 
 
 @functools.cache
@@ -449,7 +448,7 @@ def _judge_name(name: str) -> str | None:
             return reason
     top = name.partition(".")[0]
     if top == "inspect_ai":
-        return None if name == _CORE or name.startswith(f"{_CORE}.") else _INSPECT
+        return None if name == _CORE else _INSPECT
     if top in sys.stdlib_module_names or top in _WASI_BUILT:
         return None
     if top and top in _compiled_packages(tuple(sys.path)):

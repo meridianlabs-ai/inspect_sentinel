@@ -140,7 +140,7 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             "from inspect_ai.util import store",
             "store()",
             "store",
-            "function `store` from `inspect_ai.util._store`",
+            "function `store` from `inspect_ai.core._store`",
         ),
     ],
 )
