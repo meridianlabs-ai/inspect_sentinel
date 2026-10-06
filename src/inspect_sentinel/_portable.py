@@ -1,3 +1,10 @@
+# The portable check runs when a portable factory is called, before it runs.
+# It parses the factory's file once (cached on the file's text), locates the
+# factory and the functions it returns, and resolves each non-local name and
+# attribute chain they load to the real object, judging it by its defining
+# module against the allowlists. Functions and classes of the author's own
+# modules are followed the same way. Every violation is collected into one
+# PortabilityError, and the check never imports anything.
 from __future__ import annotations
 
 import ast
@@ -15,16 +22,21 @@ import posixpath
 import sys
 import time
 import types
+import typing
 import uuid
-import weakref
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast
 
+import inspect_ai.core
+import typing_extensions
 from inspect_ai._util.registry import is_registry_object, registry_info
 from inspect_ai.scorer import Reference
 from inspect_ai.util import StoreModel
+
+# Allowlists and per-object refusals
 
 # mirrors ALLOWED_THIRD_PARTY in inspect_ai's tests/core/test_core_imports.py,
 # plus anyio, which sentinel depends on and protocols use for concurrency
@@ -106,6 +118,36 @@ _BANNED_BUILTINS = (
 # StoreModel and Reference until they move into inspect_ai.core
 _ALLOWED_TYPES: tuple[type, ...] = (StoreModel, Reference, io.StringIO, io.BytesIO)
 
+# data read off a module that is otherwise not allowed: (module, attribute)
+_ALLOWED_DATA = frozenset({("io", "SEEK_SET"), ("io", "SEEK_CUR"), ("io", "SEEK_END")})
+
+
+@functools.cache
+def _core_values() -> frozenset[int]:
+    # by identity, so re-exports elsewhere in inspect_ai pass, aliases included;
+    # plain constants are left out, since equal ones can be the same object
+    return frozenset(
+        id(value)
+        for name, value in vars(inspect_ai.core).items()
+        if not name.startswith("_")
+        and not isinstance(value, (str, bytes, int, float, tuple, type(None)))
+    )
+
+
+def _types(*candidates: object) -> tuple[type, ...]:
+    return tuple(c for c in candidates if isinstance(c, type))
+
+
+_TYPE_ALIASES = _types(
+    getattr(typing, "TypeAliasType", None),
+    getattr(typing_extensions, "TypeAliasType", None),
+)
+_GENERIC_ALIASES = _types(
+    getattr(typing, "_BaseGenericAlias", None), types.GenericAlias, types.UnionType
+)
+
+# Error and entry point
+
 _FIXES = "A portable {kind} affects the outside world only through `context`: call a model with `context.host.generate()`, ask a person with `context.host.ask_human()`, and keep state with `context.store_as()`. Otherwise move the reference out of the {kind}'s code, or, if the {kind} only runs in an eval, declare it with `@{kind}(portable=False)`."
 
 _NO_SOURCE = "no source"
@@ -123,23 +165,13 @@ class PortabilityError(TypeError):
 
 
 def check_portable(factory: Callable[..., object], kind: str, name: str) -> None:
-    violations = _checked.get(factory)
-    if violations is None:
-        own = str(getattr(factory, "__module__", "")).partition(".")[0]
-        violations = _Checker(own).check(factory)
-        # a notebook redefines helpers in place, so its factories are rechecked
-        if getattr(factory, "__module__", None) != "__main__":
-            _checked[factory] = violations
+    own = str(getattr(factory, "__module__", "")).partition(".")[0]
+    violations = _Checker(own).check(factory)
     if violations:
         lines = "\n".join(f"- {v.describe()}" for v in violations)
         raise PortabilityError(
             f"{kind} {name} is portable, but its code references what a portable {kind} cannot use:\n{lines}\n{_FIXES.format(kind=kind)}"
         )
-
-
-_checked: weakref.WeakKeyDictionary[Callable[..., object], tuple[_Violation, ...]] = (
-    weakref.WeakKeyDictionary()
-)
 
 
 class _Violation(NamedTuple):
@@ -154,6 +186,9 @@ class _Violation(NamedTuple):
     def describe(self) -> str:
         via = f" (reached from {' -> '.join(self.via)})" if self.via else ""
         return f"{self.file}:{self.line} in {self.function}: `{self.reference}` is {self.resolved}, {self.reason}{via}"
+
+
+# Judging objects
 
 
 class _Kind(Enum):
@@ -199,6 +234,8 @@ def _is_author(module: str) -> bool:
     else:
         try:
             spec = importlib.util.find_spec(module.partition(".")[0])
+        except RecursionError:
+            raise
         except Exception:
             return False
         if spec is None:
@@ -247,7 +284,7 @@ def _verdict_of(value: object, own: str) -> _Verdict:
         return _Verdict(
             _Kind.DISALLOWED, "which has effects a portable function cannot have"
         )
-    if id(value) in _PATH_FUNCTIONS:
+    if id(value) in _PATH_FUNCTIONS or id(value) in _core_values():
         return _ALLOWED
     if type(value) in _ALLOWED_TYPES or any(value is t for t in _ALLOWED_TYPES):
         return _ALLOWED
@@ -274,6 +311,62 @@ def _is_sentinel_factory(value: object) -> bool:
     )
 
 
+# A type alias is judged by the types it names, and a `functools.partial` by
+# the function it calls and the functions and classes it passes.
+def _leaves(value: object) -> list[object]:
+    leaves: list[object] = []
+    pending = [value]
+    seen: set[int] = set()
+    while pending:
+        item = pending.pop()
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
+        parts = _parts(item)
+        if parts is None:
+            leaves.append(item)
+        else:
+            pending.extend(reversed(parts))
+    return leaves
+
+
+def _parts(value: object) -> list[object] | None:
+    kind = type(value)
+    if id(value) in _core_values():
+        return None
+    if issubclass(kind, functools.partial):
+        partial = cast("functools.partial[object]", value)
+        passed = [*partial.args, *partial.keywords.values()]
+        return [
+            partial.func,
+            *(
+                p
+                for p in passed
+                if inspect.isroutine(p)
+                or inspect.isclass(p)
+                or issubclass(type(p), functools.partial)
+            ),
+        ]
+    if issubclass(kind, _TYPE_ALIASES):
+        return [cast(Any, value).__value__]
+    if not issubclass(kind, _GENERIC_ALIASES):
+        return None
+    parts: list[object] = []
+    origin = typing.get_origin(value)
+    if origin is not None:
+        parts.append(origin)
+    for arg in typing.get_args(value):
+        # `Callable[[int], str]` holds its parameters in a list
+        if isinstance(arg, (list, tuple)):
+            parts.extend(cast(Sequence[object], arg))
+        else:
+            parts.append(arg)
+    return parts
+
+
+# Attribute resolution
+
+
 # resolves through modules and classes only; an instance is judged by its type
 def _attribute(value: object, name: str) -> object:
     if _is_module(value):
@@ -295,12 +388,42 @@ def _attribute(value: object, name: str) -> object:
 def _unwrap(value: object) -> object:
     try:
         return inspect.unwrap(cast(Any, value))
+    except RecursionError:
+        raise
     except Exception:
         return value
 
 
+# A wrapper the author wrote is checked as it is, and its closure reaches what
+# it wraps; a library's wrapper, such as `functools.cache` or
+# `contextlib.contextmanager`, is unwrapped to the author's function.
+def _callable(value: object, own: str) -> object:
+    for _ in range(100):
+        if inspect.isclass(value) or inspect.ismethod(value):
+            break
+        if inspect.isfunction(value):
+            defined_in = value.__globals__.get("__name__")
+            if isinstance(defined_in, str) and (
+                _classify(defined_in, own).kind is _Kind.AUTHOR
+            ):
+                break
+        try:
+            wrapped = cast(object, getattr(value, "__wrapped__", None))
+        except RecursionError:
+            raise
+        except Exception:
+            break
+        if wrapped is None:
+            break
+        value = wrapped
+    return value
+
+
+# Locating source: the file cache
+
 _DEFINITIONS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-_FUNCTION_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+_FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
+_FUNCTION_SCOPES = (*_FUNCTIONS, ast.Lambda)
 _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 _SCOPES = (*_FUNCTION_SCOPES, ast.ClassDef, *_COMPREHENSIONS)
 _TYPE_ALIAS: tuple[type[ast.AST], ...] = tuple(
@@ -310,16 +433,17 @@ _TYPE_ALIAS: tuple[type[ast.AST], ...] = tuple(
 
 class _Source(NamedTuple):
     text: str
-    # first line (decorators included) -> definitions and lambdas starting there
+    # first line (decorators included) -> functions and lambdas starting there
     definitions: dict[int, list[ast.AST]]
-    # id of a definition -> the definition or lambda enclosing it
-    parents: dict[int, ast.AST]
     classes: dict[str, list[ast.ClassDef]]
     # module-level `from M import N`: bound name -> (level, M, N)
     from_imports: dict[str, tuple[int, str, str]]
+    # id of a located node -> the identifiers written in it
+    names: dict[int, frozenset[str]]
 
 
-_sources: dict[str, _Source] = {}
+_SOURCES_KEPT = 32
+_sources: OrderedDict[str, _Source] = OrderedDict()
 
 
 def _source(filename: str, module_globals: dict[str, object]) -> _Source | str:
@@ -329,6 +453,8 @@ def _source(filename: str, module_globals: dict[str, object]) -> _Source | str:
     try:
         linecache.checkcache(filename)
         lines = linecache.getlines(filename, module_globals)
+    except RecursionError:
+        raise
     except Exception:
         return _NO_SOURCE
     if not lines:
@@ -336,41 +462,29 @@ def _source(filename: str, module_globals: dict[str, object]) -> _Source | str:
     text = "".join(lines)
     cached = _sources.get(filename)
     if cached is not None and cached.text == text:
+        _sources.move_to_end(filename)
         return cached
     try:
-        source = _index(text, ast.parse(text))
+        tree = ast.parse(text)
+    except RecursionError:
+        raise
     except Exception:
         return _UNPARSEABLE
+    source = _index(text, tree)
     _sources[filename] = source
+    _sources.move_to_end(filename)
+    while len(_sources) > _SOURCES_KEPT:
+        _sources.popitem(last=False)
     return source
 
 
 def _index(text: str, tree: ast.Module) -> _Source:
     source = _Source(text, {}, {}, {}, {})
-    pending: list[tuple[ast.AST, ast.AST | None, str]] = [
-        (node, None, "") for node in tree.body
-    ]
-    while pending:
-        node, parent, prefix = pending.pop()
-        if isinstance(node, (*_DEFINITIONS, ast.Lambda)):
-            if parent is not None:
-                source.parents[id(node)] = parent
-            if isinstance(node, ast.Lambda):
-                first, name = node.lineno, "<lambda>"
-            else:
-                first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
-                name = node.name
-            source.definitions.setdefault(first, []).append(node)
-            if isinstance(parent, ast.ClassDef):
-                prefix = f"{prefix}.{name}"
-            elif parent is not None:
-                prefix = f"{prefix}.<locals>.{name}"
-            else:
-                prefix = name
-            if isinstance(node, ast.ClassDef):
-                source.classes.setdefault(prefix, []).append(node)
-            parent = node
-        pending.extend((child, parent, prefix) for child in ast.iter_child_nodes(node))
+    for node in ast.walk(tree):
+        if isinstance(node, _FUNCTION_SCOPES):
+            source.definitions.setdefault(_first_line(node), []).append(node)
+        elif isinstance(node, ast.ClassDef):
+            source.classes.setdefault(node.name, []).append(node)
     for node in _walk_scope(tree.body):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
@@ -379,6 +493,78 @@ def _index(text: str, tree: ast.Module) -> _Source:
                     (node.level, node.module or "", alias.name),
                 )
     return source
+
+
+def _first_line(node: ast.AST) -> int:
+    if isinstance(node, _DEFINITIONS):
+        return min([node.lineno, *(d.lineno for d in node.decorator_list)])
+    return cast(int, getattr(node, "lineno", 0))
+
+
+# A located node whose running code loads a name the source does not have is
+# not the code that runs: the file changed after it was imported.
+def _stale(
+    source: _Source, nodes: Sequence[ast.AST], codes: Iterable[types.CodeType]
+) -> bool:
+    written: set[str] = set()
+    for node in nodes:
+        names = source.names.get(id(node))
+        if names is None:
+            names = source.names[id(node)] = _written_names(node)
+        written |= names
+    pending = list(codes)
+    while pending:
+        code = pending.pop()
+        pending.extend(c for c in code.co_consts if isinstance(c, types.CodeType))
+        for name in code.co_names:
+            if (
+                name in written
+                or not name.isidentifier()
+                or (name.startswith("__") and name.endswith("__"))
+            ):
+                continue
+            # a private name in a class is compiled mangled, as `_Class__name`
+            if any(
+                name.startswith("__", i) and name[i:] in written
+                for i in range(1, len(name))
+            ):
+                continue
+            return True
+    return False
+
+
+def _written_names(node: ast.AST) -> frozenset[str]:
+    names: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Name):
+            names.add(sub.id)
+        elif isinstance(sub, ast.Attribute):
+            names.add(sub.attr)
+        elif isinstance(sub, ast.alias):
+            names.update(sub.name.split("."))
+            if sub.asname:
+                names.add(sub.asname)
+        elif isinstance(sub, ast.ImportFrom) and sub.module:
+            names.update(sub.module.split("."))
+        elif isinstance(sub, (ast.Global, ast.Nonlocal)):
+            names.update(sub.names)
+        elif isinstance(sub, ast.MatchClass):
+            names.update(sub.kwd_attrs)
+        elif isinstance(sub, ast.MatchMapping) and sub.rest:
+            names.add(sub.rest)
+        elif isinstance(sub, ast.arg):
+            names.add(sub.arg)
+        elif isinstance(sub, ast.keyword) and sub.arg:
+            names.add(sub.arg)
+        else:
+            # definitions, exception handlers, match captures, type parameters
+            name = getattr(sub, "name", None)
+            if isinstance(name, str):
+                names.add(name)
+    return frozenset(names)
+
+
+# Locating source: functions and lambdas
 
 
 class _Target(NamedTuple):
@@ -399,6 +585,8 @@ def _locate(
             return _function_target(value, via)
         if inspect.isclass(value):
             return _class_target(value, via, hint)
+    except RecursionError:
+        raise
     except Exception:
         return _UNREADABLE
     return None
@@ -410,7 +598,7 @@ def _function_target(func: types.FunctionType, via: tuple[str, ...]) -> _Target 
     if isinstance(source, str):
         return source
     nodes = _function_nodes(source, code)
-    if not nodes:
+    if not nodes or _stale(source, nodes, [code]):
         return _CHANGED
     return _Target(
         func,
@@ -423,40 +611,18 @@ def _function_target(func: types.FunctionType, via: tuple[str, ...]) -> _Target 
     )
 
 
+# A lambda is matched by its line alone, so every lambda starting on that line
+# is checked.
 def _function_nodes(source: _Source, code: types.CodeType) -> list[ast.AST]:
     candidates = source.definitions.get(code.co_firstlineno, [])
-    if code.co_name != "<lambda>":
-        functions: list[ast.AST] = [
-            node
-            for node in candidates
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == code.co_name
-        ]
-        return functions[:1]
-    lambdas = [node for node in candidates if isinstance(node, ast.Lambda)]
-    positions = getattr(code, "co_positions", None)
-    if len(lambdas) < 2 or positions is None:
-        return list(lambdas)
-    spans = [
-        ((line, column), (end_line, end_column))
-        for line, end_line, column, end_column in cast(
-            Iterable[tuple[Any, Any, Any, Any]], positions()
-        )
-        if None not in (line, end_line, column, end_column)
-        and (end_line, end_column) > (line, column)
-    ]
-    containing = [
+    if code.co_name == "<lambda>":
+        return [node for node in candidates if isinstance(node, ast.Lambda)]
+    functions: list[ast.AST] = [
         node
-        for node in lambdas
-        if all(
-            (node.body.lineno, node.body.col_offset) <= start
-            and end <= (node.body.end_lineno or 0, node.body.end_col_offset or 0)
-            for start, end in spans
-        )
+        for node in candidates
+        if isinstance(node, _FUNCTIONS) and node.name == code.co_name
     ]
-    if not spans or not containing:
-        return list(lambdas)
-    return [max(containing, key=lambda node: node.col_offset)]
+    return functions[:1]
 
 
 def _cells(func: types.FunctionType) -> dict[str, object]:
@@ -471,9 +637,14 @@ def _cells(func: types.FunctionType) -> dict[str, object]:
     return closure
 
 
+# Locating source: classes
+
+
 def _class_target(
     cls: type, via: tuple[str, ...], hint: _Target | None
 ) -> _Target | str | None:
+    if _generic_origin(cls) is not None:
+        return None
     module = sys.modules.get(cls.__module__)
     module_file = getattr(module, "__file__", None)
     methods = _methods(cls)
@@ -490,40 +661,49 @@ def _class_target(
         file, namespace = hint.file, hint.namespace
     else:
         return None
-    namespace = namespace or {}
-    source = _source(file, namespace)
+    source = _source(file, namespace or {})
     if isinstance(source, str):
         return source
-    name = cls.__name__.partition("[")[0]
-    first = vars(cls).get("__firstlineno__")
-    if isinstance(first, int):
-        nodes = [
-            node
-            for node in source.definitions.get(first, [])
-            if isinstance(node, ast.ClassDef) and node.name == name
-        ]
-    elif methods:
-        code = methods[0].__code__
-        nodes = [
-            parent
-            for node in source.definitions.get(code.co_firstlineno, [])
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == code.co_name
-            for parent in (source.parents.get(id(node)),)
-            if isinstance(parent, ast.ClassDef) and parent.name == name
-        ]
-    else:
-        nodes = source.classes.get(cls.__qualname__, [])
-        if len(nodes) != 1:
-            return None
+    codes = [m.__code__ for m in methods if m.__code__.co_filename == file]
+    nodes = _class_nodes(source, cls, codes)
     if not nodes:
-        # without a class statement or methods there is no code to check
-        defined = bool(methods) or isinstance(first, int)
+        defined = bool(methods) or isinstance(vars(cls).get("__firstlineno__"), int)
         return _CHANGED if certain and defined else None
+    if _stale(source, nodes, codes):
+        return _CHANGED
     closure: dict[str, object] = {}
     for method in methods:
         closure.update(_cells(method))
-    return _Target(cls, file, (nodes[0],), source, namespace, closure, via)
+    return _Target(cls, file, tuple(nodes), source, namespace or {}, closure, via)
+
+
+# The class statement named like the class: on 3.13+ the one starting at
+# `__firstlineno__`; otherwise the innermost one holding its methods, or,
+# without methods, every one of that name.
+def _class_nodes(
+    source: _Source, cls: type, codes: Sequence[types.CodeType]
+) -> list[ast.ClassDef]:
+    candidates = source.classes.get(cls.__name__, [])
+    first = vars(cls).get("__firstlineno__")
+    if isinstance(first, int):
+        return [node for node in candidates if _first_line(node) == first][:1]
+    if not codes:
+        return candidates
+    lines = [code.co_firstlineno for code in codes]
+    holding = [
+        node
+        for node in candidates
+        if all(_first_line(node) <= line <= (node.end_lineno or 0) for line in lines)
+    ]
+    return [max(holding, key=_first_line)] if holding else []
+
+
+def _generic_origin(cls: type) -> object:
+    # a parametrized pydantic generic, such as `Box[int]`, has no statement
+    metadata = vars(cls).get("__pydantic_generic_metadata__")
+    if isinstance(metadata, dict):
+        return cast(dict[str, object], metadata).get("origin")
+    return None
 
 
 def _methods(cls: type) -> list[types.FunctionType]:
@@ -548,6 +728,14 @@ def _methods(cls: type) -> list[types.FunctionType]:
     return found
 
 
+def _is_pseudo_file(filename: str) -> bool:
+    # `<stdin>`, `<string>`, `<console>`: code typed or exec()'d, not a file
+    return filename.startswith("<") and filename.endswith(">")
+
+
+# Checker: follows the author's own functions and classes
+
+
 class _Checker:
     def __init__(self, own: str) -> None:
         self.own = own
@@ -556,14 +744,17 @@ class _Checker:
         self._pending: list[_Target] = []
 
     def check(self, factory: Callable[..., object]) -> tuple[_Violation, ...]:
-        value = _unwrap(factory)
+        value = _callable(factory, self.own)
         self.seen[id(value)] = value
-        located = _locate(value, (), None)
-        if located == _NO_SOURCE:
-            return ()
+        try:
+            located = _locate(value, (), None)
+        except RecursionError:
+            located = _TOO_DEEP
         if isinstance(located, str):
             code = getattr(value, "__code__", None)
             file = str(getattr(code, "co_filename", "<unknown>"))
+            if located == _NO_SOURCE and _is_pseudo_file(file):
+                return ()
             line = int(getattr(code, "co_firstlineno", 1))
             self._unchecked(value, file, line, located, ())
         elif located is not None:
@@ -602,23 +793,42 @@ class _Checker:
     ) -> None:
         if _is_module(value):
             return
-        value = _unwrap(value)
+        value = _callable(value, self.own)
         if inspect.ismethod(value):
-            value = _unwrap(value.__func__)
+            value = _callable(value.__func__, self.own)
         if not (inspect.isfunction(value) or inspect.isclass(value)):
             value = type(value)
         if id(value) in self.seen:
             return
         self.seen[id(value)] = value
-        located = _locate(value, via, hint)
-        if isinstance(located, str):
+        try:
+            located = _locate(value, via, hint)
+        except RecursionError:
+            located = _TOO_DEEP
+        if located is None and inspect.isclass(value):
+            # a class made without a statement: check the author code it is made of
+            for part in self._made_of(value):
+                self.follow(part, via, unchecked, hint)
+        elif isinstance(located, str):
             unchecked(f"and could not be checked ({located})")
         elif located is not None:
             self._pending.append(located)
 
+    def _made_of(self, cls: type) -> list[object]:
+        parts = [_generic_origin(cls), *cls.__bases__]
+        return [
+            part
+            for part in parts
+            if inspect.isclass(part)
+            and _verdict_of(part, self.own).kind is _Kind.AUTHOR
+        ]
+
     def add(self, violation: _Violation) -> None:
         key = (violation.file, violation.line, violation.reference)
         self.violations.setdefault(key, violation)
+
+
+# Visitor: judges every reference in the located code
 
 
 class _Scope(NamedTuple):
@@ -627,6 +837,13 @@ class _Scope(NamedTuple):
     is_class: bool
     qualname: str
     imports: dict[str, object]
+
+
+class _Global(NamedTuple):
+    value: object
+    # the module it was read from by `from M import N`, and N
+    owner: object
+    name: str
 
 
 class _Visitor:
@@ -642,22 +859,29 @@ class _Visitor:
                 target.value, "__qualname__", getattr(target.value, "__name__", "?")
             )
         )
+        # iterative, so deep expressions do not reach the recursion limit
+        self._pending: list[tuple[ast.AST, list[_Scope], bool]] = []
 
     def run(self) -> None:
-        for root in self._target.roots:
-            self._visit_scope(root, [], root=True)
+        self._push(self._target.roots, [], root=True)
+        while self._pending:
+            node, scopes, root = self._pending.pop()
+            if root or isinstance(node, _SCOPES):
+                self._visit_scope(node, scopes, root)
+            else:
+                self._visit(node, scopes)
 
-    def _visit_all(self, nodes: Iterable[ast.AST], scopes: list[_Scope]) -> None:
-        for node in nodes:
-            self._visit(node, scopes)
+    # pushed in reverse, so they are visited in source order
+    def _push(
+        self, nodes: Iterable[ast.AST], scopes: list[_Scope], root: bool = False
+    ) -> None:
+        self._pending.extend((node, scopes, root) for node in reversed(list(nodes)))
 
     def _visit(self, node: ast.AST, scopes: list[_Scope]) -> None:
-        if isinstance(node, _SCOPES):
-            self._visit_scope(node, scopes)
-        elif isinstance(node, ast.Attribute):
+        if isinstance(node, ast.Attribute):
             chain = _chain(node)
             if chain is None:
-                self._visit_all(ast.iter_child_nodes(node), scopes)
+                self._push(ast.iter_child_nodes(node), scopes)
             else:
                 self._reference(node, chain[0], chain[1:], scopes)
         elif isinstance(node, ast.Name):
@@ -666,37 +890,37 @@ class _Visitor:
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             self._import(node, scopes, report=True)
         elif _is_type_checking(node):
-            self._visit_all(cast(ast.If, node).orelse, scopes)
+            self._push(cast(ast.If, node).orelse, scopes)
         elif isinstance(node, ast.AnnAssign):
+            parts: list[ast.AST] = []
             if not scopes or scopes[-1].is_class:
-                self._visit(node.annotation, scopes)
+                parts.append(node.annotation)
             if node.value is not None:
-                self._visit(node.value, scopes)
+                parts.append(node.value)
+            self._push(parts, scopes)
         elif isinstance(node, _TYPE_ALIAS):
-            where = scopes[-1].qualname if scopes else self._qualname
-            self._visit(
-                cast(ast.AST, cast(Any, node).value),
-                self._type_scope(node, scopes, where),
+            self._push(
+                [cast(ast.AST, cast(Any, node).value)],
+                self._type_scope(node, scopes, self._where(scopes)),
             )
         else:
-            self._visit_all(ast.iter_child_nodes(node), scopes)
+            self._push(ast.iter_child_nodes(node), scopes)
 
-    def _visit_scope(
-        self, node: ast.AST, scopes: list[_Scope], root: bool = False
-    ) -> None:
-        outer = scopes[-1].qualname if scopes else self._qualname
+    def _visit_scope(self, node: ast.AST, scopes: list[_Scope], root: bool) -> None:
+        outer = self._where(scopes)
         qualname = outer
+        groups: list[tuple[list[ast.AST], list[_Scope]]] = []
         if isinstance(node, _DEFINITIONS):
-            self._visit_all(node.decorator_list, scopes)
+            groups.append((list(node.decorator_list), scopes))
             if not root:
                 qualname = _nested(outer, node.name, scopes)
         elif isinstance(node, ast.Lambda) and not root:
             qualname = _nested(outer, "<lambda>", scopes)
         if isinstance(node, _FUNCTION_SCOPES):
-            self._visit_all(_defaults(node.args), scopes)
+            groups.append((list(_defaults(node.args)), scopes))
         scopes = self._type_scope(node, scopes, qualname)
         if isinstance(node, ast.ClassDef):
-            self._visit_all([*node.bases, *node.keywords], scopes)
+            groups.append(([*node.bases, *node.keywords], scopes))
         bound, declared_global = _bound(node)
         scope = _Scope(
             bound, declared_global, isinstance(node, ast.ClassDef), qualname, {}
@@ -705,15 +929,17 @@ class _Visitor:
         if isinstance(node, _DEFINITIONS):
             for statement in _imports(node.body):
                 self._import(statement, inner, report=False)
-            self._visit_all(node.body, inner)
+            groups.append((list(node.body), inner))
         elif isinstance(node, ast.Lambda):
-            self._visit(node.body, inner)
+            groups.append(([node.body], inner))
         elif isinstance(node, _COMPREHENSIONS):
             # the first iterable is evaluated in the enclosing scope
             first = node.generators[0]
-            self._visit(first.iter, scopes)
+            groups.append(([first.iter], scopes))
             rest = [c for c in ast.iter_child_nodes(node) if c is not first]
-            self._visit_all([*rest, first.target, *first.ifs], inner)
+            groups.append(([*rest, first.target, *first.ifs], inner))
+        for nodes, group_scopes in reversed(groups):
+            self._push(nodes, group_scopes)
 
     def _type_scope(
         self, node: ast.AST, scopes: list[_Scope], qualname: str
@@ -739,29 +965,36 @@ class _Visitor:
                 return "local", None
         return "global", None
 
-    def _resolve(self, name: str) -> tuple[bool, object, object]:
+    def _resolve(self, name: str) -> _Global | None:
         if name in self._target.closure:
-            return True, self._target.closure[name], None
+            return _Global(self._target.closure[name], None, name)
         namespace = self._target.namespace
         if name in namespace:
             value = namespace[name]
-            return True, value, self._from_module(name, value)
+            owner, attribute = self._from_module(name, value)
+            return _Global(value, owner, attribute)
         if hasattr(builtins, name):
-            return True, getattr(builtins, name), None
-        return False, None, None
+            return _Global(getattr(builtins, name), None, name)
+        return None
 
     # the module a global came from by `from M import N`, so data read off a
     # disallowed module is refused as it is through `M.N`
-    def _from_module(self, name: str, value: object) -> object:
+    def _from_module(self, name: str, value: object) -> tuple[object, str]:
         imported = self._target.source.from_imports.get(name)
         if imported is None:
-            return None
+            return None, name
         level, module, attribute = imported
-        module = self._absolute(level, module) or ""
-        loaded = sys.modules.get(module)
-        if loaded is None or getattr(loaded, attribute, None) is not value:
-            return None
-        return loaded
+        loaded = sys.modules.get(self._absolute(level, module) or "")
+        if loaded is None:
+            return None, name
+        try:
+            found = cast(object, getattr(loaded, attribute, None))
+        except RecursionError:
+            raise
+        except Exception:
+            # a module `__getattr__` that raises: judged by the module's name
+            return loaded, attribute
+        return (loaded, attribute) if found is value else (None, name)
 
     def _absolute(self, level: int, module: str) -> str | None:
         if not level:
@@ -781,10 +1014,12 @@ class _Visitor:
         if binding == "local":
             return
         owner: object = None
+        name = root
         if binding == "global":
-            found, value, owner = self._resolve(root)
-            if not found:
+            found = self._resolve(root)
+            if found is None:
                 return
+            value, owner, name = found
             if root in _BANNED_BUILTINS and value is getattr(builtins, root):
                 self._violate(
                     node,
@@ -794,19 +1029,21 @@ class _Visitor:
                     scopes,
                 )
                 return
-        values = [(value, owner)]
+        values = [_Global(value, owner, name)]
         for attribute in attributes:
             try:
-                values.append((_attribute(value, attribute), value))
+                values.append(_Global(_attribute(value, attribute), value, attribute))
+            except RecursionError:
+                raise
             except Exception:
                 break
-            value = values[-1][0]
-        for index, (value, owner) in enumerate(values):
+            value = values[-1].value
+        for index, (value, owner, name) in enumerate(values):
             # a module is a namespace on the way to what the chain reaches
             if _is_module(value) and index + 1 < len(values):
                 continue
             reference = ".".join([root, *attributes[:index]])
-            if not self._judge(node, reference, value, scopes, owner):
+            if not self._judge(node, reference, value, scopes, owner, name):
                 return
 
     def _judge(
@@ -816,15 +1053,40 @@ class _Visitor:
         value: object,
         scopes: list[_Scope],
         owner: object,
+        name: str,
     ) -> bool:
         try:
-            verdict, described = self._verdict(value, owner)
+            leaves = _leaves(value)
+        except RecursionError:
+            raise
+        except Exception:
+            leaves = [value]
+        for leaf in leaves:
+            if leaf is not value:
+                owner = None
+            if not self._judge_one(node, reference, leaf, scopes, owner, name):
+                return False
+        return True
+
+    def _judge_one(
+        self,
+        node: ast.AST,
+        reference: str,
+        value: object,
+        scopes: list[_Scope],
+        owner: object,
+        name: str,
+    ) -> bool:
+        try:
+            verdict, described = self._verdict(value, owner, name)
             covered = verdict.kind is _Kind.AUTHOR and (
                 # checked on its own when configured
                 _is_sentinel_factory(value)
                 # checked with its class
                 or (inspect.isclass(owner) and id(owner) in self._checker.seen)
             )
+        except RecursionError:
+            raise
         except Exception:
             verdict = _Verdict(_Kind.DISALLOWED, "which could not be inspected")
             described = f"a `{type(value).__qualname__}`"
@@ -843,17 +1105,19 @@ class _Visitor:
             )
         return True
 
-    def _verdict(self, value: object, owner: object) -> tuple[_Verdict, str]:
+    def _verdict(self, value: object, owner: object, name: str) -> tuple[_Verdict, str]:
         own = self._checker.own
         described = _describe(value)
         if id(value) not in _REFUSED and inspect.isclass(owner):
             # an attribute reached through an allowed class is judged by the class
-            if self._verdict(owner, None)[0].kind is _Kind.ALLOWED:
+            if self._verdict(owner, None, "")[0].kind is _Kind.ALLOWED:
                 return _ALLOWED, described
         verdict = _verdict_of(value, own)
-        if _is_module(owner):
-            name = cast(types.ModuleType, owner).__name__
-            stricter = _classify(name, own)
+        if _is_module(owner) and id(value) not in _core_values():
+            module = cast(types.ModuleType, owner).__name__
+            stricter = _classify(module, own)
+            if (module, name) in _ALLOWED_DATA:
+                return _ALLOWED, described
             if not _module_of(value):
                 # a builtin without a module, such as `codecs.strict_errors`
                 verdict = stricter
@@ -867,7 +1131,7 @@ class _Visitor:
                 ):
                     # data read off a disallowed module counts as that module
                     verdict = stricter
-                    described = f"a `{type(value).__qualname__}` in module `{name}`"
+                    described = f"a `{type(value).__qualname__}` in module `{module}`"
         if (
             verdict.kind is _Kind.ALLOWED
             and not self._in_sentinel
@@ -909,6 +1173,8 @@ class _Visitor:
                 continue
             try:
                 value = _attribute(loaded, alias.name)
+            except RecursionError:
+                raise
             except Exception:
                 submodule = f"{module}.{alias.name}"
                 if report and _exists(submodule):
@@ -916,7 +1182,7 @@ class _Visitor:
                 continue
             scopes[-1].imports[alias.asname or alias.name] = value
             if report:
-                self._judge(node, statement, value, scopes, loaded)
+                self._judge(node, statement, value, scopes, loaded, alias.name)
 
     # judged by name only: the check never imports anything
     def _unloaded(
@@ -950,9 +1216,14 @@ class _Visitor:
         return scopes[-1].qualname if scopes else self._qualname
 
 
+# Scope helpers
+
+
 def _exists(module: str) -> bool:
     try:
         return importlib.util.find_spec(module) is not None
+    except RecursionError:
+        raise
     except Exception:
         return False
 

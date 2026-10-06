@@ -147,6 +147,15 @@ def configure(module: ModuleType, name: str = "watched") -> object:
         ("import colorsys", "colorsys.rgb_to_hsv(0.1, 0.2, 0.3)"),
         ("import traceback", "traceback.format_exc()"),
         ("import io", "io.StringIO('a').read()\nio.BytesIO(b'a')"),
+        (
+            "import io",
+            "io.StringIO('a').seek(0, io.SEEK_END)\nio.SEEK_SET\nio.SEEK_CUR",
+        ),
+        (
+            "from collections import namedtuple\nimport enum\nPoint = namedtuple('Point', 'x y')\nColor = enum.Enum('Color', 'RED')",
+            "Point(1, 2).x\nColor.RED",
+        ),
+        ("import io\nfrom io import SEEK_END", "io.StringIO('a').seek(0, SEEK_END)"),
         *(
             [("import tomllib", "tomllib.loads('a = 1')")]
             if sys.version_info >= (3, 11)
@@ -222,6 +231,18 @@ CORE = "inspect_ai is portable only through `inspect_ai.core`"
             STDLIB,
         ),
         ("", "import subprocess\nsubprocess.run(['ls'])", "subprocess.run", STDLIB),
+        (
+            "import functools, os\nRUN = functools.partial(os.system, 'ls')",
+            "RUN()",
+            "RUN",
+            STDLIB,
+        ),
+        (
+            "import functools, os\nRUN = functools.partial(map, os.getenv)",
+            "RUN(['HOME'])",
+            "RUN",
+            STDLIB,
+        ),
         ("", "from os import environ", "from os import environ", STDLIB),
         ("", "from json import tool", "from json import tool", STDLIB),
         ("import os", "(lambda: os.getenv('HOME'))()", "os.getenv", STDLIB),
@@ -318,7 +339,6 @@ def test_disallowed_references_fail(
     "setup,body",
     [
         ("import builtins", "getattr(builtins, 'open')('f')"),
-        ("import functools, os\nRUN = functools.partial(os.system, 'ls')", "RUN()"),
         (
             "import os\nfrom typing import NamedTuple\nclass Holder(NamedTuple):\n    fn: object\nHOLDER = Holder(os.system)",
             "HOLDER.fn('ls')",
@@ -662,13 +682,18 @@ def test_a_jupyter_cell_is_checked() -> None:
         interactiveshell.InteractiveShell.clear_instance()
 
 
-def test_the_check_runs_once_per_factory(load: Load) -> None:
-    module = load(monitor_source("pass"))
+def test_a_reloaded_helper_is_rechecked(load: Load) -> None:
+    helpers = load("def helper() -> object:\n    return 1\n")
+    module = load(
+        monitor_source(f"{helpers.__name__}.helper()", f"import {helpers.__name__}")
+    )
     configure(module)
-    path = Path(cast(str, module.__file__))
-    path.write_text(path.read_text().replace("        pass", "        open('f')"))
+    path = Path(cast(str, helpers.__file__))
+    path.write_text("def helper() -> object:\n    return open('f')\n")
     linecache.clearcache()
-    configure(module)
+    importlib.reload(helpers)
+    with pytest.raises(PortabilityError, match="`open`"):
+        configure(module)
 
 
 def test_every_violation_is_reported_together(load: Load) -> None:
@@ -804,9 +829,12 @@ def test_bound_methods_and_lambdas_are_located(
         configure(load(monitor_source(body, f"import os\n{setup}")))
 
 
-def test_only_the_lambda_on_its_line_is_checked(load: Load) -> None:
+def test_every_lambda_on_its_line_is_checked(load: Load) -> None:
     setup = "import os\nPAIR = (os.getcwd, lambda: 1)\nCALL = PAIR[1]"
     configure(load(monitor_source("CALL()", setup)))
+    setup = "import os\nPAIR = (lambda: 1, lambda: os.getcwd())\nCALL = PAIR[0]"
+    with pytest.raises(PortabilityError, match="`os.getcwd`"):
+        configure(load(monitor_source("CALL()", setup)))
 
 
 @pytest.mark.parametrize(
@@ -843,6 +871,10 @@ def load_task_file(path: Path) -> ModuleType:
             "source changed since import",
         ),
         ("def helper(:\n", "unparseable source"),
+        (
+            "import os\n\ndef helper() -> None:\n    len('HOME')\n",
+            "source changed since import",
+        ),
     ],
 )
 def test_a_helper_whose_source_changed_could_not_be_checked(
@@ -881,9 +913,17 @@ class Helper(metaclass=Strict):
         configure(load(monitor_source("Helper().home()", setup)))
 
 
-def test_deeply_nested_code_could_not_be_checked(load: Load) -> None:
-    setup = f"def helper() -> int:\n    return {'-' * 600}1"
-    with pytest.raises(PortabilityError, match=r"`helper`.*could not be checked"):
+@pytest.mark.parametrize(
+    "expression",
+    [
+        f"{'-' * 1000}len(os.getenv('HOME'))",
+        " + ".join(["len(os.getenv('HOME'))", *(["1"] * 500)]),
+    ],
+    ids=["unary", "sum"],
+)
+def test_deeply_nested_code_is_checked(load: Load, expression: str) -> None:
+    setup = f"import os\ndef helper() -> int:\n    return {expression}"
+    with pytest.raises(PortabilityError, match=r"`os\.getenv`"):
         configure(load(monitor_source("helper()", setup)))
 
 
@@ -1000,3 +1040,147 @@ def helper{i}(text: str) -> float:
     start = time.perf_counter()
     configure(module)
     assert time.perf_counter() - start < 1.0
+
+
+def test_type_aliases_from_inspect_ai_pass(load: Load) -> None:
+    setup = """
+from pydantic import Field, TypeAdapter
+from inspect_ai.model import ChatMessage, StopReason
+from inspect_ai.util import StoreModel
+
+class History(StoreModel):
+    messages: list[ChatMessage] = Field(default_factory=list)
+    stop: StopReason | None = None
+
+ADAPTER = TypeAdapter(list[ChatMessage])
+"""
+    body = "context.store_as(History).messages\nADAPTER.validate_python([])\nTypeAdapter(list[ChatMessage])"
+    configure(load(monitor_source(body, setup)))
+
+
+@pytest.mark.parametrize(
+    "setup,reference",
+    [
+        ("import subprocess\nAlias = list[subprocess.Popen]", "subprocess"),
+        (
+            "import os\nfrom typing import Optional\nclass Helper:\n    def home(self) -> object:\n        return os.getenv('HOME')\nAlias = Optional[Helper]",
+            "os.getenv",
+        ),
+        *(
+            [("import subprocess\ntype Alias = list[subprocess.Popen]", "subprocess")]
+            if sys.version_info >= (3, 12)
+            else []
+        ),
+    ],
+)
+def test_a_type_alias_is_judged_by_the_types_it_names(
+    load: Load, setup: str, reference: str
+) -> None:
+    with pytest.raises(PortabilityError, match=re.escape(reference)):
+        configure(load(monitor_source("Alias", setup)))
+
+
+BASE = "class Base:\n    def dump(self) -> object:\n        return open('f')\n"
+
+
+@pytest.mark.parametrize(
+    "setup,body",
+    [
+        (
+            "from typing import Generic, TypeVar\nfrom pydantic import BaseModel\nT = TypeVar('T')\nclass Box(BaseModel, Generic[T]):\n    item: T\n    def dump(self) -> object:\n        return open('f')\nIntBox = Box[int]",
+            "IntBox(item=1)",
+        ),
+        (f"{BASE}Made = type('Made', (Base,), {{}})", "Made()"),
+        # before 3.12 the class's module is `types`, so it is judged as allowed
+        *(
+            [
+                (
+                    f"import dataclasses\n{BASE}Made = dataclasses.make_dataclass('Made', [('x', int)], bases=(Base,))",
+                    "Made(1)",
+                )
+            ]
+            if sys.version_info >= (3, 12)
+            else []
+        ),
+    ],
+)
+def test_a_class_made_without_a_statement_is_checked_through_its_bases(
+    load: Load, setup: str, body: str
+) -> None:
+    with pytest.raises(PortabilityError, match="`open`"):
+        configure(load(monitor_source(body, setup)))
+
+
+@pytest.mark.parametrize(
+    "setup",
+    [
+        # the outer class's body holds a method of a nested class of the same name
+        "class Helper:\n    class Helper:\n        def home(self) -> object:\n            return 1\n\n    home = Helper.home\n\n    def real(self) -> object:\n        return os.getcwd()",
+        "from dataclasses import dataclass, field\nif True:\n    @dataclass\n    class Helper:\n        home: object = field(default_factory=os.getcwd)\nelse:\n    @dataclass\n    class Helper:\n        home: object = None",
+    ],
+)
+def test_a_class_is_located_by_its_lines(load: Load, setup: str) -> None:
+    with pytest.raises(PortabilityError, match="`os.getcwd`"):
+        configure(load(monitor_source("Helper()", f"import os\n{setup}")))
+
+
+def test_a_factory_whose_file_is_gone_could_not_be_checked(load: Load) -> None:
+    module = load(monitor_source("pass"))
+    Path(cast(str, module.__file__)).unlink()
+    linecache.clearcache()
+    with pytest.raises(
+        PortabilityError, match=r"`watched`.*could not be checked \(no source\)"
+    ):
+        configure(module)
+
+
+def test_a_module_getattr_that_raises_is_judged_by_the_module(load: Load) -> None:
+    helpers = load(
+        """
+_served: list[str] = []
+
+def __getattr__(name: str) -> object:
+    if name != "LIMIT":
+        raise AttributeError(name)
+    if _served:
+        raise RuntimeError(name)
+    _served.append(name)
+    return 3
+"""
+    )
+    configure(
+        load(monitor_source("LIMIT + 1", f"from {helpers.__name__} import LIMIT"))
+    )
+
+
+WRAPPER = """
+import functools, os
+
+def logged(func):
+    @functools.wraps(func)
+    def wrapper(*args: object) -> object:
+        {wrapper}
+        return func(*args)
+
+    return wrapper
+
+def _plain() -> object:
+    return {plain}
+
+helper = logged(_plain)
+"""
+
+
+@pytest.mark.parametrize(
+    "wrapper,plain,reference",
+    [
+        ("os.getenv('HOME')", "1", "os.getenv"),
+        ("pass", "open('f')", "open"),
+    ],
+)
+def test_a_wrapper_and_what_it_wraps_are_checked(
+    load: Load, wrapper: str, plain: str, reference: str
+) -> None:
+    setup = WRAPPER.format(wrapper=wrapper, plain=plain)
+    with pytest.raises(PortabilityError, match=f"`{re.escape(reference)}`"):
+        configure(load(monitor_source("helper()", setup)))
