@@ -1,6 +1,6 @@
 # Host in a proxy: spike plan
 
-Status: plan, 2026-10-04. Nothing here is built. Workstream 4 in [workstreams.md](workstreams.md); the design it builds on is [sentinel-deployment.md](sentinel-deployment.md), which this document does not repeat.
+Status: plan, 2026-10-04; section 4's WASM phase updated from the WASM sidecar spike (sentinel #58, `spikes/wasm_sidecar/`) on 2026-10-06. The proxy host itself is not built. Workstream 4 in [workstreams.md](workstreams.md); the design it builds on is [sentinel-deployment.md](sentinel-deployment.md), which this document does not repeat.
 
 The goal is a sentinel host that runs inside, or beside, an HTTP proxy such as Envoy, so the same monitors and protocols that run in an eval can watch an agent's model traffic in deployment. Each section below names what has to exist, and the last lists the spikes in order.
 
@@ -48,10 +48,26 @@ The host interface after sentinel #47 is `HostContext(context, recorder, store)`
 ## 4. Where the Python runs, phased
 
 1. **An Envoy external processor (`ext_proc`) sidecar, in ordinary CPython.** Lowest risk. It proves sections 1 to 3 and the real latency and size limits (gRPC's 4 MB default) with no WASM unknowns. `ext_proc` is the Envoy route that sees both directions; `ext_authz` sees only requests. Build it transport-neutral, so phase 3 is the same host behind another transport.
-2. **WASM inside Envoy**: CPython on WASI via proxy-wasm. The first thing to prototype is whether CPython-on-WASI has a working asyncio loop over `wasi:io/poll` (deployment doc, open question 2); the runner relies on asyncio and on `run_sentinel`'s per-step context variable. If not, Asyncify. Then linear memory that only grows, the 10 to 20 MB CPython image, and instance pooling.
+2. **WASM inside the sidecar.** The sidecar embeds wasmtime and runs the sentinel as a CPython-in-WASM component built with componentize-py. Sentinel's `Host` is the guest ABI, written in WIT with JSON payloads (`generate`, `fetch` by endpoint name, `sleep`, `get`/`put`; later `ask_human` and `terminate`); the sidecar implements the imports as async host functions; instance pools are sized to workers, not to requests. proxy-wasm inside Envoy is a fallback only if a deployment cannot run a sidecar: there is no Python proxy-wasm SDK, and its callback ABI has no component-model async.
 3. **An RPC interface for other proxies**, such as LiteLLM proxy hooks or a generic JSON-RPC sidecar.
 
-The workstream says WASM first. Run the `ext_proc` sidecar beside it as the vehicle for sections 1 to 3; the WASM spike then only has to answer the asyncio question.
+Run the `ext_proc` sidecar as the vehicle for sections 1 to 3; WASM adds isolation, credentials kept by the host, tenants and hard resource limits to the same sidecar.
+
+**What spike #58 proved (2026-10-06).** A Rust host on wasmtime ran the unchanged `inspect_sentinel` runner, real `inspect_ai.core` types and pydantic in a component: two LLM monitors under `threshold()`, `no_network()` and `no_destruction()` in `concurrent()`. Details and numbers are in the deployment doc, "WASM", "pydantic-core for WASI" and "What the guest can reach"; in brief:
+
+- asyncio works in the guest on componentize-py's loop plus a 90-line patch, without Asyncify, and one instance served 50 concurrent steps with 200 overlapping host calls. The blocking world (the host suspends the guest on a fiber) works as well.
+- `run_sentinel`'s per-step context variable stays isolated across concurrent steps in one instance (section 6).
+- Warm step 0.38 ms (about 1.3× native), instantiation 0.38 ms, about 22 MiB of linear memory per instance, component 7.8 MiB with zstd.
+- The empty WASI context leaves the guest no files, environment, sockets, subprocesses or threads; epoch deadlines, fuel and memory caps hold.
+- A cancelled host call keeps running on the host, so budgets must count it.
+
+**Next for this phase:**
+
+- A production host: the `ext_proc` sidecar of phase 1 with the component embedded, instance pools, trap recovery, and per-step or per-conversation instance policy (deployment doc, open question 11).
+- A CI job that builds pydantic-core for WASI for each supported pydantic release and the CPython componentize-py embeds.
+- componentize-py, wasmtime and wasi-sdk pinned together; the component-model async ABI still changes between releases.
+- Upstreaming the loop fixes to componentize-py (`call_soon(context=None)`, timers, `get_task_factory`, and subtask cancellation), carrying `loop_patch.py` and testing it under the conformance suite until then.
+- The guest-import changes in `inspect_ai` and `inspect_sentinel` that remove the spike's shims, part of workstream 1 ([inspect-core.md](inspect-core.md), "What a WASM guest imports").
 
 ## 5. Packaging and configuration
 
@@ -65,7 +81,7 @@ The workstream says WASM first. Run the `ext_proc` sidecar beside it as the vehi
 - What `Context`'s fields mean in a proxy, and which may be `None`.
 - `fetch`, and whether there is an out-of-band `terminate`.
 - `AfterToolCall` marked lossy in a proxy, perhaps as a fidelity field on the step.
-- `run_sentinel`'s per-step context variable verified under the WASM event loop; it is tested under CPython asyncio and trio.
+- `run_sentinel`'s per-step context variable under the WASM event loop: verified by spike #58, which ran 20 concurrent steps in one instance; it is also tested under CPython asyncio and trio.
 
 ## 7. Operations
 
@@ -84,6 +100,7 @@ The workstream says WASM first. Run the `ext_proc` sidecar beside it as the vehi
 
 1. Provider bodies to steps for one provider (Anthropic or OpenAI), on converters moved into `inspect_core`.
 2. An `ext_proc` sidecar running `run_sentinel` with an `observe_only()` monitor, then a rule that rejects; measure latency.
-3. The asyncio-on-WASI prototype, in parallel with 1 and 2.
+3. The asyncio-on-WASI prototype. Done: spike #58, 2026-10-06 (section 4).
 4. The keyed store and the audit queue.
 5. Wire actions for `modify` and `reject` on tool calls.
+6. The WASM sidecar as a production host: the phase 1 sidecar embedding wasmtime and the sentinel component, with a CI build of pydantic-core for WASI and pinned toolchain versions (section 4, "Next for this phase").

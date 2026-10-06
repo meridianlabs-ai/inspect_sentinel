@@ -1,6 +1,6 @@
 # Workstreams
 
-Areas of sentinel that can be owned separately, as of 2026-10-05. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 6), next (7 to 11), lower priority (12 to 14), then done; 5 and 6 were added on 2026-10-05. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred".
+Areas of sentinel that can be owned separately, as of 2026-10-06. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 6), next (7 to 11), lower priority (12 to 14), then done; 5 and 6 were added on 2026-10-05. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred".
 
 Work on your own branches and open PRs into `feature/sentinel`, in inspect_ai and in ts-mono alike. Pushing directly to the shared branch collides.
 
@@ -14,6 +14,7 @@ Extract Inspect's wire types (`ChatMessage`, `ToolCall`, `ModelOutput` and what 
 - `@monitor` and `@protocol` register through the shared registry with no import-order hazard.
 - The wire types get a contract, which the proxy and codegen work in [sentinel-deployment.md](sentinel-deployment.md) need.
 - Sentinel can release against a version floor of the leaf package rather than an inspect_ai branch.
+- A WASM guest can run `run_sentinel` with only `inspect_ai.core`, pydantic and anyio. The WASM sidecar spike (sentinel #58, 2026-10-06) needed about 250 lines of stand-ins for what sentinel imports beyond core, and an empty `inspect_ai/__init__`. Making `inspect_ai.core` importable on its own and sentinel's other imports lazy or interface-based is part of this workstream, not a separate sentinel PR (maintainer, 2026-10-06): the registry primitives and `SentinelAction`/`SentinelSuspicion` into core, a host-supplied store interface with `StoreModel` in core, `LimitExceededError` lazy or checked by name, `Model` `TYPE_CHECKING`-only, and configuration loading (`SentinelConfig`, `SentinelEntry`, fsspec, yaml) split off the runner's import path. [inspect-core.md](inspect-core.md), "What a WASM guest imports", gives what each import is used for and the proposed change.
 
 inspect_core is a second package inside the inspect_ai repository (UK AISI). When names move there, inspect_sentinel and inspect_ai re-export them, so user imports do not change (maintainer, 2026-10-02).
 
@@ -45,6 +46,8 @@ Prior art: Kai's structured-approval approver in Petri, built on the LLM scanner
 **Priority:** high. **Owner:** Pete. **Design:** [sentinel-deployment.md](sentinel-deployment.md); spike plan in [proxy-host.md](proxy-host.md).
 
 Raised by the maintainer on 2026-10-02: a technical spike implementing a monitor host in a proxy, WASM hosting in Envoy first, then an RPC-based interface in another proxy that supports one. Includes the changes to the `Host` interface, `Context` and the rest that proxy deployment needs. It is the later, larger project in workstream 9; coordinate with the bridged-agent work there and with workstream 11.
+
+The WASM sidecar spike (sentinel #58, 2026-10-06) answered the WASM question: the unchanged sentinel runner runs as a CPython-in-WASM component in a wasmtime host, with asyncio, many concurrent steps per instance, and an empty sandbox. The WASM phase is now an `ext_proc` sidecar embedding wasmtime rather than proxy-wasm inside Envoy; [proxy-host.md](proxy-host.md), section 4, has the result and what is next.
 
 ## 5. Landing and the first release
 
@@ -140,6 +143,8 @@ Raised by the maintainer on 2026-10-02 as an AST-based linter. Decided by the ma
 - **CI and deployment.** Enumerating the portable set and building it (the WASM build as a CI target, mitigation 3, and the proxy bundle in [proxy-host.md](proxy-host.md), section 5) consume the same check. There is no separate linter.
 
 Adds `portable=` to the decorators and otherwise consumes them and the module layout without changing them; the proxy work in workstream 4 decides what counts as bundleable.
+
+In a WASM deployment the sandbox is the real enforcement and this check is early feedback: spike #58 measured that an empty WASI context leaves a guest no files, environment, sockets, subprocesses or threads ([sentinel-deployment.md](sentinel-deployment.md), "What the guest can reach").
 
 Decided by the maintainer on 2026-10-05:
 

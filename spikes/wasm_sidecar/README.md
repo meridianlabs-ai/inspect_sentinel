@@ -2,6 +2,13 @@
 
 Status: spike, 2026-10-06. Not for merge. Answers the WASM question in `design/proxy-host.md` (section 4, phase 2) and open question 2 of `design/sentinel-deployment.md`.
 
+**Folded into design docs (2026-10-06):**
+
+- `design/sentinel-deployment.md`: the asyncio answer, the blocking model, host-call cancellation and the measurements ("WASM"); pydantic-core ("pydantic-core for WASI"); the sandbox and resource limits ("What the guest can reach"); the Envoy row and paragraph ("Deployment recap"); the pre-initialisation note ("Keeping monitors portable"); "Status"; open question 2 answered and questions 11 to 15 from this spike's open questions.
+- `design/proxy-host.md`: phase 2 as WASM inside the sidecar, what this spike proved and what is next (section 4); the context-variable check (section 6); the spike list (section 9).
+- `design/inspect-core.md`: the M4 import findings, what each import is used for and the proposed change, owned by workstream 1 ("What a WASM guest imports").
+- `design/workstreams.md`: workstreams 1, 4 and 11.
+
 ## Summary
 
 **It works, including the async part.** A host process loads a WebAssembly component that contains CPython 3.14, pydantic, the real `inspect_ai.core` types and the unchanged `inspect_sentinel` runner. It feeds the component a step as JSON. The monitors call back into the host for inference (`generate`, mocked), and the component returns a decision with its records.
@@ -202,7 +209,7 @@ REPORT 0 {"error": "invalid step", "detail": [{"type": "dict_type", "loc": ["cal
 | `_report` | `inspect_ai.event.SentinelAction, SentinelSuspicion` | **no**; `event/_sentinel.py` imports `event._base` and so the event tree | two type aliases copied |
 | `_context`, `_host` | `inspect_ai.util.Store, StoreModel` | **no**; `_store.py` imports jsonpatch and the event machinery | a dict `Store`; `StoreModel` copied verbatim |
 | `_runner` | `inspect_ai.util.LimitExceededError` | **no**; `_limit.py` imports the logger, transcript and samples | an `Exception` subclass |
-| `_decorators`, `_runner`, `_resolve`, `_validate`, `_config` | `inspect_ai._util.registry` (11 names) | **no**; imports entry points and package metadata, and lazily most of inspect_ai | a small attribute-plus-dict registry (about 100 lines) |
+| `_decorators`, `_runner`, `_resolve`, `_validate`, `_config` | `inspect_ai._util.registry` (15 names) | **no**; imports entry points and package metadata, and lazily most of inspect_ai | a small attribute-plus-dict registry (about 100 lines) |
 | `_config` | `inspect_ai.log.SentinelConfig, SentinelEntry` | **no** | minimal models (config loading not exercised) |
 | `_config` | `inspect_ai.util.resource`, `inspect_ai._util.file.exists, local_path` | **no**; fsspec and s3fs | stubs |
 | `_config` | `yaml` | third-party | PyYAML's pure-Python package works; the C accelerator is not built |
