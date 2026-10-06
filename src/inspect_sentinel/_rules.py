@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterable
 from typing import cast
 
-from inspect_ai.tool import ToolCall
+from inspect_ai.core import ToolCall
 
 from ._step import AfterToolCall
 
