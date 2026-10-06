@@ -551,11 +551,11 @@ class _Visitor:
                 )
             return None
         value: object = loaded
-        if name is not None and name != "*":
+        if name is not None:
             try:
                 value = _attribute(loaded, name)
-            except Exception:
-                value = sys.modules.get(f"{module}.{name}", loaded)
+            except AttributeError:
+                pass
         self._judge(node, statement, value, scopes, loaded)
         return value
 
@@ -635,7 +635,7 @@ def _bound(scope: ast.AST) -> frozenset[str]:
         elif isinstance(node, ast.Import):
             names.update(a.asname or a.name.partition(".")[0] for a in node.names)
         elif isinstance(node, ast.ImportFrom):
-            names.update(a.asname or a.name for a in node.names if a.name != "*")
+            names.update(a.asname or a.name for a in node.names)
         elif isinstance(node, ast.ExceptHandler) and node.name:
             names.add(node.name)
         elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:

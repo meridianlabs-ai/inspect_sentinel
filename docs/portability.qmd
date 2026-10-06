@@ -38,7 +38,7 @@ Names that are parameters or local variables are not resolved, so a factory para
 
 ## When the check runs
 
-When the factory is called: in Python when you configure the monitor, and from a configuration file when it is resolved, so the error comes before the eval starts. Importing a module that defines a monitor does not run the check. A factory is checked once, the first time it is called. Without source, as for a monitor defined in a notebook or the REPL, the check is skipped.
+When the factory is called: in Python when you configure the monitor, and from a configuration file when it is resolved, so the error comes before the eval starts. Importing a module that defines a monitor does not run the check. A factory is checked once, the first time it is called. The check reads source, so it runs for a monitor defined in a Jupyter notebook, whose cells IPython keeps; without source, as in the plain Python REPL or for code run with `exec()`, it is skipped.
 
 A failure raises `PortabilityError`, which lists every disallowed reference: the file and line, the function, the name, what it resolved to, and why it is not allowed.
 

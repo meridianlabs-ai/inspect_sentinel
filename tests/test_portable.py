@@ -517,9 +517,20 @@ def decides_portably() -> Protocol:
 
 def test_without_source_the_check_is_skipped() -> None:
     namespace: dict[str, Any] = {}
-    code = compile(monitor_source("open('f')"), "<notebook>", "exec")
+    code = compile(monitor_source("open('f')"), "<string>", "exec")
     exec(code, namespace)
     namespace["watched"]()
+
+
+def test_a_jupyter_cell_is_checked() -> None:
+    interactiveshell = pytest.importorskip("IPython.core.interactiveshell")
+    shell = interactiveshell.InteractiveShell.instance()
+    try:
+        shell.run_cell(monitor_source("open('f')"))
+        with pytest.raises(PortabilityError, match="`open`"):
+            shell.run_cell("watched()").raise_error()
+    finally:
+        interactiveshell.InteractiveShell.clear_instance()
 
 
 def test_the_check_runs_once_per_factory(load: Load) -> None:
