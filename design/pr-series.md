@@ -8,13 +8,18 @@ The minimal surface that lets `inspect_ai` connect: the types a dispatcher const
 
 ## Decisions
 
-- **Surface only.** Sentinel ships types and functions; `inspect_ai` wiring comes after. Verified by unit tests with fake `Host` and `Recorder`.
+The decisions that stand, as of 2026-10-06. The entries below record how each was reached; the PR sections name things as they were when each landed.
+
+- **Sentinel is the surface; inspect_ai hosts it.** Sentinel ships types, decorators, the runner and the protocols, tested with fake `Host` and `Recorder`. inspect_ai's dispatcher, `Host` and `Recorder` live on inspect_ai's `feature/sentinel`.
 - **Real registration.** `@monitor` and `@protocol` register under `"monitor"` and `"protocol"`, added to `inspect_ai`'s `RegistryType` by PR 0 ([inspect_ai#5514](https://github.com/UKGovernmentBEIS/inspect_ai/pull/5514), branch `feature/sentinel`). Sentinel's `inspect-ai` git ref points at that branch until it merges.
-- **Tool stages only.** `BeforeToolCall` and `AfterToolCall` with the design's full fields; `Step` is their union. The generate stages arrive with the generate-side dispatcher. The schema may change freely until there are users.
-- **Recording is the runner's, through a separate interface.** `Host` is the author-facing ABI (`generate` only for now). `Recorder` has four methods: `record`, called by the runner for every participating child; `cancelled`, called for a child cancelled before it reported; `bypassed`, called for a protocol a descendant's `decide_final()` ended the step past; and `superseded`, called for a `decide_final()` decision that lost a race to another in the same layer or was outranked by an exception there. This departs from the earlier `sentinel-deployment.md`, whose `Host` ABI carried `record`; that doc now says recording is not on the ABI.
-- **Two context types.** `Context` is what authors see. `RunnerContext(Context)` adds `recorder` and `child()`; the dispatcher builds it, `dataclasses.replace` preserves it down the layers, and the runner raises `TypeError` if handed a bare `Context`.
-- **Author surface vs integration surface.** `__init__` exports only what an author writes against, including `Reported` and `Report`, since `step.escalations` and the runner's results are typed with them. `inspect_sentinel/_integration.py` re-exports what the dispatcher needs (`RunnerContext`, `Recorder`, `validate_instance_name`, `step_types`, `resolve_sentinel`, `Sentinels`, `run_sentinel`, and since S6 `sentinel_from_config` and `config_from_sentinel`); `inspect_ai` imports from that module only, so refactors have one file to keep stable.
-- **Shipped protocols:** `observe`, `concurrent`, `threshold`. `sequential` and `human` are follow-ups.
+- **Tool stages only, for now.** `BeforeToolCall` and `AfterToolCall`; `Step` is their union. The generate stages are sentinel #42, a draft.
+- **`Host` is the author-facing ABI**: `generate` and `ask_human`, with `fetch` planned ([Context and Host](#context-and-host), [human()](#human)).
+- **Recording is the runner's, through `Recorder`**, which the host implements and authors never call. Five methods, each taking the instance's `Context` and its factory's registry name: `record`, for every participating child's report; `failed`, for a monitor that raised ([Failure policy](#failure-policy)); `cancelled`, for a child cancelled before it reported; `bypassed`, for a protocol a descendant's `decide_final()` ended the step past; and `superseded`, for a `decide_final()` decision that lost a race or was outranked by an exception in the same layer. Recording is not on the `Host` ABI.
+- **`Context` is the author's, `HostContext` the host's.** `Context` is immutable and has `path`, `host`, `eval` (an `EvalContext`, `None` outside an eval) and `store_as()`, and no private fields. The host passes `HostContext(context, recorder, store)` to `run_sentinel`, which keeps the runner's state in a per-step context variable ([Interface cleanup](#interface-cleanup), [Eval-only context](#eval-only-context-under-contexteval)).
+- **Author surface vs integration surface.** `__init__` exports what an author writes against, including `Reported`, `Report`, `Failed`, `MonitorFailedError` and `PortabilityError`. `_integration.py` re-exports what inspect_ai needs (`HostContext`, `Recorder`, `validate_instance_name`, `step_types`, `resolve_sentinel`, `Sentinels`, `run_sentinel`, `sentinel_from_config`, `config_from_sentinel`); inspect_ai imports from that module only.
+- **Shipped protocols:** `observe_only`, `concurrent`, `sequential`, `threshold` and `human`. `Task(sentinel=)` requires a protocol: monitors alone are an error naming `observe_only()` and `threshold()`.
+- **Imports from `inspect_ai.core`** where a name is there: the wire types since sentinel #59, `SentinelAction` and `SentinelSuspicion` since #60 ([inspect_ai.core imports](#imports-from-inspect_aicore)).
+- **Portable by default.** `portable=True` is checked when a factory is called ([Portable monitors](#portable-monitors-and-protocols-are-checked-when-configured)).
 
 ## Layout
 
@@ -22,26 +27,31 @@ The minimal surface that lets `inspect_ai` connect: the types a dispatcher const
 src/inspect_sentinel/
   __init__.py       author-facing exports
   _step.py          BeforeToolCall, AfterToolCall, Step
-  _report.py        Suspicion, Action, Observation, Decision, Report, Reported
-  _context.py       Context, validate_instance_name
-  _host.py          Host, HumanAnswer, Recorder, HostContext, the step context variable
+  _report.py        Suspicion, Action, Observation, Decision, Report, Reported,
+                    Failed
+  _context.py       Context, EvalContext, validate_instance_name
+  _host.py          Host, HumanAnswer, Recorder, HostContext, the per-step
+                    context variable
   _types.py         Monitor, Protocol, Monitors, Protocols, Sentinel, Sentinels,
                     MonitorGroup, ProtocolGroup
   _decorators.py    @monitor, @protocol, registration, signature validation,
                     the direct-call guard, step_types
-  _results.py       Observations, Decisions, Reports
+  _portable.py      the portable=True check, PortabilityError
+  _results.py       Observations, Decisions, Reports, MonitorFailedError
   _runner.py        run_monitors, run_protocols, run_children, run_sentinel
   _validate.py      run-time checks: validate_decision_shape, per-child checks,
                     named_children
   _final.py         decide_final, Final
-  _protocols/       observe, concurrent, threshold, one module each
+  _rules.py         call_text, tool_matches, find_words, result_text
+  _protocols/       observe_only, concurrent, sequential, threshold, human,
+                    one module each
   _resolve.py       resolve_sentinel
   _config.py        sentinel_from_config, config_from_sentinel
   _integration.py   the contract inspect_ai imports
   _entrypoint.py    inspect_ai entry point; imports _protocols so they register
 ```
 
-The layout as of [Module layout](#module-layout); the PR sections below name the modules as they were when each landed.
+The layout as of 2026-10-06. [Module layout](#module-layout) records the restructure of 2026-09-30; the PR sections below name the modules as they were when each landed.
 
 ## PR 1: types
 
@@ -225,7 +235,7 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 - `Reports`, what `run_children` returns, is a `NamedTuple` of `observations` and `decisions`, so `observations, decisions = await run_children(...)` works beside named access.
 - The planned ordered composition is `sequential`, not `chain`: it pairs with `concurrent` and does not collide with `inspect_ai.solver.chain`. It shipped 2026-10-01 (see "sequential()").
 - `Reported` keeps its name. It was reviewed as a possible verb form of `Report`; read as an adjective on its type parameter, like `typing.Annotated`, `Reported[Decision]` is a reported decision: the decision together with the identity of the instance that reported it. `ChildReport` and `Attributed` were considered.
-- Vocabulary: a *step* is the payload a monitor receives, a *stage* is its type (`BeforeToolCall`, `AfterToolCall`, and the generate stages), and "a point in the loop" is only an informal gloss on stage. `Context` and `Step` are unrelated to inspect_ai's `StepEvent` and `step()`. A monitor judges a call against `step.input`, exactly what the model was sent; `context.input` is the sample's input, the assignment.
+- Vocabulary: a *step* is the payload a monitor receives, a *stage* is its type (`BeforeToolCall`, `AfterToolCall`, and the generate stages), and "a point in the loop" is only an informal gloss on stage. `Context` and `Step` are unrelated to inspect_ai's `StepEvent` and `step()`. A monitor judges a call against `step.input`, exactly what the model was sent; `context.input` is the sample's input, the assignment (*superseded: now `context.eval.sample_input`; [Eval-only context](#eval-only-context-under-contexteval)*).
 
 ## Explicit groups, decorator arguments and the call guard
 
@@ -251,16 +261,16 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 
 Decided with the user 2026-09-30, before the first release, so nothing is kept for compatibility:
 
-- The `Context` docstrings say what fills: `task_description` and `sample_description` are None until inspect_ai has `Task(description=)` and `Sample(description=)`, and `target` is None until the `target=True` opt-in exists (both under [Deferred](#deferred)). `Context.store` is the whole sample store, the agent's state included, and is not namespaced; `store_as` is the namespaced way in.
+- The `Context` docstrings say what fills: `task_description` and `sample_description` are None until inspect_ai has `Task(description=)` and `Sample(description=)`, and `target` is None until the `target=True` opt-in exists (both under [Deferred](#deferred)). `Context.store` is the whole sample store, the agent's state included, and is not namespaced; `store_as` is the namespaced way in. *Superseded: `Context.store` was removed and the descriptions moved to `EvalContext` ([Interface cleanup](#interface-cleanup), [Eval-only context](#eval-only-context-under-contexteval)).*
 - `store_as` is keyed by the instance path, so renaming a mapping key or wrapping a monitor in another layer moves its state. The docs say so; there is no `namespace=` override.
 - `Host.generate(input, *, model: str | Model | None = None, role: str | None = None, tools=None, config=None)`. `model` is always a model (a name or an instance), `role` always a role, and passing both is an error the host raises. With neither, the host uses the `monitor` role; if that role is not configured, it falls back to the agent's model and logs a warning once per eval naming the role to set. LLM monitors expose `model=` and `role=` on their factory, `role` defaulting to `"monitor"`, and pass them through. `defer_to_trusted` and `resample` will use a `trusted` role, so a task declares `monitor` and `trusted` separately with `Task(model_roles=...)` or `--model-role`. The inspect_ai `Host` implementation follows in inspect_ai.
-- The docs no longer call `context.host` the only route out of a monitor. Outbound HTTP is planned as `fetch` through named endpoints (`sentinel-deployment.md`); meanwhile an in-process monitor may call inspect_ai APIs directly, such as `sandbox()` or `logging`, at the cost of portability to a proxy, which a future `portable=False` will declare.
+- The docs no longer call `context.host` the only route out of a monitor. Outbound HTTP is planned as `fetch` through named endpoints (`sentinel-deployment.md`); meanwhile an in-process monitor may call inspect_ai APIs directly, such as `sandbox()` or `logging`, at the cost of portability to a proxy, which a future `portable=False` will declare. *Superseded: `portable=` exists, default `True` ([Portable monitors](#portable-monitors-and-protocols-are-checked-when-configured)).*
 
 ## Root and escalate
 
 Decided with the user 2026-09-30, before the first release, so nothing is kept for compatibility. This replaces PR 4's "every configuration wrapped" rule.
 
-- **A lone protocol is the root, unwrapped.** `resolve_sentinel` returns a single `Protocol` as the root itself, so `Task(sentinel=threshold(suspicion(), ...))` records `threshold` at the empty path and its monitor at `suspicion`. A list or mapping still resolves to `concurrent(...)`, and monitors alone to `observe(...)` with the warning. A lone `ProtocolGroup` is wrapped in `concurrent`: the root returns the step's one outcome, `run_sentinel` runs one function, and combining several functions' decisions is `concurrent`'s job. The root records its own decision at the empty path, as every layer does. Configuration follows: `SentinelConfig` accepts one entry, `config_from_sentinel` records a lone instance as one entry, and `sentinel_from_config` builds one entry, or a bare registered name, as a lone instance, so a retry records the same paths. A mapping is one entry when its `name` is a string and a mapping of instance names when every value is an entry; anything else is an error naming the layer.
+- **A lone protocol is the root, unwrapped.** `resolve_sentinel` returns a single `Protocol` as the root itself, so `Task(sentinel=threshold(suspicion(), ...))` records `threshold` at the empty path and its monitor at `suspicion`. A list or mapping still resolves to `concurrent(...)`, and monitors alone to `observe(...)` with the warning (*superseded: monitors alone are an error naming `observe_only()` and `threshold()`; [Interface cleanup](#interface-cleanup)*). A lone `ProtocolGroup` is wrapped in `concurrent`: the root returns the step's one outcome, `run_sentinel` runs one function, and combining several functions' decisions is `concurrent`'s job. The root records its own decision at the empty path, as every layer does. Configuration follows: `SentinelConfig` accepts one entry, `config_from_sentinel` records a lone instance as one entry, and `sentinel_from_config` builds one entry, or a bare registered name, as a lone instance, so a retry records the same paths. A mapping is one entry when its `name` is a string and a mapping of instance names when every value is an entry; anything else is an error naming the layer.
 - **`escalate` outranks `continue`.** The precedence is `terminate > reject > modify > escalate > continue`, in `PRECEDENCE`, `Decisions.strongest()` and `concurrent`. A peer's `continue` cannot override an `escalate`, a stronger decision still wins, and a layer whose strongest decision is `escalate` returns `escalate`, its explanation listing the votes when several decided. An `escalate` does not contest a `modify`. `sequential`, when it lands, returns the last escalate when every deciding link escalated, so it passes up the same way.
 - **A top-level escalate proceeds.** When the root's decision is `escalate`, nobody is left to hand it to: the inspect_ai dispatcher proceeds as for `continue`, the escalate stays recorded as the root's decision, and the host warns once per eval that `sequential([..., human()])` sends escalations to a person. `run_sentinel` returns the escalate; the host decides what an unresolved escalate means.
 - **Runners stay three.** `run_children` runs anything; `run_monitors` and `run_protocols` are typed shortcuts whose parameter and return types catch misuse. Docs only.
@@ -269,7 +279,7 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 
 Decided with the user 2026-09-30, before the first release, so nothing is kept for compatibility:
 
-- `Action` and `Suspicion` are defined once, in inspect_ai, as `SentinelAction` and `SentinelSuspicion` exported from `inspect_ai.event` beside `SentinelEvent`. inspect_sentinel re-exports them under its own names, `Action` and `Suspicion`, with the same validation. inspect_ai's drift test that compared the two copies is gone.
+- *Superseded in part by sentinel #60: sentinel imports them from `inspect_ai.core`, and `inspect_ai.event` re-exports them ([Imports from inspect_ai.core](#imports-from-inspect_aicore)).* `Action` and `Suspicion` are defined once, in inspect_ai, as `SentinelAction` and `SentinelSuspicion` exported from `inspect_ai.event` beside `SentinelEvent`. inspect_sentinel re-exports them under its own names, `Action` and `Suspicion`, with the same validation. inspect_ai's drift test that compared the two copies is gone.
 - `SentinelEntry` and `SentinelConfig` move into inspect_ai (`inspect_ai._sentinel._config`, exported from `inspect_ai.log`), with the parsing of one entry, a list or a mapping. `EvalConfig.sentinel` is typed `SentinelConfig | None`, and logs load without inspect_sentinel. `_config.py` imports them from there; `sentinel_from_config` and `config_from_sentinel` stay in inspect_sentinel.
 - `SentinelEvent.kind` is split in two. `kind` is the report family (`observation` or `decision`), and `status` says what happened to the report (`reported`, `cancelled`, `bypassed` or `superseded`). A `cancelled` event's kind comes from the registry type of the layer's factory. A `bypassed` event is always a decision, and only a decision can be `superseded`.
 
@@ -299,13 +309,13 @@ Decided 2026-10-01. Each function a `@monitor` or `@protocol` factory returns ha
 Decided with the user 2026-10-01, before the first release, so nothing is kept for compatibility:
 
 - `Host.generate` resolves `model` and `role` as inspect's `get_model(model=, role=)` does instead of raising when both are given: the role's model if that role is configured for the task or eval, otherwise `model`, otherwise the agent's model with the one-time warning. With neither, the role is `monitor`. An LLM monitor's factory takes `model=None, role="monitor"` and passes both straight through.
-- `Context.input_text` is the sample input as one string: `input` itself if a string, else its messages' text joined with newlines.
+- *Superseded: renamed `sample_input_text` ([Interface cleanup](#interface-cleanup)), then moved to `context.eval.sample_input_text` ([Eval-only context](#eval-only-context-under-contexteval)).* `Context.input_text` is the sample input as one string: `input` itself if a string, else its messages' text joined with newlines.
 - The examples pass a single instance where they mean one, `threshold(suspicion(), reject_at=0.8)`, rather than a one-element list.
 - `concurrent` lists the votes in its explanation only when they are not all `continue`; an all-continue layer keeps the winner's own explanation, if any.
 
 ## sequential()
 
-Shipped 2026-10-01, the first of the `sequential()` and `human()` series. `sequential(children)` takes what `concurrent` takes, annotates `Step`, and runs each child through `run_children` with a one-entry mapping, so each link is recorded under its own name and a link that does not watch the stage is not invoked. The first decision other than `escalate` is returned and later links do not run; an `escalate` is appended to `step.escalations` for the next link. The list starts empty for each run of the chain, so escalations do not cross layers. Monitors are recorded and fall through. All-escalate returns the last escalate, monitors only `continue`, nothing participating `None`. An empty children list is a `ValueError` when the factory is called; YAML nests the links under `children:`. With it, decided with the user 2026-10-01, `Child` and `Children` are replaced by `Sentinel` (a monitor, protocol or group) and `Sentinels` (one sentinel, or a sequence or mapping of them), both exported; `Sentinels` is what `Task(sentinel=)`, `concurrent`, `sequential` and `run_children` take. The check that a `human()` directly under `concurrent` is an error is not stubbed: with no `human()` it would be dead code, so it lands with `human()`.
+Shipped 2026-10-01, the first of the `sequential()` and `human()` series. `sequential(children)` takes what `concurrent` takes, annotates `Step`, and runs each child through `run_children` with a one-entry mapping, so each link is recorded under its own name and a link that does not watch the stage is not invoked. The first decision other than `escalate` is returned and later links do not run; an `escalate` is appended to `step.escalations` for the next link. The list starts empty for each run of the chain, so escalations do not cross layers. Monitors are recorded and fall through. All-escalate returns the last escalate, monitors only `continue`, nothing participating `None`. An empty children list is a `ValueError` when the factory is called; YAML nests the links under `children:`. With it, decided with the user 2026-10-01, `Child` and `Children` are superseded by `Sentinel` (a monitor, protocol or group) and `Sentinels` (one sentinel, or a sequence or mapping of them), both exported; `Sentinels` is what `Task(sentinel=)`, `concurrent`, `sequential` and `run_children` take. The check that a `human()` directly under `concurrent` is an error is not stubbed: with no `human()` it would be dead code, so it lands with `human()`.
 
 ## human()
 
@@ -412,6 +422,10 @@ The `portable=True` check ([workstreams.md](workstreams.md), workstream 11), as 
 - **Docs.** A Portable Monitors page (`docs/portability.qmd`): what is checked and why, what is not and why, the depth and its limit, the sandbox as the enforcement, read-only bundled files, configuration through factory parameters, and module-level code running at build time. A section on the Monitors page and the decorator docstrings.
 - **Known limits** (listed in `docs/portability.qmd`): helpers, classes, decorators and partials outside the factory are not followed; a name assigned in the factory other than by an import is local throughout; dynamic access (`getattr()`, `globals()`, instance attributes, containers); a package with optional compiled speedups (PyYAML) is refused although its pure-Python fallback would work; a factory whose source cannot be parsed or located is refused as not checked; a changed `__module__`. `Host.fetch` is still to build, so a monitor that needs HTTP is not portable yet.
 
+## Imports from `inspect_ai.core`
+
+Sentinel #59 and #60, merged 2026-10-06, toward a sentinel that needs only `inspect_ai.core` in a proxy ([workstreams.md](workstreams.md), workstream 1). #59 imports the ten wire types already in `inspect_ai.core` from there (`ChatMessage`, `ChatMessageTool`, `GenerateConfig`, `ModelOutput`, `Reference`, `Target`, `ToolCall`, `ToolCallView`, `ToolInfo`, `ToolResult`); #60 does the same for `SentinelAction` and `SentinelSuspicion`, which inspect_ai `feature/sentinel` moved into `inspect_ai.core`. The old paths re-export the same objects, so behavior does not change. The registry primitives, `Store` and `StoreModel`, `LimitExceededError`, `Model` and the configuration types still come from the rest of inspect_ai.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands. Grouped by priority, decided by the maintainer on 2026-10-02, in the order to take them.
@@ -425,7 +439,7 @@ Do as soon as possible.
 ### Then: helpers for tool-stage rules
 
 - **Views and prompt helpers** (`monitor_prompt` and the view helpers): designed, not yet built. Add with them a structured-verdict helper, since today a structured verdict takes a pydantic model, a `GenerateConfig` with `ResponseSchema` and `json_schema`, `model_validate_json` and `Observation.score`; and helpers for escaping untrusted agent text and laying out a trusted/untrusted prompt, which `examples/llm_suspicion.py` writes by hand. Raised by the maintainer on 2026-10-02: views of the messages (for example the last six); the model-facing helpers are [workstreams.md](workstreams.md), workstream 3. The message views come first. The rule helpers, including the call's arguments as text, are done (see "Helpers for rules" above).
-- **Shared message rendering, then the prompt helpers. Planned for 2026-10-05, with the generate stages, after the tool-call work lands.** Sentinel PR #48 (closed 2026-10-04, branch `feat/prompt-helpers` kept for its code and tests) built `messages_as_str`, `message_as_str`, `call_as_str`, `last_turns` and `step_as_str` in `src/inspect_sentinel/_prompt.py`. It was closed because message rendering already exists in four places and should be shared rather than written a fifth time: Inspect Scout's public `messages_as_str`/`message_as_str`/`MessageFormatOptions` (`_scanner/extract.py`), inspect_ai's private `format_function_call` (`_util/format.py`, used by approval, review, the scorer and the transcript), a private `messages_as_str`/`message_as_str` in `analysis/_dataframe/extract.py`, and `chat_history` in `scorer/_model.py`. Decided with the maintainer:
+- **Shared message rendering, then the prompt helpers. Not started as of 2026-10-06; waits on the generate stages (sentinel #42, a draft).** Sentinel PR #48 (closed 2026-10-04, branch `feat/prompt-helpers` kept for its code and tests) built `messages_as_str`, `message_as_str`, `call_as_str`, `last_turns` and `step_as_str` in `src/inspect_sentinel/_prompt.py`. It was closed because message rendering already exists in four places and should be shared rather than written a fifth time: Inspect Scout's public `messages_as_str`/`message_as_str`/`MessageFormatOptions` (`_scanner/extract.py`), inspect_ai's private `format_function_call` (`_util/format.py`, used by approval, review, the scorer and the transcript), a private `messages_as_str`/`message_as_str` in `analysis/_dataframe/extract.py`, and `chat_history` in `scorer/_model.py`. Decided with the maintainer:
   1. An inspect_ai PR moves Scout's sync renderer into inspect_ai as public API (`message_as_str`, `messages_as_str` with Scout's `MessageFormatOptions` options, and a public tool-call renderer built on `format_function_call`), in `inspect_ai.model` and later `inspect_core` (workstream 1). Its output must be exactly Scout's, since scanner prompts and results depend on it.
   2. A Scout PR imports it, keeping what is Scout's own (the async `messages_as_str`, the preprocessor `transform`, message numbering and `include_ids` references), with a test that its output is unchanged.
   3. Sentinel imports the shared functions and keeps only `step_as_str` and `last_turns`. #48 rendered a tool call on one line where Scout uses one argument per line; either adopt Scout's or add an option to the shared renderer.

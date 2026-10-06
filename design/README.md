@@ -1,6 +1,6 @@
 # Design
 
-Eight documents. **Start with [sentinel-overview.md](sentinel-overview.md)**, which is the short form written to solicit feedback on the concepts and Python API. [sentinel.md](sentinel.md) is the full design and the place arguments are made; [sentinel-reference.md](sentinel-reference.md) restates its conclusions as a reference, without the reasoning. The remaining three each take one concern the core design depends on.
+Nine documents. **Start with [sentinel-overview.md](sentinel-overview.md)**, which is the short form written to solicit feedback on the concepts and Python API. [sentinel.md](sentinel.md) is the full design and the place arguments are made; [sentinel-reference.md](sentinel-reference.md) restates its conclusions as a reference, without the reasoning. Of the remaining six, four each take one concern the core design depends on (deployment, the proxy host, development and inspect_core), and [pr-series.md](pr-series.md) and [workstreams.md](workstreams.md) track implementation and who works on what.
 
 | | covers | status |
 |---|---|---|
