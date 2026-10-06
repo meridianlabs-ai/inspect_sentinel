@@ -139,7 +139,7 @@ async def test_a_failing_function_of_a_group_does_not_stop_the_others() -> None:
 async def test_a_cancelled_monitor_is_not_recorded_as_failed() -> None:
     started = anyio.Event()
 
-    @monitor(portable=False)
+    @monitor
     def slow_monitor() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             started.set()
@@ -148,7 +148,7 @@ async def test_a_cancelled_monitor_is_not_recorded_as_failed() -> None:
 
         return check
 
-    @protocol(portable=False)
+    @protocol
     def stops() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
@@ -190,7 +190,7 @@ async def test_a_monitor_that_turns_its_cancellation_into_an_error_is_cancelled(
 ):
     entered = anyio.Event()
 
-    @monitor(portable=False)
+    @monitor
     def monitor_converts_cancellation() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             entered.set()

@@ -111,6 +111,15 @@ def configure(module: ModuleType, name: str = "watched") -> object:
         ("import os", "os.path.normpath('a/../b')"),
         ("from os.path import normpath", "normpath('a/../b')"),
         ("import os\nlast = os.environ", "[(last := w) for w in ['a']]\nlast.upper()"),
+        ("import random", "random.Random(0).random()\nrandom.random()"),
+        ("import heapq, bisect", "heapq.heappush([], 1)\nbisect.bisect([1], 0)"),
+        ("import hashlib", "hashlib.sha256(b'a').hexdigest()"),
+        ("import statistics", "statistics.mean([1.0, 2.0])"),
+        ("import asyncio", "asyncio.Lock()\nasyncio.wait_for"),
+        ("import anyio", "anyio.create_task_group()\nanyio.sleep(0)"),
+        ("from collections import Counter", "Counter('abc').most_common(1)"),
+        ("import logging", "logging.getLogger(__name__).info('a')"),
+        ("import builtins", "builtins.len('a')"),
     ],
 )
 def test_allowed_references_pass(load: Load, setup: str, body: str) -> None:
@@ -128,6 +137,16 @@ def test_allowed_references_pass(load: Load, setup: str, body: str) -> None:
         ("import sys", "sys", "sys"),
         ("import subprocess", "subprocess.run(['ls'])", "subprocess.run"),
         ("import socket", "socket.create_connection(('x', 1))", "socket"),
+        ("import pathlib", "pathlib.Path('f').read_text()", "pathlib.Path"),
+        ("import pickle", "pickle.loads(b'')", "pickle.loads"),
+        ("import io", "io.StringIO()", "io.StringIO"),
+        (
+            "import asyncio",
+            "asyncio.create_subprocess_exec('ls')",
+            "asyncio.create_subprocess_exec",
+        ),
+        ("reader = open", "reader('f')", "reader"),
+        ("import builtins", "builtins.open('f')", "builtins.open"),
         ("import importlib", "importlib.import_module('os')", "importlib"),
         ("", "open('f')", "open"),
         ("", "input()", "input"),
@@ -136,16 +155,11 @@ def test_allowed_references_pass(load: Load, setup: str, body: str) -> None:
         ("", "compile('1', 'f', 'eval')", "compile"),
         ("", "__import__('os')", "__import__"),
         ("", "breakpoint()", "breakpoint"),
-        ("import builtins", "builtins.open('f')", "builtins.open"),
-        ("import builtins", "getattr(builtins, 'open')('f')", "builtins.open"),
-        ("import builtins", "getattr(builtins, 'op' + 'en')('f')", "builtins"),
-        ("", "__builtins__", "__builtins__"),
         ("from inspect_ai.model import get_model", "get_model()", "get_model"),
         ("import inspect_ai.model", "inspect_ai.model.get_model()", "get_model"),
         ("import os as o", "o.environ['HOME']", "o.environ"),
         ("from os import environ as e", "e.get('HOME')", "e"),
         ("from os import *", "getenv('HOME')", "getenv"),
-        ("reader = open", "reader('f')", "reader"),
         ("import functools, os", "functools.partial(os.system, 'ls')", "os.system"),
         ("", "import subprocess", "import subprocess"),
         ("", "from os import environ", "from os import environ"),
@@ -159,21 +173,9 @@ def test_allowed_references_pass(load: Load, setup: str, body: str) -> None:
         ("", "import os.path\nos.system('ls')", "os.system"),
         ("", "import posixpath\nposixpath.os.system('ls')", "posixpath.os.system"),
         (
-            "import posixpath",
-            "getattr(posixpath, 'os').system('ls')",
-            "posixpath.os.system",
-        ),
-        ("import json", "json.__builtins__['open']('f')", "__builtins__"),
-        ("", "object.__subclasses__()", "__subclasses__"),
-        (
             "from inspect_sentinel._runner import run_sentinel",
             "run_sentinel",
             "run_sentinel",
-        ),
-        (
-            "import os\nfrom typing import NamedTuple\nclass Holder(NamedTuple):\n    fn: object\nHOLDER = Holder(os.system)",
-            "HOLDER.fn('ls')",
-            "HOLDER.fn",
         ),
         (
             "import functools, os\n@functools.cache\ndef helper() -> None:\n    os.system('ls')",
@@ -187,6 +189,29 @@ def test_disallowed_references_fail(
 ) -> None:
     with pytest.raises(PortabilityError, match=f"`{reference}`"):
         configure(load(monitor_source(body, setup)))
+
+
+def test_a_standard_library_module_off_the_list_names_the_list(load: Load) -> None:
+    module = load(monitor_source("pathlib.Path('f')", "import pathlib"))
+    with pytest.raises(PortabilityError, match="not on the portable standard-library"):
+        configure(module)
+
+
+@pytest.mark.parametrize(
+    "setup,body",
+    [
+        ("import builtins", "getattr(builtins, 'open')('f')"),
+        ("import functools, os\nRUN = functools.partial(os.system, 'ls')", "RUN()"),
+        (
+            "import os\nfrom typing import NamedTuple\nclass Holder(NamedTuple):\n    fn: object\nHOLDER = Holder(os.system)",
+            "HOLDER.fn('ls')",
+        ),
+    ],
+)
+def test_deliberate_indirection_is_not_caught(
+    load: Load, setup: str, body: str
+) -> None:
+    configure(load(monitor_source(body, setup)))
 
 
 def test_a_third_party_package_fails(load: Load, third_party: str) -> None:
@@ -232,7 +257,7 @@ def test_a_helper_in_another_local_module_is_followed(load: Load) -> None:
         configure(module)
 
 
-def test_a_module_imported_inside_the_function_is_followed(
+def test_a_module_imported_inside_the_function_is_followed_only_if_loaded(
     load: Load, tmp_path: Path
 ) -> None:
     helpers = load(
@@ -247,12 +272,8 @@ def test_a_module_imported_inside_the_function_is_followed(
     (tmp_path / f"{unloaded}.py").write_text(
         "import os\n\ndef home() -> str | None:\n    return os.getenv('HOME')\n"
     )
-    module = load(monitor_source(f"from {unloaded} import home\nhome()"))
-    try:
-        with pytest.raises(PortabilityError, match="`os.getenv`"):
-            configure(module)
-    finally:
-        sys.modules.pop(unloaded, None)
+    configure(load(monitor_source(f"from {unloaded} import home\nhome()")))
+    assert unloaded not in sys.modules
 
 
 def test_a_wrapping_decorator_under_monitor_is_checked(load: Load) -> None:

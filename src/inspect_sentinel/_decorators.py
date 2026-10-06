@@ -135,7 +135,7 @@ def monitor(
         factory: A function returning a monitor, or a `MonitorGroup`.
         name: The registered name, in place of the factory's `__name__`.
         version: The monitor's version, recorded in its registry metadata so a calibration can say which version it measured; bump it when a change alters the scores. Defaults to 0.
-        portable: Whether the monitor can run outside an eval, in a proxy, recorded in its registry metadata. When True, the default, calling the factory first checks what its code references: the standard library except modules with effects, `inspect_ai.core` and its dependencies, and `inspect_sentinel`, with effects only through `context`. Functions and classes of the author's own modules that it references are checked the same way. Without source, as in a notebook, the check is skipped. False opts out, for a monitor that only runs in an eval.
+        portable: Whether the monitor can run outside an eval, in a proxy, recorded in its registry metadata. When True, the default, calling the factory first checks what its code references: a list of standard-library modules that only compute, `inspect_ai.core` and its dependencies, `anyio` and `inspect_sentinel`, with effects only through `context`. Functions and classes of the author's own modules that it references are checked the same way. Without source, as in a notebook, the check is skipped. False opts out, for a monitor that only runs in an eval.
 
     Raises:
         TypeError: If `version` is not an integer, `portable` is not a bool, or a factory parameter is named `name`, `params`, `version` or `meta`, the keys of a configuration entry.
