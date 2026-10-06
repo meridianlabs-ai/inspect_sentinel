@@ -21,7 +21,7 @@ Two things belong in `core`:
 
 Event types are not in `core`. `BaseEvent.working_start` defaults to `sample_working_time()`, which is eval machinery.
 
-`inspect_sentinel` imports from `inspect_ai` only through `inspect_ai.core`, and otherwise imports only the standard library, `pydantic`, `anyio` and `exceptiongroup`. `tests/test_package.py` checks this with `check_imports`, which also allows the packages `core` itself imports. `core` is a subpackage of `inspect_ai`, so importing it still runs `inspect_ai/__init__.py`. Running sentinel without inspect_ai installed needs the separate distribution in open question 2.
+`inspect_sentinel` imports from `inspect_ai` only through `inspect_ai.core`, and otherwise imports only the standard library, `pydantic`, `anyio` and `exceptiongroup`. `tests/test_package.py` checks this with `check_imports`, which also allows the packages `core` itself imports. `core` is a subpackage of `inspect_ai`, so importing it still runs `inspect_ai/__init__.py`. Running sentinel without inspect_ai installed would need a separate distribution, which open question 2 decided against.
 
 ## The measurement
 
@@ -210,7 +210,7 @@ And note what codegen does *not* do: it gives hosts the target shape, not the ma
 ## Open questions
 
 1.  **Scope of `inspect_core` beyond the rule above.** A log reader wants `EvalLog` and the event types, which the rule leaves out. `sentinel-development.md` adds a concrete consumer for `ModelEvent` and `ToolEvent`: replaying a monitor over an eval log at full fidelity needs them, and without them in core that reconstruction lives in `inspect_ai` rather than `inspect_sentinel`.
-2.  **Is it a separate distribution or a subpackage?** A separate wheel lets a Go-host author depend on it without `inspect_ai`; a subpackage is far less release machinery. The WASM case wants the former.
+2.  **Is it a separate distribution or a subpackage?** Decided: a subpackage, `inspect_ai.core`, with the moved names re-exported from their old paths so user imports do not change. Sentinel imports its wire types and `SentinelAction`/`SentinelSuspicion` from it since sentinel #59 and #60 (2026-10-06).
 3.  **How far to chase the four-package floor.** Removing `rich`, `platformdirs`, `anyio` and `jsonlines` means the types stop using `warn_once` and friends. Worth it for a constrained build, possibly not otherwise.
 4.  **Does `inspect_api` ship the Google provider conversions** given the heavier dependency, or are they an optional extra?
 5.  **Catch-all member design** for the discriminated unions, and whether the passthrough type is one shape or per-union.
