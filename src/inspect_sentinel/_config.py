@@ -8,6 +8,7 @@ from typing import Any, NamedTuple, cast
 
 import yaml
 from inspect_ai._util.file import exists, local_path
+from inspect_ai.core import SentinelConfig, SentinelEntry
 from inspect_ai.core._registry import (
     RegistryDict,
     RegistryInfo,
@@ -20,7 +21,6 @@ from inspect_ai.core._registry import (
     registry_lookup,
     registry_value,
 )
-from inspect_ai.log import SentinelConfig, SentinelEntry
 from inspect_ai.util import resource
 
 from ._context import validate_instance_name
