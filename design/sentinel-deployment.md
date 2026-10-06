@@ -347,6 +347,8 @@ Recommendation: own a CI job that builds pydantic-core for each supported pydant
 
 The WASI context is empty unless the host grants something. Measured in the spike with an empty context: opening or listing files fails (no preopened directories), the environment is empty, sockets raise `PermissionError`, and subprocesses and threads cannot start. Host-mediated calls work: `generate`, and `fetch` by endpoint name, where a URL is refused as an unknown endpoint and the host attaches the credential. Granting a preopened directory or an environment variable gives the guest exactly that.
 
+**File access is a grant, not a prohibition.** Decided by the maintainer on 2026-10-06: the sidecar gives the guest read-only access to files bundled with the monitor (word lists, prompt templates, policy files), as a read-only preopened bundle data directory or through `importlib.resources`, and nothing else by default. Arbitrary host paths are never granted. State belongs in `context.store_as()`, not in files: a write in a proxy is per instance and lost. The `portable=True` check does not check file access; the grant is the boundary.
+
 This is the real enforcement of "effects only through `context`" (mitigation 1 in "Keeping monitors portable"). The static `portable=True` check is early feedback: it fails in an eval, before a monitor reaches a deployment, but the sandbox is what holds in one.
 
 Resource limits work too: an epoch deadline and a fuel limit each trapped a spinning guest, and a memory cap made an oversized allocation raise `MemoryError` in the guest. A trapped instance is discarded and a fresh one costs 0.4 ms.
@@ -367,6 +369,10 @@ The class design could not express the first cleanly (a class with one portable 
 This works *only* because monitors are top-level functions. A class body is an `ast.ClassDef` with its methods nested inside, invisible to that walk.
 
 What is *not* statically available is the stage, since the annotation sits on the inner function a factory returns. That is fine and worth stating plainly so nobody designs around it: the bundler needs enumeration and the closure, both of which it has. Stages resolve at load time, once, inside the bundle.
+
+### Imports inside function bodies
+
+componentize-py bundles only the modules imported during build-time initialisation ("WASM", above), so a module first imported inside a function body is missing from the component and raises `ModuleNotFoundError` at run time. Decided by the maintainer on 2026-10-06: this is the bundler's job, not the portability check's. The bundler imports what portable functions' bodies import as well as module-level imports, or bundles whole packages.
 
 One caveat if the existing helper is reused: `_util/decorator.py` imports `_util.file` for S3 support, which pulls `fsspec` and `s3fs`. The concept is \~40 lines of stdlib `ast`; a bundler-side scanner wants a local-path-only variant rather than the shipped helper.
 

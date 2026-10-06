@@ -43,6 +43,7 @@ The host interface after sentinel #47 is `HostContext(context, recorder, store)`
 - **`Recorder`**: `SentinelEvent`s to a sink (structured logs, OpenTelemetry, or files a viewer or workstream 12 can read).
 - **The store**: a keyed store, keyed by a session header verified against a fingerprint of the conversation's start (deployment doc, "Making the key trustworthy"), behind `store_as()`.
 - **`step.history`** across compaction, from the keyed store's accumulation for the conversation.
+- **Files**: read-only access to files bundled with the monitor (a read-only preopened bundle data directory, or `importlib.resources`) and nothing else by default; arbitrary host paths are never granted. State goes in the store, since a write is per instance and lost. Decided by the maintainer on 2026-10-06 (deployment doc, "What the guest can reach").
 - **New host methods**: `fetch` through named endpoints (designed in the deployment doc, not built), and possibly an out-of-band `terminate()`.
 
 ## 4. Where the Python runs, phased
@@ -68,6 +69,9 @@ Run the `ext_proc` sidecar as the vehicle for sections 1 to 3; WASM adds isolati
 - componentize-py, wasmtime and wasi-sdk pinned together; the component-model async ABI still changes between releases.
 - Upstreaming the loop fixes to componentize-py (`call_soon(context=None)`, timers, `get_task_factory`, and subtask cancellation), carrying `loop_patch.py` and testing it under the conformance suite until then.
 - The guest-import changes in `inspect_ai` and `inspect_sentinel` that remove the spike's shims, part of workstream 1 ([inspect-core.md](inspect-core.md), "What a WASM guest imports").
+- The read-only bundle data directory: preopen it in the production host and give the guest nothing else (section 3, "Files").
+- Imports inside function bodies: componentize-py bundles only what build-time initialisation imports, so a module first imported in a function body raises `ModuleNotFoundError` at run time. The bundler also imports what portable functions' bodies import, or bundles whole packages; the portability check does not (deployment doc, "Imports inside function bodies").
+- Measure what `time.sleep` does in a guest under the async model, in particular whether it blocks the whole instance; the portability check may make it an error afterwards.
 
 ## 5. Packaging and configuration
 
