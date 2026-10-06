@@ -484,7 +484,7 @@ There is no `monitor_store_as()` or `monitor_host()` global. Helpers take what t
 
 ### Effects
 
-`context.host` is how a monitor reaches the outside world portably. Today that is inference; outbound JSON through named endpoints (`fetch`) and keyed storage are planned, and `sentinel-deployment.md` defines them. The runner records through a separate `Recorder`. In-process these are ordinary implementations; under a proxy they cross the host boundary. Until `fetch` lands, a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, at the cost of portability to a proxy, which a future `portable=False` will declare.
+`context.host` is how a monitor reaches the outside world portably. Today that is inference; outbound JSON through named endpoints (`fetch`) and keyed storage are planned, and `sentinel-deployment.md` defines them. The runner records through a separate `Recorder`. In-process these are ordinary implementations; under a proxy they cross the host boundary. Until `fetch` lands, a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, if it is declared `portable=False`, at the cost of portability to a proxy.
 
 Rules:
 

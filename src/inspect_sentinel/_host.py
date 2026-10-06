@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
-from inspect_ai.model import ChatMessage, GenerateConfig, Model, ModelOutput
-from inspect_ai.tool import ToolCall, ToolInfo
+from inspect_ai.core import ChatMessage, GenerateConfig, ModelOutput, ToolCall, ToolInfo
+from inspect_ai.model import Model
 from inspect_ai.util import Store
 
 from ._report import Decision, Failed, Report, Reported
@@ -35,7 +35,7 @@ class HumanAnswer:
 class Host(TypingProtocol):
     """What a monitor or protocol may do to the outside world. Author-facing.
 
-    Inference and asking a person are the only effects for now. Outbound HTTP through named endpoints (`fetch`) is planned. Meanwhile a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, at the cost of portability to a proxy, which a future `portable=False` will declare.
+    Inference and asking a person are the only effects for now. Outbound HTTP through named endpoints (`fetch`) is planned. Meanwhile a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()`, if it is declared `portable=False`.
     """
 
     async def generate(

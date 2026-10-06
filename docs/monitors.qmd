@@ -14,7 +14,7 @@ How to write a monitor: a `@monitor` factory returning a function that takes a `
 
 ## Planned Sections
 
-- The `@monitor` decorator and factories (parameters, `name=`, `version=`)
+- The `@monitor` decorator and factories (parameters, `name=`, `version=`, `portable=`)
 - Stages: `BeforeToolCall` and `AfterToolCall`; `BeforeGenerate` and `AfterGenerate` (planned)
 - What a step carries: `call`, `message`, `view`, `result`, `input` and `history`
 - Context: what the agent was asked to do (`context.eval`, None outside an Inspect eval), and why it is trusted where `step` is not
@@ -25,3 +25,7 @@ How to write a monitor: a `@monitor` factory returning a function that takes a `
 - Prompting an LLM monitor safely: separating instructions from evidence; prompt helpers such as `monitor_prompt()` (planned)
 - Failures: a monitor that raises is recorded as failed and the step goes on; a protocol that reads its scores fails unless it checks `observations.failed`
 - Testing a monitor
+
+## Portable Monitors
+
+A monitor is portable by default, so it can run outside an eval, in a proxy, where it runs in a sandbox with no environment variables, processes, threads or network. It may compute anything, and affect the outside world only through `context`: `context.host.generate()`, `context.host.ask_human()` and `context.store_as()`, with configuration through the factory's parameters. Calling the factory checks the names its code references for common mistakes that would fail in the sandbox: inspect_ai outside `inspect_ai.core` (such as `get_model()`), environment variables, processes and threads, direct networking, and packages with compiled code. Each raises `PortabilityError` naming the reference. File access, the rest of the standard library and pure-Python packages are not refused. Declare a monitor that only runs in an eval with `@monitor(portable=False)`. See [Portable Monitors](portability.qmd).

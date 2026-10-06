@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
-from inspect_ai.model import ChatMessage
-from inspect_ai.scorer import Target
+from inspect_ai.core import ChatMessage, Target
 from inspect_ai.util import StoreModel
 
 from ._host import Host, active_step

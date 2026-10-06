@@ -27,6 +27,7 @@ from inspect_ai._util.registry import (
 )
 
 from ._context import Context
+from ._portable import check_portable
 from ._report import Decision, Observation, Report
 from ._step import Step
 from ._types import (
@@ -46,6 +47,7 @@ _STEP_TYPES = frozenset(get_args(Step))
 # and registry metadata would need a name<->class mapping
 STEP_TYPES_ATTR = "__sentinel_step_types__"
 VERSION = "version"
+PORTABLE = "portable"
 ENTRY_FIELDS = ("name", "params", VERSION, "meta")
 
 
@@ -112,17 +114,20 @@ def monitor(factory: Callable[P, Monitor], /) -> Callable[P, Monitor]: ...
 @overload
 def monitor(factory: Callable[P, MonitorGroup], /) -> Callable[P, MonitorGroup]: ...
 @overload
-def monitor(*, name: str | None = None, version: int = 0) -> _MonitorDecorator: ...
+def monitor(
+    *, name: str | None = None, version: int = 0, portable: bool = True
+) -> _MonitorDecorator: ...
 def monitor(
     factory: Callable[P, Monitor | MonitorGroup] | None = None,
     /,
     *,
     name: str | None = None,
     version: int = 0,
+    portable: bool = True,
 ) -> Callable[P, Monitor | MonitorGroup] | _MonitorDecorator:
     """Register a monitor factory.
 
-    Use as `@monitor`, or as `@monitor(name=..., version=...)`. The factory returns a function that must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated `-> Observation`, or `-> Observation | None` if it can abstain. These are checked when the factory is called. Each function watches one stage, so `Step` or any other union is rejected; to watch several, return a `MonitorGroup` of functions, which together are one configured instance. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
+    Use as `@monitor`, or as `@monitor(name=..., version=..., portable=...)`. The factory returns a function that must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated `-> Observation`, or `-> Observation | None` if it can abstain. These are checked when the factory is called. Each function watches one stage, so `Step` or any other union is rejected; to watch several, return a `MonitorGroup` of functions, which together are one configured instance. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     A configured function runs only through the runners while a sentinel is running: a protocol that calls one directly from its body raises `RuntimeError`, and must call it through `run_monitors` or `run_children` instead. Outside a run, as in a unit test, a direct call works.
 
@@ -130,19 +135,21 @@ def monitor(
         factory: A function returning a monitor, or a `MonitorGroup`.
         name: The registered name, in place of the factory's `__name__`.
         version: The monitor's version, recorded in its registry metadata so a calibration can say which version it measured; bump it when a change alters the scores. Defaults to 0.
+        portable: Whether the monitor can run outside an eval, in a proxy, recorded in its registry metadata. When True, the default, calling the factory first checks the names its code references, in its body and the functions defined inside it, and raises for inspect_ai outside `inspect_ai.core`, environment variables, processes and threads, direct networking, and packages with compiled code. Helpers defined outside the factory are not followed. A factory with no source, as in the plain REPL before Python 3.13 or `exec()`'d code, is not checked; one whose source cannot be parsed or located is reported as not checked. False opts out, for a monitor that only runs in an eval.
 
     Raises:
-        TypeError: If `version` is not an integer, or a factory parameter is named `name`, `params`, `version` or `meta`, the keys of a configuration entry.
+        TypeError: If `version` is not an integer, `portable` is not a bool, or a factory parameter is named `name`, `params`, `version` or `meta`, the keys of a configuration entry.
         ValueError: If `version` is negative.
+        PortabilityError: When the factory is called, if the monitor is portable and its code references what a portable monitor cannot use.
     """
     if factory is not None:
         return cast(
             Callable[P, Monitor | MonitorGroup],
-            _register("monitor", factory, Observation, None, 0),
+            _register("monitor", factory, Observation, None, 0, True),
         )
 
     def decorate(factory: Callable[P, Any]) -> Callable[P, Any]:
-        return _register("monitor", factory, Observation, name, version)
+        return _register("monitor", factory, Observation, name, version, portable)
 
     return cast(_MonitorDecorator, decorate)
 
@@ -156,13 +163,16 @@ def protocol(
     factory: Callable[P, Protocol | ProtocolGroup], /
 ) -> Callable[P, Protocol | ProtocolGroup]: ...
 @overload
-def protocol(*, name: str | None = None, version: int = 0) -> _ProtocolDecorator: ...
+def protocol(
+    *, name: str | None = None, version: int = 0, portable: bool = True
+) -> _ProtocolDecorator: ...
 def protocol(
     factory: Callable[P, Protocol | ProtocolGroup] | None = None,
     /,
     *,
     name: str | None = None,
     version: int = 0,
+    portable: bool = True,
 ) -> Callable[P, Protocol | ProtocolGroup] | _ProtocolDecorator:
     """Register a protocol factory.
 
@@ -174,19 +184,21 @@ def protocol(
         factory: A function returning a protocol, or a `ProtocolGroup`.
         name: The registered name, in place of the factory's `__name__`.
         version: The protocol's version, recorded in its registry metadata; bump it when a change alters its decisions. Defaults to 0.
+        portable: Whether the protocol can run outside an eval, checked when the factory is called as for `@monitor`. Children, passed in as arguments or configured inside the factory, are checked by their own factories, not as part of this one. Defaults to True; False opts out.
 
     Raises:
-        TypeError: If `version` is not an integer, or a factory parameter is named `name`, `params`, `version` or `meta`, the keys of a configuration entry.
+        TypeError: If `version` is not an integer, `portable` is not a bool, or a factory parameter is named `name`, `params`, `version` or `meta`, the keys of a configuration entry.
         ValueError: If `version` is negative.
+        PortabilityError: When the factory is called, if the protocol is portable and its code references what a portable protocol cannot use.
     """
     if factory is not None:
         return cast(
             Callable[P, Protocol | ProtocolGroup],
-            _register("protocol", factory, Decision, None, 0),
+            _register("protocol", factory, Decision, None, 0, True),
         )
 
     def decorate(factory: Callable[P, Any]) -> Callable[P, Any]:
-        return _register("protocol", factory, Decision, name, version)
+        return _register("protocol", factory, Decision, name, version, portable)
 
     return cast(_ProtocolDecorator, decorate)
 
@@ -220,6 +232,7 @@ def _register(
     report_type: type[Report],
     name: str | None,
     version: object,
+    portable: object,
 ) -> Callable[P, Any]:
     registered_name = registry_name(factory, name or factory.__name__)
     if not isinstance(version, int) or isinstance(version, bool):
@@ -229,6 +242,10 @@ def _register(
     if version < 0:
         raise ValueError(
             f"{registered_name}: version must be 0 or more, not {version}."
+        )
+    if not isinstance(portable, bool):
+        raise TypeError(
+            f"{registered_name}: portable must be True or False, not {portable!r}."
         )
     signature = inspect.signature(factory).parameters
     for param in signature.values():
@@ -243,7 +260,7 @@ def _register(
     info = RegistryInfo(
         type=kind,
         name=registered_name,
-        metadata={"params": params, VERSION: version},
+        metadata={"params": params, VERSION: version, PORTABLE: portable},
     )
     # configuration finds a factory by name alone, so the name must be one kind
     other: RegistryType = "protocol" if kind == "monitor" else "monitor"
@@ -255,6 +272,8 @@ def _register(
 
     @wraps(factory)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> object:
+        if portable:
+            check_portable(factory, kind, registered_name)
         returned = factory(*args, **kwargs)
         instance: object
         if isinstance(returned, Group):
