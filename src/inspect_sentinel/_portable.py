@@ -14,7 +14,7 @@ import os
 import sys
 import types
 from collections.abc import Callable, Iterator
-from typing import NamedTuple, cast
+from typing import NamedTuple, TypeGuard, cast
 
 import inspect_ai.core
 from inspect_ai.util import StoreModel
@@ -48,7 +48,8 @@ concurrent.futures.ProcessPoolExecutor
 """.split()
 _NETWORK_MODULES = """
 socket _socket ssl _ssl socketserver http.client http.server urllib.request
-ftplib smtplib imaplib poplib xmlrpc asyncio.streams
+ftplib smtplib imaplib poplib xmlrpc asyncio.streams httpx httpcore requests
+urllib3
 """.split()
 _REFUSED_MODULES = {
     **dict.fromkeys(_PROCESS_MODULES, _PROCESSES),
@@ -65,7 +66,7 @@ _FIXES = "A portable {kind} affects the outside world only through `context`: ca
 class PortabilityError(TypeError):
     """A portable monitor or protocol references something a portable function cannot use.
 
-    Raised when the factory of a `@monitor` or `@protocol` declared with `portable=True` (the default) is called, before it runs. The message lists each reference in the factory's code that a portable function cannot use: the file and line, the function, the name, what it resolved to and why. A `TypeError`, as the factory's other configuration-time checks of the functions it returns are.
+    Raised when the factory of a `@monitor` or `@protocol` declared with `portable=True` (the default) is called, before it runs. The message lists each reference in the factory's code that a portable function cannot use: the file and line, the function, the name, what it resolved to and why. A factory whose source exists but cannot be parsed or located is reported as not checked. A `TypeError`, as the factory's other configuration-time checks of the functions it returns are.
     """
 
 
@@ -121,12 +122,20 @@ def _locate(text: str, code: types.CodeType) -> ast.AST | str:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
         return "its source could not be parsed"
-    for node in ast.walk(tree):
-        if isinstance(node, _Function) and _name(node) == code.co_name:
-            decorators = getattr(node, "decorator_list", [])
-            first = min([node.lineno, *(d.lineno for d in decorators)])
-            if code.co_firstlineno in (first, node.lineno):
-                return node
+    named = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, _Function) and _name(node) == code.co_name
+    ]
+    for node in named:
+        decorators = getattr(node, "decorator_list", [])
+        first = min([node.lineno, *(d.lineno for d in decorators)])
+        if code.co_firstlineno in (first, node.lineno):
+            return node
+    # the file was edited since import, but its one definition of that name is
+    # still the factory as far as the check can tell
+    if len(named) == 1:
+        return named[0]
     return "its source could not be located"
 
 
@@ -208,7 +217,9 @@ def _references(
         elif isinstance(node, ast.ClassDef):
             inner = f"{where}.<locals>.{node.name}"
         for field, value in ast.iter_fields(node):
-            if field in ("annotation", "returns"):
+            if field in ("annotation", "returns", "type_params") or (
+                field == "value" and type(node).__name__ == "TypeAlias"
+            ):
                 continue
             # decorators and defaults run where the definition is
             scope = where if field in ("decorator_list", "args") else inner
@@ -252,7 +263,7 @@ def _resolve(
         return None
     reference, reason = first, _judge(value)
     for name in chain[1:]:
-        if not isinstance(value, types.ModuleType):
+        if not _is_module(value):
             break
         reference = f"{reference}.{name}"
         value, reason = _attribute(value, value.__name__, name)
@@ -276,9 +287,10 @@ def _judge_import(node: ast.Import | ast.ImportFrom) -> _Result | None:
 
 
 def _attribute(
-    module: types.ModuleType | None, module_name: str, name: str
+    module: object, module_name: str, name: str
 ) -> tuple[object, str | None]:
-    value = _MISSING if module is None else vars(module).get(name, _MISSING)
+    namespace = vars(module) if _is_module(module) else {}
+    value = namespace.get(name, _MISSING)
     if value is _MISSING:
         unloaded = _Unloaded(f"{module_name}.{name}")
         return unloaded, _judge_module(unloaded)
@@ -288,9 +300,10 @@ def _attribute(
 def _judge(value: object, read_from: str | None = None) -> str | None:
     if _allowed(value):
         return None
-    if id(value) in _OS_REFUSED:
-        return _OS_REFUSED[id(value)]
-    if isinstance(value, types.ModuleType):
+    owner = value.__self__ if type(value) is types.MethodType else value
+    if id(value) in _OS_REFUSED or id(owner) in _OS_REFUSED:
+        return _OS_REFUSED.get(id(value)) or _OS_REFUSED[id(owner)]
+    if _is_module(value):
         return _judge_module(value.__name__)
     if _is_code(value):
         return _judge_module(_module_of(value))
@@ -300,8 +313,28 @@ def _judge(value: object, read_from: str | None = None) -> str | None:
     return None if _allowed(type(value)) else _judge_module(_module_of(type(value)))
 
 
+_ROUTINES = (
+    types.FunctionType,
+    types.BuiltinFunctionType,
+    types.MethodType,
+    types.MethodDescriptorType,
+    types.WrapperDescriptorType,
+    types.MethodWrapperType,
+    types.ClassMethodDescriptorType,
+)
+
+
+# type(), not isinstance(), so a lazy proxy's `__class__` is never consulted
+def _is_class(value: object) -> bool:
+    return issubclass(type(value), type)
+
+
+def _is_module(value: object) -> TypeGuard[types.ModuleType]:
+    return issubclass(type(value), types.ModuleType)
+
+
 def _is_code(value: object) -> bool:
-    return inspect.isclass(value) or inspect.isroutine(value)
+    return _is_class(value) or issubclass(type(value), _ROUTINES)
 
 
 def _allowed(value: object) -> bool:
@@ -320,9 +353,9 @@ def _module_of(value: object) -> str:
     if isinstance(module, str):
         return module
     owner = getattr(value, "__objclass__", getattr(value, "__self__", None))
-    if isinstance(owner, types.ModuleType):
+    if _is_module(owner):
         return owner.__name__
-    if inspect.isclass(owner):
+    if _is_class(owner):
         return str(getattr(owner, "__module__", ""))
     return ""
 
@@ -347,7 +380,10 @@ def _judge_module(module: str) -> str | None:
 def _compiled_packages(path: tuple[str, ...]) -> frozenset[str]:
     compiled: dict[str, list[bool]] = {}
     for distribution in importlib.metadata.distributions():
-        record = distribution.read_text("RECORD")
+        try:
+            record = distribution.read_text("RECORD")
+        except (OSError, UnicodeDecodeError):
+            continue
         files = (
             [line.split(",")[0] for line in record.splitlines()]
             if record is not None
@@ -361,12 +397,12 @@ def _compiled_packages(path: tuple[str, ...]) -> frozenset[str]:
 
 
 def _describe(value: object) -> str:
-    if isinstance(value, _Unloaded):
+    if type(value) is _Unloaded:
         return f"module `{value}`"
-    if isinstance(value, types.ModuleType):
+    if _is_module(value):
         return f"module `{value.__name__}`"
     if _is_code(value):
         label = getattr(value, "__qualname__", getattr(value, "__name__", "?"))
-        kind = "class" if inspect.isclass(value) else "function"
+        kind = "class" if _is_class(value) else "function"
         return f"{kind} `{label}` from `{_module_of(value)}`"
     return f"a `{type(value).__qualname__}` from `{_module_of(type(value))}`"

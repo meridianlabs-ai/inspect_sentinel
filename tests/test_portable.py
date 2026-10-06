@@ -158,6 +158,7 @@ def test_inspect_ai_outside_core_fails(
         ("import os", "os.unsetenv('KEY')", "os.unsetenv"),
         ("from os import environ", "environ['KEY']", "environ"),
         ("from os import getenv as env", "env('KEY')", "env"),
+        ("import os\nlookup = os.environ.get", "lookup('KEY')", "lookup"),
     ],
 )
 def test_environment_variables_fail(
@@ -236,6 +237,7 @@ def test_processes_and_threads_fail(
             "asyncio.open_connection",
         ),
         ("import asyncio", "asyncio.start_server(len)", "asyncio.start_server"),
+        ("import httpx", "httpx.AsyncClient()", "httpx.AsyncClient"),
     ],
 )
 def test_direct_networking_fails(
@@ -595,11 +597,58 @@ def test_a_factory_whose_file_is_gone_is_skipped(load: Load) -> None:
     configure(module)
 
 
+def test_a_factory_moved_in_its_edited_file_is_still_checked(load: Load) -> None:
+    module = load(monitor_source("os.getenv('A')", "import os"))
+    path = Path(cast(str, module.__file__))
+    path.write_text("# edited\n\n" + path.read_text())
+    linecache.clearcache()
+    with pytest.raises(
+        PortabilityError, match=":9 in watched.<locals>.check: `os.getenv`"
+    ):
+        configure(module)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="PEP 695")
+def test_type_aliases_and_bounds_are_not_checked(load: Load) -> None:
+    body = """
+    type Alias = Model
+
+    def pick[T: Model](value: T) -> T:
+        return value
+    """
+    configure(load(monitor_source(body, "from inspect_ai.model import Model")))
+
+
+def test_a_lazy_proxy_is_judged_by_its_type(load: Load) -> None:
+    setup = """
+class Lazy:
+    @property
+    def __class__(self) -> type:
+        raise RuntimeError("not configured")
+
+settings = Lazy()
+"""
+    configure(load(monitor_source("settings", setup)))
+
+
+def test_an_unreadable_record_is_skipped(load: Load, site: Path) -> None:
+    info = site / "broken-1.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: broken\nVersion: 1.0\n"
+    )
+    (info / "RECORD").write_bytes(b"caf\xe9/x.so,,\n")
+    configure(load(monitor_source("json.dumps({})", "import json")))
+
+
 @pytest.mark.parametrize(
     "replacement,reason",
     [
         ("def (:\n", "its source could not be parsed"),
-        ("x = 1\n", "its source could not be located"),
+        (
+            "x = 1\n" * 20 + "def watched():\n    pass\ndef watched():\n    pass\n",
+            "its source could not be located",
+        ),
     ],
 )
 def test_a_factory_whose_source_cannot_be_used_could_not_be_checked(

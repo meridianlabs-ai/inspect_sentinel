@@ -14,7 +14,7 @@ A monitor or protocol is portable when it can run outside an Inspect eval, for e
 
 In a proxy, a portable monitor runs as a WebAssembly guest in a sandbox. The sandbox is what enforces portability: a guest has no environment variables, no processes or threads, no network and no files except those bundled with the monitor. Almost all pure Python works there: computation, the standard library, `asyncio` and `anyio`, pydantic and `inspect_ai.core`, and other pure-Python packages.
 
-Some mistakes would only show up once the monitor is deployed. Sentinel's check finds the common ones when the factory is called, before the eval starts. It reports only what fails in the sandbox, so it does not refuse a monitor that would work.
+Some mistakes would only show up once the monitor is deployed. Sentinel's check finds the common ones when the factory is called, before the eval starts. It refuses only what fails in the sandbox, so it aims never to refuse a monitor that would work; the exceptions are under Known limits.
 
 ## What a portable function may do
 
@@ -33,9 +33,9 @@ Module-level code runs when the monitor is built for a proxy, not when it runs: 
 The check raises `PortabilityError` when the factory's code references any of:
 
 - **inspect_ai outside `inspect_ai.core`**, such as `get_model()`, `sandbox()` or `store()`. Anything `inspect_ai.core` exports passes wherever it is imported from, so `ChatMessage`, `GenerateConfig` and `ToolCall` from `inspect_ai.model` or `inspect_ai.tool` pass, as do `Reference` and `StoreModel`, which sentinel's API takes.
-- **Environment variables:** `os.environ`, `os.environb`, `os.getenv()`, `os.putenv()` and `os.unsetenv()`. A guest has none, and reading one returns nothing rather than failing, so it is a silent wrong answer.
-- **Processes and threads:** `subprocess`, `os.system()`, `os.popen()`, `os.kill()` and the `os.exec*`, `os.fork*` and `os.spawn*` functions, `threading` (locks included; use `anyio.Lock`), `multiprocessing`, the thread and process pools of `concurrent.futures`, `asyncio.create_subprocess_exec()`, `asyncio.create_subprocess_shell()` and `asyncio.to_thread()`.
-- **Direct networking:** `socket`, `ssl`, `http.client`, `http.server`, `socketserver`, `urllib.request`, `ftplib`, `smtplib`, `imaplib`, `poplib`, `xmlrpc`, and the streams of `asyncio` (`asyncio.open_connection()`, `asyncio.start_server()`).
+- **Environment variables:** `os.environ` (and its methods, such as `os.environ.get`), `os.environb`, `os.getenv()`, `os.getenvb()`, `os.putenv()` and `os.unsetenv()`. A guest has none, and reading one returns nothing rather than failing, so it is a silent wrong answer.
+- **Processes and threads:** `subprocess`, `os.system()`, `os.popen()`, `os.kill()`, `os.killpg()`, `os.startfile()` and the `os.exec*`, `os.fork*`, `os.spawn*` and `os.posix_spawn*` functions, `threading` and `_thread` (locks included; use `anyio.Lock`), `multiprocessing`, the thread and process pools of `concurrent.futures`, `asyncio.create_subprocess_exec()`, `asyncio.create_subprocess_shell()` and `asyncio.to_thread()`.
+- **Direct networking:** `socket`, `ssl`, `http.client`, `http.server`, `socketserver`, `urllib.request`, `ftplib`, `smtplib`, `imaplib`, `poplib`, `xmlrpc`, the streams of `asyncio` (`asyncio.open_connection()`, `asyncio.start_server()`), and the HTTP clients `httpx`, `httpcore`, `requests` and `urllib3`. Call a model with `context.host.generate()` rather than a client.
 - **Packages with compiled code**, such as `numpy`: an installed distribution whose files include extension modules (`.so`, `.pyd` or `.dylib`), which the guest cannot load. `pydantic_core` is the exception, since sentinel builds it for the guest.
 
 Each failure names the file and line, the function, the reference, what it resolved to and why:
@@ -47,7 +47,7 @@ PortabilityError: monitor suspicion is portable, but its code references what a 
 
 ## What the check does not refuse
 
-Anything that may be intentional, or that works in the guest, passes:
+Anything that may be intentional, or that works in the guest, passes, apart from the cases under Known limits:
 
 - **File access**, such as `open()` and `pathlib`. Files are a capability the host grants: a monitor may read files bundled with it. A path outside the bundle fails in the sandbox, not here.
 - **The rest of the standard library**, `os.path` and `sys` included, and builtins such as `exec()` and `eval()`, which work in the guest.
@@ -61,13 +61,13 @@ The check reads the factory's source: its body and the functions and lambdas def
 
 It does not follow anything else: a helper function, a class or a decorator defined outside the factory is not looked into, so a helper that calls `os.getenv()` passes. Only the factory's own code is checked, so a `@task` that calls `get_model()` beside the monitor plays no part.
 
-A name assigned anywhere in the factory, including a parameter, a loop or `except` target, an import or a nested function, is treated as local everywhere in it and is not resolved, so a parameter named like a module passes. A module imported inside the factory is judged by its name, without importing it. Annotations are type hints and are not checked. The check never imports anything.
+A name assigned anywhere in the factory, including a parameter, a loop or `except` target, an import or a nested function, is treated as local everywhere in it and is not resolved, so a parameter named like a module passes. A module imported inside the factory is judged by its name, without importing it, so `import inspect_ai.model` inside the factory is refused (the guest cannot import it) while `from inspect_ai.model import ChatMessageUser` passes, since that name is an `inspect_ai.core` export. Annotations, type aliases (`type X = ...`) and type-parameter bounds are type hints and are not checked. The check never imports anything.
 
 ## When the check runs
 
 When the factory is called: in Python when you configure the monitor, and from a configuration file when it is resolved, so the error comes before the eval starts. Importing a module that defines a monitor does not run the check. Each call parses the factory's file again, so an edited notebook cell is seen.
 
-The check reads source, so it runs for a monitor defined in a notebook, whose cells IPython keeps. When the factory has no source, as one typed into the plain Python REPL or run with `exec()` from a string, or one whose file was deleted, the check is skipped. A factory whose file is there but cannot be parsed, or no longer holds the factory, is reported as not checked.
+The check reads source, so it runs for a monitor defined in a notebook, whose cells IPython keeps. When the factory has no source, as one typed into the plain Python REPL or run with `exec()` from a string, or one whose file was deleted, the check is skipped. A factory whose file was edited since it was imported is checked against the one definition of its name in the file. A file that cannot be parsed, or that holds no definition or several definitions of the factory's name none of which starts on the factory's line, is reported as not checked.
 
 A protocol's children are passed in as arguments and are checked by their own factories, not as part of the protocol. The shipped protocols pass the check.
 
@@ -90,7 +90,7 @@ The check catches common honest mistakes early; it is not the enforcement, and i
 - Helpers, classes and decorators defined outside the factory are not followed.
 - A name assigned anywhere in the factory is treated as local throughout, so `import os` inside the factory followed by `os.environ` passes.
 - Dynamic access is not followed: `getattr()`, `globals()`, attributes of instances, and the contents of containers.
-- An installed package with optional compiled speedups, such as PyYAML, is refused even though its pure-Python fallback would work in the guest. A package whose top-level name several distributions share is refused only if all of them have compiled code.
+- An installed package with optional compiled speedups, such as PyYAML or MarkupSafe, is refused even though its pure-Python fallback would work in the guest; declare the monitor `portable=False` until it is bundled. Your own package, installed (not editable) with any extension module, is refused the same way. A package whose top-level name several distributions share is refused only if all of them have compiled code.
 - An object is judged by the module it says it comes from.
 
 ## Per function and per module (planned)
