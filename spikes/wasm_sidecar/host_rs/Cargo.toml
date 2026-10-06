@@ -1,0 +1,17 @@
+[package]
+name = "sentinel-wasm-host"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+futures = "0.3"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+# Pinned to the wasmtime componentize-py 0.25.1 builds and tests against: the
+# component-model async ABI is still moving between releases.
+wasmtime = "=46.0.1"
+wasmtime-wasi = { version = "=46.0.1", features = ["p3"] }
+
+[profile.release]
+debug = false
