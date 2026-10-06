@@ -887,17 +887,13 @@ def test_a_jupyter_cell_is_checked() -> None:
         interactiveshell.InteractiveShell.clear_instance()
 
 
-def test_a_config_file_entry_raises_portability_error(
-    load: Load, tmp_path: Path
-) -> None:
+def test_a_config_entry_raises_portability_error(load: Load) -> None:
     name = f"cfg_portable_{uuid.uuid4().hex}"
     load(monitor_source("os.getenv('A')", "import os", decorator=f"(name={name!r})"))
-    config = tmp_path / "sentinel.yaml"
-    config.write_text(f"sentinel:\n  name: {name}\n")
     with pytest.raises(
         PortabilityError, match=rf"sentinel: monitor {name} is portable"
     ):
-        sentinel_from_config(str(config))
+        sentinel_from_config({"name": name})
 
 
 # Realistic monitors, shipped protocols and examples
