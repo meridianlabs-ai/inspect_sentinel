@@ -7,6 +7,7 @@ from ._context import Context, EvalContext
 from ._decorators import monitor, protocol
 from ._final import decide_final
 from ._host import Host, HumanAnswer
+from ._portable import PortabilityError
 from ._protocols import concurrent, human, observe_only, sequential, threshold
 from ._report import (
     Action,
@@ -60,6 +61,7 @@ __all__ = [
     "Monitors",
     "Observation",
     "Observations",
+    "PortabilityError",
     "Protocol",
     "ProtocolGroup",
     "Protocols",

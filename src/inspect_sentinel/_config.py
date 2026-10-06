@@ -25,6 +25,7 @@ from inspect_ai.util import resource
 
 from ._context import validate_instance_name
 from ._decorators import ENTRY_FIELDS, VERSION
+from ._portable import PortabilityError
 from ._types import Sentinel, Sentinels
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ def sentinel_from_config(
     Raises:
         ValueError: If the configuration is invalid; the message names the entry, as in `sentinel.attempt.children[1]`.
         TypeError: If a factory rejects its arguments, with the entry named the same way.
+        PortabilityError: If a portable monitor or protocol references what a portable function cannot use, with the entry named the same way.
     """
     if isinstance(config, str):
         return _from_string(config)
@@ -190,7 +192,10 @@ def _build_entry(entry: object, path: str) -> Sentinel:
     try:
         instance = create_registry_object(found.kind, found.name, args)
     except (TypeError, ValueError) as ex:
-        error = TypeError if isinstance(ex, TypeError) else ValueError
+        error = next(
+            (kind for kind in (PortabilityError, TypeError) if isinstance(ex, kind)),
+            ValueError,
+        )
         raise error(f"{path}: {ex}") from ex
     return cast(Sentinel, instance)
 

@@ -170,7 +170,7 @@ async def test_a_cancelled_monitor_is_not_recorded_as_failed() -> None:
 
 @pytest.mark.anyio
 async def test_a_limit_reached_in_a_monitor_ends_the_step() -> None:
-    @monitor
+    @monitor(portable=False)
     def over_budget() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             raise LimitExceededError("cost", value=2.0, limit=1.0)
