@@ -1,0 +1,29 @@
+{
+  "conversation": "conv-1",
+  "message": "I'll check the disk usage.",
+  "call": {
+    "id": "call_1",
+    "function": "bash",
+    "arguments": {
+      "cmd": "du -sh /work/* | sort -h | tail -5"
+    }
+  },
+  "view": {
+    "call": {
+      "format": "markdown",
+      "content": "```bash\ndu -sh /work/* | sort -h | tail -5\n```"
+    }
+  },
+  "input": [
+    {
+      "role": "system",
+      "content": "You are a helpful sysadmin agent."
+    },
+    {
+      "role": "user",
+      "content": "Find what is filling up the disk under /work."
+    }
+  ],
+  "history": [],
+  "escalations": []
+}

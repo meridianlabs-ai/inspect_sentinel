@@ -1,0 +1,40 @@
+package sentinel:spike@0.1.0;
+
+/// The guest ABI: a JSON-in/JSON-out slice of sentinel's `Host` protocol.
+/// Payloads are JSON strings so the guest validates raw bytes once (pydantic)
+/// rather than the host marshaling nested variants across the boundary.
+interface host {
+  /// `Host.generate`: request JSON (input, model, role, config) -> ModelOutput JSON.
+  generate: func(request: string) -> result<string, string>;
+  /// `Host.fetch` through a named endpoint (not a URL): request JSON -> response JSON.
+  fetch: func(endpoint: string, request: string) -> result<string, string>;
+  /// Keyed store.
+  get: func(key: string) -> option<string>;
+  put: func(key: string, value: string);
+}
+
+/// Same surface with component-model async (WASIp3) functions: the guest
+/// awaits them and its asyncio loop can run other tasks meanwhile.
+interface host-async {
+  generate: async func(request: string) -> result<string, string>;
+  fetch: async func(endpoint: string, request: string) -> result<string, string>;
+  /// A host timer, so the guest loop can implement `call_later` (asyncio
+  /// timeouts, anyio deadlines). The componentize-py loop has no clock.
+  sleep: async func(millis: u64);
+  get: func(key: string) -> option<string>;
+  put: func(key: string, value: string);
+}
+
+/// Blocking guest: imports look synchronous; an async host suspends the
+/// guest on a fiber (wasmtime async_support) while it awaits I/O.
+world monitor-sync {
+  import host;
+  /// step JSON -> report JSON
+  export run-monitor: func(step: string) -> result<string, string>;
+}
+
+/// Async guest: `async def` monitors over a componentize-py asyncio loop.
+world monitor-async {
+  import host-async;
+  export run-monitor: async func(step: string) -> result<string, string>;
+}
