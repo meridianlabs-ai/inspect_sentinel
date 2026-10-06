@@ -181,7 +181,15 @@ def test_environment_variables_fail(
         ("import os", "os.popen('ls')", "os.popen"),
         ("import os", "os.kill(1, 9)", "os.kill"),
         ("import threading", "threading.Thread()", "threading.Thread"),
-        ("import threading", "threading.Lock()", "threading.Lock"),
+        ("from threading import Thread", "Thread()", "Thread"),
+        ("import threading", "threading.Timer(1, len)", "threading.Timer"),
+        (
+            "import _thread",
+            "_thread.start_new_thread(len, ())",
+            "_thread.start_new_thread",
+        ),
+        ("import pty", "pty.spawn('ls')", "pty.spawn"),
+        ("import pty", "pty.fork()", "pty.fork"),
         ("import multiprocessing", "multiprocessing.Pool()", "multiprocessing.Pool"),
         (
             "import concurrent.futures",
@@ -198,6 +206,46 @@ def test_environment_variables_fail(
             "import asyncio",
             "asyncio.create_subprocess_exec('ls')",
             "asyncio.create_subprocess_exec",
+        ),
+        ("", "import concurrent.interpreters", "import concurrent.interpreters"),
+        ("", "import _interpreters", "import _interpreters"),
+        (
+            "",
+            "from concurrent.futures import InterpreterPoolExecutor",
+            "from concurrent.futures import InterpreterPoolExecutor",
+        ),
+        (
+            "import concurrent.futures",
+            "concurrent.futures.InterpreterPoolExecutor",
+            "concurrent.futures.InterpreterPoolExecutor",
+        ),
+        (
+            "",
+            "import concurrent.futures.interpreter",
+            "import concurrent.futures.interpreter",
+        ),
+        ("import anyio", "anyio.run_process(['ls'])", "anyio.run_process"),
+        ("import anyio", "anyio.open_process(['ls'])", "anyio.open_process"),
+        ("from anyio import run_process", "run_process(['ls'])", "run_process"),
+        (
+            "import anyio.to_thread",
+            "anyio.to_thread.run_sync(len, 'a')",
+            "anyio.to_thread.run_sync",
+        ),
+        (
+            "",
+            "import anyio\nanyio.to_thread.run_sync(len, 'a')",
+            "anyio.to_thread.run_sync",
+        ),
+        (
+            "import anyio.from_thread",
+            "anyio.from_thread.run(len)",
+            "anyio.from_thread.run",
+        ),
+        (
+            "from anyio import to_process",
+            "to_process.run_sync(len)",
+            "to_process.run_sync",
         ),
     ],
 )
@@ -238,6 +286,23 @@ def test_processes_and_threads_fail(
         ),
         ("import asyncio", "asyncio.start_server(len)", "asyncio.start_server"),
         ("import httpx", "httpx.AsyncClient()", "httpx.AsyncClient"),
+        ("", "import nntplib", "import nntplib"),
+        ("", "import telnetlib", "import telnetlib"),
+        ("import anyio", "anyio.connect_tcp('a', 1)", "anyio.connect_tcp"),
+        ("import anyio", "anyio.connect_unix('a')", "anyio.connect_unix"),
+        ("import anyio", "anyio.create_tcp_listener()", "anyio.create_tcp_listener"),
+        (
+            "import anyio",
+            "anyio.create_unix_listener('a')",
+            "anyio.create_unix_listener",
+        ),
+        ("import anyio", "anyio.create_udp_socket()", "anyio.create_udp_socket"),
+        (
+            "import anyio",
+            "anyio.create_connected_udp_socket('a', 1)",
+            "anyio.create_connected_udp_socket",
+        ),
+        ("from anyio import getaddrinfo", "getaddrinfo('a', 1)", "getaddrinfo"),
     ],
 )
 def test_direct_networking_fails(
@@ -248,20 +313,25 @@ def test_direct_networking_fails(
     assert NETWORK in message
 
 
-def test_a_package_with_compiled_code_fails(load: Load, site: Path) -> None:
+@pytest.mark.parametrize(
+    "extension", ["_speedups.cpython-312-x86_64-linux-gnu.so", "_speedups.dll"]
+)
+def test_a_package_with_compiled_code_fails(
+    load: Load, site: Path, extension: str
+) -> None:
     name = f"fakec_{uuid.uuid4().hex}"
     write_distribution(
         site,
         name,
         {
             f"{name}/__init__.py": "LIMIT = 3\ndef fast(): return 1\n",
-            f"{name}/_speedups.cpython-312-x86_64-linux-gnu.so": "",
+            f"{name}/{extension}": "",
         },
     )
     message = refused(load, f"{name}.fast()\n{name}.LIMIT", f"import {name}")
     reason = f"and `{name}` contains compiled extension modules, which a portable function cannot load"
     assert f"`{name}.fast` is function `fast` from `{name}`, {reason}" in message
-    assert f"`{name}.LIMIT` is a `int` from `builtins`, {reason}" in message
+    assert f"`{name}.LIMIT` is a value in `{name}`, {reason}" in message
 
 
 def test_a_pure_python_package_passes(load: Load, site: Path) -> None:
@@ -328,7 +398,18 @@ def test_inspect_ai_core_and_its_aliases_pass(
         ("import json, re, math", "json.dumps({})\nre.compile('a')\nmath.sqrt(2)"),
         ("import asyncio", "asyncio.Lock()\nasyncio.sleep(0)\nasyncio.wait_for"),
         ("import concurrent.futures", "concurrent.futures.Future"),
-        ("import anyio", "anyio.sleep(0)\nanyio.run_process\nanyio.to_thread.run_sync"),
+        (
+            "import threading, _thread",
+            "threading.Lock()\nthreading.RLock()\nthreading.Event()\nthreading.Condition()"
+            "\nthreading.Semaphore()\nthreading.local()\n_thread.allocate_lock()",
+        ),
+        (
+            "import anyio",
+            "anyio.run\nanyio.sleep(0)\nanyio.create_task_group()\nanyio.CancelScope()"
+            "\nanyio.fail_after(1)\nanyio.Lock()\nanyio.Event()"
+            "\nanyio.create_memory_object_stream()\nanyio.to_thread",
+        ),
+        ("import asyncio", "asyncio.run\nasyncio.TaskGroup\nasyncio.Event()"),
         ("from pydantic import BaseModel", "BaseModel"),
         ("import http", "http.HTTPStatus.OK"),
     ],
@@ -355,9 +436,31 @@ def unreferenced() -> Task:
     configure(load(monitor_source("json.dumps({})", setup)))
 
 
-def test_a_helper_outside_the_factory_is_not_followed(load: Load) -> None:
-    setup = "import os\n\ndef home() -> object:\n    return os.getenv('HOME')\n"
-    configure(load(monitor_source("home()", setup)))
+@pytest.mark.parametrize(
+    "setup,body",
+    [
+        (
+            "import os\n\ndef home() -> object:\n    return os.getenv('HOME')\n",
+            "home()",
+        ),
+        (
+            "import os\n\nclass Settings:\n    def key(self) -> object:\n        return os.getenv('A')\n",
+            "Settings().key()\nSettings.key",
+        ),
+        (
+            "import functools, os\ngetter = functools.partial(os.getenv, 'A')",
+            "getter()",
+        ),
+        (
+            "import os, types\nholder = types.SimpleNamespace(env=os.environ)",
+            "holder.env",
+        ),
+    ],
+)
+def test_what_a_reference_leads_to_is_not_followed(
+    load: Load, setup: str, body: str
+) -> None:
+    configure(load(monitor_source(body, setup)))
 
 
 def test_annotations_are_not_checked(load: Load) -> None:
@@ -426,6 +529,22 @@ def make() -> object:
         factory()
 
 
+def test_class_bases_and_keywords_are_checked_where_the_class_is(
+    load: Load,
+) -> None:
+    body = """
+    class Local(subprocess.Popen, flag=os.getenv):
+        def run(self) -> None:
+            os.environ
+    """
+    message = refused(load, body, "import os, subprocess")
+    assert "in watched.<locals>.check: `subprocess.Popen`" in message
+    assert "in watched.<locals>.check: `os.getenv`" in message
+    assert (
+        "in watched.<locals>.check.<locals>.Local.<locals>.run: `os.environ`" in message
+    )
+
+
 def test_the_factory_body_and_nested_functions_are_checked(load: Load) -> None:
     source = f"""{HEADER}import os
 import subprocess
@@ -458,7 +577,9 @@ def watched() -> Monitor:
     "body,reference",
     [
         ("import subprocess", "import subprocess"),
-        ("import json, threading", "import threading"),
+        ("import json, multiprocessing", "import multiprocessing"),
+        ("from os import getenv, environ", "from os import getenv"),
+        ("from os import getenv, environ", "from os import environ"),
         ("from os import environ", "from os import environ"),
         (
             "from inspect_ai.model import get_model",
@@ -486,16 +607,70 @@ def test_an_allowed_import_inside_the_factory_passes(load: Load, body: str) -> N
     configure(load(monitor_source(body)))
 
 
+@pytest.mark.parametrize(
+    "body,reference,reason",
+    [
+        ("import os\nos.environ.get('KEY')", "os.environ", ENVIRONMENT),
+        ("import os as o\no.getenv('KEY')", "o.getenv", ENVIRONMENT),
+        ("from os import environ as env\nenv['KEY']", "env", ENVIRONMENT),
+        (
+            "import concurrent.futures\nconcurrent.futures.ThreadPoolExecutor()",
+            "concurrent.futures.ThreadPoolExecutor",
+            PROCESSES,
+        ),
+        ("import anyio\nanyio.connect_tcp('a', 1)", "anyio.connect_tcp", NETWORK),
+    ],
+)
+def test_a_name_imported_inside_the_factory_resolves_to_its_module(
+    load: Load, body: str, reference: str, reason: str
+) -> None:
+    message = refused(load, body)
+    assert f"`{reference}` is " in message
+    assert reason in message
+
+
+def test_a_name_imported_and_assigned_in_the_factory_is_local(load: Load) -> None:
+    configure(load(monitor_source("import os\nos = step\nos.environ")))
+
+
+def test_a_non_module_in_sys_modules_is_judged_by_name(
+    load: Load, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    name = f"fake_mod_{uuid.uuid4().hex}"
+    monkeypatch.setitem(sys.modules, name, object())
+    configure(load(monitor_source(f"from {name} import x\nx")))
+
+
 def test_the_check_imports_nothing(load: Load, site: Path) -> None:
     name = f"fakec_{uuid.uuid4().hex}"
     write_distribution(site, name, {f"{name}/__init__.py": "", f"{name}/_c.so": ""})
     unloaded = f"unloaded_{uuid.uuid4().hex}"
     (site / f"{unloaded}.py").write_text("")
-    module = load(monitor_source(f"import {unloaded}\nimport {name}\n{name}.x"))
+    body = f"import {unloaded}\n{unloaded}.y\nfrom {unloaded} import y\nimport {name}\n{name}.x"
+    module = load(monitor_source(body))
     before = set(sys.modules)
     with pytest.raises(PortabilityError, match=f"`import {name}`"):
         configure(module)
     assert set(sys.modules) == before
+
+
+def test_a_lazy_module_is_not_loaded_by_the_check(load: Load, site: Path) -> None:
+    name = f"fakec_{uuid.uuid4().hex}"
+    write_distribution(
+        site,
+        name,
+        {f"{name}/__init__.py": "raise RuntimeError('loaded')\n", f"{name}/_c.so": ""},
+    )
+    setup = f"""
+import importlib.util
+spec = importlib.util.find_spec({name!r})
+spec.loader = importlib.util.LazyLoader(spec.loader)
+lazy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(lazy)
+"""
+    message = refused(load, "lazy\nlazy.fast()", setup)
+    assert f"`lazy` is module `{name}`" in message
+    assert f"`lazy.fast` is `{name}.fast` (not loaded)" in message
 
 
 # The error
@@ -532,6 +707,38 @@ def test_every_violation_is_reported_together(load: Load) -> None:
         "@monitor(portable=False)",
     ):
         assert fix in fixes
+
+
+@pytest.mark.parametrize(
+    "setup,body,described",
+    [
+        (
+            "import os\nlookup = os.environ.get",
+            "lookup('KEY')",
+            f"`lookup` is method `get` of `os.environ`, and {ENVIRONMENT}",
+        ),
+        (
+            "import os",
+            "os.environ",
+            f"`os.environ` is a value in `os`, and {ENVIRONMENT}",
+        ),
+        (
+            "import ssl",
+            "ssl.PROTOCOL_TLS_CLIENT",
+            f"`ssl.PROTOCOL_TLS_CLIENT` is a value in `ssl`, and {NETWORK}",
+        ),
+        (
+            "",
+            "import telnetlib",
+            f"`import telnetlib` is `telnetlib` (not loaded), and {NETWORK}",
+        ),
+        ("import socket", "socket", f"`socket` is module `socket`, and {NETWORK}"),
+    ],
+)
+def test_what_a_reference_resolved_to_is_described(
+    load: Load, setup: str, body: str, described: str
+) -> None:
+    assert described in refused(load, body, setup)
 
 
 def test_a_protocol_is_checked(load: Load) -> None:
@@ -655,13 +862,14 @@ def test_a_factory_whose_source_cannot_be_used_could_not_be_checked(
     load: Load, replacement: str, reason: str
 ) -> None:
     module = load(monitor_source("pass"))
-    Path(cast(str, module.__file__)).write_text(replacement)
+    file = cast(str, module.__file__)
+    Path(file).write_text(replacement)
     linecache.clearcache()
-    with pytest.raises(
-        PortabilityError,
-        match=rf"`watched` is monitor factory `watched`, and could not be checked \({reason}\)",
-    ):
+    with pytest.raises(PortabilityError) as raised:
         configure(module)
+    assert str(raised.value) == (
+        f"monitor watched is portable, but its factory `watched` ({file}:4) could not be checked: {reason}. Fix the source, or declare it with `@monitor(portable=False)`."
+    )
 
 
 def test_a_jupyter_cell_is_checked() -> None:

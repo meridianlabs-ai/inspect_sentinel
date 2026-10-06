@@ -192,12 +192,9 @@ def _build_entry(entry: object, path: str) -> Sentinel:
     try:
         instance = create_registry_object(found.kind, found.name, args)
     except (TypeError, ValueError) as ex:
-        error = (
-            PortabilityError
-            if isinstance(ex, PortabilityError)
-            else TypeError
-            if isinstance(ex, TypeError)
-            else ValueError
+        error = next(
+            (kind for kind in (PortabilityError, TypeError) if isinstance(ex, kind)),
+            ValueError,
         )
         raise error(f"{path}: {ex}") from ex
     return cast(Sentinel, instance)
