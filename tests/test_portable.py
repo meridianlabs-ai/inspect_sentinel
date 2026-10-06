@@ -1,11 +1,9 @@
 import importlib
-import importlib.machinery
 import importlib.util
 import linecache
-import re
+import shutil
 import sys
 import textwrap
-import time
 import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -33,6 +31,12 @@ from inspect_sentinel._integration import sentinel_from_config
 Load = Callable[..., ModuleType]
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
+CORPUS = Path(__file__).parent / "portable_corpus"
+
+ENVIRONMENT = "a portable function has no environment variables"
+PROCESSES = "a portable function cannot start processes or threads"
+NETWORK = "a portable function has no network access"
+INSPECT = "inspect_ai is portable only through `inspect_ai.core`"
 
 HEADER = """\
 from inspect_sentinel import BeforeToolCall, Context, Monitor, Observation, monitor
@@ -47,6 +51,11 @@ def watched() -> Monitor:
 
     return check
 """
+
+
+def prepend_path(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    monkeypatch.setattr(sys, "path", [path, *sys.path])
+    importlib.invalidate_caches()
 
 
 @pytest.fixture
@@ -67,22 +76,6 @@ def load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Load:
     return load
 
 
-@pytest.fixture
-def third_party(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
-    name = f"fakereq_{uuid.uuid4().hex}"
-    package = tmp_path / "site-packages" / name
-    package.mkdir(parents=True)
-    (package / "__init__.py").write_text("def get(url):\n    return url\n")
-    prepend_path(monkeypatch, str(tmp_path / "site-packages"))
-    monkeypatch.delitem(sys.modules, name, raising=False)
-    return name
-
-
-def prepend_path(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
-    monkeypatch.setattr(sys, "path", [path, *sys.path])
-    importlib.invalidate_caches()
-
-
 def monitor_source(
     body: str, setup: str = "", decorator: str = "", header: str = HEADER
 ) -> str:
@@ -94,548 +87,476 @@ def configure(module: ModuleType, name: str = "watched") -> object:
     return cast(Callable[[], object], getattr(module, name))()
 
 
+def refused(load: Load, body: str, setup: str = "") -> str:
+    with pytest.raises(PortabilityError) as raised:
+        configure(load(monitor_source(body, setup)))
+    return str(raised.value)
+
+
+def write_distribution(site: Path, name: str, files: dict[str, str]) -> None:
+    for file, text in files.items():
+        (site / file).parent.mkdir(parents=True, exist_ok=True)
+        (site / file).write_text(text)
+    info = site / f"{name}-1.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text(
+        f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n"
+    )
+    record = [*files, f"{info.name}/METADATA", f"{info.name}/RECORD"]
+    (info / "RECORD").write_text("".join(f"{f},,\n" for f in record))
+
+
+@pytest.fixture
+def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    site = tmp_path / "site-packages"
+    site.mkdir()
+    prepend_path(monkeypatch, str(site))
+    return site
+
+
+# What is refused
+
+
 @pytest.mark.parametrize(
-    "setup,body",
+    "setup,body,reference,resolved",
     [
-        ("import json", "json.dumps(step.call.arguments)"),
-        ("import re", "re.findall('rm', step.call.function)"),
-        ("import datetime", "datetime.datetime.now(datetime.timezone.utc)"),
-        ("import math", "math.sqrt(2.0)"),
-        ("import os", "os.path.join('a', 'b')"),
-        ("import posixpath", "posixpath.join('a', 'b')"),
-        ("from os import path", "path.join('a', 'b')"),
-        ("from os.path import join", "join('a', 'b')"),
         (
-            "from inspect_sentinel import call_text, find_words",
-            "find_words(call_text(step.call), ['rm'])",
-        ),
-        ("import inspect_sentinel", "inspect_sentinel.Observation.score(0.1)"),
-        ("from pydantic import BaseModel", "BaseModel.model_validate({})"),
-        ("import os", "os.path.normpath('a/../b')"),
-        ("from os.path import normpath", "normpath('a/../b')"),
-        ("import os\nlast = os.environ", "[(last := w) for w in ['a']]\nlast.upper()"),
-        ("import random", "random.Random(0).random()\nrandom.random()"),
-        ("import heapq, bisect", "heapq.heappush([], 1)\nbisect.bisect([1], 0)"),
-        ("import hashlib", "hashlib.sha256(b'a').hexdigest()"),
-        ("import statistics", "statistics.mean([1.0, 2.0])"),
-        ("import asyncio", "asyncio.Lock()\nasyncio.wait_for"),
-        ("import anyio", "anyio.create_task_group()\nanyio.sleep(0)"),
-        ("from collections import Counter", "Counter('abc').most_common(1)"),
-        ("import logging", "logging.getLogger(__name__).info('a')"),
-        ("import builtins", "builtins.len('a')"),
-        ("import string", "'a'.translate(str.maketrans('', '', string.punctuation))"),
-        ("", "from os import path\npath.join('a', 'b')"),
-        (
-            "from typing import TYPE_CHECKING",
-            "if TYPE_CHECKING:\n    from inspect_ai.model import Model",
-        ),
-        ("", "import os\nos.path.join('a', 'b')"),
-        ("", "from inspect_ai import core"),
-        (
-            "import os",
-            "def inner(path: os.PathLike[str]) -> os.PathLike[str]:\n    return path",
+            "from inspect_ai.model import get_model",
+            "get_model()",
+            "get_model",
+            "function `get_model` from `inspect_ai.model._model`",
         ),
         (
-            "import os as names\nclass Words:\n    names = ('a', 'b')\n    upper = [n.upper() for n in names]",
-            "Words.upper",
-        ),
-        ("import ipaddress", "ipaddress.ip_address('10.0.0.1').is_private"),
-        ("import graphlib", "graphlib.TopologicalSorter({}).static_order()"),
-        ("import codecs", "codecs.decode('nop', 'rot13')\ncodecs.strict_errors"),
-        ("import csv", "list(csv.reader(['a,b']))"),
-        ("import errno", "errno.ENOENT"),
-        ("import colorsys", "colorsys.rgb_to_hsv(0.1, 0.2, 0.3)"),
-        ("import traceback", "traceback.format_exc()"),
-        ("import io", "io.StringIO('a').read()\nio.BytesIO(b'a')"),
-        (
-            "import io",
-            "io.StringIO('a').seek(0, io.SEEK_END)\nio.SEEK_SET\nio.SEEK_CUR",
+            "import inspect_ai.util",
+            "inspect_ai.util.sandbox()",
+            "inspect_ai.util.sandbox",
+            "function `sandbox` from `inspect_ai.util._sandbox.context`",
         ),
         (
-            "from collections import namedtuple\nimport enum\nPoint = namedtuple('Point', 'x y')\nColor = enum.Enum('Color', 'RED')",
-            "Point(1, 2).x\nColor.RED",
-        ),
-        ("import io\nfrom io import SEEK_END", "io.StringIO('a').seek(0, SEEK_END)"),
-        *(
-            [("import tomllib", "tomllib.loads('a = 1')")]
-            if sys.version_info >= (3, 11)
-            else []
+            "from inspect_ai.util import store",
+            "store()",
+            "store",
+            "function `store` from `inspect_ai.util._store`",
         ),
     ],
 )
-def test_allowed_references_pass(load: Load, setup: str, body: str) -> None:
-    configure(load(monitor_source(body, setup)))
-
-
-STDLIB = "is not on the portable standard-library list"
-BUILTIN = "which a portable function cannot call"
-EFFECTS = "which has effects a portable function cannot have"
-CORE = "inspect_ai is portable only through `inspect_ai.core`"
+def test_inspect_ai_outside_core_fails(
+    load: Load, setup: str, body: str, reference: str, resolved: str
+) -> None:
+    message = refused(load, body, setup)
+    assert f"`{reference}` is {resolved}, and {INSPECT}" in message
 
 
 @pytest.mark.parametrize(
-    "setup,body,reference,reason",
+    "setup,body,reference",
     [
-        ("import os", "os.environ.get('HOME')", "os.environ", STDLIB),
-        ("import os", "os.getenv('HOME')", "os.getenv", STDLIB),
-        ("import os", "os.system('ls')", "os.system", f"`os` {STDLIB}"),
-        ("import os", "os.sep", "os.sep", f"`os` {STDLIB}"),
-        ("from os import sep", "sep", "sep", f"`os` {STDLIB}"),
-        ("import sys", "sys.modules", "sys.modules", STDLIB),
-        ("import sys", "sys", "sys", STDLIB),
-        ("import subprocess", "subprocess.run(['ls'])", "subprocess.run", STDLIB),
+        ("import os", "os.environ['KEY']", "os.environ"),
+        ("import os", "os.environ.get('KEY')", "os.environ"),
+        ("import os", "os.environb", "os.environb"),
+        ("import os", "os.getenv('KEY')", "os.getenv"),
+        ("import os", "os.putenv('KEY', 'a')", "os.putenv"),
+        ("import os", "os.unsetenv('KEY')", "os.unsetenv"),
+        ("from os import environ", "environ['KEY']", "environ"),
+        ("from os import getenv as env", "env('KEY')", "env"),
+    ],
+)
+def test_environment_variables_fail(
+    load: Load, setup: str, body: str, reference: str
+) -> None:
+    message = refused(load, body, setup)
+    assert f"`{reference}` is " in message
+    assert ENVIRONMENT in message
+
+
+@pytest.mark.parametrize(
+    "setup,body,reference",
+    [
+        ("import subprocess", "subprocess.run(['ls'])", "subprocess.run"),
+        ("from subprocess import run", "run(['ls'])", "run"),
+        ("import os", "os.system('ls')", "os.system"),
+        ("import os", "os.execv('ls', [])", "os.execv"),
+        ("import os", "os.fork()", "os.fork"),
+        ("import os", "os.spawnl(0, 'ls')", "os.spawnl"),
+        ("import os", "os.popen('ls')", "os.popen"),
+        ("import os", "os.kill(1, 9)", "os.kill"),
+        ("import threading", "threading.Thread()", "threading.Thread"),
+        ("import threading", "threading.Lock()", "threading.Lock"),
+        ("import multiprocessing", "multiprocessing.Pool()", "multiprocessing.Pool"),
         (
-            "import socket",
-            "socket.create_connection(('x', 1))",
-            "socket.create_connection",
-            STDLIB,
+            "import concurrent.futures",
+            "concurrent.futures.ThreadPoolExecutor()",
+            "concurrent.futures.ThreadPoolExecutor",
         ),
-        ("import pathlib", "pathlib.Path('f').read_text()", "pathlib.Path", STDLIB),
-        ("import pickle", "pickle.loads(b'')", "pickle.loads", STDLIB),
-        ("import io", "io.open('f')", "io.open", STDLIB),
+        (
+            "from concurrent.futures import ProcessPoolExecutor",
+            "ProcessPoolExecutor()",
+            "ProcessPoolExecutor",
+        ),
+        ("import asyncio", "asyncio.to_thread(len, 'a')", "asyncio.to_thread"),
         (
             "import asyncio",
             "asyncio.create_subprocess_exec('ls')",
             "asyncio.create_subprocess_exec",
-            STDLIB,
-        ),
-        ("reader = open", "reader('f')", "reader", STDLIB),
-        ("import builtins", "builtins.open('f')", "builtins.open", STDLIB),
-        (
-            "import importlib",
-            "importlib.import_module('os')",
-            "importlib.import_module",
-            STDLIB,
-        ),
-        ("", "open('f')", "open", BUILTIN),
-        ("", "input()", "input", BUILTIN),
-        ("", "eval('1')", "eval", BUILTIN),
-        ("", "exec('1')", "exec", BUILTIN),
-        ("", "compile('1', 'f', 'eval')", "compile", BUILTIN),
-        ("", "__import__('os')", "__import__", BUILTIN),
-        ("", "breakpoint()", "breakpoint", BUILTIN),
-        ("from inspect_ai.model import get_model", "get_model()", "get_model", CORE),
-        (
-            "import inspect_ai.model",
-            "inspect_ai.model.get_model()",
-            "inspect_ai.model.get_model",
-            CORE,
-        ),
-        ("import os as o", "o.environ['HOME']", "o.environ", STDLIB),
-        ("from os import environ as e", "e.get('HOME')", "e", STDLIB),
-        ("from os import *", "getenv('HOME')", "getenv", STDLIB),
-        (
-            "import functools, os",
-            "functools.partial(os.system, 'ls')",
-            "os.system",
-            STDLIB,
-        ),
-        ("", "import subprocess\nsubprocess.run(['ls'])", "subprocess.run", STDLIB),
-        (
-            "import functools, os\nRUN = functools.partial(os.system, 'ls')",
-            "RUN()",
-            "RUN",
-            STDLIB,
-        ),
-        (
-            "import functools, os\nRUN = functools.partial(map, os.getenv)",
-            "RUN(['HOME'])",
-            "RUN",
-            STDLIB,
-        ),
-        ("", "from os import environ", "from os import environ", STDLIB),
-        ("", "from json import tool", "from json import tool", STDLIB),
-        ("import os", "(lambda: os.getenv('HOME'))()", "os.getenv", STDLIB),
-        ("import os", "[os.getenv(k) for k in ('A', 'B')]", "os.getenv", STDLIB),
-        ("import os", "[os for os in os.listdir('.')]", "os.listdir", STDLIB),
-        (
-            "import os",
-            "def inner() -> str | None:\n    return os.getenv('HOME')\ninner()",
-            "os.getenv",
-            STDLIB,
-        ),
-        (
-            "",
-            "def inner() -> object:\n    return subprocess.run\nimport subprocess",
-            "subprocess.run",
-            STDLIB,
-        ),
-        (
-            "import os",
-            "os = 1\ndef inner() -> object:\n    global os\n    return os.getcwd()",
-            "os.getcwd",
-            STDLIB,
-        ),
-        ("", "import os.path\nos.system('ls')", "os.system", STDLIB),
-        (
-            "",
-            "import posixpath\nposixpath.os.system('ls')",
-            "posixpath.os.system",
-            STDLIB,
-        ),
-        (
-            "from inspect_sentinel._runner import run_sentinel",
-            "run_sentinel",
-            "run_sentinel",
-            "only `inspect_sentinel`'s public API is portable",
-        ),
-        (
-            "import functools, os\n@functools.cache\ndef helper() -> None:\n    os.system('ls')",
-            "helper()",
-            "os.system",
-            STDLIB,
-        ),
-        (
-            "def make() -> type:\n    import subprocess\n    class Helper:\n        def run(self) -> object:\n            return subprocess.run\n    return Helper\nHelper = make()",
-            "Helper().run()",
-            "subprocess.run",
-            STDLIB,
-        ),
-        (
-            "import os\nclass Paths:\n    home: os.PathLike[str]",
-            "Paths",
-            "os.PathLike",
-            STDLIB,
-        ),
-        ("import logging", "logging.FileHandler('f')", "logging.FileHandler", EFFECTS),
-        (
-            "import logging",
-            "logging.basicConfig(filename='f')",
-            "logging.basicConfig",
-            EFFECTS,
-        ),
-        ("import uuid", "uuid.uuid1()", "uuid.uuid1", EFFECTS),
-        ("import uuid", "uuid.getnode()", "uuid.getnode", EFFECTS),
-        ("import calendar", "calendar.main", "calendar.main", EFFECTS),
-        ("import codecs", "codecs.open('f')", "codecs.open", EFFECTS),
-        *(
-            [
-                (
-                    "import contextlib",
-                    "contextlib.chdir('/')",
-                    "contextlib.chdir",
-                    EFFECTS,
-                )
-            ]
-            if sys.version_info >= (3, 11)
-            else []
-        ),
-        *(
-            [("import time", "time.tzset()", "time.tzset", EFFECTS)]
-            if hasattr(time, "tzset")
-            else []
         ),
     ],
 )
-def test_disallowed_references_fail(
-    load: Load, setup: str, body: str, reference: str, reason: str
+def test_processes_and_threads_fail(
+    load: Load, setup: str, body: str, reference: str
 ) -> None:
-    match = f"`{re.escape(reference)}` is [^\\n]*{re.escape(reason)}"
-    with pytest.raises(PortabilityError, match=match):
-        configure(load(monitor_source(body, setup)))
+    message = refused(load, body, setup)
+    assert f"`{reference}` is " in message
+    assert PROCESSES in message
+
+
+@pytest.mark.parametrize(
+    "setup,body,reference",
+    [
+        ("import socket", "socket.socket()", "socket.socket"),
+        (
+            "import socket",
+            "socket.create_connection(('a', 1))",
+            "socket.create_connection",
+        ),
+        ("from socket import AF_INET", "AF_INET", "AF_INET"),
+        ("import ssl", "ssl.create_default_context()", "ssl.create_default_context"),
+        ("import ssl", "ssl.PROTOCOL_TLS_CLIENT", "ssl.PROTOCOL_TLS_CLIENT"),
+        (
+            "import http.client",
+            "http.client.HTTPSConnection('a')",
+            "http.client.HTTPSConnection",
+        ),
+        (
+            "import urllib.request",
+            "urllib.request.urlopen('https://a')",
+            "urllib.request.urlopen",
+        ),
+        (
+            "import asyncio",
+            "asyncio.open_connection('a', 1)",
+            "asyncio.open_connection",
+        ),
+        ("import asyncio", "asyncio.start_server(len)", "asyncio.start_server"),
+    ],
+)
+def test_direct_networking_fails(
+    load: Load, setup: str, body: str, reference: str
+) -> None:
+    message = refused(load, body, setup)
+    assert f"`{reference}` is " in message
+    assert NETWORK in message
+
+
+def test_a_package_with_compiled_code_fails(load: Load, site: Path) -> None:
+    name = f"fakec_{uuid.uuid4().hex}"
+    write_distribution(
+        site,
+        name,
+        {
+            f"{name}/__init__.py": "LIMIT = 3\ndef fast(): return 1\n",
+            f"{name}/_speedups.cpython-312-x86_64-linux-gnu.so": "",
+        },
+    )
+    message = refused(load, f"{name}.fast()\n{name}.LIMIT", f"import {name}")
+    reason = f"and `{name}` contains compiled extension modules, which a portable function cannot load"
+    assert f"`{name}.fast` is function `fast` from `{name}`, {reason}" in message
+    assert f"`{name}.LIMIT` is a `int` from `builtins`, {reason}" in message
+
+
+def test_a_pure_python_package_passes(load: Load, site: Path) -> None:
+    name = f"fakepure_{uuid.uuid4().hex}"
+    write_distribution(site, name, {f"{name}/__init__.py": "def get(): return 1\n"})
+    configure(load(monitor_source(f"{name}.get()", f"import {name}")))
+
+
+def test_pydantic_core_passes(load: Load) -> None:
+    configure(
+        load(
+            monitor_source(
+                "to_json({})\nValidationError",
+                "from pydantic_core import ValidationError, to_json",
+            )
+        )
+    )
+
+
+# What passes
 
 
 @pytest.mark.parametrize(
     "setup,body",
     [
-        ("import builtins", "getattr(builtins, 'open')('f')"),
         (
-            "import os\nfrom typing import NamedTuple\nclass Holder(NamedTuple):\n    fn: object\nHOLDER = Holder(os.system)",
-            "HOLDER.fn('ls')",
+            "from inspect_ai.core import ChatMessageUser, ToolCall",
+            "ChatMessageUser(content='a')\nToolCall",
         ),
+        ("import inspect_ai.core", "inspect_ai.core.ModelOutput"),
+        (
+            "from inspect_ai.model import ChatMessage, ChatMessageUser, GenerateConfig, StopReason",
+            "ChatMessage\nChatMessageUser\nGenerateConfig()\nStopReason",
+        ),
+        (
+            "import inspect_ai.model",
+            "inspect_ai.model.ModelOutput.from_content('m', 'a')",
+        ),
+        ("from inspect_ai.scorer import Reference", "Reference"),
+        ("from inspect_ai.util import StoreModel", "StoreModel"),
+        ("from inspect_ai.tool import ToolCall", "ToolCall"),
     ],
 )
-def test_deliberate_indirection_is_not_caught(
+def test_inspect_ai_core_and_its_aliases_pass(
     load: Load, setup: str, body: str
 ) -> None:
     configure(load(monitor_source(body, setup)))
 
 
-def test_a_third_party_package_fails(load: Load, third_party: str) -> None:
-    module = load(monitor_source(f"{third_party}.get('u')", f"import {third_party}"))
-    with pytest.raises(PortabilityError, match="is not a portable dependency"):
-        configure(module)
-
-
-def test_inspect_ai_core_passes(load: Load) -> None:
-    # importing inspect_ai.model replaces ModelOutput.from_message with its own
-    setup = "import inspect_ai.model\nfrom inspect_ai.core import ChatMessageUser, ModelOutput\nfrom inspect_ai.model import ChatMessageAssistant"
-    body = "ChatMessageUser(content='a')\nModelOutput.from_message(ChatMessageAssistant(content='b'))"
+@pytest.mark.parametrize(
+    "setup,body",
+    [
+        (
+            "import os",
+            "os.path.join('a', 'b')\nos.path.exists('a')\nos.sep\nos.getcwd()",
+        ),
+        ("from os import path, sep", "path.join('a', sep)"),
+        ("import sys", "sys.argv\nsys.version_info"),
+        ("", "open('f')\nexec('1')\neval('1')\ncompile('1', 'f', 'eval')"),
+        ("import pathlib", "pathlib.Path('f').read_text()"),
+        ("import io, pickle", "io.open('f')\npickle.loads(b'')"),
+        ("import time", "time.sleep(1)\ntime.monotonic()"),
+        ("import logging", "logging.basicConfig()\nlogging.getLogger('a').info('a')"),
+        ("import json, re, math", "json.dumps({})\nre.compile('a')\nmath.sqrt(2)"),
+        ("import asyncio", "asyncio.Lock()\nasyncio.sleep(0)\nasyncio.wait_for"),
+        ("import concurrent.futures", "concurrent.futures.Future"),
+        ("import anyio", "anyio.sleep(0)\nanyio.run_process\nanyio.to_thread.run_sync"),
+        ("from pydantic import BaseModel", "BaseModel"),
+        ("import http", "http.HTTPStatus.OK"),
+    ],
+)
+def test_what_is_not_checked_passes(load: Load, setup: str, body: str) -> None:
     configure(load(monitor_source(body, setup)))
-
-
-def test_a_helper_in_the_same_module_is_followed(load: Load) -> None:
-    setup = """
-def clean(text: str) -> str:
-    return text.strip()
-
-def read(path: str) -> str:
-    return open(path).read()
-"""
-    configure(load(monitor_source("clean(step.call.function)", setup)))
-    with pytest.raises(PortabilityError, match=r"in read: `open`.*reached from"):
-        configure(load(monitor_source("read('f')", setup)))
-
-
-def test_a_helper_in_another_local_module_is_followed(load: Load) -> None:
-    helpers = load(
-        "import subprocess\n\ndef run() -> None:\n    subprocess.run(['ls'])\n"
-    )
-    module = load(monitor_source("run()", f"from {helpers.__name__} import run"))
-    with pytest.raises(PortabilityError, match="`subprocess.run`"):
-        configure(module)
-
-
-def test_allowed_data_in_a_helper_module_is_not_looked_into(load: Load) -> None:
-    helpers = load(
-        "import logging\nfrom pydantic import TypeAdapter\nlog = logging.getLogger('x')\nSCORES = TypeAdapter(list[float])\n"
-    )
-    body = f"{helpers.__name__}.log.info('a')\n{helpers.__name__}.SCORES.validate_json('[0.1]')"
-    configure(load(monitor_source(body, f"import {helpers.__name__}")))
-
-
-def test_a_class_in_a_module_outside_sys_modules_is_checked(tmp_path: Path) -> None:
-    setup = "import os\n\nclass Helper:\n    def home(self) -> str | None:\n        return os.getenv('HOME')\n"
-    path = tmp_path / "task_file.py"
-    path.write_text(monitor_source("Helper().home()", setup))
-    # how `inspect eval` loads a task file: named by its path, not in sys.modules
-    loader = importlib.machinery.SourceFileLoader(path.as_posix(), path.as_posix())
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    with pytest.raises(PortabilityError, match=r"in Helper\.home: `os\.getenv`"):
-        configure(module)
-
-
-def test_a_module_imported_inside_the_function_is_followed_only_if_loaded(
-    load: Load, tmp_path: Path
-) -> None:
-    helpers = load(
-        "import subprocess\n\ndef run() -> None:\n    subprocess.run(['ls'])\n"
-    )
-    module = load(
-        monitor_source(f"import {helpers.__name__}\n{helpers.__name__}.run()")
-    )
-    with pytest.raises(PortabilityError, match="`subprocess.run`"):
-        configure(module)
-    unloaded = f"fixture_{uuid.uuid4().hex}"
-    (tmp_path / f"{unloaded}.py").write_text(
-        "import os\n\ndef home() -> str | None:\n    return os.getenv('HOME')\n"
-    )
-    configure(load(monitor_source(f"from {unloaded} import home\nhome()")))
-    assert unloaded not in sys.modules
-
-
-def test_a_wrapping_decorator_under_monitor_is_checked(load: Load) -> None:
-    source = (
-        HEADER
-        + """
-import functools
-import os
-
-def logged(factory):
-    @functools.wraps(factory)
-    def wrapper():
-        os.system("ls")
-        return factory()
-
-    return wrapper
-
-@monitor
-@logged
-def watched() -> Monitor:
-    async def check(context: Context, step: BeforeToolCall) -> Observation:
-        return Observation.score(0.0)
-
-    return check
-"""
-    )
-    with pytest.raises(PortabilityError, match="`os.system`"):
-        configure(load(source))
-
-
-def test_a_function_of_unknown_module_fails(load: Load) -> None:
-    setup = "namespace = {}\nexec('def helper():\\n    return 1', namespace)\nhelper = namespace['helper']"
-    with pytest.raises(PortabilityError, match="its module is unknown"):
-        configure(load(monitor_source("helper()", setup)))
-
-
-def test_an_object_that_cannot_be_inspected_fails(load: Load) -> None:
-    setup = """
-class Proxy:
-    @property
-    def __class__(self):
-        raise RuntimeError("unbound")
-
-PROXY = Proxy()
-"""
-    with pytest.raises(PortabilityError, match="could not be inspected"):
-        configure(load(monitor_source("PROXY.value", setup)))
-
-
-def test_an_installed_package_can_use_its_own_helpers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    name = f"mymons_{uuid.uuid4().hex}"
-    package = tmp_path / "site-packages" / name
-    package.mkdir(parents=True)
-    source = monitor_source(
-        "_score(step.call.function)",
-        "def _score(text: str) -> float:\n    return float(len(text))\n",
-    )
-    (package / "__init__.py").write_text(source)
-    prepend_path(monkeypatch, str(tmp_path / "site-packages"))
-    try:
-        configure(importlib.import_module(name))
-    finally:
-        sys.modules.pop(name, None)
-
-
-def test_helpers_that_call_each_other_are_checked_once(load: Load) -> None:
-    setup = """
-def ping(n: int) -> int:
-    return pong(n - 1) if n else 0
-
-def pong(n: int) -> int:
-    return ping(n - 1) if n else 0
-"""
-    configure(load(monitor_source("ping(3)", setup)))
 
 
 def test_an_unreferenced_task_beside_the_monitor_passes(load: Load) -> None:
     setup = """
 import json
+import subprocess
 from inspect_ai import Task, task
 from inspect_ai.model import get_model
+from inspect_ai.util import sandbox
 
 @task
 def unreferenced() -> Task:
     get_model()
+    sandbox()
+    subprocess.run(["ls"])
     return Task()
 """
     configure(load(monitor_source("json.dumps({})", setup)))
 
 
-def test_class_methods_are_followed(load: Load) -> None:
-    clean = """
-class Rules:
-    LIMIT = 3
-
-    @staticmethod
-    def clean(text: str) -> str:
-        return text.strip()
-"""
-    configure(load(monitor_source("Rules.clean('a')\nRules.LIMIT", clean)))
-    setup = """
-import os
-
-class Rules:
-    LIMIT = 3
-
-    @staticmethod
-    def clean(text: str) -> str:
-        return text.strip()
-
-    def home(self) -> str | None:
-        return os.getenv("HOME")
-"""
-    with pytest.raises(PortabilityError, match=r"in Rules\.home: `os\.getenv`"):
-        configure(load(monitor_source("Rules().home()", setup)))
+def test_a_helper_outside_the_factory_is_not_followed(load: Load) -> None:
+    setup = "import os\n\ndef home() -> object:\n    return os.getenv('HOME')\n"
+    configure(load(monitor_source("home()", setup)))
 
 
-def test_classes_for_store_as_and_pydantic_pass(load: Load) -> None:
-    setup = """
-from inspect_ai.scorer import Reference
-from inspect_ai.util import StoreModel
-from pydantic import BaseModel, Field
-
-class Count(StoreModel):
-    n: int = 0
-
-class Verdict(BaseModel):
-    score: float = Field(ge=0.0, le=1.0)
-
-CITE = Reference(type="message", id="m0")
-"""
+def test_annotations_are_not_checked(load: Load) -> None:
     body = """
-context.store_as(Count).n += 1
-Verdict.model_validate_json('{"score": 0.5}')
-Reference(type="message", id="m1")
-Observation.score(0.5, references=[CITE])
-"""
+    def inner(model: Model | None = None) -> Model | None:
+        return model
+    held: Model | None = inner()
+    """
+    configure(load(monitor_source(body, "from inspect_ai.model import Model")))
+
+
+# Scoping
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "os = step\nos.environ",
+        "for subprocess in []:\n    pass\nsubprocess.run",
+        "def inner(getenv: object) -> None:\n    pass\ngetenv('KEY')",
+        "def inner() -> None:\n    socket = 1\nsocket.socket",
+        "[socket for socket in []]\nsocket.socket",
+        "try:\n    pass\nexcept Exception as os:\n    pass\nos.environ",
+    ],
+)
+def test_a_name_assigned_in_the_factory_is_local_throughout(
+    load: Load, body: str
+) -> None:
+    setup = "import os, socket, subprocess\nfrom os import getenv"
     configure(load(monitor_source(body, setup)))
 
 
-def test_local_scopes_pass(load: Load) -> None:
-    body = """
-def double(x: int) -> int:
-    return x * 2
-square = lambda x: x * x
-values = [double(i) for i in range(3)]
-pairs = {k: square(v) for k, v in zip("ab", values)}
-"""
-    configure(load(monitor_source(body)))
+def test_a_factory_parameter_shadowing_a_module_passes(load: Load) -> None:
+    source = f"""{HEADER}import os
 
-
-def test_closures_over_factory_parameters_pass(load: Load) -> None:
-    source = (
-        HEADER
-        + """
 @monitor
-def watched(client: object = None, limit: float = 0.5) -> Monitor:
+def watched(os: str = "a") -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation:
-        assert client is not None
-        return Observation.score(limit)
-
-    return check
-"""
-    )
-    module = load(source)
-    configure_with = cast(Callable[..., object], module.watched)
-    configure_with(client=sys.modules["subprocess"])
-
-
-def test_a_default_argument_is_checked(load: Load) -> None:
-    source = (
-        HEADER
-        + """
-@monitor
-def watched() -> Monitor:
-    async def check(context: Context, step: BeforeToolCall, read=open) -> Observation:
+        os.environ
         return Observation.score(0.0)
 
     return check
 """
-    )
-    with pytest.raises(PortabilityError, match="`open`"):
-        configure(load(source))
+    configure(load(source))
 
 
-def test_the_factory_body_is_checked(load: Load) -> None:
-    source = (
-        HEADER
-        + """
-import os
+def test_a_closure_cell_is_resolved(load: Load) -> None:
+    source = f"""{HEADER}
+def make() -> object:
+    import subprocess as sp
+
+    @monitor
+    def watched() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation:
+            sp.run(["ls"])
+            return Observation.score(0.0)
+
+        return check
+
+    return watched
+"""
+    factory = cast(Callable[[], Callable[[], object]], load(source).make)()
+    with pytest.raises(
+        PortabilityError, match=r"`sp\.run` is function `run` from `subprocess`"
+    ):
+        factory()
+
+
+def test_the_factory_body_and_nested_functions_are_checked(load: Load) -> None:
+    source = f"""{HEADER}import os
+import subprocess
 
 @monitor
 def watched() -> Monitor:
-    home = os.getenv("HOME")
+    key = os.environ["KEY"]
+    run = lambda: subprocess.run(["ls"])
+
+    def helper() -> object:
+        return os.getenv("A")
 
     async def check(context: Context, step: BeforeToolCall) -> Observation:
-        return Observation.score(0.0, home)
+        return Observation.score(0.0, key)
 
     return check
 """
-    )
-    with pytest.raises(PortabilityError, match=r"in watched: `os\.getenv`"):
+    with pytest.raises(PortabilityError) as raised:
         configure(load(source))
+    message = str(raised.value)
+    assert ":7 in watched: `os.environ`" in message
+    assert ":8 in watched.<locals>.<lambda>: `subprocess.run`" in message
+    assert ":11 in watched.<locals>.helper: `os.getenv`" in message
 
 
-def test_portable_false_skips_the_check(load: Load) -> None:
-    module = load(monitor_source("open('f')", decorator="(portable=False)"))
-    configure(module)
-    assert registry_info(module.watched).metadata["portable"] is False
+# Imports inside the factory
+
+
+@pytest.mark.parametrize(
+    "body,reference",
+    [
+        ("import subprocess", "import subprocess"),
+        ("import json, threading", "import threading"),
+        ("from os import environ", "from os import environ"),
+        (
+            "from inspect_ai.model import get_model",
+            "from inspect_ai.model import get_model",
+        ),
+        ("import xmlrpc.client", "import xmlrpc.client"),
+    ],
+)
+def test_an_import_inside_the_factory_is_judged(
+    load: Load, body: str, reference: str
+) -> None:
+    assert f"`{reference}` is " in refused(load, body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "import json\njson.dumps({})",
+        "from inspect_ai.core import ToolCall",
+        "from inspect_ai.model import ChatMessageUser",
+        "import os\nos.path.join('a', 'b')",
+    ],
+)
+def test_an_allowed_import_inside_the_factory_passes(load: Load, body: str) -> None:
+    configure(load(monitor_source(body)))
+
+
+def test_the_check_imports_nothing(load: Load, site: Path) -> None:
+    name = f"fakec_{uuid.uuid4().hex}"
+    write_distribution(site, name, {f"{name}/__init__.py": "", f"{name}/_c.so": ""})
+    unloaded = f"unloaded_{uuid.uuid4().hex}"
+    (site / f"{unloaded}.py").write_text("")
+    module = load(monitor_source(f"import {unloaded}\nimport {name}\n{name}.x"))
+    before = set(sys.modules)
+    with pytest.raises(PortabilityError, match=f"`import {name}`"):
+        configure(module)
+    assert set(sys.modules) == before
+
+
+# The error
+
+
+def test_every_violation_is_reported_together(load: Load) -> None:
+    body = """
+    os.getenv("A")
+    subprocess.run(["ls"])
+    get_model()
+    """
+    setup = "import os, subprocess\nfrom inspect_ai.model import get_model"
+    module = load(monitor_source(body, setup))
+    with pytest.raises(PortabilityError) as raised:
+        configure(module)
+    file = module.__file__
+    lines = str(raised.value).splitlines()
+    assert (
+        lines[0]
+        == "monitor watched is portable, but its code references what a portable monitor cannot use:"
+    )
+    assert lines[1:4] == [
+        f"- {file}:8 in watched.<locals>.check: `os.getenv` is function `getenv` from `os`, and {ENVIRONMENT}; take configuration as factory parameters",
+        f"- {file}:9 in watched.<locals>.check: `subprocess.run` is function `run` from `subprocess`, and {PROCESSES}",
+        f"- {file}:10 in watched.<locals>.check: `get_model` is function `get_model` from `inspect_ai.model._model`, and {INSPECT}",
+    ]
+    fixes = lines[4]
+    for fix in (
+        "context.host.generate()",
+        "context.host.ask_human()",
+        "context.store_as()",
+        "factory parameters",
+        "move the reference",
+        "@monitor(portable=False)",
+    ):
+        assert fix in fixes
+
+
+def test_a_protocol_is_checked(load: Load) -> None:
+    source = """
+import os
+from inspect_sentinel import Context, Decision, Protocol, Step, protocol
+
+@protocol
+def decides_portably() -> Protocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        os.getenv("A")
+        return None
+
+    return decide
+"""
+    with pytest.raises(
+        PortabilityError, match="protocol decides_portably is portable"
+    ) as raised:
+        configure(load(source), "decides_portably")
+    assert "@protocol(portable=False)" in str(raised.value)
+
+
+def test_a_portability_error_is_a_type_error() -> None:
+    assert issubclass(PortabilityError, TypeError)
+
+
+# Opting out and when the check runs
 
 
 def test_portable_is_recorded_in_the_registry(load: Load) -> None:
@@ -643,78 +564,82 @@ def test_portable_is_recorded_in_the_registry(load: Load) -> None:
     assert registry_info(module.watched).metadata["portable"] is True
 
 
+def test_portable_false_skips_the_check(load: Load) -> None:
+    module = load(
+        monitor_source("os.getenv('A')", "import os", decorator="(portable=False)")
+    )
+    configure(module)
+    assert registry_info(module.watched).metadata["portable"] is False
+
+
 def test_portable_must_be_a_bool(load: Load) -> None:
     with pytest.raises(TypeError, match="portable must be True or False"):
         load(monitor_source("pass", decorator="(portable=1)"))
 
 
-def test_a_protocol_is_checked(load: Load) -> None:
-    source = """
-from inspect_sentinel import Context, Decision, Protocol, Step, protocol
-
-@protocol
-def decides_portably() -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
-        open("f")
-        return None
-
-    return decide
-"""
-    with pytest.raises(PortabilityError, match="protocol decides_portably"):
-        configure(load(source), "decides_portably")
+def test_importing_checks_nothing(load: Load) -> None:
+    load(monitor_source("os.getenv('A')", "import os"))
 
 
 def test_without_source_the_check_is_skipped() -> None:
     namespace: dict[str, Any] = {}
-    code = compile(monitor_source("open('f')"), "<string>", "exec")
+    code = compile(monitor_source("os.getenv('A')", "import os"), "<string>", "exec")
     exec(code, namespace)
     namespace["watched"]()
+
+
+def test_a_factory_whose_file_is_gone_is_skipped(load: Load) -> None:
+    module = load(monitor_source("os.getenv('A')", "import os"))
+    Path(cast(str, module.__file__)).unlink()
+    linecache.clearcache()
+    configure(module)
+
+
+@pytest.mark.parametrize(
+    "replacement,reason",
+    [
+        ("def (:\n", "its source could not be parsed"),
+        ("x = 1\n", "its source could not be located"),
+    ],
+)
+def test_a_factory_whose_source_cannot_be_used_could_not_be_checked(
+    load: Load, replacement: str, reason: str
+) -> None:
+    module = load(monitor_source("pass"))
+    Path(cast(str, module.__file__)).write_text(replacement)
+    linecache.clearcache()
+    with pytest.raises(
+        PortabilityError,
+        match=rf"`watched` is monitor factory `watched`, and could not be checked \({reason}\)",
+    ):
+        configure(module)
 
 
 def test_a_jupyter_cell_is_checked() -> None:
     interactiveshell = pytest.importorskip("IPython.core.interactiveshell")
     shell = interactiveshell.InteractiveShell.instance()
     try:
-        shell.run_cell(monitor_source("open('f')"))
-        with pytest.raises(PortabilityError, match="`open`"):
+        shell.run_cell(monitor_source("os.getenv('A')", "import os"))
+        with pytest.raises(PortabilityError, match="`os.getenv`"):
             shell.run_cell("watched()").raise_error()
     finally:
         interactiveshell.InteractiveShell.clear_instance()
 
 
-def test_a_reloaded_helper_is_rechecked(load: Load) -> None:
-    helpers = load("def helper() -> object:\n    return 1\n")
-    module = load(
-        monitor_source(f"{helpers.__name__}.helper()", f"import {helpers.__name__}")
-    )
-    configure(module)
-    path = Path(cast(str, helpers.__file__))
-    path.write_text("def helper() -> object:\n    return open('f')\n")
-    linecache.clearcache()
-    importlib.reload(helpers)
-    with pytest.raises(PortabilityError, match="`open`"):
-        configure(module)
+def test_a_config_file_entry_raises_portability_error(
+    load: Load, tmp_path: Path
+) -> None:
+    name = f"cfg_portable_{uuid.uuid4().hex}"
+    load(monitor_source("os.getenv('A')", "import os", decorator=f"(name={name!r})"))
+    config = tmp_path / "sentinel.yaml"
+    config.write_text(f"sentinel:\n  name: {name}\n")
+    with pytest.raises(
+        PortabilityError, match=rf"sentinel: monitor {name} is portable"
+    ):
+        sentinel_from_config(str(config))
 
 
-def test_every_violation_is_reported_together(load: Load) -> None:
-    body = """
-from os import getenv
-open('f')
-os.environ['HOME']
-os.getenv('A') or os.getenv('B')
-"""
-    module = load(monitor_source(body, "import os"))
-    with pytest.raises(PortabilityError) as raised:
-        configure(module)
-    message = str(raised.value)
-    lines = [line for line in message.splitlines() if line.startswith("- ")]
-    assert len(lines) == 4
-    assert f"{module.__file__}:" in lines[0]
-    assert "watched.<locals>.check" in lines[0]
-    assert "monitor watched is portable" in message
-    assert "context.host.generate()" in message
-    assert "@monitor(portable=False)" in message
-    assert "ask for it" not in message
+# Realistic monitors, shipped protocols and examples
 
 
 @monitor
@@ -740,12 +665,17 @@ def test_shipped_protocols_pass(configure_shipped: Callable[[], object]) -> None
 
 
 @pytest.fixture
-def examples(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    prepend_path(monkeypatch, str(EXAMPLES))
+def modules_from(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[Path], None]]:
     before = set(sys.modules)
-    yield
+    roots: list[Path] = []
+
+    def modules_from(root: Path) -> None:
+        roots.append(root)
+        prepend_path(monkeypatch, str(root))
+
+    yield modules_from
     for name in set(sys.modules) - before:
-        if Path(getattr(sys.modules[name], "__file__", "") or "").parent == EXAMPLES:
+        if Path(getattr(sys.modules[name], "__file__", "") or "").parent in roots:
             del sys.modules[name]
 
 
@@ -759,428 +689,31 @@ def examples(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         ("nested", "nested"),
     ],
 )
-@pytest.mark.usefixtures("examples")
-def test_examples(example: str, task: str) -> None:
+def test_examples(
+    modules_from: Callable[[Path], None], example: str, task: str
+) -> None:
+    modules_from(EXAMPLES)
     getattr(importlib.import_module(example), task)()
 
 
-FLUSH_LEFT_CHECK = '''
-        async def check(context: Context, step: BeforeToolCall) -> Observation:
-            prompt = """
-flush-left template
-"""
-            os.getenv(prompt)
-            return Observation.score(0.0)
-
-        return check
-'''
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        f"""
-def make() -> object:
-    @monitor(name=NAME)
-    def made() -> Monitor:{FLUSH_LEFT_CHECK}
-    return made
-
-watched = make()
-""",
-        f"""
-class Factories:
-    @staticmethod
-    @monitor(name=NAME)
-    def made() -> Monitor:{FLUSH_LEFT_CHECK}
-
-watched = Factories.made
-""",
-    ],
-)
-def test_a_nested_factory_with_a_flush_left_string_is_checked(
-    load: Load, source: str
+def test_realistic_monitors_and_protocols_pass(
+    modules_from: Callable[[Path], None], tmp_path: Path
 ) -> None:
-    header = f"import os\n{HEADER}NAME = 'made_{uuid.uuid4().hex}'\n"
-    with pytest.raises(PortabilityError, match="`os.getenv`"):
-        configure(load(header + source))
-
-
-@pytest.mark.parametrize(
-    "setup,body",
-    [
-        (
-            'class Reader:\n    def home(self) -> object:\n        note = """\nflush-left\n"""\n        return os.getenv(note)\n\nHOME = Reader().home',
-            "HOME()",
-        ),
-        (
-            "TABLE = {\n    'home': lambda: os.getenv('HOME'),\n}\nHOME = TABLE['home']",
-            "HOME()",
-        ),
-        (
-            "def keep(f: object) -> object:\n    return f\nCALL = keep(\n    lambda: os.getenv('HOME'))",
-            "CALL",
-        ),
-    ],
-)
-def test_bound_methods_and_lambdas_are_located(
-    load: Load, setup: str, body: str
-) -> None:
-    with pytest.raises(PortabilityError, match="`os.getenv`"):
-        configure(load(monitor_source(body, f"import os\n{setup}")))
-
-
-def test_every_lambda_on_its_line_is_checked(load: Load) -> None:
-    setup = "import os\nPAIR = (os.getcwd, lambda: 1)\nCALL = PAIR[1]"
-    configure(load(monitor_source("CALL()", setup)))
-    setup = "import os\nPAIR = (lambda: 1, lambda: os.getcwd())\nCALL = PAIR[0]"
-    with pytest.raises(PortabilityError, match="`os.getcwd`"):
-        configure(load(monitor_source("CALL()", setup)))
-
-
-@pytest.mark.parametrize(
-    "setup",
-    [
-        "from dataclasses import dataclass, field\n@dataclass\nclass Helper:\n    home: object = field(default_factory=os.getcwd)",
-        "from typing import NamedTuple\nclass Helper(NamedTuple):\n    home: object = os.getcwd",
-    ],
-)
-def test_a_class_with_generated_methods_outside_sys_modules_is_checked(
-    tmp_path: Path, setup: str
-) -> None:
-    path = tmp_path / "task_file.py"
-    path.write_text(monitor_source("Helper()", f"import os\n{setup}"))
-    with pytest.raises(PortabilityError, match="`os.getcwd`"):
-        configure(load_task_file(path))
-
-
-def load_task_file(path: Path) -> ModuleType:
-    # how `inspect eval` loads a task file: named by its path, not in sys.modules
-    loader = importlib.machinery.SourceFileLoader(path.as_posix(), path.as_posix())
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
-
-
-@pytest.mark.parametrize(
-    "rewritten,reason",
-    [
-        (
-            "import os\n\n\n\ndef other() -> None:\n    pass\n",
-            "source changed since import",
-        ),
-        ("def helper(:\n", "unparseable source"),
-        (
-            "import os\n\ndef helper() -> None:\n    len('HOME')\n",
-            "source changed since import",
-        ),
-    ],
-)
-def test_a_helper_whose_source_changed_could_not_be_checked(
-    load: Load, rewritten: str, reason: str
-) -> None:
-    helpers = load("import os\n\ndef helper() -> None:\n    os.getenv('HOME')\n")
-    module = load(monitor_source("helper()", f"from {helpers.__name__} import helper"))
-    Path(cast(str, helpers.__file__)).write_text(rewritten)
-    with pytest.raises(
-        PortabilityError, match=rf"`helper`.*could not be checked \({reason}\)"
-    ):
-        configure(module)
-
-
-def test_a_helper_without_source_could_not_be_checked(load: Load) -> None:
-    setup = "exec('def helper():\\n    return 1', globals())"
-    with pytest.raises(
-        PortabilityError, match=r"`helper`.*could not be checked \(no source\)"
-    ):
-        configure(load(monitor_source("helper()", setup)))
-
-
-def test_a_class_that_raises_on_lookup_is_still_checked(load: Load) -> None:
-    setup = """
-import os
-
-class Strict(type):
-    def __getattr__(cls, name: str) -> object:
-        raise RuntimeError(name)
-
-class Helper(metaclass=Strict):
-    def home(self) -> object:
-        return os.getenv("HOME")
-"""
-    with pytest.raises(PortabilityError, match="`os.getenv`"):
-        configure(load(monitor_source("Helper().home()", setup)))
-
-
-@pytest.mark.parametrize(
-    "expression",
-    [
-        f"{'-' * 1000}len(os.getenv('HOME'))",
-        " + ".join(["len(os.getenv('HOME'))", *(["1"] * 500)]),
-    ],
-    ids=["unary", "sum"],
-)
-def test_deeply_nested_code_is_checked(load: Load, expression: str) -> None:
-    setup = f"import os\ndef helper() -> int:\n    return {expression}"
-    with pytest.raises(PortabilityError, match=r"`os\.getenv`"):
-        configure(load(monitor_source("helper()", setup)))
-
-
-def test_type_parameters_bind_their_names(load: Load) -> None:
-    if sys.version_info < (3, 12):
-        pytest.skip("type parameter syntax is new in Python 3.12")
-    setup = """
-import os as T
-
-def generic[T](value: T) -> list[T]:
-    return [T]
-
-class Box[T]:
-    def kind(self) -> object:
-        return T
-
-type Pair[T] = tuple[T, T]
-"""
-    configure(load(monitor_source("generic(1)\nBox().kind()\nPair", setup)))
-
-
-def test_a_monitor_configured_inside_a_protocol_is_not_followed(load: Load) -> None:
-    source = """
-from inspect_sentinel import Context, Decision, Monitor, Observation, Protocol, Step, BeforeToolCall, monitor, protocol, run_monitors
-
-@monitor(name=f"{NAME}_child", portable=False)
-def reads_files() -> Monitor:
-    async def check(context: Context, step: BeforeToolCall) -> Observation:
-        open("f")
-        return Observation.score(0.0)
-
-    return check
-
-@protocol(name=NAME)
-def watched() -> Protocol:
-    child = reads_files()
-
-    async def decide(context: Context, step: Step) -> Decision | None:
-        await run_monitors(context, step, [child])
-        return None
-
-    return decide
-"""
-    configure(load(f"NAME = 'outer_{uuid.uuid4().hex}'\n{source}"))
-
-
-def test_a_namespace_package_is_the_authors(
-    load: Load, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    name = f"nspkg_{uuid.uuid4().hex}"
-    (tmp_path / name).mkdir()
-    (tmp_path / name / "helpers.py").write_text("def clean(text):\n    return text\n")
-    module = load(monitor_source(f"import {name}"))
-    configure(module)
-    assert name not in sys.modules
-
-
-def test_a_method_reached_through_its_class_is_reported_once(load: Load) -> None:
-    setup = "import os\n\nclass Rules:\n    @staticmethod\n    def home() -> object:\n        return os.getenv('HOME')\n"
-    with pytest.raises(PortabilityError) as raised:
-        configure(load(monitor_source("Rules.home()\nRules().home()", setup)))
-    assert str(raised.value).count("`os.getenv`") == 1
-
-
-def test_a_config_file_entry_raises_portability_error(
-    load: Load, tmp_path: Path
-) -> None:
-    name = f"cfg_portable_{uuid.uuid4().hex}"
-    load(monitor_source("open('f')", decorator=f"(name={name!r})"))
-    config = tmp_path / "sentinel.yaml"
-    config.write_text(f"sentinel:\n  name: {name}\n")
-    with pytest.raises(
-        PortabilityError, match=rf"sentinel: monitor {name} is portable"
-    ):
-        sentinel_from_config(str(config))
-
-
-def test_a_notebook_rechecks_after_a_helper_changes() -> None:
-    interactiveshell = pytest.importorskip("IPython.core.interactiveshell")
-    shell = interactiveshell.InteractiveShell.instance()
-    try:
-        shell.run_cell("def helper():\n    return 1\n")
-        shell.run_cell(monitor_source("helper()"))
-        shell.run_cell("watched()").raise_error()
-        shell.run_cell("def helper():\n    return open('f')\n")
-        with pytest.raises(PortabilityError, match="`open`"):
-            shell.run_cell("watched()").raise_error()
-    finally:
-        interactiveshell.InteractiveShell.clear_instance()
-
-
-def test_a_large_module_is_checked_quickly(load: Load) -> None:
-    helpers = "".join(
-        f'''
-class Rule{i}:
-    limit = {i}
-
-    def apply(self, text: str) -> float:
-        prompt = """
-flush-left template {i}
-"""
-        return float(len(json.dumps([text, prompt])) > self.limit)
-
-
-def helper{i}(text: str) -> float:
-    return Rule{i}().apply(text)
-'''
-        for i in range(155)
-    )
-    calls = " + ".join(f"helper{i}('a')" for i in range(155))
-    source = monitor_source(calls, f"import json\n{helpers}")
-    assert len(source.splitlines()) >= 2000
-    module = load(source)
-    start = time.perf_counter()
-    configure(module)
-    assert time.perf_counter() - start < 1.0
-
-
-def test_type_aliases_from_inspect_ai_pass(load: Load) -> None:
-    setup = """
-from pydantic import Field, TypeAdapter
-from inspect_ai.model import ChatMessage, StopReason
-from inspect_ai.util import StoreModel
-
-class History(StoreModel):
-    messages: list[ChatMessage] = Field(default_factory=list)
-    stop: StopReason | None = None
-
-ADAPTER = TypeAdapter(list[ChatMessage])
-"""
-    body = "context.store_as(History).messages\nADAPTER.validate_python([])\nTypeAdapter(list[ChatMessage])"
-    configure(load(monitor_source(body, setup)))
-
-
-@pytest.mark.parametrize(
-    "setup,reference",
-    [
-        ("import subprocess\nAlias = list[subprocess.Popen]", "subprocess"),
-        (
-            "import os\nfrom typing import Optional\nclass Helper:\n    def home(self) -> object:\n        return os.getenv('HOME')\nAlias = Optional[Helper]",
-            "os.getenv",
-        ),
-        *(
-            [("import subprocess\ntype Alias = list[subprocess.Popen]", "subprocess")]
-            if sys.version_info >= (3, 12)
-            else []
-        ),
-    ],
-)
-def test_a_type_alias_is_judged_by_the_types_it_names(
-    load: Load, setup: str, reference: str
-) -> None:
-    with pytest.raises(PortabilityError, match=re.escape(reference)):
-        configure(load(monitor_source("Alias", setup)))
-
-
-BASE = "class Base:\n    def dump(self) -> object:\n        return open('f')\n"
-
-
-@pytest.mark.parametrize(
-    "setup,body",
-    [
-        (
-            "from typing import Generic, TypeVar\nfrom pydantic import BaseModel\nT = TypeVar('T')\nclass Box(BaseModel, Generic[T]):\n    item: T\n    def dump(self) -> object:\n        return open('f')\nIntBox = Box[int]",
-            "IntBox(item=1)",
-        ),
-        (f"{BASE}Made = type('Made', (Base,), {{}})", "Made()"),
-        # before 3.12 the class's module is `types`, so it is judged as allowed
-        *(
-            [
-                (
-                    f"import dataclasses\n{BASE}Made = dataclasses.make_dataclass('Made', [('x', int)], bases=(Base,))",
-                    "Made(1)",
-                )
-            ]
-            if sys.version_info >= (3, 12)
-            else []
-        ),
-    ],
-)
-def test_a_class_made_without_a_statement_is_checked_through_its_bases(
-    load: Load, setup: str, body: str
-) -> None:
-    with pytest.raises(PortabilityError, match="`open`"):
-        configure(load(monitor_source(body, setup)))
-
-
-@pytest.mark.parametrize(
-    "setup",
-    [
-        # the outer class's body holds a method of a nested class of the same name
-        "class Helper:\n    class Helper:\n        def home(self) -> object:\n            return 1\n\n    home = Helper.home\n\n    def real(self) -> object:\n        return os.getcwd()",
-        "from dataclasses import dataclass, field\nif True:\n    @dataclass\n    class Helper:\n        home: object = field(default_factory=os.getcwd)\nelse:\n    @dataclass\n    class Helper:\n        home: object = None",
-    ],
-)
-def test_a_class_is_located_by_its_lines(load: Load, setup: str) -> None:
-    with pytest.raises(PortabilityError, match="`os.getcwd`"):
-        configure(load(monitor_source("Helper()", f"import os\n{setup}")))
-
-
-def test_a_factory_whose_file_is_gone_could_not_be_checked(load: Load) -> None:
-    module = load(monitor_source("pass"))
-    Path(cast(str, module.__file__)).unlink()
-    linecache.clearcache()
-    with pytest.raises(
-        PortabilityError, match=r"`watched`.*could not be checked \(no source\)"
-    ):
-        configure(module)
-
-
-def test_a_module_getattr_that_raises_is_judged_by_the_module(load: Load) -> None:
-    helpers = load(
-        """
-_served: list[str] = []
-
-def __getattr__(name: str) -> object:
-    if name != "LIMIT":
-        raise AttributeError(name)
-    if _served:
-        raise RuntimeError(name)
-    _served.append(name)
-    return 3
-"""
-    )
-    configure(
-        load(monitor_source("LIMIT + 1", f"from {helpers.__name__} import LIMIT"))
-    )
-
-
-WRAPPER = """
-import functools, os
-
-def logged(func):
-    @functools.wraps(func)
-    def wrapper(*args: object) -> object:
-        {wrapper}
-        return func(*args)
-
-    return wrapper
-
-def _plain() -> object:
-    return {plain}
-
-helper = logged(_plain)
-"""
-
-
-@pytest.mark.parametrize(
-    "wrapper,plain,reference",
-    [
-        ("os.getenv('HOME')", "1", "os.getenv"),
-        ("pass", "open('f')", "open"),
-    ],
-)
-def test_a_wrapper_and_what_it_wraps_are_checked(
-    load: Load, wrapper: str, plain: str, reference: str
-) -> None:
-    setup = WRAPPER.format(wrapper=wrapper, plain=plain)
-    with pytest.raises(PortabilityError, match=f"`{re.escape(reference)}`"):
-        configure(load(monitor_source("helper()", setup)))
+    for data in CORPUS.glob("*.py.txt"):
+        shutil.copy(data, tmp_path / data.name.removesuffix(".txt"))
+    modules_from(tmp_path)
+    a = importlib.import_module("corp_pass_a")
+    b = importlib.import_module("corp_pass_b")
+    compose = importlib.import_module("corp_compose")
+    factories = cast(dict[str, Callable[..., object]], {**vars(a), **vars(b)})
+    for name in (
+        "llm_judge llm_retry llm_classify rule_words secrets_scan tally policy grab_bag "
+        "window wrapped ensemble asyncio_ensemble agen trajectory cached matcher "
+        "budget keyword boxed serial_llm"
+    ).split():
+        factories[name]()
+    rules, tally = factories["rule_words"], factories["tally"]
+    factories["escalating"](rules())
+    factories["two_stage"]([rules(), tally()])
+    factories["top_k"]([rules(), factories["escalating"](tally())])
+    cast(Callable[[], object], compose.layered)()

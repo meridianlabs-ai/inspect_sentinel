@@ -152,7 +152,7 @@ def raises() -> Protocol:
     return decide
 
 
-@protocol(portable=False)
+@protocol
 def decides(action: Action = "continue") -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(
@@ -370,7 +370,7 @@ async def test_a_protocols_own_task_group_can_run_children() -> None:
     assert sorted(r.context.path for r in recorder.records) == ["", "p/x", "p/y"]
 
 
-@monitor(portable=False)
+@monitor
 def nests_a_step() -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         await run_sentinel(
@@ -381,7 +381,7 @@ def nests_a_step() -> Monitor:
     return check
 
 
-@protocol(portable=False)
+@protocol
 def runs_after_a_nested_step() -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         await run_monitors({"n": nests_a_step()}, context, step)

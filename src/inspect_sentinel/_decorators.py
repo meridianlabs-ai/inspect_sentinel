@@ -135,7 +135,7 @@ def monitor(
         factory: A function returning a monitor, or a `MonitorGroup`.
         name: The registered name, in place of the factory's `__name__`.
         version: The monitor's version, recorded in its registry metadata so a calibration can say which version it measured; bump it when a change alters the scores. Defaults to 0.
-        portable: Whether the monitor can run outside an eval, in a proxy, recorded in its registry metadata. When True, the default, calling the factory first checks what its code references: a list of standard-library modules that only compute, `inspect_ai.core` and its dependencies, `anyio`, `inspect_sentinel`'s public API, and `StoreModel` and `Reference` until they move into `inspect_ai.core`, with effects only through `context`. Functions and classes of the author's own modules that it references are checked the same way, and any of them that cannot be checked is reported. When the factory has no file, as in the plain REPL, the check is skipped; one whose file cannot be read is reported, and Jupyter notebooks are checked. False opts out, for a monitor that only runs in an eval.
+        portable: Whether the monitor can run outside an eval, in a proxy, recorded in its registry metadata. When True, the default, calling the factory first checks the names its code references, in its body and the functions defined inside it, and raises for inspect_ai outside `inspect_ai.core`, environment variables, processes and threads, direct networking, and packages with compiled code. Helpers defined outside the factory are not followed, and a factory with no source, as in the plain REPL, is not checked. False opts out, for a monitor that only runs in an eval.
 
     Raises:
         TypeError: If `version` is not an integer, `portable` is not a bool, or a factory parameter is named `name`, `params`, `version` or `meta`, the keys of a configuration entry.
@@ -184,7 +184,7 @@ def protocol(
         factory: A function returning a protocol, or a `ProtocolGroup`.
         name: The registered name, in place of the factory's `__name__`.
         version: The protocol's version, recorded in its registry metadata; bump it when a change alters its decisions. Defaults to 0.
-        portable: Whether the protocol can run outside an eval, checked when the factory is called as for `@monitor`, against `inspect_sentinel`'s public API and the same list. Children, passed in as arguments or configured inside the factory, are checked by their own factories, not as part of this one. Defaults to True; False opts out.
+        portable: Whether the protocol can run outside an eval, checked when the factory is called as for `@monitor`. Children, passed in as arguments or configured inside the factory, are checked by their own factories, not as part of this one. Defaults to True; False opts out.
 
     Raises:
         TypeError: If `version` is not an integer, `portable` is not a bool, or a factory parameter is named `name`, `params`, `version` or `meta`, the keys of a configuration entry.

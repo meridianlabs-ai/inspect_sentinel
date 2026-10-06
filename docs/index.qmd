@@ -370,6 +370,6 @@ The token usage for the `monitor` role is reported separately from the agent's i
 - [Configuration](configuration.qmd): sentinels from Python, YAML files and the command line.
 - [Transcript and Viewer](transcript.qmd): what is recorded and how to read it.
 - [Approval and Review](approval.qmd): how sentinels relate to Inspect's tool approval and review.
-- [Portable Monitors](portability.qmd): what a monitor may reference to run outside an eval, and `portable=False`.
+- [Portable Monitors](portability.qmd): what a monitor can do to run outside an eval, what the check refuses, and `portable=False`.
 - [Calibration](calibration.qmd) and [Deployment](deployment.qmd): planned.
 - [Reference](reference/index.qmd): the Python API.

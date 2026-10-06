@@ -235,7 +235,7 @@ async def test_a_limit_beside_another_error_in_a_monitors_own_group_ends_the_ste
     async def broken() -> None:
         raise ValueError("model unavailable")
 
-    @monitor(portable=False)
+    @monitor
     def fans_out() -> Monitor:
         async def check(context: Context, step: BeforeToolCall) -> Observation | None:
             async with anyio.create_task_group() as tg:

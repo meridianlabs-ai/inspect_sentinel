@@ -1,0 +1,12 @@
+"""Compositions of the ones above, and a factory composing shipped protocols."""
+from corp_pass_a import llm_judge, rule_words, tally, trajectory
+from corp_pass_b import escalating, keyword
+from inspect_sentinel import Protocol, concurrent, observe_only, protocol, sequential, threshold
+
+
+# 24 factory composing shipped protocols
+@protocol
+def layered(reject_at: float = 0.8) -> Protocol:
+    return sequential([
+        threshold([rule_words(), keyword()], reject_at=reject_at),
+        observe_only(tally())])
