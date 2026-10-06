@@ -13,7 +13,9 @@ class BlockingHost:
         self._imports = imports
 
     async def generate(self, input: str, *, role: str | None = None) -> dict[str, Any]:
-        return json.loads(self._imports.generate(json.dumps({"input": input, "role": role})))
+        return json.loads(
+            self._imports.generate(json.dumps({"input": input, "role": role}))
+        )
 
 
 class AsyncHost:
@@ -23,7 +25,9 @@ class AsyncHost:
         self._imports = imports
 
     async def generate(self, input: str, *, role: str | None = None) -> dict[str, Any]:
-        return json.loads(await self._imports.generate(json.dumps({"input": input, "role": role})))
+        return json.loads(
+            await self._imports.generate(json.dumps({"input": input, "role": role}))
+        )
 
 
 def run_blocking(coro: Coroutine[Any, Any, T]) -> T:

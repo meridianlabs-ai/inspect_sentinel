@@ -17,7 +17,13 @@ except ModuleNotFoundError:
     class SSLError(OSError):
         pass
 
-    for _name in ("SSLEOFError", "SSLWantWriteError", "SSLWantReadError", "SSLSyscallError", "SSLZeroReturnError"):
+    for _name in (
+        "SSLEOFError",
+        "SSLWantWriteError",
+        "SSLWantReadError",
+        "SSLSyscallError",
+        "SSLZeroReturnError",
+    ):
         setattr(ssl_stub, _name, type(_name, (SSLError,), {}))
     ssl_stub.SSLError = SSLError
     for _name in ("SSLContext", "SSLObject", "SSLSocket", "MemoryBIO"):

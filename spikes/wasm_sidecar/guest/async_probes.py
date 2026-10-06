@@ -7,7 +7,6 @@ from typing import Any
 
 import anyio
 import anyio._backends._asyncio  # noqa: F401  (loaded dynamically; must be bundled)
-
 from m1.guest_host import AsyncHost
 
 VAR: contextvars.ContextVar[str] = contextvars.ContextVar("VAR", default="unset")
@@ -17,15 +16,28 @@ async def _try(name: str, fn: Any) -> dict[str, Any]:
     t = time.perf_counter()
     try:
         result = await fn()
-        return {"probe": name, "ok": True, "result": repr(result)[:160], "ms": round((time.perf_counter() - t) * 1000, 1)}
+        return {
+            "probe": name,
+            "ok": True,
+            "result": repr(result)[:160],
+            "ms": round((time.perf_counter() - t) * 1000, 1),
+        }
     except BaseException as ex:
         import traceback
 
-        while isinstance(ex, BaseExceptionGroup):
+        while hasattr(ex, "exceptions"):  # unwrap an exception group
             ex = ex.exceptions[0]
 
-        where = [f"{f.filename.rsplit('/', 2)[-1]}:{f.lineno} {f.name}" for f in traceback.extract_tb(ex.__traceback__)[-3:]]
-        return {"probe": name, "ok": False, "error": f"{type(ex).__name__}: {ex}"[:300], "at": where}
+        where = [
+            f"{f.filename.rsplit('/', 2)[-1]}:{f.lineno} {f.name}"
+            for f in traceback.extract_tb(ex.__traceback__)[-3:]
+        ]
+        return {
+            "probe": name,
+            "ok": False,
+            "error": f"{type(ex).__name__}: {ex}"[:300],
+            "at": where,
+        }
 
 
 async def run(host_async: Any, only: str | None = None) -> list[dict[str, Any]]:

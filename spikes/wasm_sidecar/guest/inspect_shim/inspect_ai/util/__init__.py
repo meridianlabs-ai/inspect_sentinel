@@ -10,7 +10,9 @@ class LimitExceededError(Exception):
     """Stand-in: the runner only catches it."""
 
 
-def resource(resource: str, type: str = "auto", fs_options: dict[str, Any] = {}) -> str:
+def resource(
+    resource: str, type: str = "auto", fs_options: dict[str, Any] | None = None
+) -> str:
     """Stand-in: configuration loading is out of scope in the guest."""
     return resource
 

@@ -20,7 +20,9 @@ from wasmtime.component import Component, Linker, Variant
 INTERFACE = "sentinel:spike/host@0.1.0"
 
 # Named endpoints -> (url, credential). Credentials live here, never in the guest.
-ENDPOINTS = {"allowlist": ("https://allowlist.internal/check", "Bearer host-held-secret")}
+ENDPOINTS = {
+    "allowlist": ("https://allowlist.internal/check", "Bearer host-held-secret")
+}
 STORE: dict[str, str] = {}
 CALLS: list[dict[str, Any]] = []
 
@@ -40,7 +42,11 @@ def mock_model_output(request: dict[str, Any]) -> dict[str, Any]:
                 "stop_reason": "stop",
             }
         ],
-        "usage": {"input_tokens": len(request["input"]) // 4, "output_tokens": 14, "total_tokens": len(request["input"]) // 4 + 14},
+        "usage": {
+            "input_tokens": len(request["input"]) // 4,
+            "output_tokens": 14,
+            "total_tokens": len(request["input"]) // 4 + 14,
+        },
         "time": 0.0,
     }
 
@@ -57,7 +63,9 @@ def fetch(_store: Any, endpoint: str, request: str) -> Variant:
         return Variant("err", f"unknown endpoint {endpoint!r}")
     url, credential = ENDPOINTS[endpoint]
     # A real host would POST `request` to `url` with `credential` attached.
-    return Variant("ok", json.dumps({"status": 200, "json": {"allowed": True, "via": url}}))
+    return Variant(
+        "ok", json.dumps({"status": 200, "json": {"allowed": True, "via": url}})
+    )
 
 
 def get(_store: Any, key: str) -> str | None:
@@ -74,6 +82,11 @@ def main() -> None:
     parser.add_argument("step")
     parser.add_argument("--probe", action="store_true")
     parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument(
+        "--grant",
+        action="store_true",
+        help="contrast: hand the guest an env var and a directory",
+    )
     args = parser.parse_args()
 
     t0 = time.perf_counter()
@@ -93,6 +106,11 @@ def main() -> None:
 
     store = Store(engine)
     wasi = WasiConfig()  # nothing inherited: no env, no preopens, no stdio
+    if args.grant:
+        import tempfile
+
+        wasi.env = [("OPENAI_API_KEY", "sk-granted-by-host")]
+        wasi.preopen_dir(tempfile.mkdtemp(), "/tmp")
     store.set_wasi(wasi)
     t1 = time.perf_counter()
     instance = linker.instantiate(store, component)
@@ -118,9 +136,15 @@ def main() -> None:
                 "compile_s": round(t_compile, 4),
                 "instantiate_s": round(t_inst, 4),
                 "first_call_s": round(timings[0], 4),
-                "warm_call_median_s": round(sorted(timings[1:])[len(timings[1:]) // 2], 6) if len(timings) > 1 else None,
+                "warm_call_median_s": round(
+                    sorted(timings[1:])[len(timings[1:]) // 2], 6
+                )
+                if len(timings) > 1
+                else None,
                 "host_calls": CALLS[:5],
-                "max_rss_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20, 1),
+                "max_rss_mb": round(
+                    resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20, 1
+                ),
             }
         ),
         file=sys.stderr,

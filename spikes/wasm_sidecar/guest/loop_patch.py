@@ -18,28 +18,33 @@ import time
 from typing import Any, Callable
 
 import componentize_py_async_support as cpas
+import componentize_py_runtime as _rt
+from componentize_py_types import Ok as _Ok
+from wit_world.imports import host_async
 
 _Loop = cpas._Loop
 _call_soon = _Loop.call_soon
-_sleep: Callable[[int], Any] | None = None
+_sleep: Callable[[int], Any] = host_async.sleep
 
 
-def install(sleep: Callable[[int], Any]) -> None:
-    global _sleep
-    _sleep = sleep
-
-
-def _patched_call_soon(self: Any, callback: Any, *args: Any, context: Any = None) -> asyncio.Handle:
-    return _call_soon(self, callback, *args, context=context if context is not None else contextvars.copy_context())
+def _patched_call_soon(
+    self: Any, callback: Any, *args: Any, context: Any = None
+) -> asyncio.Handle:
+    return _call_soon(
+        self,
+        callback,
+        *args,
+        context=context if context is not None else contextvars.copy_context(),
+    )
 
 
 def _time(self: Any) -> float:
     return time.monotonic()
 
 
-def _call_at(self: Any, when: float, callback: Any, *args: Any, context: Any = None) -> asyncio.TimerHandle:
-    if _sleep is None:
-        raise NotImplementedError("loop_patch.install(sleep) not called")
+def _call_at(
+    self: Any, when: float, callback: Any, *args: Any, context: Any = None
+) -> asyncio.TimerHandle:
     ctx = context if context is not None else contextvars.copy_context()
     handle = asyncio.TimerHandle(when, callback, args, self, ctx)
     state = cpas._future_state.get()
@@ -59,7 +64,9 @@ def _call_at(self: Any, when: float, callback: Any, *args: Any, context: Any = N
     return handle
 
 
-def _call_later(self: Any, delay: float, callback: Any, *args: Any, context: Any = None) -> asyncio.TimerHandle:
+def _call_later(
+    self: Any, delay: float, callback: Any, *args: Any, context: Any = None
+) -> asyncio.TimerHandle:
     return _call_at(self, time.monotonic() + delay, callback, *args, context=context)
 
 
@@ -82,10 +89,6 @@ _Loop.call_later = _call_later
 # ("resource has children"). Detach instead: the host call runs to completion,
 # its result is lifted and discarded, and the component-model task stays open
 # until then.
-import componentize_py_runtime as _rt
-from componentize_py_types import Ok as _Ok
-
-
 async def _await_result(result: Any) -> Any:
     if isinstance(result, _Ok):
         return result.value

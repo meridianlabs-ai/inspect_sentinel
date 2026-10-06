@@ -10,7 +10,9 @@ from typing import Any, Callable, Literal, cast
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-RegistryType = Literal["monitor", "protocol", "solver", "scorer", "tool", "model", "approver"]
+RegistryType = Literal[
+    "monitor", "protocol", "solver", "scorer", "tool", "model", "approver"
+]
 REGISTRY_INFO = "__registry_info__"
 REGISTRY_PARAMS = "__registry_params__"
 
@@ -49,7 +51,9 @@ def registry_has(type: str, name: str) -> bool:
 
 
 def registry_lookup(type: str, name: str) -> object | None:
-    return _registry.get(f"{type}:{name}") or _registry.get(f"{type}:inspect_sentinel/{name}")
+    return _registry.get(f"{type}:{name}") or _registry.get(
+        f"{type}:inspect_sentinel/{name}"
+    )
 
 
 def registry_info(o: object) -> RegistryInfo:
@@ -64,7 +68,13 @@ def is_registry_object(o: object, type: str | None = None) -> bool:
     return info is not None and (type is None or info.type == type)
 
 
-def registry_tag(type_or_factory: Callable[..., Any], o: object, info: RegistryInfo, *args: Any, **kwargs: Any) -> None:
+def registry_tag(
+    type_or_factory: Callable[..., Any],
+    o: object,
+    info: RegistryInfo,
+    *args: Any,
+    **kwargs: Any,
+) -> None:
     bound = inspect.signature(type_or_factory).bind_partial(*args, **kwargs)
     setattr(o, REGISTRY_INFO, info)
     setattr(o, REGISTRY_PARAMS, dict(bound.arguments))
@@ -75,7 +85,11 @@ def has_registry_params(o: object) -> bool:
 
 
 def registry_value(o: object) -> dict[str, Any]:
-    return {"type": registry_info(o).type, "name": registry_info(o).name, "params": getattr(o, REGISTRY_PARAMS, {})}
+    return {
+        "type": registry_info(o).type,
+        "name": registry_info(o).name,
+        "params": getattr(o, REGISTRY_PARAMS, {}),
+    }
 
 
 def is_registry_dict(o: object) -> bool:

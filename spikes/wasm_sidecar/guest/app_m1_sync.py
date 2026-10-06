@@ -1,11 +1,10 @@
 import json
 
+import probes
 import wit_world
-from wit_world.imports import host
-
 from m1.guest_host import BlockingHost, run_blocking
 from m1.monitor import tool_call_monitor
-import probes
+from wit_world.imports import host
 
 
 class WitWorld(wit_world.WitWorld):

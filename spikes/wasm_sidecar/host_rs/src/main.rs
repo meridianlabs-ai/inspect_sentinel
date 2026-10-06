@@ -157,7 +157,9 @@ impl<T> async_world::sentinel::spike::host_async::HostWithStore<T> for HasSelf<C
         });
         let n = CALL_SEQ.fetch_add(1, Ordering::SeqCst);
         log.lock().unwrap().push(format!("{:8.1}ms instance {id} generate #{n} start", ms()));
-        tokio::time::sleep(delay).await;
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
         log.lock().unwrap().push(format!("{:8.1}ms instance {id} generate #{n} end", ms()));
         Ok(Ok(mock_output(&request, &format!("call {n}"))))
     }
@@ -315,9 +317,154 @@ async fn run_async(path: &str, step: String, o: Opts) -> Result<()> {
     Ok(())
 }
 
+fn rss_mib() -> f64 {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .expect("ps");
+    String::from_utf8_lossy(&out.stdout).trim().parse::<f64>().unwrap_or(0.0) / 1024.0
+}
+
+fn stats(xs: &mut [f64]) -> String {
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let pick = |q: f64| xs[((xs.len() as f64 - 1.0) * q).round() as usize];
+    format!("median {:.3}ms p90 {:.3}ms min {:.3}ms (n={})", pick(0.5), pick(0.9), xs[0], xs.len())
+}
+
+fn async_pre(engine: &Engine, component: &Component) -> Result<async_world::MonitorAsyncPre<Ctx>> {
+    let mut linker: Linker<Ctx> = Linker::new(engine);
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+    async_world::MonitorAsync::add_to_linker::<_, HasSelf<_>>(&mut linker, |c| c)?;
+    async_world::MonitorAsyncPre::new(linker.instantiate_pre(component)?)
+}
+
+async fn call_once(store: &mut Store<Ctx>, world: &async_world::MonitorAsync, step: &str) -> Result<Result<String, String>> {
+    let step = step.to_string();
+    store.run_concurrent(async |a| world.call_run_monitor(a, step).await).await?
+}
+
+/// Sizes, compile/AOT load, cold start, warm calls and memory for an async-world component.
+async fn bench(path: &str, step: String, o: Opts) -> Result<()> {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let engine = engine(false, false)?;
+    let rss_start = rss_mib();
+    // A `.cwasm` is loaded as-is, so RSS is not inflated by compiling in-process.
+    let (cwasm, compile_ms) = if path.ends_with(".cwasm") {
+        (path.to_string(), None)
+    } else {
+        let t = Instant::now();
+        let component = Component::from_file(&engine, path)?;
+        let compile_ms = t.elapsed().as_secs_f64() * 1000.0;
+        let cwasm = format!("{path}.cwasm");
+        std::fs::write(&cwasm, component.serialize()?)?;
+        (cwasm, Some(compile_ms))
+    };
+    let t = Instant::now();
+    // SAFETY: produced by `serialize` with an engine of this configuration.
+    let component = unsafe { Component::deserialize_file(&engine, &cwasm)? };
+    let load_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let pre = async_pre(&engine, &component)?;
+    println!("component {path}: {} bytes; AOT {cwasm}: {} bytes", std::fs::metadata(path)?.len(), std::fs::metadata(&cwasm)?.len());
+    if let Some(ms) = compile_ms {
+        println!("compile (Cranelift, then serialize) {ms:.0}ms");
+    }
+    println!("load precompiled {load_ms:.1}ms; host RSS after load {:.0} MiB (start {rss_start:.0})", rss_mib());
+
+    let rss0 = rss_mib();
+    let mut inst_ms = Vec::new();
+    let mut instances = Vec::new();
+    for id in 0..o.instances {
+        let mut store = new_store(&engine, id, o.delay, log.clone(), None);
+        let t = Instant::now();
+        let world = pre.instantiate_async(&mut store).await?;
+        inst_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        instances.push((store, world));
+    }
+    let rss1 = rss_mib();
+    let mut first_ms = Vec::new();
+    for (store, world) in instances.iter_mut() {
+        let t = Instant::now();
+        call_once(store, world, &step).await?.map_err(|e| format_err!("guest error {e}"))?;
+        first_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    let rss2 = rss_mib();
+    let peak = instances.iter().map(|(s, _)| s.data().limits.peak_memory).max().unwrap_or(0);
+    let (store, world) = &mut instances[0];
+    let mut warm_ms = Vec::new();
+    for _ in 0..o.calls {
+        let t = Instant::now();
+        call_once(store, world, &step).await?.map_err(|e| format_err!("guest error {e}"))?;
+        warm_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    let peak_after = store.data().limits.peak_memory;
+    println!("instantiate: {}", stats(&mut inst_ms));
+    println!("first call:  {}", stats(&mut first_ms));
+    println!("warm call:   {}", stats(&mut warm_ms));
+    println!(
+        "memory: linear memory peak {:.1} MiB/instance after first call, {:.1} MiB after {} warm calls; host RSS +{:.1} MiB/instance at instantiation, +{:.1} MiB/instance after first call ({} instances)",
+        peak as f64 / 1048576.0,
+        peak_after as f64 / 1048576.0,
+        o.calls,
+        (rss1 - rss0) / o.instances as f64,
+        (rss2 - rss0) / o.instances as f64,
+        o.instances
+    );
+    if let Ok(meta) = call_once(store, world, "meta").await {
+        println!("guest meta (pre-init check): {}", meta.unwrap_or_else(|e| e));
+    }
+    Ok(())
+}
+
+/// Epoch deadline, fuel and memory cap against a runaway or greedy guest (m1_async).
+async fn limits(path: &str) -> Result<()> {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let engine = engine(true, true)?;
+    let component = load(&engine, path)?;
+    let pre = async_pre(&engine, &component)?;
+    let ticker = engine.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(10));
+        ticker.increment_epoch();
+    });
+    let run = async |step: &str, deadline_ticks: u64, fuel: u64, max_memory: Option<usize>| -> Result<(String, u64, f64)> {
+        let mut store = new_store(&engine, 0, Duration::from_millis(0), log.clone(), max_memory);
+        store.set_fuel(u64::MAX)?;
+        store.set_epoch_deadline(u64::MAX / 2);
+        let world = pre.instantiate_async(&mut store).await?;
+        store.set_fuel(fuel)?;
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(deadline_ticks);
+        let t = Instant::now();
+        let result = call_once(&mut store, &world, step).await;
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        let used = fuel - store.get_fuel().unwrap_or(0);
+        let shown = match result {
+            Ok(Ok(r)) => format!("ok {}", &r[..r.len().min(120)]),
+            Ok(Err(e)) => format!("guest err {e}"),
+            Err(e) => format!("trap: {}", e.root_cause()),
+        };
+        Ok((shown, used, ms))
+    };
+    let normal = std::fs::read_to_string("step.json")?;
+    let (r, used, ms) = run(&normal, 1000, u64::MAX / 4, None).await?;
+    println!("normal step:        {r} | fuel used {used} | {ms:.1}ms");
+    let (r, _, ms) = run(r#"{"spin": true}"#, 50, u64::MAX / 4, None).await?;
+    println!("spin, 500ms epoch:  {r} | {ms:.0}ms");
+    let (r, used, ms) = run(r#"{"spin": true}"#, 1_000_000, 50_000_000, None).await?;
+    println!("spin, 50M fuel:     {r} | fuel used {used} | {ms:.0}ms");
+    let (r, _, _) = run(r#"{"alloc_mb": 16}"#, 1000, u64::MAX / 4, Some(64 << 20)).await?;
+    println!("alloc 16MiB, cap 64MiB:  {r}");
+    let (r, _, _) = run(r#"{"alloc_mb": 200}"#, 1000, u64::MAX / 4, Some(64 << 20)).await?;
+    println!("alloc 200MiB, cap 64MiB: {r}");
+    Ok(())
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() == 3 && args[1] == "limits" {
+        return limits(&args[2]).await;
+    }
     if args.len() < 4 {
         bail!("usage: sentinel-wasm-host <sync|async|bench|limits> <component.wasm> <step.json> [options]");
     }
@@ -326,6 +473,7 @@ async fn main() -> Result<()> {
     match args[1].as_str() {
         "sync" => run_sync(&args[2], step, o).await,
         "async" => run_async(&args[2], step, o).await,
+        "bench" => bench(&args[2], step, o).await,
         other => bail!("unknown command {other}"),
     }
 }

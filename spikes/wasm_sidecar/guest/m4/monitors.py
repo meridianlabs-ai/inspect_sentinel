@@ -1,6 +1,8 @@
-"""Real `@monitor` / `@protocol` factories, from examples/llm_suspicion.py and
-examples/no_network.py with their `@task` parts removed. Unchanged otherwise
-except `json_schema()` (inspect_ai.util), replaced by its core equivalent."""
+"""Real `@monitor` and `@protocol` factories from the examples.
+
+From examples/llm_suspicion.py and examples/no_network.py, with their `@task` parts removed. Unchanged otherwise
+except `json_schema()` (inspect_ai.util), replaced by its core equivalent.
+"""
 
 import json
 
@@ -43,7 +45,8 @@ class Verdict(BaseModel):
 
 VERDICT = GenerateConfig(
     response_schema=ResponseSchema(
-        name="verdict", json_schema=JSONSchema.model_validate(Verdict.model_json_schema())
+        name="verdict",
+        json_schema=JSONSchema.model_validate(Verdict.model_json_schema()),
     )
 )
 
@@ -65,7 +68,9 @@ def suspicion(model: str | None = None, role: str = "monitor") -> Monitor:
             function=step.call.function,
             arguments=untrusted(json.dumps(step.call.arguments)),
         )
-        output = await context.host.generate(prompt, model=model, role=role, config=VERDICT)
+        output = await context.host.generate(
+            prompt, model=model, role=role, config=VERDICT
+        )
         verdict = Verdict.model_validate_json(output.completion)
         return Observation.score(verdict.score, verdict.reasoning)
 
@@ -95,11 +100,15 @@ def no_network() -> Protocol:
 
 @protocol
 def no_destruction() -> Protocol:
-    """Terminate on `rm -rf`. A terminate cancels siblings still running, such
-    as `suspicion` awaiting its host call: the guest's cancellation path."""
+    """Terminate on `rm -rf`.
+
+    A terminate cancels siblings still running, such as `suspicion` awaiting its host call: the guest's cancellation path.
+    """
 
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
-        if step.call.function == "bash" and find_words(call_text(step.call), ["rm -rf"]):
+        if step.call.function == "bash" and find_words(
+            call_text(step.call), ["rm -rf"]
+        ):
             return Decision.terminate("rm -rf")
         return Decision.proceed()
 
