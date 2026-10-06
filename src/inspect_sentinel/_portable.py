@@ -3,10 +3,15 @@ from __future__ import annotations
 import ast
 import builtins
 import functools
+import genericpath
+import importlib
 import importlib.util
 import inspect
+import ntpath
+import posixpath
 import sys
 import textwrap
+import types
 import weakref
 from collections.abc import Callable, Iterable, Sequence
 from enum import Enum
@@ -55,6 +60,36 @@ _EFFECTFUL = frozenset(
     }
 )
 
+# attributes that reach interpreter internals: globals, frames, loaders, every class
+_DENIED_ATTRIBUTES = frozenset(
+    {
+        "__globals__",
+        "__builtins__",
+        "__subclasses__",
+        "__code__",
+        "__closure__",
+        "__loader__",
+        "__spec__",
+        "__import__",
+        "f_globals",
+        "f_locals",
+        "f_builtins",
+        "f_back",
+        "cr_frame",
+        "gi_frame",
+        "ag_frame",
+        "tb_frame",
+    }
+)
+
+# some of `os.path` is implemented in `posix`
+_PATH_FUNCTIONS = {
+    id(value): value
+    for module in (posixpath, ntpath, genericpath)
+    for value in vars(module).values()
+    if inspect.isroutine(value)
+}
+
 _BANNED_BUILTINS = (
     "open",
     "input",
@@ -82,7 +117,8 @@ class PortabilityError(TypeError):
 def check_portable(factory: Callable[..., object], kind: str, name: str) -> None:
     violations = _checked.get(factory)
     if violations is None:
-        violations = _Checker().check(factory)
+        own = str(getattr(factory, "__module__", "")).partition(".")[0]
+        violations = _Checker(own).check(factory)
         _checked[factory] = violations
     if violations:
         lines = "\n".join(f"- {v.describe()}" for v in violations)
@@ -124,7 +160,9 @@ class _Verdict(NamedTuple):
 _ALLOWED = _Verdict(_Kind.ALLOWED)
 
 
-def _classify(module: str) -> _Verdict:
+def _classify(module: str, own: str = "") -> _Verdict:
+    if not module:
+        return _Verdict(_Kind.DISALLOWED, "and its module is unknown")
     top = module.partition(".")[0]
     for effectful in _EFFECTFUL:
         if module == effectful or module.startswith(f"{effectful}."):
@@ -140,7 +178,7 @@ def _classify(module: str) -> _Verdict:
         )
     if top in _ALLOWED_PACKAGES or top in sys.stdlib_module_names:
         return _ALLOWED
-    if _is_author(module):
+    if top == own or _is_author(module):
         return _Verdict(_Kind.AUTHOR)
     return _Verdict(_Kind.DISALLOWED, f"and `{top}` is not a portable dependency")
 
@@ -170,6 +208,7 @@ def _module_of(value: object) -> str:
         owner = getattr(value, "__objclass__", None)
         if inspect.isclass(owner):
             return owner.__module__
+        return ""
     return type(value).__module__
 
 
@@ -184,7 +223,9 @@ def _describe(value: object) -> str:
     return f"a `{type(value).__qualname__}` from `{module}`"
 
 
-def _judge(value: object) -> _Verdict:
+def _judge(value: object, own: str = "") -> _Verdict:
+    if id(value) in _PATH_FUNCTIONS:
+        return _ALLOWED
     if type(value) in _ALLOWED_TYPES or any(value is t for t in _ALLOWED_TYPES):
         return _ALLOWED
     if any(value is getattr(builtins, name) for name in _BANNED_BUILTINS):
@@ -192,16 +233,41 @@ def _judge(value: object) -> _Verdict:
     if value is builtins:
         return _Verdict(_Kind.DISALLOWED, "which reaches the builtins by name")
     if isinstance(value, functools.partial):
-        return _judge(value.func)
-    return _classify(_module_of(value))
+        return _judge(value.func, own)
+    return _classify(_module_of(value), own)
 
 
-def _unwrap_attribute(value: object) -> object:
-    if isinstance(value, (staticmethod, classmethod)):
-        return cast(object, cast(Any, value).__func__)
-    if isinstance(value, property) and value.fget is not None:
-        return value.fget
-    return value
+def _is_module(value: object) -> bool:
+    # type(), not isinstance(), so a proxy's raising `__class__` is not consulted
+    return issubclass(type(value), types.ModuleType)
+
+
+def _public_sentinel() -> dict[int, object]:
+    package = sys.modules["inspect_sentinel"]
+    public: dict[int, object] = {id(package): package}
+    for name in getattr(package, "__all__", ()):
+        value = getattr(package, name, None)
+        public[id(value)] = value
+    return public
+
+
+def _attribute(value: object, name: str) -> object:
+    found = inspect.getattr_static(value, name)
+    if isinstance(found, (staticmethod, classmethod)):
+        return cast(object, cast(Any, found).__func__)
+    if isinstance(found, property):
+        return found.fget if found.fget is not None else found
+    # slots and named tuple fields: the value, not its descriptor
+    if (
+        not inspect.isclass(value)
+        and not _is_module(value)
+        and inspect.isdatadescriptor(found)
+    ):
+        try:
+            return cast(object, getattr(value, name))
+        except Exception:
+            return found
+    return found
 
 
 _FUNCTION_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
@@ -226,7 +292,8 @@ class _Target(NamedTuple):
 
 
 class _Checker:
-    def __init__(self) -> None:
+    def __init__(self, own: str) -> None:
+        self.own = own
         self._seen: dict[int, object] = {}
         self._pending: list[_Target] = []
         self._violations: list[_Violation] = []
@@ -241,8 +308,9 @@ class _Checker:
         self._violations.append(violation)
 
     def follow(self, value: object, via: tuple[str, ...]) -> None:
-        if inspect.ismodule(value):
+        if _is_module(value):
             return
+        value = _unwrap(value)
         if inspect.ismethod(value):
             value = value.__func__
         if isinstance(value, functools.partial):
@@ -252,8 +320,7 @@ class _Checker:
         self._enqueue(value, via)
 
     def _enqueue(self, value: object, via: tuple[str, ...]) -> None:
-        if inspect.isfunction(value):
-            value = inspect.unwrap(value)
+        value = _unwrap(value)
         if id(value) in self._seen:
             return
         self._seen[id(value)] = value
@@ -262,12 +329,19 @@ class _Checker:
             self._pending.append(target)
 
 
+def _unwrap(value: object) -> object:
+    try:
+        return inspect.unwrap(cast(Any, value))
+    except Exception:
+        return value
+
+
 def _target(value: object, via: tuple[str, ...]) -> _Target | None:
     try:
         lines, first_line = inspect.getsourcelines(cast(Any, value))
         file = inspect.getsourcefile(cast(Any, value)) or "<unknown>"
         tree = ast.parse(textwrap.dedent("".join(lines)))
-    except (OSError, TypeError, SyntaxError):
+    except (OSError, TypeError, ValueError, SyntaxError):
         return None
     if inspect.isfunction(value):
         namespace: dict[str, object] = value.__globals__
@@ -290,6 +364,11 @@ class _Visitor:
     def __init__(self, checker: _Checker, target: _Target) -> None:
         self._checker = checker
         self._target = target
+        self._imports: dict[tuple[int, str], object] = {}
+        module = target.namespace.get("__name__")
+        self._in_sentinel = isinstance(module, str) and (
+            module == "inspect_sentinel" or module.startswith("inspect_sentinel.")
+        )
         self._qualname = str(
             getattr(
                 target.value, "__qualname__", getattr(target.value, "__name__", "?")
@@ -312,10 +391,19 @@ class _Visitor:
         if isinstance(node, _SCOPES):
             qualname = scopes[-1].qualname if scopes else self._qualname
             self._visit_scope(node, scopes, qualname, root=False)
-        elif isinstance(node, ast.Attribute):
+        elif isinstance(node, ast.Attribute) or _is_getattr(node):
+            denied = _denied(node)
             chain = _chain(node)
-            if chain is None:
-                self._visit(node.value, scopes)
+            if denied is not None:
+                self._violate(
+                    node,
+                    denied,
+                    "an attribute that reaches interpreter internals",
+                    "which a portable function cannot use",
+                    scopes,
+                )
+            elif chain is None:
+                self._visit_all(ast.iter_child_nodes(node), scopes)
             else:
                 self._reference(node, chain[0], chain[1:], scopes)
         elif isinstance(node, ast.Name):
@@ -335,9 +423,7 @@ class _Visitor:
         self, node: ast.AST, scopes: list[_Scope], qualname: str, root: bool
     ) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            # the factory's own decorators include the `@monitor` or `@protocol`
-            if not (root and not self._target.via):
-                self._visit_all(node.decorator_list, scopes)
+            self._visit_all(node.decorator_list, scopes)
             if not root:
                 qualname = _nested(qualname, node.name, scopes)
         if isinstance(node, _FUNCTION_SCOPES):
@@ -372,29 +458,38 @@ class _Visitor:
             return True, getattr(builtins, name)
         return False, None
 
+    def _imported(self, name: str, scopes: Sequence[_Scope]) -> tuple[bool, object]:
+        for scope in reversed(scopes):
+            key = (id(scope.node), name)
+            if key in self._imports:
+                return True, self._imports[key]
+        return False, None
+
     def _reference(
         self, node: ast.AST, root: str, attributes: list[str], scopes: list[_Scope]
     ) -> None:
-        if self._is_local(root, scopes):
+        imported, value = self._imported(root, scopes)
+        if not imported and self._is_local(root, scopes):
             return
         if root == "__builtins__":
             self._violate(
                 node, root, "the builtins", "which reaches the builtins by name", scopes
             )
             return
-        found, value = self._resolve(root)
-        if not found:
-            return
+        if not imported:
+            found, value = self._resolve(root)
+            if not found:
+                return
         values = [value]
         for attribute in attributes:
             try:
-                value = _unwrap_attribute(inspect.getattr_static(value, attribute))
-            except AttributeError:
+                value = _attribute(value, attribute)
+            except Exception:
                 break
             values.append(value)
         for index, value in enumerate(values):
             # a module is a namespace on the way to what the chain reaches
-            if inspect.ismodule(value) and index + 1 < len(values):
+            if _is_module(value) and index + 1 < len(values):
                 continue
             owner = values[index - 1] if index > 0 else None
             reference = ".".join([root, *attributes[:index]])
@@ -409,15 +504,11 @@ class _Visitor:
         scopes: list[_Scope],
         owner: object = None,
     ) -> bool:
-        verdict = _judge(value)
-        described = _describe(value)
-        # data has no module of its own, so a module's data is judged as the module
-        if verdict.kind is not _Kind.DISALLOWED and inspect.ismodule(owner):
-            if not (inspect.isclass(value) or inspect.isroutine(value)):
-                verdict = _classify(owner.__name__)
-                described = (
-                    f"a `{type(value).__qualname__}` in module `{owner.__name__}`"
-                )
+        try:
+            verdict, described = self._verdict(value, owner)
+        except Exception:
+            verdict = _Verdict(_Kind.DISALLOWED, "which could not be inspected")
+            described = f"a `{type(value).__qualname__}`"
         if verdict.kind is _Kind.DISALLOWED:
             self._violate(node, reference, described, verdict.reason, scopes)
             return False
@@ -425,10 +516,41 @@ class _Visitor:
             self._checker.follow(value, (*self._target.via, self._where(scopes)))
         return True
 
+    def _verdict(self, value: object, owner: object) -> tuple[_Verdict, str]:
+        own = self._checker.own
+        verdict = _judge(value, own)
+        described = _describe(value)
+        # data has no module of its own, so a module's data is judged as the module
+        if verdict.kind is not _Kind.DISALLOWED and _is_module(owner):
+            if not (inspect.isclass(value) or inspect.isroutine(value)):
+                name = cast(types.ModuleType, owner).__name__
+                verdict = _classify(name, own)
+                described = f"a `{type(value).__qualname__}` in module `{name}`"
+        if (
+            verdict.kind is _Kind.ALLOWED
+            and not self._in_sentinel
+            and _module_of(value).partition(".")[0] == "inspect_sentinel"
+        ):
+            public = _public_sentinel()
+            if not (
+                id(value) in public
+                or id(type(value)) in public
+                or (inspect.isclass(owner) and id(owner) in public)
+            ):
+                verdict = _Verdict(
+                    _Kind.DISALLOWED,
+                    "and only `inspect_sentinel`'s public API is portable",
+                )
+        return verdict, described
+
     def _import(self, node: ast.Import | ast.ImportFrom, scopes: list[_Scope]) -> None:
         if isinstance(node, ast.Import):
             for alias in node.names:
-                self._import_module(node, alias.name, None, scopes)
+                bound = alias.asname or alias.name.partition(".")[0]
+                value = self._import_module(node, alias.name, None, scopes)
+                if value is not None and alias.asname is None:
+                    value = sys.modules.get(bound)
+                self._bind(bound, value, scopes)
             return
         module = node.module or ""
         if node.level:
@@ -441,27 +563,41 @@ class _Visitor:
             except (ImportError, ValueError):
                 return
         for alias in node.names:
-            self._import_module(node, module, alias.name, scopes)
+            value = self._import_module(node, module, alias.name, scopes)
+            self._bind(alias.asname or alias.name, value, scopes)
+
+    def _bind(self, name: str, value: object, scopes: Sequence[_Scope]) -> None:
+        if value is not None and scopes:
+            self._imports[(id(scopes[-1].node), name)] = value
 
     def _import_module(
         self, node: ast.AST, module: str, name: str | None, scopes: list[_Scope]
-    ) -> None:
+    ) -> object:
         statement = (
             f"import {module}" if name is None else f"from {module} import {name}"
         )
         loaded = sys.modules.get(module)
-        if loaded is not None:
-            value: object = loaded
-            if name is not None and name != "*":
-                try:
-                    value = _unwrap_attribute(inspect.getattr_static(loaded, name))
-                except AttributeError:
-                    pass
-            self._judge(node, statement, value, scopes, loaded)
-            return
-        verdict = _classify(module)
-        if verdict.kind is _Kind.DISALLOWED:
-            self._violate(node, statement, f"module `{module}`", verdict.reason, scopes)
+        verdict = _classify(module, self._checker.own)
+        if loaded is None and verdict.kind is _Kind.AUTHOR:
+            # the author's module is imported when the function runs anyway
+            try:
+                loaded = importlib.import_module(module)
+            except Exception:
+                loaded = None
+        if loaded is None:
+            if verdict.kind is _Kind.DISALLOWED:
+                self._violate(
+                    node, statement, f"module `{module}`", verdict.reason, scopes
+                )
+            return None
+        value: object = loaded
+        if name is not None and name != "*":
+            try:
+                value = _attribute(loaded, name)
+            except Exception:
+                value = sys.modules.get(f"{module}.{name}", loaded)
+        self._judge(node, statement, value, scopes, loaded)
+        return value
 
     def _violate(
         self,
@@ -500,15 +636,45 @@ def _defaults(arguments: ast.arguments) -> list[ast.expr]:
     return [*arguments.defaults, *(d for d in arguments.kw_defaults if d is not None)]
 
 
-def _chain(node: ast.Attribute) -> list[str] | None:
+def _is_getattr(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) == 2
+        and not node.keywords
+        and isinstance(node.args[1], ast.Constant)
+        and isinstance(node.args[1].value, str)
+    )
+
+
+def _step(node: ast.AST) -> tuple[ast.AST, str] | None:
+    if isinstance(node, ast.Attribute):
+        return node.value, node.attr
+    if _is_getattr(node):
+        call = cast(ast.Call, node)
+        return call.args[0], cast(str, cast(ast.Constant, call.args[1]).value)
+    return None
+
+
+def _chain(node: ast.AST) -> list[str] | None:
     attributes: list[str] = []
-    current: ast.expr = node
-    while isinstance(current, ast.Attribute):
-        attributes.append(current.attr)
-        current = current.value
+    current = node
+    while (step := _step(current)) is not None:
+        current, attribute = step
+        attributes.append(attribute)
     if not isinstance(current, ast.Name):
         return None
     return [current.id, *reversed(attributes)]
+
+
+def _denied(node: ast.AST) -> str | None:
+    current = node
+    while (step := _step(current)) is not None:
+        current, attribute = step
+        if attribute in _DENIED_ATTRIBUTES:
+            return attribute
+    return None
 
 
 def _bound(scope: ast.AST) -> frozenset[str]:
@@ -548,6 +714,13 @@ def _bound(scope: ast.AST) -> frozenset[str]:
             names.add(node.rest)
         elif isinstance(node, ast.Global):
             declared_global.update(node.names)
+        elif isinstance(node, _COMPREHENSIONS):
+            # an assignment expression in a comprehension binds in this scope
+            names.update(
+                sub.target.id
+                for sub in ast.walk(node)
+                if isinstance(sub, ast.NamedExpr)
+            )
     return frozenset(names - declared_global)
 
 

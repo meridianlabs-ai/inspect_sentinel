@@ -26,12 +26,12 @@ Configuration comes through the factory's parameters, which the log records, not
 
 The check reads the factory's source, including the functions it returns, and resolves every name they reference to the object it names. Each object is judged by the module that defines it:
 
-- **Allowed:** the standard library, except modules with effects; `inspect_ai.core` (inspect_ai's wire types: messages, tool calls, `GenerateConfig`, `ModelOutput`) and its dependencies `pydantic`, `pydantic_core`, `typing_extensions` and `shortuuid`; `inspect_sentinel`; and `StoreModel` and `Reference`, which sentinel's API takes.
+- **Allowed:** the standard library, except modules with effects; `inspect_ai.core` (inspect_ai's wire types: messages, tool calls, `GenerateConfig`, `ModelOutput`) and its dependencies `pydantic`, `pydantic_core`, `typing_extensions` and `shortuuid`; `inspect_sentinel`'s public API; and `StoreModel` and `Reference`, which sentinel's API takes.
 - **Not allowed, in the standard library:** `os` and `sys` themselves (`os.path` is allowed), `socket`, `ssl`, `http.client`, `urllib.request`, `subprocess`, `multiprocessing`, `threading`, `signal`, `ctypes`, `sqlite3`, `shutil` and `importlib`.
-- **Not allowed, builtins:** `open`, `input`, `exec`, `eval`, `compile`, `__import__` and `breakpoint`.
+- **Not allowed, builtins:** `open`, `input`, `exec`, `eval`, `compile`, `__import__` and `breakpoint`, and attributes that reach interpreter internals, such as `__globals__`, `__builtins__`, `__subclasses__` and frames.
 - **Not allowed, packages:** the rest of inspect_ai, such as `get_model()` and `sandbox()`, and every other third-party package (`requests`, `openai`, `numpy`). Models are reached through `context.host.generate()`.
 
-Functions and classes from your own modules that the code references are checked the same way, wherever they are defined. What is checked is what the monitor references, not what its file imports: a `@task` that calls `get_model()` beside a portable monitor does not affect the monitor.
+Functions and classes from your own modules that the code references are checked the same way, wherever they are defined, including modules imported inside a function. Your own modules are those outside the standard library and `site-packages`, and the package that defines the monitor. What is checked is what the monitor references, not what its file imports: a `@task` that calls `get_model()` beside a portable monitor does not affect the monitor.
 
 Names that are parameters or local variables are not resolved, so a factory parameter holding a model or client passes; keep effects out of the function rather than passing them in.
 
@@ -62,9 +62,16 @@ def sandbox_state() -> Monitor:
 
 ## Known limits
 
-- Dynamic access is not followed: `getattr()` with a computed name, `globals()`, `vars()`, and the contents of containers such as a list of functions.
-- Standard-library modules outside the list above pass, even when they have effects, such as `pathlib` and `io` file access or `asyncio` subprocesses.
-- Referencing a class checks all of its methods, not only the ones called.
+The check reads source; it is a guard against accidents, not a sandbox.
+
+- Dynamic access is not followed: `getattr()` with a computed name, `globals()`, `vars()`, a module's `__getattr__`, and the contents of containers, such as a list of functions or the arguments of a `functools.partial`.
+- Standard-library modules outside the list above pass, even when they have effects, such as `pathlib` and `io` file access, `asyncio` subprocesses and connections, `pickle` and `runpy`.
+- Data read straight from `os` or `sys`, such as `os.sep` or `sys.version_info`, is refused with the module.
+- An object is judged by the module it says it comes from, so a function whose `__module__` is changed is judged by the new one.
+- Referencing a class checks all of its methods, not only the ones called; a class defined inside a function is resolved against its module's globals.
+- A package installed in editable mode, outside `site-packages`, counts as your own code and is followed rather than refused.
+- Source that cannot be parsed alone, such as a lambda inside a call, is skipped.
+- Checking may import your own modules that a function imports inside its body.
 - There is no runtime guard: a portable function is checked by its source, not watched while it runs.
 
 ## Per function and per module (planned)

@@ -108,6 +108,9 @@ def configure(module: ModuleType, name: str = "watched") -> object:
         ),
         ("import inspect_sentinel", "inspect_sentinel.Observation.score(0.1)"),
         ("from pydantic import BaseModel", "BaseModel.model_validate({})"),
+        ("import os", "os.path.normpath('a/../b')"),
+        ("from os.path import normpath", "normpath('a/../b')"),
+        ("import os\nlast = os.environ", "[(last := w) for w in ['a']]\nlast.upper()"),
     ],
 )
 def test_allowed_references_pass(load: Load, setup: str, body: str) -> None:
@@ -134,7 +137,8 @@ def test_allowed_references_pass(load: Load, setup: str, body: str) -> None:
         ("", "__import__('os')", "__import__"),
         ("", "breakpoint()", "breakpoint"),
         ("import builtins", "builtins.open('f')", "builtins.open"),
-        ("import builtins", "getattr(builtins, 'open')('f')", "builtins"),
+        ("import builtins", "getattr(builtins, 'open')('f')", "builtins.open"),
+        ("import builtins", "getattr(builtins, 'op' + 'en')('f')", "builtins"),
         ("", "__builtins__", "__builtins__"),
         ("from inspect_ai.model import get_model", "get_model()", "get_model"),
         ("import inspect_ai.model", "inspect_ai.model.get_model()", "get_model"),
@@ -151,6 +155,30 @@ def test_allowed_references_pass(load: Load, setup: str, body: str) -> None:
             "import os",
             "def inner() -> str | None:\n    return os.getenv('HOME')\ninner()",
             "os.getenv",
+        ),
+        ("", "import os.path\nos.system('ls')", "os.system"),
+        ("", "import posixpath\nposixpath.os.system('ls')", "posixpath.os.system"),
+        (
+            "import posixpath",
+            "getattr(posixpath, 'os').system('ls')",
+            "posixpath.os.system",
+        ),
+        ("import json", "json.__builtins__['open']('f')", "__builtins__"),
+        ("", "object.__subclasses__()", "__subclasses__"),
+        (
+            "from inspect_sentinel._runner import run_sentinel",
+            "run_sentinel",
+            "run_sentinel",
+        ),
+        (
+            "import os\nfrom typing import NamedTuple\nclass Holder(NamedTuple):\n    fn: object\nHOLDER = Holder(os.system)",
+            "HOLDER.fn('ls')",
+            "HOLDER.fn",
+        ),
+        (
+            "import functools, os\n@functools.cache\ndef helper() -> None:\n    os.system('ls')",
+            "helper()",
+            "os.system",
         ),
     ],
 )
@@ -202,6 +230,94 @@ def test_a_helper_in_another_local_module_is_followed(load: Load) -> None:
     module = load(monitor_source("run()", f"from {helpers.__name__} import run"))
     with pytest.raises(PortabilityError, match="`subprocess.run`"):
         configure(module)
+
+
+def test_a_module_imported_inside_the_function_is_followed(
+    load: Load, tmp_path: Path
+) -> None:
+    helpers = load(
+        "import subprocess\n\ndef run() -> None:\n    subprocess.run(['ls'])\n"
+    )
+    module = load(
+        monitor_source(f"import {helpers.__name__}\n{helpers.__name__}.run()")
+    )
+    with pytest.raises(PortabilityError, match="`subprocess.run`"):
+        configure(module)
+    unloaded = f"fixture_{uuid.uuid4().hex}"
+    (tmp_path / f"{unloaded}.py").write_text(
+        "import os\n\ndef home() -> str | None:\n    return os.getenv('HOME')\n"
+    )
+    module = load(monitor_source(f"from {unloaded} import home\nhome()"))
+    try:
+        with pytest.raises(PortabilityError, match="`os.getenv`"):
+            configure(module)
+    finally:
+        sys.modules.pop(unloaded, None)
+
+
+def test_a_wrapping_decorator_under_monitor_is_checked(load: Load) -> None:
+    source = (
+        HEADER
+        + """
+import functools
+import os
+
+def logged(factory):
+    @functools.wraps(factory)
+    def wrapper():
+        os.system("ls")
+        return factory()
+
+    return wrapper
+
+@monitor
+@logged
+def watched() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation:
+        return Observation.score(0.0)
+
+    return check
+"""
+    )
+    with pytest.raises(PortabilityError, match="`os.system`"):
+        configure(load(source))
+
+
+def test_a_function_of_unknown_module_fails(load: Load) -> None:
+    setup = "namespace = {}\nexec('def helper():\\n    return 1', namespace)\nhelper = namespace['helper']"
+    with pytest.raises(PortabilityError, match="its module is unknown"):
+        configure(load(monitor_source("helper()", setup)))
+
+
+def test_an_object_that_cannot_be_inspected_fails(load: Load) -> None:
+    setup = """
+class Proxy:
+    @property
+    def __class__(self):
+        raise RuntimeError("unbound")
+
+PROXY = Proxy()
+"""
+    with pytest.raises(PortabilityError, match="could not be inspected"):
+        configure(load(monitor_source("PROXY.value", setup)))
+
+
+def test_an_installed_package_can_use_its_own_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    name = f"mymons_{uuid.uuid4().hex}"
+    package = tmp_path / "site-packages" / name
+    package.mkdir(parents=True)
+    source = monitor_source(
+        "_score(step.call.function)",
+        "def _score(text: str) -> float:\n    return float(len(text))\n",
+    )
+    (package / "__init__.py").write_text(source)
+    prepend_path(monkeypatch, str(tmp_path / "site-packages"))
+    try:
+        configure(importlib.import_module(name))
+    finally:
+        sys.modules.pop(name, None)
 
 
 def test_helpers_that_call_each_other_are_checked_once(load: Load) -> None:
