@@ -1,6 +1,9 @@
+import ast
 import importlib
 import importlib.util
+import inspect
 import linecache
+import re
 import shutil
 import sys
 import textwrap
@@ -8,10 +11,10 @@ import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 import pytest
-from inspect_ai._util.registry import registry_info
+from inspect_ai._util.registry import is_registry_object, registry_info
 
 from inspect_sentinel import (
     BeforeToolCall,
@@ -32,6 +35,7 @@ Load = Callable[..., ModuleType]
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
 CORPUS = Path(__file__).parent / "portable_corpus"
+DOCS = Path(__file__).parent.parent / "docs"
 
 ENVIRONMENT = "a portable function has no environment variables"
 PROCESSES = "a portable function cannot start processes or threads"
@@ -951,6 +955,94 @@ def test_examples(
 ) -> None:
     modules_from(EXAMPLES)
     getattr(importlib.import_module(example), task)()
+
+
+class DocBlock(NamedTuple):
+    id: str
+    earlier: list[str]
+    source: str
+
+
+_FENCE = re.compile(
+    r"^```\s*(?:python|\{\.python[^}]*\})\s*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL
+)
+
+_DOC_BLOCKS_NOT_RUNNABLE = {
+    "docs/portability.qmd:1": "a `...` sketch of `portable=False`, which the check skips",
+}
+
+
+def factory_names(source: str) -> list[str]:
+    return [
+        node.name
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef)
+        and any(
+            isinstance(name := d.func if isinstance(d, ast.Call) else d, ast.Name)
+            and name.id in ("monitor", "protocol")
+            for d in node.decorator_list
+        )
+    ]
+
+
+def doc_blocks() -> list[DocBlock]:
+    found: list[DocBlock] = []
+    for page in sorted(DOCS.rglob("*.qmd")):
+        if any(part.startswith("_") for part in page.relative_to(DOCS).parts):
+            continue
+        blocks = _FENCE.findall(page.read_text())
+        for index, block in enumerate(blocks):
+            if factory_names(block):
+                id = f"{page.relative_to(DOCS.parent).as_posix()}:{index + 1}"
+                found.append(DocBlock(id, blocks[:index], block))
+    return found
+
+
+def import_doc_block(load: Load, block: DocBlock) -> ModuleType | None:
+    for source in (block.source, "\n".join([*block.earlier, block.source])):
+        try:
+            return load(source)
+        except Exception:
+            continue
+    return None
+
+
+def needs_arguments(factory: Callable[..., object]) -> bool:
+    return any(
+        p.default is p.empty and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+        for p in inspect.signature(factory).parameters.values()
+    )
+
+
+@pytest.mark.parametrize("block", doc_blocks(), ids=lambda block: block.id)
+def test_doc_snippets_pass(
+    load: Load, modules_from: Callable[[Path], None], block: DocBlock
+) -> None:
+    modules_from(EXAMPLES)
+    module = import_doc_block(load, block)
+    if block.id in _DOC_BLOCKS_NOT_RUNNABLE:
+        assert module is None, (
+            f"{block.id} now runs; remove it from _DOC_BLOCKS_NOT_RUNNABLE"
+        )
+        pytest.skip(_DOC_BLOCKS_NOT_RUNNABLE[block.id])
+    assert module is not None, (
+        f"{block.id} does not import, alone or after the page's earlier blocks"
+    )
+    factories = [
+        factory
+        for factory in (getattr(module, name) for name in factory_names(block.source))
+        if is_registry_object(factory, "monitor")
+        or is_registry_object(factory, "protocol")
+    ]
+    callable_now = [f for f in factories if not needs_arguments(f)]
+    if not callable_now:
+        pytest.skip(f"{block.id}: every factory needs arguments")
+    for factory in callable_now:
+        factory()
+
+
+def test_doc_exclusions_name_doc_blocks() -> None:
+    assert set(_DOC_BLOCKS_NOT_RUNNABLE) <= {block.id for block in doc_blocks()}
 
 
 def test_realistic_monitors_and_protocols_pass(
