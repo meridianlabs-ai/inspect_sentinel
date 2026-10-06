@@ -15,7 +15,6 @@ from inspect_ai.core import (
     ToolCall,
     ToolInfo,
 )
-from inspect_ai.model import Model
 
 from ._report import Decision, Failed, Report, Reported
 from ._step import Step
@@ -48,7 +47,7 @@ class Host(TypingProtocol):
         self,
         input: str | list[ChatMessage],
         *,
-        model: str | Model | None = None,
+        model: str | None = None,
         role: str | None = None,
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
@@ -59,7 +58,7 @@ class Host(TypingProtocol):
 
         Args:
             input: A prompt string or a list of chat messages.
-            model: A model name or instance, used when `role` is not configured.
+            model: A model name, used when `role` is not configured.
             role: A model role, e.g. `trusted`. Defaults to `monitor` when `model` is None.
             tools: Tool definitions to offer the model.
             config: Generation configuration.

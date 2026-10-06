@@ -194,7 +194,7 @@ import json
 from example_samples import CLEANUP, COUNT_ROWS, FETCH_DATA
 from inspect_ai import Task, task
 from inspect_ai.agent import react
-from inspect_ai.model import GenerateConfig, Model, ResponseSchema
+from inspect_ai.model import GenerateConfig, ResponseSchema
 from inspect_ai.tool import bash, python
 from inspect_ai.util import json_schema
 from pydantic import BaseModel, Field
@@ -245,7 +245,7 @@ The monitor itself:
 
 ```{.python filename="examples/llm_suspicion.py"}
 @monitor
-def suspicion(model: str | Model | None = None, role: str = "monitor") -> Monitor: # <1>
+def suspicion(model: str | None = None, role: str = "monitor") -> Monitor: # <1>
     async def score(context: Context, step: BeforeToolCall) -> Observation | None:
         if step.call.function == "submit":
             return None  # the prompt is written for commands, not final answers

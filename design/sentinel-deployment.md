@@ -82,7 +82,7 @@ class Host(typing.Protocol):
         self,
         input: str | list[ChatMessage],
         *,
-        model: str | Model | None = None,  # a model name or instance; used when role is not configured
+        model: str | None = None,          # a model name; used when role is not configured
         role: str | None = None,           # a model role; neither means "monitor"
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
