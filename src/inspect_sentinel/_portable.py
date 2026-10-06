@@ -6,10 +6,12 @@ import genericpath
 import importlib
 import importlib.util
 import inspect
+import linecache
 import ntpath
 import posixpath
 import sys
 import textwrap
+import tokenize
 import types
 import weakref
 from collections.abc import Callable, Iterable, Sequence
@@ -39,22 +41,22 @@ _CORE = "inspect_ai.core"
 # defined in, so the C modules behind public ones are listed too. Left out
 # with effects or a filesystem dependency: os (except os.path), sys, io,
 # pathlib, pickle, subprocess, socket, threading, zoneinfo (reads the tz
-# database), gzip (gzip.open; use zlib) and asyncio's streams, subprocesses,
-# threads and event loops. `time` is allowed though `time.sleep` blocks the
-# runtime (use `anyio.sleep`); `logging` is allowed but not its file handlers.
+# database), gzip (gzip.open; use zlib), logging.handlers, and asyncio's
+# streams, subprocesses and threads. `time` is allowed though `time.sleep`
+# blocks the runtime (use `anyio.sleep`).
 _PORTABLE_STDLIB = frozenset(
     """
     builtins abc _abc annotationlib array asyncio asyncio.base_futures
     asyncio.coroutines asyncio.events asyncio.exceptions asyncio.futures
     asyncio.locks asyncio.queues asyncio.taskgroups asyncio.tasks
     asyncio.timeouts _asyncio base64 binascii bisect _bisect calendar cmath
-    collections collections.abc contextlib contextvars _contextvars copy
+    collections collections.abc _collections contextlib contextvars _contextvars copy
     dataclasses datetime decimal _decimal _pydecimal difflib enum fnmatch
     fractions functools _functools genericpath hashlib _hashlib _blake2 _md5
-    _sha1 _sha2 _sha3 heapq _heapq hmac html html.entities html.parser
-    itertools json json.decoder json.encoder keyword logging math ntpath
-    numbers operator _operator posixpath pprint random re reprlib secrets shlex
-    statistics string struct _struct textwrap time types typing unicodedata
+    _sha1 _sha2 _sha3 heapq _heapq hmac html html.entities html.parser _markupbase
+    itertools json json.decoder json.encoder _json keyword logging math ntpath
+    numbers operator _operator posixpath pprint random _random re reprlib secrets shlex
+    statistics string string.templatelib struct _struct textwrap time types typing unicodedata
     urllib.parse uuid warnings _warnings _py_warnings weakref _weakref
     _weakrefset zlib
     """.split()
@@ -311,8 +313,8 @@ def _target(value: object, via: tuple[str, ...]) -> _Target | None:
         lines, first_line = inspect.getsourcelines(cast(Any, value))
         file = inspect.getsourcefile(cast(Any, value)) or "<unknown>"
         tree = ast.parse(textwrap.dedent("".join(lines)))
-    except (OSError, TypeError, ValueError, SyntaxError):
-        return None
+    except (OSError, TypeError, ValueError, SyntaxError, tokenize.TokenError):
+        return _class_target(value, via) if inspect.isclass(value) else None
     if inspect.isfunction(value):
         namespace: dict[str, object] = value.__globals__
         closure: dict[str, object] = {}
@@ -328,6 +330,35 @@ def _target(value: object, via: tuple[str, ...]) -> _Target | None:
         namespace = vars(module) if module is not None else {}
         closure = {}
     return _Target(value, file, max(first_line, 1), tree, namespace, closure, via)
+
+
+# a class whose module is not in `sys.modules` (a task file loaded by
+# `inspect eval`, a notebook cell): find it through one of its methods
+def _class_target(cls: type, via: tuple[str, ...]) -> _Target | None:
+    methods = [
+        cast(Any, f).__func__ if isinstance(f, (staticmethod, classmethod)) else f
+        for f in vars(cls).values()
+    ]
+    method = next((f for f in methods if inspect.isfunction(f)), None)
+    if method is None:
+        return None
+    code = method.__code__
+    try:
+        tree = ast.parse("".join(linecache.getlines(code.co_filename)))
+    except (SyntaxError, ValueError):
+        return None
+    found = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+        and node.name == cls.__name__
+        and node.lineno <= code.co_firstlineno <= (node.end_lineno or 0)
+    ]
+    if not found:
+        return None
+    node = max(found, key=lambda n: n.lineno)
+    body = ast.Module(body=[node], type_ignores=[])
+    return _Target(cls, code.co_filename, 1, body, method.__globals__, {}, via)
 
 
 class _Visitor:
@@ -372,6 +403,11 @@ class _Visitor:
                 self._reference(node, node.id, [], scopes)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             self._import(node, scopes)
+        elif (
+            isinstance(node, ast.If)
+            and (_chain(node.test) or [""])[-1] == "TYPE_CHECKING"
+        ):
+            self._visit_all(node.orelse, scopes)
         elif isinstance(node, ast.AnnAssign):
             if not (scopes and isinstance(scopes[-1].node, _FUNCTION_SCOPES)):
                 self._visit(node.annotation, scopes)
@@ -485,11 +521,19 @@ class _Visitor:
         own = self._checker.own
         verdict = _judge(value, own)
         described = _describe(value)
-        # data has no module of its own, so a module's data is judged as the module
-        if verdict.kind is not _Kind.DISALLOWED and _is_module(owner):
-            if not (inspect.isclass(value) or inspect.isroutine(value)):
-                name = cast(types.ModuleType, owner).__name__
-                verdict = _classify(name, own)
+        if not _module_of(value) and inspect.isclass(owner):
+            verdict = _judge(owner, own)
+        # data read off a disallowed module counts as that module (`os.environ`)
+        if (
+            verdict.kind is not _Kind.DISALLOWED
+            and _is_module(owner)
+            and not (_is_module(value) or inspect.isclass(value))
+            and not inspect.isroutine(value)
+        ):
+            name = cast(types.ModuleType, owner).__name__
+            stricter = _classify(name, own)
+            if stricter.kind is _Kind.DISALLOWED:
+                verdict = stricter
                 described = f"a `{type(value).__qualname__}` in module `{name}`"
         if (
             verdict.kind is _Kind.ALLOWED

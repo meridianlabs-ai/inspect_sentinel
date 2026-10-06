@@ -1,4 +1,5 @@
 import importlib
+import importlib.machinery
 import importlib.util
 import linecache
 import sys
@@ -120,6 +121,12 @@ def configure(module: ModuleType, name: str = "watched") -> object:
         ("from collections import Counter", "Counter('abc').most_common(1)"),
         ("import logging", "logging.getLogger(__name__).info('a')"),
         ("import builtins", "builtins.len('a')"),
+        ("import string", "'a'.translate(str.maketrans('', '', string.punctuation))"),
+        ("", "from os import path\npath.join('a', 'b')"),
+        (
+            "from typing import TYPE_CHECKING",
+            "if TYPE_CHECKING:\n    from inspect_ai.model import Model",
+        ),
     ],
 )
 def test_allowed_references_pass(load: Load, setup: str, body: str) -> None:
@@ -254,6 +261,28 @@ def test_a_helper_in_another_local_module_is_followed(load: Load) -> None:
     )
     module = load(monitor_source("run()", f"from {helpers.__name__} import run"))
     with pytest.raises(PortabilityError, match="`subprocess.run`"):
+        configure(module)
+
+
+def test_allowed_data_in_a_helper_module_is_not_looked_into(load: Load) -> None:
+    helpers = load(
+        "import logging\nfrom pydantic import TypeAdapter\nlog = logging.getLogger('x')\nSCORES = TypeAdapter(list[float])\n"
+    )
+    body = f"{helpers.__name__}.log.info('a')\n{helpers.__name__}.SCORES.validate_json('[0.1]')"
+    configure(load(monitor_source(body, f"import {helpers.__name__}")))
+
+
+def test_a_class_in_a_module_outside_sys_modules_is_checked(tmp_path: Path) -> None:
+    setup = "import os\n\nclass Helper:\n    def home(self) -> str | None:\n        return os.getenv('HOME')\n"
+    path = tmp_path / "task_file.py"
+    path.write_text(monitor_source("Helper().home()", setup))
+    # how `inspect eval` loads a task file: named by its path, not in sys.modules
+    loader = importlib.machinery.SourceFileLoader(path.as_posix(), path.as_posix())
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    with pytest.raises(PortabilityError, match=r"in Helper\.home: `os\.getenv`"):
         configure(module)
 
 
