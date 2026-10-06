@@ -1,5 +1,6 @@
 import anyio
 import pytest
+from inspect_ai.core._imports import check_imports
 
 import inspect_sentinel
 import inspect_sentinel._integration
@@ -104,3 +105,7 @@ def test_wire_types_come_from_inspect_ai() -> None:
 
     assert inspect_sentinel.Action is SentinelAction
     assert inspect_sentinel.Suspicion is SentinelSuspicion
+
+
+def test_imports_only_inspect_ai_core() -> None:
+    assert check_imports("inspect_sentinel", allowed=["anyio", "exceptiongroup"]) == []
