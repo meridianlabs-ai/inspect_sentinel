@@ -15,7 +15,7 @@ Extract Inspect's wire types (`ChatMessage`, `ToolCall`, `ModelOutput` and what 
 - The wire types get a contract, which the proxy and codegen work in [sentinel-deployment.md](sentinel-deployment.md) need.
 - Sentinel can release against a version floor of the leaf package rather than an inspect_ai branch.
 
-inspect_core is a second package inside the inspect_ai repository (UK AISI). When names move there, inspect_sentinel and inspect_ai re-export them, so user imports do not change (maintainer, 2026-10-02).
+inspect_core is `inspect_ai.core`, a subpackage of inspect_ai (UK AISI). When names move there, inspect_sentinel and inspect_ai re-export them, so user imports do not change (maintainer, 2026-10-02; the subpackage form per [inspect-core.md](inspect-core.md), open question 2). Sentinel imports its wire types from it since sentinel #59 and #60 (2026-10-06).
 
 Touches modules that sentinel, Scout and inspect_ai all import. Agree up front which import paths stay stable while it is in flight, or the Scout work churns.
 
@@ -133,10 +133,10 @@ Lives mostly in inspect_sentinel, with inspect_scout where Scout does the scanni
 
 Raised by the maintainer on 2026-10-02 as an AST-based linter. Decided by the maintainer on 2026-10-05: it is a runtime check, triggered by `portable=True`, the default on `@monitor` and `@protocol`, not a separate lint step a user runs. `@monitor(portable=False)` and `@protocol(portable=False)` opt out, visibly in code review and the registry. Scope as first raised; the decisions below supersede it where they differ (no runtime guard, per function by reference, the per-module verdict at deploy time):
 
-- **The check.** When a portable monitor or protocol is registered or configured, sentinel checks the import closure of its defining module against the allowlist of bundleable dependencies (the dependency half, per module), and that its body does not reach the ambient escapes: `get_model()`, `sandbox()`, inspect_ai's `store()` and similar (the affordance half, per function). A failure is an error naming the function, the offending import or call, and `portable=False`.
-- **The restricted host.** While it runs, a portable function runs through the same restricted host a proxy would use ([sentinel-deployment.md](sentinel-deployment.md), "Keeping monitors portable", mitigation 1), so a banned call raises at runtime too, in every eval. The property is exercised continuously rather than asserted.
-- **Compositions.** A composition is as portable as its least portable member: a leaf monitor calling `get_model()` disqualifies the protocol that wraps it.
-- **Per function and per module.** The flag is per function, but the dependency half is per module, so a `portable=False` function does not excuse its module: the module cannot be bundled, and the portable functions beside it go with it. The check says so rather than let it be discovered at build time.
+- ~~**The check.**~~ A per-module import closure plus a per-function affordance check, on registration or configuration; superseded by the per-function check when the factory is called.
+- ~~**The restricted host.**~~ A runtime check in every eval; superseded by "No runtime guard to start" below.
+- ~~**Compositions.**~~ A composition as portable as its least portable member; superseded by "Each instance is checked on its own" below.
+- ~~**Per function and per module.**~~ The check reporting per-module bundling; superseded: the check is per function and the per-module verdict belongs to the bundler.
 - **CI and deployment.** Enumerating the portable set and building it (the WASM build as a CI target, mitigation 3, and the proxy bundle in [proxy-host.md](proxy-host.md), section 5) consume the same check. There is no separate linter.
 
 Adds `portable=` to the decorators and otherwise consumes them and the module layout without changing them; the proxy work in workstream 4 decides what counts as bundleable.

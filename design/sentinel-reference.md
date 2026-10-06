@@ -85,7 +85,7 @@ The pieces:
 | `run_monitors`, `run_protocols`, `run_children` | The runner. The only way a protocol invokes a child. Names, records, and applies the failure policy. |
 | `concurrent`, `sequential` | The two compositions: concurrent (every child runs, strongest decision wins) and ordered (first non-`escalate` decides). |
 | `threshold`, `observe_only`, `resample` | The shipped protocols that turn monitors' scores into decisions. `resample` is not built yet. |
-| `human` | A rule that asks a person through `Host.ask_human`, which the host renders with its human approval surfaces. Its decisions are final by default. |
+| `human` | A rule that asks a person through `Host.ask_human`, which the host renders with its human approval surfaces. Its answer is an ordinary decision: it ends a `sequential()` chain, and in a `concurrent()` it is one vote (decided 2026-10-01). |
 | `decide_final` | Ends the step with a decision. Nothing above the calling protocol runs. |
 | `SentinelEvent` | Transcript record of every report, keyed by instance path. |
 
@@ -111,7 +111,7 @@ Rules:
 
 - **Annotate `-> Observation`, or `-> Observation | None` if it can abstain.** A monitor observes. If you find yourself wanting to return an action, you are writing a protocol; see [Monitor or protocol?](#monitor-or-protocol).
 - **One function, one stage.** If a concern spans two stages, write two functions. Independent ones are two monitors, listed both. When they share state, return both from one factory as `return MonitorGroup(before, after)` (a `ProtocolGroup` for protocols): the functions form one instance, with one name, one path and one `store_as` namespace, and each runs, in the order returned, at the stage it watches, until one returns `terminate` or calls `decide_final()`; the functions after it do not run and are not recorded. Give them distinct `__name__`s; that is how their reports are told apart, and the group's constructor rejects a duplicate. A group is not callable, so it cannot be invoked by mistake, and a factory that returns a plain list or tuple is an error that says to return the group.
-- **Name and version it in the decorator when you need to.** `@monitor(name="suspicion", version=2)` registers under `name` in place of the factory's `__name__`, as `@solver(name=)` does, and records `version` (a non-negative `int`, default 0) in the registry metadata, and in the log's configuration entry when not 0, so a calibration can record which version it measured; bump it when a change alters the scores. Bare `@monitor` is the same with the defaults. `portable=` is a future argument on this form; there is no `fail=` (see [Failures](#failures)).
+- **Name and version it in the decorator when you need to.** `@monitor(name="suspicion", version=2)` registers under `name` in place of the factory's `__name__`, as `@solver(name=)` does, and records `version` (a non-negative `int`, default 0) in the registry metadata, and in the log's configuration entry when not 0, so a calibration can record which version it measured; bump it when a change alters the scores. Bare `@monitor` is the same with the defaults. `portable=` (default `True`) says whether it can run outside an eval, and is checked when the factory is called ([Portable Monitors](../docs/portability.qmd)); there is no `fail=` (see [Failures](#failures)).
 - **Never take a threshold as a factory parameter.** If your monitor compares a score to a constant, return the score as an `Observation` and let a protocol hold the constant. See [Monitor or protocol?](#monitor-or-protocol).
 - **Do not keep per-sample state in the closure.** The factory runs once per configuration and the returned function is shared by every sample. Use `context.store_as()`. See [State](#state).
 
@@ -246,15 +246,15 @@ class Context:
 
     # -- effects
     host: Host
-    """Inference today; outbound JSON and keyed storage are planned. See [Effects](#effects)."""
+    """Inference and asking a person today; outbound JSON and keyed storage are planned. See [Effects](#effects)."""
 
     # -- the briefing, in an eval
     eval: EvalContext | None
     """The task and sample being run. None outside an Inspect eval, as in a proxy."""
 
     # -- memory; there is no `store`: an instance reaches only its own state
-    def store_as(self, model_cls: Type[SMT], *, scope: Scope = "sample") -> SMT:
-        """Typed view of this instance's state, namespaced by `path`. `scope="task"` is not built."""
+    def store_as(self, model_cls: Type[SMT]) -> SMT:
+        """Typed view of this instance's per-sample state, namespaced by `path`. Other scopes are planned."""
 ```
 
 The host (inspect_ai's dispatcher, or a proxy) builds the top layer's `Context`, with an empty `path` and, outside an eval, `eval=None`, and passes it to `run_sentinel` in a `HostContext` with its recorder and the sample store. Authors never see a `HostContext`: every monitor and protocol is given a plain `Context`, which has no private fields. For the duration of the step, `run_sentinel` sets a private context variable holding the recorder, the store, and the factory of each layer that has run, keyed by `path`; the runner registers each child's path before invoking it, and tasks a protocol starts inherit the variable. `run_monitors`, `run_protocols` and `run_children` look up the `path` of the context a protocol passes them: called outside a step, for example with a context kept after its protocol returned, they raise `RuntimeError`; given a context whose `path` is not a layer of the running step, `ValueError`. `store_as()` reads the store from the same variable and raises `RuntimeError` outside a step. Two instances with different factories under one `path` in one step are a `ValueError`, since their records and state would be indistinguishable.
@@ -463,7 +463,7 @@ You get three things for free: the state is recorded to the transcript as `Store
 
 The key is the instance path, so renaming a mapping key or wrapping a monitor in another layer moves its state: a resumed sample or a scorer reading under the old path finds nothing.
 
-Per-task state would use `scope="task"`. It is designed but not built; it needs a design for concurrency and checkpointing first:
+Per-task state is planned, not built: `store_as()` has no `scope=` today. `pr-series.md`, "Deferred", lists four scopes (the sample in one epoch, which is today's, the sample across epochs, the task, and global), which need a design for concurrency and checkpointing first. The intended shape, illustrative:
 
 ```python
 class RunTotals(StoreModel):
@@ -484,7 +484,7 @@ There is no `monitor_store_as()` or `monitor_host()` global. Helpers take what t
 
 ### Effects
 
-`context.host` is how a monitor reaches the outside world portably. Today that is inference; outbound JSON through named endpoints (`fetch`) and keyed storage are planned, and `sentinel-deployment.md` defines them. The runner records through a separate `Recorder`. In-process these are ordinary implementations; under a proxy they cross the host boundary. Until `fetch` lands, a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, if it is declared `portable=False`, at the cost of portability to a proxy.
+`context.host` is how a monitor reaches the outside world portably. Today that is inference (`generate`) and asking a person (`ask_human`); outbound JSON through named endpoints (`fetch`) and keyed storage are planned, and `sentinel-deployment.md` defines them. The runner records through a separate `Recorder`. In-process these are ordinary implementations; under a proxy they cross the host boundary. Until `fetch` lands, a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, if it is declared `portable=False`, at the cost of portability to a proxy.
 
 Rules:
 
@@ -633,7 +633,7 @@ def protocol(*, name: str | None = None, version: int = 0) -> ProtocolDecorator:
 Rules:
 
 - **Decorate with `@protocol`.** It registers under the `"protocol"` registry type. The returned callable must be `Decision`-kind; see [Static checking](#static-checking).
-- **Take children as one named parameter, if any.** `monitors: Monitor | MonitorGroup | Monitors` for a protocol that reads scores (`threshold`), `children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Children` for a composition (`sequential`, `concurrent`), so one instance needs no list around it. Not `*args`: a mapping is how children get names, and the parameter name is the nested key in YAML. A rule takes no children at all.
+- **Take children as one named parameter, if any.** `monitors: Monitor | MonitorGroup | Monitors` for a protocol that reads scores (`threshold`), `children: Sentinels` for a composition (`sequential`, `concurrent`), so one instance needs no list around it. Not `*args`: a mapping is how children get names, and the parameter name is the nested key in YAML. A rule takes no children at all.
 - **Annotate the return as `Protocol`.** A control protocol, not `typing.Protocol`; see [Open questions](#open-questions) item 19.
 - **Annotate `step` as `Step`** to run at all four stages. Annotate a single payload to run at one. `threshold` above runs at `BeforeToolCall` so that `reject` is always legal.
 - **Annotate `-> Decision`, or `-> Decision | None` if it can abstain.** A protocol's job is to produce a decision.
@@ -730,7 +730,7 @@ Shape checks raise. Each is a deterministic bug in a protocol, not agent input, 
 
 `decide_final()` is the mechanism for a decision no layer above may weaken. It replaces an earlier design in which a `binding` flag set a floor that the runner clamped each layer's return up to, recording the override. A value-level rule requires every layer to carry or compare the property, and each patch to it leaked where a middle layer built a new decision; control flow cannot be dropped by a middle layer, because that layer's code does not run. It reuses `terminate`'s cancellation, and the first `decide_final()` wins, as with two `terminate`s. Ordering several authorities is a `sequential`, or a panel that collects advisory votes and calls `decide_final()` itself.
 
-The host invokes the resolved root through `run_sentinel`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `decide_final()` from below records the root as `bypassed`, and `run_sentinel` returns the final decision as the step's outcome, so the dispatcher never catches `Final`. A lone protocol is the root itself; a list, a mapping or a lone `ProtocolGroup` is wrapped in `concurrent`, and monitors alone in `observe_only`.
+The host invokes the resolved root through `run_sentinel`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `decide_final()` from below records the root as `bypassed`, and `run_sentinel` returns the final decision as the step's outcome, so the dispatcher never catches `Final`. A lone protocol is the root itself; a list, a mapping or a lone `ProtocolGroup` is wrapped in `concurrent`. Monitors alone are a configuration error naming them and saying to wrap them in `threshold()` or `observe_only()`.
 
 An `escalate` that reaches the root has nobody to hand it to: the host proceeds as for `continue`, the escalate stays recorded as the root's decision, and the host warns once per eval that `sequential([..., human()])` sends escalations to a person. This is the current behaviour and is under review (see [Open questions](#open-questions) item 24); rejecting instead would fail closed, as approval does when every approver escalates, but would turn every unsure rule into a blocked call.
 
@@ -759,7 +759,7 @@ Rules:
 
 ```python
 @protocol
-def sequential(children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Children) -> Protocol:
+def sequential(children: Sentinels) -> Protocol:
     named = named_children(children, None)
     if not named:
         raise ValueError("sequential needs at least one child.")
@@ -770,7 +770,8 @@ def sequential(children: Monitor | MonitorGroup | Protocol | ProtocolGroup | Chi
         for name, child in named:
             current = replace(step, escalations=tuple(escalations))
             observations, decisions = await run_children({name: child}, context, current)
-            if observations:
+            warn_failed(observations.failed)          # a failed monitor is logged and falls through
+            if observations.failed or observations.succeeded:
                 participated = True      # recorded; falls through
             strongest = decisions.strongest()      # a group link decides by its strongest function
             if strongest is None:
@@ -1372,7 +1373,7 @@ What keeps the simple case simple:
 1. Every control action lives in the protocol. `defer`, `resample`, `audit`-as-action, `trusted_edit`, honeypots, paraphrasing, and multi-sample payloads are not on the monitor surface. Apply the same test to anything added later.
 2. Every optional field has a default.
 3. Protocols ship named and configured.
-4. Zero configuration does something sensible for each kind: a rule acts, a monitor records.
+4. Zero configuration does something sensible for each kind: a rule acts; a monitor alone is a configuration error that names `observe_only()` to record it and `threshold()` to act on it.
 5. "Monitor" and "protocol" are two types, and the decorator says which you are writing. The "write your first rule" page contains no control vocabulary.
 6. Research machinery goes in extensions, per AGENTS.md.
 

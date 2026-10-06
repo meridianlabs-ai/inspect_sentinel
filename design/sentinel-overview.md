@@ -6,7 +6,7 @@ Inspect Sentinel is a package for defining, developing, and deploying sentinels:
 
 1.  A single interface that encompasses monitoring tool calls and model generations, with execution either before or after model generations and tool calls.
 2.  A division between monitors, which observe and report a suspicion score, and protocols, which decide on an action similar to the current Inspect tool call approval interface (e.g. continue, modify, reject, escalate, terminate). A protocol with no monitors is a simple rule.
-3.  Support for layering control protocols (thresholds, audit budgets, resampling, defer to trusted, human review, etc.) on top of monitors.
+3.  Support for layering control protocols (thresholds, audit budgets, resampling, human review, etc.) on top of monitors.
 4.  Core interfaces decoupled from the Inspect runtime so that monitors can be deployed elsewhere (e.g. in network proxies).
 5.  Development tools for validating, calibrating, and backtesting monitors on test or production transcripts.
 
@@ -117,13 +117,10 @@ class Context:
     eval: EvalContext | None
     """The task and sample being run. None outside an Inspect eval."""
 
-    def store_as(
-        self,
-        model_cls: Type[SMT],
-        *,
-        scope: Scope = "sample"  # "task" is not built
-    ) -> SMT:
-        """Typed view of this instance's state, namespaced by its path."""
+    def store_as(self, model_cls: Type[SMT]) -> SMT:
+        """Typed view of this instance's per-sample state, namespaced by its path.
+
+        Other scopes (across epochs, the task, global) are planned."""
 ```
 
 ## Protocols {#protocols}
@@ -133,7 +130,7 @@ A protocol decides what happens at a step. It may consult monitors, other protoc
 - **Thresholds**, calibrated against benign score distributions.
 - **Escalation** to more capable judges or humans for review.
 - **Aggregation** of reports from several monitors.
-- **Control actions**: accept, audit, defer to a trusted model, trusted edit, resample. These are things a protocol does with a score, not values a monitor can return.
+- **Control actions**: accept, audit, trusted edit, resample. These are things a protocol does with a score, not values a monitor can return.
 - **Pipeline stages** such as paraphrasing agent output before monitors see it, or injecting honeypot inputs to catch a colluding monitor.
 
 Built-in protocols cover the common compositions and basic control scenarios. `concurrent()`, `sequential()`, `observe_only()`, `threshold()` and `human()` ship today; `resample()` is designed but not yet built:
@@ -198,9 +195,9 @@ The goal is to enable two deployment modes for proxy servers:
 1.  Sidecar (a Python service beside the proxy); or
 2.  Embedded (CPython compiled to WASM inside the proxy)
 
-Both modes depend on sentinels being lightweight. `inspect_sentinel` is to depend only on `inspect_core`, a new package holding the wire types (`ChatMessage`, `ModelOutput`, `ToolCall`, `ToolInfo`) and the registry primitives, so that a monitor author, a proxy, or a WASM build never pulls in the full Inspect framework. Today it depends on `inspect_ai`.
+Both modes depend on sentinels being lightweight. `inspect_sentinel` is to depend only on `inspect_ai.core`, a subpackage of inspect_ai holding the wire types (`ChatMessage`, `ModelOutput`, `ToolCall`, `ToolInfo`) and, later, the registry primitives, so that a monitor author, a proxy, or a WASM build never pulls in the full Inspect framework. Today it imports the wire types from `inspect_ai.core` and the registry, store and configuration from the rest of `inspect_ai`.
 
-Even if you are deploying sentinels inside Inspect AI to start with, sentinel will check that your code travels well to a proxy without Inspect dependencies. Monitors and protocols are portable by default, which is checked when they are registered and while they run, and `@monitor(portable=False)` opts out. Neither is built yet.
+Even if you are deploying sentinels inside Inspect AI to start with, sentinel will check that your code travels well to a proxy without Inspect dependencies. Monitors and protocols are portable by default, and `@monitor(portable=False)` opts out. Calling the factory checks its code for common mistakes that would fail in a proxy, such as calling `get_model()` or reading environment variables; there is no check while it runs.
 
 ## Development
 
