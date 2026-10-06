@@ -12,6 +12,17 @@ Make Inspect's core data types — `ChatMessage`, `Content`, `ToolCall`, `ToolIn
 
 This came out of the sentinel design, but nothing here is monitor-specific.
 
+## What belongs in `inspect_ai.core`
+
+Two things belong in `core`:
+
+- the data passed between a monitor and the system running it (inspect_ai in an eval, or a proxy host), and
+- the registry substrate: storing, tagging and looking up registered objects.
+
+Event types are not in `core`. `BaseEvent.working_start` defaults to `sample_working_time()`, which is eval machinery.
+
+`inspect_sentinel` imports only `inspect_ai.core`, `anyio` and `exceptiongroup`. `tests/test_package.py` checks this with `check_imports`. `core` is a subpackage of `inspect_ai`, so importing it still runs `inspect_ai/__init__.py`. Running sentinel without inspect_ai installed needs the separate distribution in open question 2.
+
 ## The measurement
 
 Importing a data model today:
@@ -103,17 +114,17 @@ Those are all exception classes, but the top-level import runs `openai/__init__.
 
 On weight: the `anthropic` and `openai` SDKs are pure Python whose only native dependency is `pydantic-core`, which `inspect_core` already needs — tolerable in a constrained build. `google-genai` reaches for google-auth, requests and possibly grpc, and may need to be an optional extra.
 
-### The registry is already a leaf
+### The registry is a leaf
 
-`_util/registry.py` runtime imports are `inspect`, `sys`, `typing`, `pydantic`, `pydantic_core`, `typing_extensions`, plus `_util.json`, `_util.package`, `_util.constants`, `_util.entrypoints`. Every reference to `Task`, `Agent`, `Approver`, `Hooks`, `ModelAPI`, `Metric`, `Scorer`, `Solver`, `Tool` and `SandboxEnvironment` is `TYPE_CHECKING`-only — they exist for `registry_create`'s overload signatures. `registry_tag` is two `setattr` calls; `extract_named_params` is stdlib `inspect.signature().bind()`.
+`inspect_ai.core._registry` imports only the stdlib, `pydantic`, `pydantic_core`, `typing_extensions` and other `core` modules. `registry_create`, whose overloads name `Task`, `Agent`, `Approver`, `Hooks`, `ModelAPI`, `Metric`, `Scorer`, `Solver`, `Tool` and `SandboxEnvironment`, stays in `inspect_ai._util.registry`. `registry_tag` is two `setattr` calls; `extract_named_params` is stdlib `inspect.signature().bind()`.
 
-So `RegistryInfo`, `registry_add`, `registry_tag`, `registry_info`, `registry_lookup` and `extract_named_params` can live in `inspect_core`. A decorator defined there registers for real — no marker attributes, no deferred drain, no import-ordering hazard, no dependency inversion. Module identity gives a shared singleton registry for free: `inspect_ai` imports the same module object, so there is one dict, not two to keep coherent.
+So `RegistryInfo`, `registry_add`, `registry_tag`, `registry_info`, `registry_lookup` and `extract_named_params` live in `inspect_ai.core`. A decorator defined there registers for real — no marker attributes, no deferred drain, no import-ordering hazard, no dependency inversion. Module identity gives a shared singleton registry for free: `inspect_ai` imports the same module object, so there is one dict, not two to keep coherent.
 
 Three details:
 
-- **`ensure_entry_points()` is a hazard.** It is called from `registry.py` and loads plugin entry points, so it can import arbitrary third-party packages at runtime — silently defeating the dependency discipline in a constrained build. It needs to be injectable or a no-op in `inspect_core`, with `inspect_ai` installing the real implementation.
+- **`ensure_entry_points()` moves with the registry.** It loads plugin entry points, so it can import arbitrary third-party packages at runtime. A bundle has no installed entry points, so there it finds none.
 - **`registry_create` stays up.** The leaf needs tag/add/info/lookup; the typed overloads are about constructing heavy objects.
-- **`RegistryType`** enumerates `"solver"`, `"scorer"`, … Either move the Literal down (harmless — it is strings) or type the leaf's field as `str` and keep the Literal in `inspect_ai` for checking.
+- **`RegistryType`** is a `Literal` that lists every kind (`"solver"`, `"scorer"`, …), and it is in `core`. Logs keep their validation when read.
 
 ### Annotation-driven registration needs nothing extra
 
@@ -124,8 +135,6 @@ The related static pass — enumerating `@monitor` functions in a file without i
 ## Compatibility
 
 Prefer re-export shims over relocation: `inspect_ai.model.ChatMessage` keeps working with the definition moving underneath. This matters beyond politeness — `inspect_scout` imports `inspect_ai` privates directly, so a bare move breaks a sibling package.
-
-`_util.registry` is more central than the rest of the leaf set; worth checking whether the types genuinely need it or whether that is another incidental reach.
 
 ## The wire contract
 
@@ -200,7 +209,7 @@ And note what codegen does *not* do: it gives hosts the target shape, not the ma
 
 ## Open questions
 
-1.  **Scope of `inspect_core`.** Which types exactly? The seven analyzed here are the monitor's needs; a log reader wants `EvalLog` and the event types, which reach further. `sentinel-development.md` adds a concrete consumer for `ModelEvent` and `ToolEvent`: replaying a monitor over an eval log at full fidelity needs them, and without them in core that reconstruction lives in `inspect_ai` rather than `inspect_sentinel`.
+1.  **Scope of `inspect_core` beyond the rule above.** A log reader wants `EvalLog` and the event types, which the rule leaves out. `sentinel-development.md` adds a concrete consumer for `ModelEvent` and `ToolEvent`: replaying a monitor over an eval log at full fidelity needs them, and without them in core that reconstruction lives in `inspect_ai` rather than `inspect_sentinel`.
 2.  **Is it a separate distribution or a subpackage?** A separate wheel lets a Go-host author depend on it without `inspect_ai`; a subpackage is far less release machinery. The WASM case wants the former.
 3.  **How far to chase the four-package floor.** Removing `rich`, `platformdirs`, `anyio` and `jsonlines` means the types stop using `warn_once` and friends. Worth it for a constrained build, possibly not otherwise.
 4.  **Does `inspect_api` ship the Google provider conversions** given the heavier dependency, or are they an optional extra?

@@ -1310,7 +1310,7 @@ Ambient accessors exist in Inspect for call boundaries you do not control: a too
 
 ### Where the decorator lives
 
-`_util/registry.py` is already a leaf: stdlib, pydantic, and four small `_util` modules at runtime, with every heavy type imported under `TYPE_CHECKING`. So the registry primitives move to `inspect_core` alongside the wire types, and `@monitor` defined there registers for real, with one shared registry dict because `inspect_ai` imports the same module. `ensure_entry_points()` must be injectable or a no-op in the leaf, since it imports third-party packages. Parameter capture reuses `extract_named_params`, which carries the VAR_KEYWORD flattening from #4374.
+The registry is a leaf: `inspect_ai.core._registry` imports only the stdlib, pydantic and other `core` modules, and `registry_create`, typed with the heavy types, stays in `inspect_ai._util.registry`. So the registry primitives live in `inspect_ai.core` alongside the wire types, and `@monitor` defined there registers for real, with one shared registry dict because `inspect_ai` imports the same module. `ensure_entry_points()` moves with the registry; it imports third-party packages, but a bundle has no installed entry points, so there it finds none. Parameter capture reuses `extract_named_params`, which carries the VAR_KEYWORD flattening from #4374.
 
 ### Why monitors record and readers fail
 
