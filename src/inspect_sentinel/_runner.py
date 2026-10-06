@@ -8,7 +8,7 @@ from typing import Literal, NamedTuple, TypeVar, cast
 
 import anyio
 from anyio.abc import TaskGroup
-from inspect_ai._util.registry import registry_info, registry_unqualified_name
+from inspect_ai.core._registry import registry_info, registry_unqualified_name
 from inspect_ai.util import LimitExceededError
 
 from ._context import Context, validate_instance_name

@@ -8,7 +8,7 @@ from typing import Any, NamedTuple, cast
 
 import yaml
 from inspect_ai._util.file import exists, local_path
-from inspect_ai._util.registry import (
+from inspect_ai.core._registry import (
     RegistryDict,
     RegistryInfo,
     RegistryType,

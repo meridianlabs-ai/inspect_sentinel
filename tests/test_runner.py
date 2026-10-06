@@ -983,7 +983,7 @@ async def test_non_string_mapping_keys_are_a_configuration_error(key: Any) -> No
 async def test_packaged_children_are_named_without_the_package_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import inspect_ai._util.registry as registry
+    import inspect_ai.core._registry as registry
 
     def packaged(o: object) -> str:
         return "acme"

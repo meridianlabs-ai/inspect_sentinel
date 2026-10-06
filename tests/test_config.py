@@ -5,8 +5,8 @@ from typing import Any, cast
 
 import pytest
 import yaml
-from inspect_ai._util import registry
 from inspect_ai._util.registry import registry_info, registry_params
+from inspect_ai.core import _registry as registry
 from inspect_ai.log import SentinelConfig
 from pydantic import ValidationError
 
