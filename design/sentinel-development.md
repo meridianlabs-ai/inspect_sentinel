@@ -55,9 +55,9 @@ Scout already depends on Inspect, so it gets `inspect_sentinel` transitively and
 
 | Where | What | Why there |
 |------------------------|------------------------|------------------------|
-| `inspect_sentinel` | `steps_from_messages()`; the `ReplayStep` record; `Context` from a transcript's info; an in-process `Host`; `replay_monitor()` | needs only core types, and is also what a monitor's unit tests want |
+| `inspect_sentinel` | `steps_from_messages()`; the `ReplayStep` record; `Context` from a transcript's info; an in-process `Host`; `replay_monitor()`; `calibrate()` | needs only core types, and is also what a monitor's unit tests want; the development loop's verbs live here ([workstreams.md](workstreams.md), workstream 10) |
 | `inspect_ai` | `steps_from_events()` — enrichment of the messages-only reconstruction with `view`, truncation, `tools`, `config` from `ModelEvent` and `ToolEvent` | the event types are not in core today |
-| `inspect_scout` | `as_scanner()`; the `subject` field on `Result` and row expansion; the read-mode scanner over recorded `SentinelEvent`s; `calibrate()`; viewer work | consumes monitors; owns validation and the view |
+| `inspect_scout` | `as_scanner()`; the `subject` field on `Result` and row expansion; the read-mode scanner over recorded `SentinelEvent`s; viewer work | does the scanning; owns validation and the view |
 
 The middle row is pressure on `inspect-core.md`'s first open question. If `ModelEvent` and `ToolEvent` move down, the events-based reconstruction moves down with them and `inspect_sentinel` can replay an eval log at full fidelity on its own. Nothing in this document requires that; it only gets tidier.
 
@@ -240,7 +240,7 @@ thresholds = calibrate(results, target_recall=0.95)   # from labels
 Task(sentinel=threshold(suspicion_monitor(), reject_at=thresholds["sabotage"]))
 ```
 
-It is ordinary pandas over a Scout results dataframe and lives in Scout. What matters more than the helper is that the *inputs* to it — recorded scores, including ones a protocol ignored — are produced by the runner as a matter of course, which is why `sentinel.md` records them.
+It is ordinary pandas over a Scout results dataframe. It lives in inspect_sentinel, as one of the development loop's verbs, and uses Scout for the scanning (workstream 10, reframed by the maintainer on 2026-10-02). What matters more than the helper is that the *inputs* to it — recorded scores, including ones a protocol ignored — are produced by the runner as a matter of course, which is why `sentinel.md` records them.
 
 The calibration corpus should be held out from the validation set's `test` split, and a threshold derived from one model's scores is not a threshold for another model's; both are ordinary ML hygiene rather than framework concerns, but the docs should say them.
 
@@ -270,7 +270,7 @@ Monitor inference in replay is charged to the scan, never to anything resembling
 - **`sentinel.md` and `sentinel-reference.md`:** `SentinelEvent.step_id`, recorded live by the runner. Open question 5 (calibration) and open question 11 (monitors as scores) are answered here and retire there.
 - **Core:** `conversation` on `ModelEvent` and `CompactionEvent`, so the events reconstruction can rebuild one agent's `history` across compactions without a heuristic.
 - **`inspect-core.md`:** the events-based reconstruction wants `ModelEvent` and `ToolEvent` in core. Not required, but it is a concrete consumer for the first open question.
-- **Scout:** `Result.subject`; expansion of subject-bearing results into rows; `"sentinel"` in `EventType`; the read-mode scanner; `calibrate()`; and, later, a step-level labelling gesture in the transcript view.
+- **Scout:** `Result.subject`; expansion of subject-bearing results into rows; `"sentinel"` in `EventType`; the read-mode scanner; and, later, a step-level labelling gesture in the transcript view.
 
 ## Open questions
 
@@ -278,7 +278,7 @@ Monitor inference in replay is charged to the scan, never to anything resembling
 2. **What does an expanded row's `input` hold?** Parent transcript id plus subject is the proposal; whether the view needs the step's messages materialised for rendering is a viewer question.
 3. **Should `unit="transcript"` reduce by max or by strongest?** Max suspicion for observations and strongest decision are the obvious defaults and match `sentinel.md`'s composition rules; a protocol may want the outermost layer's decision instead, which the adapter can take from its own report.
 4. **Replaying a bridged agent's log.** A `claude_code` or `codex` transcript has no `ToolEvent`s of Inspect's own, so replay is messages-only even from an eval log. That is fine — it is the deployment those monitors face anyway — but the fidelity table should say so.
-5. **Does replay honour `portable=True`?** A portable monitor runs through the same restricted `Host` the proxy would use in every eval (`workstreams.md`, workstream 11), the enforcement `sentinel-deployment.md` argues for. Replay should do the same, or a monitor could pass in replay and fail in an eval. Probably yes by default, rather than as an option on `as_scanner()`.
+5. **Does replay honour `portable=True`?** The check runs when a monitor's factory is called, before it runs, with no restricted host or runtime guard (`workstreams.md`, workstream 11), so a monitor configured for replay is checked as in an eval. Open: whether replay should also refuse a `portable=False` monitor when the replay stands in for a proxy deployment.
 6. **Step-level labelling in the transcript view.** Results rows suffice for a first version; a "this tool call was bad" gesture on the transcript itself is the natural way to build step sets and needs Scout View work.
 7. **Splits and calibration.** Whether `calibrate()` should refuse to read a split that is also used for validation, or merely document the hygiene.
 8. **Sub-section splitting and stateful monitors.** Splitting a compaction segment resets the per-transcript store at each cut. Whether the adapter should refuse to split for a monitor that declares state, seed each sub-section with a summary of the prior one, or simply document the fidelity loss.

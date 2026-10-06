@@ -27,7 +27,7 @@ Needed:
 |---|---|---|
 | `continue` | pass the request | pass the response |
 | `modify` | rewrite the request body | rewrite the response, e.g. a `tool_use` block |
-| `reject` | not legal before a generate in v1 | rewrite the response so the agent does not run the call: the `tool_use` replaced by the decision's `message` as text, or a refusal. There is no tool-result channel here, so the exact shape needs design. |
+| `reject` | pending the generate stages (sentinel #42); the design makes it "do not run this generate, tell the agent why" (`sentinel.md`, "One vocabulary across stages") | rewrite the response so the agent does not run the call: the `tool_use` replaced by the decision's `message` as text, or a refusal. There is no tool-result channel here, so the exact shape needs design. |
 | `terminate` | an error response, plus an optional out-of-band signal to whatever owns the session (who owns it is open; deployment doc, open question 3) | same |
 | `escalate` at the top, and `human()` | an audit queue that never blocks: the step proceeds with a default and the case is queued for review | same |
 
@@ -76,7 +76,7 @@ Run the `ext_proc` sidecar as the vehicle for sections 1 to 3; WASM adds isolati
 ## 5. Packaging and configuration
 
 - **Bundling**: the monitor modules and a manifest (deployment doc, "What gets bundled"), and configuration through `sentinel_from_config` (YAML), with the `version` and `meta` each entry records.
-- **The `portable=True` check** (workstream 11), the runtime check a portable monitor or protocol gets when registered or configured, run at deploy time over the bundled set as well: only bundleable imports in each module's closure, no `get_model()` or `sandbox()` in each function. A module that fails is dropped and named.
+- **The `portable=True` check** (workstream 11) runs when a factory is called, per function; it is early feedback, and the sandbox is the enforcement. Bundling adds a separate per-module verdict, the import closure of each bundled module: a module that fails is dropped and named.
 - **Dependencies**: `inspect_core`, pydantic and anyio; not inspect_ai.
 
 ## 6. Changes to the sentinel interface
