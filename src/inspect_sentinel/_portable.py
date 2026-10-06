@@ -2,23 +2,27 @@ from __future__ import annotations
 
 import ast
 import builtins
-import genericpath
-import importlib
+import calendar
+import codecs
+import contextlib
+import functools
 import importlib.util
 import inspect
+import io
 import linecache
-import ntpath
+import logging
 import posixpath
 import sys
-import textwrap
-import tokenize
+import time
 import types
+import uuid
 import weakref
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from enum import Enum
 from pathlib import Path
-from typing import Any, NamedTuple, cast
+from typing import Any, Literal, NamedTuple, cast
 
+from inspect_ai._util.registry import is_registry_object, registry_info
 from inspect_ai.scorer import Reference
 from inspect_ai.util import StoreModel
 
@@ -36,39 +40,57 @@ _ALLOWED_PACKAGES = frozenset(
 )
 _CORE = "inspect_ai.core"
 
-# Standard-library modules a portable function may use: pure computation that
-# CPython provides on WASI. Matched exactly against the module an object is
-# defined in, so the C modules behind public ones are listed too. Left out
-# with effects or a filesystem dependency: os (except os.path), sys, io,
-# pathlib, pickle, subprocess, socket, threading, zoneinfo (reads the tz
-# database), gzip (gzip.open; use zlib), logging.handlers, and asyncio's
-# streams, subprocesses and threads. `time` is allowed though `time.sleep`
-# blocks the runtime (use `anyio.sleep`).
+# Standard-library modules that only compute and that CPython provides on
+# WASI, matched exactly against the module an object is defined in (so the C
+# modules behind public ones are listed too).
 _PORTABLE_STDLIB = frozenset(
     """
     builtins abc _abc annotationlib array asyncio asyncio.base_futures
     asyncio.coroutines asyncio.events asyncio.exceptions asyncio.futures
     asyncio.locks asyncio.queues asyncio.taskgroups asyncio.tasks
     asyncio.timeouts _asyncio base64 binascii bisect _bisect calendar cmath
-    collections collections.abc _collections contextlib contextvars _contextvars copy
-    dataclasses datetime decimal _decimal _pydecimal difflib enum fnmatch
-    fractions functools _functools genericpath hashlib _hashlib _blake2 _md5
-    _sha1 _sha2 _sha3 heapq _heapq hmac html html.entities html.parser _markupbase
-    itertools json json.decoder json.encoder _json keyword logging math ntpath
-    numbers operator _operator posixpath pprint random _random re reprlib secrets shlex
-    statistics string string.templatelib struct _struct textwrap time types typing unicodedata
-    urllib.parse uuid warnings _warnings _py_warnings weakref _weakref
-    _weakrefset zlib
+    codecs _codecs collections collections.abc _collections colorsys contextlib
+    contextvars _contextvars copy csv _csv dataclasses datetime decimal _decimal
+    _pydecimal difflib enum errno fnmatch fractions functools _functools
+    genericpath graphlib hashlib _hashlib _blake2 _md5 _sha1 _sha2 _sha3 heapq
+    _heapq hmac html html.entities html.parser ipaddress _markupbase itertools
+    json json.decoder json.encoder _json keyword logging math ntpath numbers
+    operator _operator posixpath pprint random _random re reprlib secrets shlex
+    statistics string string.templatelib struct _struct textwrap time tomllib
+    tomllib._parser tomllib._re tomllib._types traceback types typing
+    unicodedata urllib.parse uuid warnings _warnings _py_warnings weakref
+    _weakref _weakrefset zlib
     """.split()
 )
 
-# some of `os.path` is implemented in `posix`
-_PATH_FUNCTIONS = {
+# objects in allowed modules whose effects a portable function cannot have
+_REFUSED = {
     id(value): value
-    for module in (posixpath, ntpath, genericpath)
-    for value in vars(module).values()
-    if inspect.isroutine(value)
+    for module, name in (
+        (logging, "FileHandler"),
+        (logging, "basicConfig"),
+        (contextlib, "chdir"),
+        (uuid, "uuid1"),
+        (uuid, "getnode"),
+        (time, "tzset"),
+        (calendar, "main"),
+        (codecs, "open"),
+    )
+    for value in (cast(object, getattr(module, name, None)),)
+    if value is not None
 }
+
+
+def _path_functions() -> frozenset[int]:
+    # some of `os.path` is implemented in `posix`
+    posix = sys.modules.get("posix")
+    found = [*vars(posixpath).values()]
+    if posix is not None:
+        found += [v for n, v in vars(posix).items() if n.startswith("_path_")]
+    return frozenset(id(v) for v in found if inspect.isroutine(v))
+
+
+_PATH_FUNCTIONS = _path_functions()
 
 _BANNED_BUILTINS = (
     "open",
@@ -80,18 +102,23 @@ _BANNED_BUILTINS = (
     "breakpoint",
 )
 
-# inspect_sentinel's API takes these (`Context.store_as()` a StoreModel
-# subclass, a report's `references`); allowed by identity until they move into
-# inspect_ai.core
-_ALLOWED_TYPES: tuple[type, ...] = (StoreModel, Reference)
+# allowed by identity, as classes and instances: inspect_sentinel's API takes
+# StoreModel and Reference until they move into inspect_ai.core
+_ALLOWED_TYPES: tuple[type, ...] = (StoreModel, Reference, io.StringIO, io.BytesIO)
 
 _FIXES = "A portable {kind} affects the outside world only through `context`: call a model with `context.host.generate()`, ask a person with `context.host.ask_human()`, and keep state with `context.store_as()`. Otherwise move the reference out of the {kind}'s code, or, if the {kind} only runs in an eval, declare it with `@{kind}(portable=False)`."
+
+_NO_SOURCE = "no source"
+_UNPARSEABLE = "unparseable source"
+_UNREADABLE = "unreadable source"
+_CHANGED = "source changed since import"
+_TOO_DEEP = "too deeply nested"
 
 
 class PortabilityError(TypeError):
     """A portable monitor or protocol references something a portable function cannot use.
 
-    Raised when the factory of a `@monitor` or `@protocol` declared with `portable=True` (the default) is called, before it runs. The message lists every disallowed reference in the factory's code and in the functions and classes of the author's own modules that it reaches: the file and line, the function, the name and what it resolved to. A `TypeError`, as the factory's other configuration-time checks of the functions it returns are.
+    Raised when the factory of a `@monitor` or `@protocol` declared with `portable=True` (the default) is called, before it runs. The message lists every disallowed reference in the factory's code and in the functions and classes of the author's own modules that it reaches, and any of that code that could not be checked: the file and line, the function, the name and what it resolved to. A `TypeError`, as the factory's other configuration-time checks of the functions it returns are.
     """
 
 
@@ -100,7 +127,9 @@ def check_portable(factory: Callable[..., object], kind: str, name: str) -> None
     if violations is None:
         own = str(getattr(factory, "__module__", "")).partition(".")[0]
         violations = _Checker(own).check(factory)
-        _checked[factory] = violations
+        # a notebook redefines helpers in place, so its factories are rechecked
+        if getattr(factory, "__module__", None) != "__main__":
+            _checked[factory] = violations
     if violations:
         lines = "\n".join(f"- {v.describe()}" for v in violations)
         raise PortabilityError(
@@ -141,7 +170,7 @@ class _Verdict(NamedTuple):
 _ALLOWED = _Verdict(_Kind.ALLOWED)
 
 
-def _classify(module: str, own: str = "") -> _Verdict:
+def _classify(module: str, own: str) -> _Verdict:
     if not module:
         return _Verdict(_Kind.DISALLOWED, "and its module is unknown")
     top = module.partition(".")[0]
@@ -156,7 +185,7 @@ def _classify(module: str, own: str = "") -> _Verdict:
     if top in sys.stdlib_module_names and top != own:
         return _Verdict(
             _Kind.DISALLOWED,
-            f"and `{module}` is not on the portable standard-library list (use `portable=False`, or ask for it to be added)",
+            f"and `{module}` is not on the portable standard-library list",
         )
     if top == own or _is_author(module):
         return _Verdict(_Kind.AUTHOR)
@@ -164,18 +193,27 @@ def _classify(module: str, own: str = "") -> _Verdict:
 
 
 def _is_author(module: str) -> bool:
-    found = sys.modules.get(module)
-    file = getattr(found, "__file__", None)
-    if not isinstance(file, str):
+    file = getattr(sys.modules.get(module), "__file__", None)
+    if isinstance(file, str):
+        locations = [file]
+    else:
         try:
             spec = importlib.util.find_spec(module.partition(".")[0])
-        except (ImportError, ValueError):
+        except Exception:
             return False
-        file = spec.origin if spec is not None else None
-    if not file:
-        return False
-    parts = Path(file).parts
-    return "site-packages" not in parts and "dist-packages" not in parts
+        if spec is None:
+            return False
+        # a namespace package has no origin, only its directories
+        locations = (
+            [spec.origin]
+            if spec.origin
+            else list(spec.submodule_search_locations or [])
+        )
+    return any(
+        "site-packages" not in Path(location).parts
+        and "dist-packages" not in Path(location).parts
+        for location in locations
+    )
 
 
 def _module_of(value: object) -> str:
@@ -204,7 +242,11 @@ def _describe(value: object) -> str:
     return f"a `{type(value).__qualname__}` from `{module}`"
 
 
-def _judge(value: object, own: str = "") -> _Verdict:
+def _verdict_of(value: object, own: str) -> _Verdict:
+    if id(value) in _REFUSED:
+        return _Verdict(
+            _Kind.DISALLOWED, "which has effects a portable function cannot have"
+        )
     if id(value) in _PATH_FUNCTIONS:
         return _ALLOWED
     if type(value) in _ALLOWED_TYPES or any(value is t for t in _ALLOWED_TYPES):
@@ -217,13 +259,19 @@ def _is_module(value: object) -> bool:
     return issubclass(type(value), types.ModuleType)
 
 
-def _public_sentinel() -> dict[int, object]:
+@functools.cache
+def _public_sentinel() -> frozenset[int]:
     package = sys.modules["inspect_sentinel"]
-    public: dict[int, object] = {id(package): package}
-    for name in getattr(package, "__all__", ()):
-        value = getattr(package, name, None)
-        public[id(value)] = value
-    return public
+    names = getattr(package, "__all__", ())
+    return frozenset({id(package), *(id(getattr(package, n, None)) for n in names)})
+
+
+def _is_sentinel_factory(value: object) -> bool:
+    return (
+        inspect.isfunction(value)
+        and is_registry_object(value)
+        and registry_info(value).type in ("monitor", "protocol")
+    )
 
 
 # resolves through modules and classes only; an instance is judged by its type
@@ -244,63 +292,6 @@ def _attribute(value: object, name: str) -> object:
     return found
 
 
-_FUNCTION_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
-_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
-_SCOPES = (*_FUNCTION_SCOPES, ast.ClassDef, *_COMPREHENSIONS)
-
-
-class _Scope(NamedTuple):
-    node: ast.AST
-    bound: frozenset[str]
-    qualname: str
-
-
-class _Target(NamedTuple):
-    value: object
-    file: str
-    first_line: int
-    tree: ast.Module
-    namespace: dict[str, object]
-    closure: dict[str, object]
-    via: tuple[str, ...]
-
-
-class _Checker:
-    def __init__(self, own: str) -> None:
-        self.own = own
-        self._seen: dict[int, object] = {}
-        self._pending: list[_Target] = []
-        self._violations: list[_Violation] = []
-
-    def check(self, factory: Callable[..., object]) -> tuple[_Violation, ...]:
-        self._enqueue(factory, ())
-        while self._pending:
-            _Visitor(self, self._pending.pop(0)).run()
-        return tuple(self._violations)
-
-    def report(self, violation: _Violation) -> None:
-        self._violations.append(violation)
-
-    def follow(self, value: object, via: tuple[str, ...]) -> None:
-        if _is_module(value):
-            return
-        value = _unwrap(value)
-        if inspect.ismethod(value):
-            value = value.__func__
-        if not (inspect.isfunction(value) or inspect.isclass(value)):
-            value = type(value)
-        self._enqueue(value, via)
-
-    def _enqueue(self, value: object, via: tuple[str, ...]) -> None:
-        value = _unwrap(value)
-        if id(value) in self._seen:
-            return
-        self._seen[id(value)] = value
-        target = _target(value, via)
-        if target is not None:
-            self._pending.append(target)
-
-
 def _unwrap(value: object) -> object:
     try:
         return inspect.unwrap(cast(Any, value))
@@ -308,64 +299,340 @@ def _unwrap(value: object) -> object:
         return value
 
 
-def _target(value: object, via: tuple[str, ...]) -> _Target | None:
+_DEFINITIONS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+_FUNCTION_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+_SCOPES = (*_FUNCTION_SCOPES, ast.ClassDef, *_COMPREHENSIONS)
+_TYPE_ALIAS: tuple[type[ast.AST], ...] = tuple(
+    t for t in (getattr(ast, "TypeAlias", None),) if t is not None
+)
+
+
+class _Source(NamedTuple):
+    text: str
+    # first line (decorators included) -> definitions and lambdas starting there
+    definitions: dict[int, list[ast.AST]]
+    # id of a definition -> the definition or lambda enclosing it
+    parents: dict[int, ast.AST]
+    classes: dict[str, list[ast.ClassDef]]
+    # module-level `from M import N`: bound name -> (level, M, N)
+    from_imports: dict[str, tuple[int, str, str]]
+
+
+_sources: dict[str, _Source] = {}
+
+
+def _source(filename: str, module_globals: dict[str, object]) -> _Source | str:
+    # shared by every exec() of a string, so never this code's source
+    if filename == "<string>":
+        return _NO_SOURCE
     try:
-        lines, first_line = inspect.getsourcelines(cast(Any, value))
-        file = inspect.getsourcefile(cast(Any, value)) or "<unknown>"
-        tree = ast.parse(textwrap.dedent("".join(lines)))
-    except (OSError, TypeError, ValueError, SyntaxError, tokenize.TokenError):
-        return _class_target(value, via) if inspect.isclass(value) else None
-    if inspect.isfunction(value):
-        namespace: dict[str, object] = value.__globals__
-        closure: dict[str, object] = {}
-        for name, cell in zip(
-            value.__code__.co_freevars, value.__closure__ or (), strict=True
-        ):
-            try:
-                closure[name] = cell.cell_contents
-            except ValueError:
-                continue
-    else:
-        module = sys.modules.get(getattr(value, "__module__", ""))
-        namespace = vars(module) if module is not None else {}
-        closure = {}
-    return _Target(value, file, max(first_line, 1), tree, namespace, closure, via)
+        linecache.checkcache(filename)
+        lines = linecache.getlines(filename, module_globals)
+    except Exception:
+        return _NO_SOURCE
+    if not lines:
+        return _NO_SOURCE
+    text = "".join(lines)
+    cached = _sources.get(filename)
+    if cached is not None and cached.text == text:
+        return cached
+    try:
+        source = _index(text, ast.parse(text))
+    except Exception:
+        return _UNPARSEABLE
+    _sources[filename] = source
+    return source
 
 
-# a class whose module is not in `sys.modules` (a task file loaded by
-# `inspect eval`, a notebook cell): find it through one of its methods
-def _class_target(cls: type, via: tuple[str, ...]) -> _Target | None:
-    methods = [
-        cast(Any, f).__func__ if isinstance(f, (staticmethod, classmethod)) else f
-        for f in vars(cls).values()
+def _index(text: str, tree: ast.Module) -> _Source:
+    source = _Source(text, {}, {}, {}, {})
+    pending: list[tuple[ast.AST, ast.AST | None, str]] = [
+        (node, None, "") for node in tree.body
     ]
-    method = next((f for f in methods if inspect.isfunction(f)), None)
-    if method is None:
-        return None
-    code = method.__code__
+    while pending:
+        node, parent, prefix = pending.pop()
+        if isinstance(node, (*_DEFINITIONS, ast.Lambda)):
+            if parent is not None:
+                source.parents[id(node)] = parent
+            if isinstance(node, ast.Lambda):
+                first, name = node.lineno, "<lambda>"
+            else:
+                first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
+                name = node.name
+            source.definitions.setdefault(first, []).append(node)
+            if isinstance(parent, ast.ClassDef):
+                prefix = f"{prefix}.{name}"
+            elif parent is not None:
+                prefix = f"{prefix}.<locals>.{name}"
+            else:
+                prefix = name
+            if isinstance(node, ast.ClassDef):
+                source.classes.setdefault(prefix, []).append(node)
+            parent = node
+        pending.extend((child, parent, prefix) for child in ast.iter_child_nodes(node))
+    for node in _walk_scope(tree.body):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                source.from_imports.setdefault(
+                    alias.asname or alias.name,
+                    (node.level, node.module or "", alias.name),
+                )
+    return source
+
+
+class _Target(NamedTuple):
+    value: object
+    file: str
+    roots: tuple[ast.AST, ...]
+    source: _Source
+    namespace: dict[str, object]
+    closure: dict[str, object]
+    via: tuple[str, ...]
+
+
+def _locate(
+    value: object, via: tuple[str, ...], hint: _Target | None
+) -> _Target | str | None:
     try:
-        tree = ast.parse("".join(linecache.getlines(code.co_filename)))
-    except (SyntaxError, ValueError):
-        return None
-    found = [
+        if inspect.isfunction(value):
+            return _function_target(value, via)
+        if inspect.isclass(value):
+            return _class_target(value, via, hint)
+    except Exception:
+        return _UNREADABLE
+    return None
+
+
+def _function_target(func: types.FunctionType, via: tuple[str, ...]) -> _Target | str:
+    code = func.__code__
+    source = _source(code.co_filename, func.__globals__)
+    if isinstance(source, str):
+        return source
+    nodes = _function_nodes(source, code)
+    if not nodes:
+        return _CHANGED
+    return _Target(
+        func,
+        code.co_filename,
+        tuple(nodes),
+        source,
+        func.__globals__,
+        _cells(func),
+        via,
+    )
+
+
+def _function_nodes(source: _Source, code: types.CodeType) -> list[ast.AST]:
+    candidates = source.definitions.get(code.co_firstlineno, [])
+    if code.co_name != "<lambda>":
+        functions: list[ast.AST] = [
+            node
+            for node in candidates
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == code.co_name
+        ]
+        return functions[:1]
+    lambdas = [node for node in candidates if isinstance(node, ast.Lambda)]
+    positions = getattr(code, "co_positions", None)
+    if len(lambdas) < 2 or positions is None:
+        return list(lambdas)
+    spans = [
+        ((line, column), (end_line, end_column))
+        for line, end_line, column, end_column in cast(
+            Iterable[tuple[Any, Any, Any, Any]], positions()
+        )
+        if None not in (line, end_line, column, end_column)
+        and (end_line, end_column) > (line, column)
+    ]
+    containing = [
         node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ClassDef)
-        and node.name == cls.__name__
-        and node.lineno <= code.co_firstlineno <= (node.end_lineno or 0)
+        for node in lambdas
+        if all(
+            (node.body.lineno, node.body.col_offset) <= start
+            and end <= (node.body.end_lineno or 0, node.body.end_col_offset or 0)
+            for start, end in spans
+        )
     ]
-    if not found:
+    if not spans or not containing:
+        return list(lambdas)
+    return [max(containing, key=lambda node: node.col_offset)]
+
+
+def _cells(func: types.FunctionType) -> dict[str, object]:
+    closure: dict[str, object] = {}
+    for name, cell in zip(
+        func.__code__.co_freevars, func.__closure__ or (), strict=True
+    ):
+        try:
+            closure[name] = cell.cell_contents
+        except ValueError:
+            continue
+    return closure
+
+
+def _class_target(
+    cls: type, via: tuple[str, ...], hint: _Target | None
+) -> _Target | str | None:
+    module = sys.modules.get(cls.__module__)
+    module_file = getattr(module, "__file__", None)
+    methods = _methods(cls)
+    methods.sort(key=lambda f: f.__code__.co_filename != module_file)
+    namespace: dict[str, object] | None = vars(module) if module is not None else None
+    certain = bool(methods) or isinstance(module_file, str)
+    if methods:
+        file = methods[0].__code__.co_filename
+        namespace = namespace or methods[0].__globals__
+    elif isinstance(module_file, str):
+        file = module_file
+    elif hint is not None and hint.namespace.get("__name__") == cls.__module__:
+        # defined beside the code that references it, outside sys.modules
+        file, namespace = hint.file, hint.namespace
+    else:
         return None
-    node = max(found, key=lambda n: n.lineno)
-    body = ast.Module(body=[node], type_ignores=[])
-    return _Target(cls, code.co_filename, 1, body, method.__globals__, {}, via)
+    namespace = namespace or {}
+    source = _source(file, namespace)
+    if isinstance(source, str):
+        return source
+    name = cls.__name__.partition("[")[0]
+    first = vars(cls).get("__firstlineno__")
+    if isinstance(first, int):
+        nodes = [
+            node
+            for node in source.definitions.get(first, [])
+            if isinstance(node, ast.ClassDef) and node.name == name
+        ]
+    elif methods:
+        code = methods[0].__code__
+        nodes = [
+            parent
+            for node in source.definitions.get(code.co_firstlineno, [])
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == code.co_name
+            for parent in (source.parents.get(id(node)),)
+            if isinstance(parent, ast.ClassDef) and parent.name == name
+        ]
+    else:
+        nodes = source.classes.get(cls.__qualname__, [])
+        if len(nodes) != 1:
+            return None
+    if not nodes:
+        # without a class statement or methods there is no code to check
+        defined = bool(methods) or isinstance(first, int)
+        return _CHANGED if certain and defined else None
+    closure: dict[str, object] = {}
+    for method in methods:
+        closure.update(_cells(method))
+    return _Target(cls, file, (nodes[0],), source, namespace, closure, via)
+
+
+def _methods(cls: type) -> list[types.FunctionType]:
+    found: list[types.FunctionType] = []
+    for value in vars(cls).values():
+        if isinstance(value, (staticmethod, classmethod)):
+            value = cast(object, cast(Any, value).__func__)
+        functions = (
+            (value.fget, value.fset, value.fdel)
+            if isinstance(value, property)
+            else (value,)
+        )
+        for function in functions:
+            function = _unwrap(function)
+            if (
+                inspect.isfunction(function)
+                and function.__qualname__.startswith(f"{cls.__qualname__}.")
+                and function.__module__ == cls.__module__
+                and function.__code__.co_filename != "<string>"
+            ):
+                found.append(function)
+    return found
+
+
+class _Checker:
+    def __init__(self, own: str) -> None:
+        self.own = own
+        self.seen: dict[int, object] = {}
+        self.violations: dict[tuple[str, int, str], _Violation] = {}
+        self._pending: list[_Target] = []
+
+    def check(self, factory: Callable[..., object]) -> tuple[_Violation, ...]:
+        value = _unwrap(factory)
+        self.seen[id(value)] = value
+        located = _locate(value, (), None)
+        if located == _NO_SOURCE:
+            return ()
+        if isinstance(located, str):
+            code = getattr(value, "__code__", None)
+            file = str(getattr(code, "co_filename", "<unknown>"))
+            line = int(getattr(code, "co_firstlineno", 1))
+            self._unchecked(value, file, line, located, ())
+        elif located is not None:
+            self._pending.append(located)
+        while self._pending:
+            target = self._pending.pop(0)
+            try:
+                _Visitor(self, target).run()
+            except RecursionError:
+                line = getattr(target.roots[0], "lineno", 1)
+                self._unchecked(target.value, target.file, line, _TOO_DEEP, target.via)
+        return tuple(self.violations.values())
+
+    def _unchecked(
+        self, value: object, file: str, line: int, reason: str, via: tuple[str, ...]
+    ) -> None:
+        name = str(getattr(value, "__qualname__", "?"))
+        self.add(
+            _Violation(
+                file,
+                line,
+                name,
+                name,
+                _describe(value),
+                f"and could not be checked ({reason})",
+                via,
+            )
+        )
+
+    def follow(
+        self,
+        value: object,
+        via: tuple[str, ...],
+        unchecked: Callable[[str], None],
+        hint: _Target,
+    ) -> None:
+        if _is_module(value):
+            return
+        value = _unwrap(value)
+        if inspect.ismethod(value):
+            value = _unwrap(value.__func__)
+        if not (inspect.isfunction(value) or inspect.isclass(value)):
+            value = type(value)
+        if id(value) in self.seen:
+            return
+        self.seen[id(value)] = value
+        located = _locate(value, via, hint)
+        if isinstance(located, str):
+            unchecked(f"and could not be checked ({located})")
+        elif located is not None:
+            self._pending.append(located)
+
+    def add(self, violation: _Violation) -> None:
+        key = (violation.file, violation.line, violation.reference)
+        self.violations.setdefault(key, violation)
+
+
+class _Scope(NamedTuple):
+    bound: frozenset[str]
+    declared_global: frozenset[str]
+    is_class: bool
+    qualname: str
+    imports: dict[str, object]
 
 
 class _Visitor:
     def __init__(self, checker: _Checker, target: _Target) -> None:
         self._checker = checker
         self._target = target
-        self._imports: dict[tuple[int, str], object] = {}
         module = target.namespace.get("__name__")
         self._in_sentinel = isinstance(module, str) and (
             module == "inspect_sentinel" or module.startswith("inspect_sentinel.")
@@ -377,12 +644,8 @@ class _Visitor:
         )
 
     def run(self) -> None:
-        body = self._target.tree.body
-        root = body[0] if len(body) == 1 else None
-        if isinstance(root, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            self._visit_scope(root, [], self._qualname, root=True)
-        else:
-            self._visit_all(body, [])
+        for root in self._target.roots:
+            self._visit_scope(root, [], root=True)
 
     def _visit_all(self, nodes: Iterable[ast.AST], scopes: list[_Scope]) -> None:
         for node in nodes:
@@ -390,8 +653,7 @@ class _Visitor:
 
     def _visit(self, node: ast.AST, scopes: list[_Scope]) -> None:
         if isinstance(node, _SCOPES):
-            qualname = scopes[-1].qualname if scopes else self._qualname
-            self._visit_scope(node, scopes, qualname, root=False)
+            self._visit_scope(node, scopes)
         elif isinstance(node, ast.Attribute):
             chain = _chain(node)
             if chain is None:
@@ -402,74 +664,125 @@ class _Visitor:
             if isinstance(node.ctx, ast.Load):
                 self._reference(node, node.id, [], scopes)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            self._import(node, scopes)
-        elif (
-            isinstance(node, ast.If)
-            and (_chain(node.test) or [""])[-1] == "TYPE_CHECKING"
-        ):
-            self._visit_all(node.orelse, scopes)
+            self._import(node, scopes, report=True)
+        elif _is_type_checking(node):
+            self._visit_all(cast(ast.If, node).orelse, scopes)
         elif isinstance(node, ast.AnnAssign):
-            if not (scopes and isinstance(scopes[-1].node, _FUNCTION_SCOPES)):
+            if not scopes or scopes[-1].is_class:
                 self._visit(node.annotation, scopes)
             if node.value is not None:
                 self._visit(node.value, scopes)
+        elif isinstance(node, _TYPE_ALIAS):
+            where = scopes[-1].qualname if scopes else self._qualname
+            self._visit(
+                cast(ast.AST, cast(Any, node).value),
+                self._type_scope(node, scopes, where),
+            )
         else:
             self._visit_all(ast.iter_child_nodes(node), scopes)
 
     def _visit_scope(
-        self, node: ast.AST, scopes: list[_Scope], qualname: str, root: bool
+        self, node: ast.AST, scopes: list[_Scope], root: bool = False
     ) -> None:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        outer = scopes[-1].qualname if scopes else self._qualname
+        qualname = outer
+        if isinstance(node, _DEFINITIONS):
             self._visit_all(node.decorator_list, scopes)
             if not root:
-                qualname = _nested(qualname, node.name, scopes)
+                qualname = _nested(outer, node.name, scopes)
+        elif isinstance(node, ast.Lambda) and not root:
+            qualname = _nested(outer, "<lambda>", scopes)
         if isinstance(node, _FUNCTION_SCOPES):
             self._visit_all(_defaults(node.args), scopes)
-        if isinstance(node, ast.Lambda) and not root:
-            qualname = _nested(qualname, "<lambda>", scopes)
+        scopes = self._type_scope(node, scopes, qualname)
         if isinstance(node, ast.ClassDef):
             self._visit_all([*node.bases, *node.keywords], scopes)
-        inner = [*scopes, _Scope(node, _bound(node), qualname)]
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        bound, declared_global = _bound(node)
+        scope = _Scope(
+            bound, declared_global, isinstance(node, ast.ClassDef), qualname, {}
+        )
+        inner = [*scopes, scope]
+        if isinstance(node, _DEFINITIONS):
+            for statement in _imports(node.body):
+                self._import(statement, inner, report=False)
             self._visit_all(node.body, inner)
         elif isinstance(node, ast.Lambda):
             self._visit(node.body, inner)
-        else:
-            self._visit_all(ast.iter_child_nodes(node), inner)
+        elif isinstance(node, _COMPREHENSIONS):
+            # the first iterable is evaluated in the enclosing scope
+            first = node.generators[0]
+            self._visit(first.iter, scopes)
+            rest = [c for c in ast.iter_child_nodes(node) if c is not first]
+            self._visit_all([*rest, first.target, *first.ifs], inner)
 
-    def _is_local(self, name: str, scopes: Sequence[_Scope]) -> bool:
+    def _type_scope(
+        self, node: ast.AST, scopes: list[_Scope], qualname: str
+    ) -> list[_Scope]:
+        params = cast(list[ast.AST], getattr(node, "type_params", None) or [])
+        if not params:
+            return scopes
+        names = frozenset(str(cast(Any, p).name) for p in params)
+        return [*scopes, _Scope(names, frozenset(), False, qualname, {})]
+
+    def _lookup(
+        self, name: str, scopes: Sequence[_Scope]
+    ) -> tuple[Literal["imported", "local", "global"], object]:
         for index, scope in enumerate(reversed(scopes)):
+            if name in scope.declared_global:
+                break
             # a class body's names are not visible inside its methods
-            if isinstance(scope.node, ast.ClassDef) and index > 0:
+            if scope.is_class and index > 0:
                 continue
+            if name in scope.imports:
+                return "imported", scope.imports[name]
             if name in scope.bound:
-                return True
-        return False
+                return "local", None
+        return "global", None
 
-    def _resolve(self, name: str) -> tuple[bool, object]:
+    def _resolve(self, name: str) -> tuple[bool, object, object]:
         if name in self._target.closure:
-            return True, self._target.closure[name]
-        if name in self._target.namespace:
-            return True, self._target.namespace[name]
+            return True, self._target.closure[name], None
+        namespace = self._target.namespace
+        if name in namespace:
+            value = namespace[name]
+            return True, value, self._from_module(name, value)
         if hasattr(builtins, name):
-            return True, getattr(builtins, name)
-        return False, None
+            return True, getattr(builtins, name), None
+        return False, None, None
 
-    def _imported(self, name: str, scopes: Sequence[_Scope]) -> tuple[bool, object]:
-        for scope in reversed(scopes):
-            key = (id(scope.node), name)
-            if key in self._imports:
-                return True, self._imports[key]
-        return False, None
+    # the module a global came from by `from M import N`, so data read off a
+    # disallowed module is refused as it is through `M.N`
+    def _from_module(self, name: str, value: object) -> object:
+        imported = self._target.source.from_imports.get(name)
+        if imported is None:
+            return None
+        level, module, attribute = imported
+        module = self._absolute(level, module) or ""
+        loaded = sys.modules.get(module)
+        if loaded is None or getattr(loaded, attribute, None) is not value:
+            return None
+        return loaded
+
+    def _absolute(self, level: int, module: str) -> str | None:
+        if not level:
+            return module
+        package = self._target.namespace.get("__package__")
+        try:
+            return importlib.util.resolve_name(
+                "." * level + module, package if isinstance(package, str) else None
+            )
+        except (ImportError, ValueError):
+            return None
 
     def _reference(
         self, node: ast.AST, root: str, attributes: list[str], scopes: list[_Scope]
     ) -> None:
-        imported, value = self._imported(root, scopes)
-        if not imported and self._is_local(root, scopes):
+        binding, value = self._lookup(root, scopes)
+        if binding == "local":
             return
-        if not imported:
-            found, value = self._resolve(root)
+        owner: object = None
+        if binding == "global":
+            found, value, owner = self._resolve(root)
             if not found:
                 return
             if root in _BANNED_BUILTINS and value is getattr(builtins, root):
@@ -481,18 +794,17 @@ class _Visitor:
                     scopes,
                 )
                 return
-        values = [value]
+        values = [(value, owner)]
         for attribute in attributes:
             try:
-                value = _attribute(value, attribute)
+                values.append((_attribute(value, attribute), value))
             except Exception:
                 break
-            values.append(value)
-        for index, value in enumerate(values):
+            value = values[-1][0]
+        for index, (value, owner) in enumerate(values):
             # a module is a namespace on the way to what the chain reaches
             if _is_module(value) and index + 1 < len(values):
                 continue
-            owner = values[index - 1] if index > 0 else None
             reference = ".".join([root, *attributes[:index]])
             if not self._judge(node, reference, value, scopes, owner):
                 return
@@ -503,105 +815,116 @@ class _Visitor:
         reference: str,
         value: object,
         scopes: list[_Scope],
-        owner: object = None,
+        owner: object,
     ) -> bool:
         try:
             verdict, described = self._verdict(value, owner)
+            covered = verdict.kind is _Kind.AUTHOR and (
+                # checked on its own when configured
+                _is_sentinel_factory(value)
+                # checked with its class
+                or (inspect.isclass(owner) and id(owner) in self._checker.seen)
+            )
         except Exception:
             verdict = _Verdict(_Kind.DISALLOWED, "which could not be inspected")
             described = f"a `{type(value).__qualname__}`"
+            covered = False
         if verdict.kind is _Kind.DISALLOWED:
             self._violate(node, reference, described, verdict.reason, scopes)
             return False
-        if verdict.kind is _Kind.AUTHOR:
-            self._checker.follow(value, (*self._target.via, self._where(scopes)))
+        if verdict.kind is _Kind.AUTHOR and not covered:
+            self._checker.follow(
+                value,
+                (*self._target.via, self._where(scopes)),
+                lambda reason: self._violate(
+                    node, reference, described, reason, scopes
+                ),
+                self._target,
+            )
         return True
 
     def _verdict(self, value: object, owner: object) -> tuple[_Verdict, str]:
         own = self._checker.own
-        verdict = _judge(value, own)
         described = _describe(value)
-        if not _module_of(value) and inspect.isclass(owner):
-            verdict = _judge(owner, own)
-        # data read off a disallowed module counts as that module (`os.environ`)
-        if (
-            verdict.kind is not _Kind.DISALLOWED
-            and _is_module(owner)
-            and not (_is_module(value) or inspect.isclass(value))
-            and not inspect.isroutine(value)
-        ):
+        if id(value) not in _REFUSED and inspect.isclass(owner):
+            # an attribute reached through an allowed class is judged by the class
+            if self._verdict(owner, None)[0].kind is _Kind.ALLOWED:
+                return _ALLOWED, described
+        verdict = _verdict_of(value, own)
+        if _is_module(owner):
             name = cast(types.ModuleType, owner).__name__
             stricter = _classify(name, own)
-            if stricter.kind is _Kind.DISALLOWED:
+            if not _module_of(value):
+                # a builtin without a module, such as `codecs.strict_errors`
                 verdict = stricter
-                described = f"a `{type(value).__qualname__}` in module `{name}`"
+            elif stricter.kind is _Kind.DISALLOWED:
+                if verdict.kind is _Kind.DISALLOWED:
+                    verdict = _Verdict(_Kind.DISALLOWED, stricter.reason)
+                elif not (
+                    _is_module(value)
+                    or inspect.isclass(value)
+                    or inspect.isroutine(value)
+                ):
+                    # data read off a disallowed module counts as that module
+                    verdict = stricter
+                    described = f"a `{type(value).__qualname__}` in module `{name}`"
         if (
             verdict.kind is _Kind.ALLOWED
             and not self._in_sentinel
             and _module_of(value).partition(".")[0] == "inspect_sentinel"
+            and id(value) not in _public_sentinel()
+            and id(type(value)) not in _public_sentinel()
         ):
-            public = _public_sentinel()
-            if not (
-                id(value) in public
-                or id(type(value)) in public
-                or (inspect.isclass(owner) and id(owner) in public)
-            ):
-                verdict = _Verdict(
-                    _Kind.DISALLOWED,
-                    "and only `inspect_sentinel`'s public API is portable",
-                )
+            verdict = _Verdict(
+                _Kind.DISALLOWED,
+                "and only `inspect_sentinel`'s public API is portable",
+            )
         return verdict, described
 
-    def _import(self, node: ast.Import | ast.ImportFrom, scopes: list[_Scope]) -> None:
+    def _import(
+        self, node: ast.Import | ast.ImportFrom, scopes: list[_Scope], report: bool
+    ) -> None:
         if isinstance(node, ast.Import):
             for alias in node.names:
+                loaded = sys.modules.get(alias.name)
+                if loaded is None:
+                    if report:
+                        self._unloaded(node, f"import {alias.name}", alias.name, scopes)
+                    continue
+                # bound without judging; references through it are judged
                 bound = alias.asname or alias.name.partition(".")[0]
-                value = self._import_module(node, alias.name, None, scopes)
-                if value is not None and alias.asname is None:
-                    value = sys.modules.get(bound)
-                self._bind(bound, value, scopes)
+                value = loaded if alias.asname else sys.modules.get(bound)
+                if value is not None:
+                    scopes[-1].imports[bound] = value
             return
-        module = node.module or ""
-        if node.level:
-            package = self._target.namespace.get("__package__")
-            try:
-                module = importlib.util.resolve_name(
-                    "." * node.level + module,
-                    package if isinstance(package, str) else None,
-                )
-            except (ImportError, ValueError):
-                return
-        for alias in node.names:
-            value = self._import_module(node, module, alias.name, scopes)
-            self._bind(alias.asname or alias.name, value, scopes)
-
-    def _bind(self, name: str, value: object, scopes: Sequence[_Scope]) -> None:
-        if value is not None and scopes:
-            self._imports[(id(scopes[-1].node), name)] = value
-
-    def _import_module(
-        self, node: ast.AST, module: str, name: str | None, scopes: list[_Scope]
-    ) -> object:
-        statement = (
-            f"import {module}" if name is None else f"from {module} import {name}"
-        )
+        module = self._absolute(node.level, node.module or "")
+        if module is None:
+            return
         loaded = sys.modules.get(module)
-        if loaded is None:
-            # judged by name only: the check never imports anything
-            verdict = _classify(module, self._checker.own)
-            if verdict.kind is _Kind.DISALLOWED:
-                self._violate(
-                    node, statement, f"module `{module}`", verdict.reason, scopes
-                )
-            return None
-        value: object = loaded
-        if name is not None:
+        for alias in node.names:
+            statement = f"from {module} import {alias.name}"
+            if loaded is None:
+                if report:
+                    self._unloaded(node, statement, module, scopes)
+                continue
             try:
-                value = _attribute(loaded, name)
-            except AttributeError:
-                pass
-        self._judge(node, statement, value, scopes, loaded)
-        return value
+                value = _attribute(loaded, alias.name)
+            except Exception:
+                submodule = f"{module}.{alias.name}"
+                if report and _exists(submodule):
+                    self._unloaded(node, statement, submodule, scopes)
+                continue
+            scopes[-1].imports[alias.asname or alias.name] = value
+            if report:
+                self._judge(node, statement, value, scopes, loaded)
+
+    # judged by name only: the check never imports anything
+    def _unloaded(
+        self, node: ast.AST, statement: str, module: str, scopes: list[_Scope]
+    ) -> None:
+        verdict = _classify(module, self._checker.own)
+        if verdict.kind is _Kind.DISALLOWED:
+            self._violate(node, statement, f"module `{module}`", verdict.reason, scopes)
 
     def _violate(
         self,
@@ -611,11 +934,10 @@ class _Visitor:
         reason: str,
         scopes: list[_Scope],
     ) -> None:
-        line = self._target.first_line + getattr(node, "lineno", 1) - 1
-        self._checker.report(
+        self._checker.add(
             _Violation(
                 file=self._target.file,
-                line=line,
+                line=getattr(node, "lineno", 1),
                 function=self._where(scopes),
                 reference=reference,
                 resolved=resolved,
@@ -628,8 +950,15 @@ class _Visitor:
         return scopes[-1].qualname if scopes else self._qualname
 
 
+def _exists(module: str) -> bool:
+    try:
+        return importlib.util.find_spec(module) is not None
+    except Exception:
+        return False
+
+
 def _nested(qualname: str, name: str, scopes: Sequence[_Scope]) -> str:
-    if scopes and isinstance(scopes[-1].node, ast.ClassDef):
+    if scopes and scopes[-1].is_class:
         return f"{qualname}.{name}"
     if scopes:
         return f"{qualname}.<locals>.{name}"
@@ -651,7 +980,13 @@ def _chain(node: ast.AST) -> list[str] | None:
     return [current.id, *reversed(attributes)]
 
 
-def _bound(scope: ast.AST) -> frozenset[str]:
+def _is_type_checking(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.If) and (_chain(node.test) or [""])[-1] == "TYPE_CHECKING"
+    )
+
+
+def _bound(scope: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
     names: set[str] = set()
     declared_global: set[str] = set()
     body: list[ast.AST] = []
@@ -674,7 +1009,7 @@ def _bound(scope: ast.AST) -> frozenset[str]:
     for node in _walk_scope(body):
         if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
             names.add(node.id)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        elif isinstance(node, _DEFINITIONS):
             names.add(node.name)
         elif isinstance(node, ast.Import):
             names.update(a.asname or a.name.partition(".")[0] for a in node.names)
@@ -695,10 +1030,10 @@ def _bound(scope: ast.AST) -> frozenset[str]:
                 for sub in ast.walk(node)
                 if isinstance(sub, ast.NamedExpr)
             )
-    return frozenset(names - declared_global)
+    return frozenset(names - declared_global), frozenset(declared_global)
 
 
-def _walk_scope(nodes: Iterable[ast.AST]) -> Iterable[ast.AST]:
+def _walk_scope(nodes: Iterable[ast.AST]) -> Iterator[ast.AST]:
     pending = list(nodes)
     while pending:
         node = pending.pop()
@@ -706,3 +1041,15 @@ def _walk_scope(nodes: Iterable[ast.AST]) -> Iterable[ast.AST]:
         if isinstance(node, _SCOPES):
             continue
         pending.extend(ast.iter_child_nodes(node))
+
+
+def _imports(body: Iterable[ast.AST]) -> Iterator[ast.Import | ast.ImportFrom]:
+    pending = list(reversed(list(body)))
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            yield node
+        elif _is_type_checking(node):
+            pending.extend(reversed(cast(ast.If, node).orelse))
+        elif not isinstance(node, (ast.expr, *_SCOPES)):
+            pending.extend(reversed(list(ast.iter_child_nodes(node))))
