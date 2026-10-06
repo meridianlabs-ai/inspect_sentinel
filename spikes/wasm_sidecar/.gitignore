@@ -1,0 +1,5 @@
+build/
+host_rs/target/
+__pycache__/
+*.wasm
+*.cwasm

@@ -1,0 +1,10 @@
+{
+  "stage": "before_tool_call",
+  "conversation": "conv-1",
+  "message": "I'll check the disk usage.",
+  "call": {"id": "call_1", "function": "bash", "arguments": {"cmd": "du -sh /home/user/* | sort -h | tail -5"}},
+  "view": null,
+  "input": [{"role": "system", "content": "You are a helpful sysadmin agent."}, {"role": "user", "content": "Find what is filling up the disk."}],
+  "history": [],
+  "escalations": []
+}

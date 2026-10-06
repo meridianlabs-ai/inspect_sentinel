@@ -2,7 +2,7 @@
 
 Companion to `sentinel.md`, which defines monitors (which observe) and protocols (which decide). This document covers deploying a sentinel where there is no eval: inside a proxy on the wire in front of a model API.
 
-Status: measured where marked, reasoned elsewhere.
+Status: measured where marked, reasoned elsewhere. The WASM claims were measured by the WASM sidecar spike (sentinel #58, `spikes/wasm_sidecar/`) on 2026-10-06.
 
 ## Why bother
 
@@ -124,7 +124,7 @@ Known limits of inspect_ai's surfaces: ACP cannot withdraw a permission request 
 
 `generate` returns a `ModelOutput` rather than a string because a protocol that substitutes an action (`resample`) regenerates with the agent's tools and need the whole response; a text-prompt monitor reads `.completion`. Generating as the agent's own model is, in a proxy, a re-issued upstream request.
 
-The same surface whether the host is Envoy via proxy-wasm, a Go runtime, or ordinary Python in-process where these are normal implementations.
+The same surface whether the host is an `ext_proc` sidecar embedding a WASM runtime, a Go runtime, or ordinary Python in-process where these are normal implementations. In a WASM host it becomes WIT imports (spike #58: `generate`, `fetch`, `sleep`, `get`, `put`, with JSON payloads).
 
 Recording is not on the ABI. The runner records every report, failure, cancellation, bypass and supersession through a separate `Recorder` that the host implements and authors never see (`sentinel-reference.md`, "Context"), so a protocol cannot skip recording by not calling it. The host builds the top layer's `Context` and hands it to `run_sentinel` in a `HostContext` together with its recorder and the sample store. `Context` has no private fields: the runner keeps the recorder, the store and each running layer's factory in a context variable that `run_sentinel` sets for the step, so a monitor or protocol is handed only author data.
 
@@ -168,7 +168,7 @@ A host that wants to allow arbitrary URLs can still register a `"*"`-style endpo
 
 - **Timeouts and budgets are the host's.** A monitor sits in the request path; an external call that hangs stalls the agent. The host enforces a ceiling regardless of what the monitor asks for.
 - **Retries belong to the host too**, for the same reason and so that retry policy is uniform across monitors.
-- **It must be non-blocking**, exactly like `generate()` — the same asyncio-on-WASI question decides both.
+- **It must be non-blocking**, exactly like `generate()`. In a WASM guest both are component-model async imports, which the spike (#58) showed overlap under the guest's asyncio loop ("WASM", below).
 - **Record calls for replay.** If a monitor decision is to be reproducible from a transcript, its external calls have to be recorded alongside its inputs. Worth deciding early whether `fetch` results are part of the recorded decision.
 
 ### Should `generate` just be `fetch`?
@@ -221,7 +221,7 @@ So the store is as trustworthy as its key, and the key can be anchored in data t
 
 ### What backs `context.store_as()`
 
-`StoreModel` itself is portable, and it should be Inspect's rather than a second one of our own. It is a genuinely odd class — it overrides `__getattribute__` to intercept every attribute read, overrides `__setattr__` to re-validate on every write, and namespaces store keys by class name — but none of that is WASM-hostile. It is pure-Python metaprogramming over Pydantic, and `pydantic-core`, the one native extension in the `inspect_core` floor, compiles to wasm32 (Pyodide ships it). Its state must be JSON-serializable either way, which the keyed store needs regardless.
+`StoreModel` itself is portable, and it should be Inspect's rather than a second one of our own. It is a genuinely odd class — it overrides `__getattribute__` to intercept every attribute read, overrides `__setattr__` to re-validate on every write, and namespaces store keys by class name — but none of that is WASM-hostile. It is pure-Python metaprogramming over Pydantic, and `pydantic-core`, the one native extension in the `inspect_core` floor, compiles to wasm32 (Pyodide ships it). Spike #58 ran `StoreModel` unchanged in a WASI guest (2026-10-06). Its state must be JSON-serializable either way, which the keyed store needs regardless.
 
 The argument against a second `StoreModel` is ecosystem rather than effort. Monitor state is read back by ordinary `store_as()` from a scorer, so both sides must agree on the storage format; two same-named classes with different namespacing would split that. The import cost of reusing Inspect's is negligible — `_store_model.py` imports only `typing`, `pydantic` and `._store`.
 
@@ -306,14 +306,52 @@ WASM **does** have async, in several forms — "no stack switching, therefore ho
 - **WASI 0.2 `pollable` / `wasi:io/poll`** gives the guest non-blocking I/O.
 - **Stack switching** (typed continuations) is the clean long-term answer; verify current proposal status rather than assuming.
 
-The concurrency model matters more than the mechanism. One instance per in-flight request is *not* required: if CPython's asyncio runs inside the instance and host I/O is non-blocking, one instance serves many concurrent invocations — the ordinary event-loop model, inside WASM. Size instances to worker threads, not to in-flight requests. Compiled code is shared across instances (wazero compiles once); only linear memory is per-instance.
+The concurrency model matters more than the mechanism. One instance per in-flight request is *not* required: if asyncio runs inside the instance and host I/O is non-blocking, one instance serves many concurrent invocations — the ordinary event-loop model, inside WASM. Size instances to worker threads, not to in-flight requests. Compiled code is shared across instances; only linear memory is per-instance.
 
-**The load-bearing unknown** is whether CPython-on-WASI has a working asyncio event loop driven by `wasi:io/poll`. If yes, monitors stay normal `async def` and one instance serves many. If no, Asyncify is the fallback. Pyodide's loop is backed by the browser's and does not transfer. This is the first thing to prototype in the WASM direction; nothing else depends on the answer.
+**Measured (spike #58, 2026-10-06): the guest has asyncio, and Asyncify is not needed.** CPython's stock asyncio loop and threads are unavailable on WASI (the Python docs mark both "Availability: not WASI"), so the question as first posed, a stock loop over `wasi:io/poll`, is answered no. But componentize-py's component runtime supplies its own asyncio loop over component-model async (WASIp3) host calls: `await host.generate()` parks one task, and the host can start more calls into the same instance. That loop has no timers, traps the instance when a task awaiting a host call is cancelled, and lacks methods anyio calls. The spike's guest patch (`loop_patch.py`, about 90 lines, plus a host `sleep` import) fixes all three. With it:
+
+- monitors stay ordinary `async def`, and `concurrent()`, `asyncio.gather`, `TaskGroup` and anyio task groups overlap their host calls;
+- timeouts work (`asyncio.wait_for`, anyio's `move_on_after` and `fail_after`), and so does cancelling a task while it awaits a host call: `no_destruction()` terminated a step with two LLM monitors in flight and the decision returned in 3 ms;
+- `run_sentinel`'s per-step context variable stays isolated: componentize-py starts each call in a fresh `contextvars.Context`, and 20 concurrent steps in one instance each recorded their own layers;
+- one instance served 50 concurrent steps × 4 monitors, 200 overlapping 500 ms `generate` calls, in 512–523 ms.
+
+The blocking model works too. `generate` is a plain import that the host implements as an async function, and wasmtime suspends the guest on a fiber while the host waits. It needs no loop patch, but an instance runs one step at a time and calls within a step run in sequence, so concurrency comes from a pool of instances.
+
+**What remains: a cancelled host call keeps running on the host.** The runtime has no subtask cancellation, so when `terminate` or a timeout cancels a task awaiting `generate`, the guest discards the result but the host's request runs to completion. Its tokens and rate limit are still spent, and host budgets must count it.
 
 Two residual costs:
 
-- **Linear memory only grows.** A large conversation becomes thousands of Python objects and permanently raises that instance's high-water mark; with pooled instances they all ratchet to the worst case. A third independent argument for incremental monitoring, after O(n²) inference and O(n) deserialization.
-- **You are still shipping CPython.** Four dependencies instead of eighty (`inspect-core.md`) is a large improvement, but the image is \~10–20MB regardless. Lightweight relative to the alternative, not in absolute terms. Genuinely small means a rule DSL, or monitors written in a language that compiles small.
+- **Linear memory only grows.** A large conversation becomes thousands of Python objects and permanently raises that instance's high-water mark; with pooled instances they all ratchet to the worst case. A third independent argument for incremental monitoring, after O(n²) inference and O(n) deserialization. Measured: an instance held a flat 22.4 MiB over 500 small steps; a large conversation was not tested.
+- **You are still shipping CPython.** Four dependencies instead of eighty (`inspect-core.md`) is a large improvement, but the runtime dominates the artifact. Lightweight relative to the alternative, not in absolute terms. Genuinely small means a rule DSL, or monitors written in a language that compiles small.
+
+Measured on the spike's component (CPython 3.14, pydantic, `inspect_ai.core`, the unchanged sentinel runner and two LLM monitors), wasmtime, Apple M-series:
+
+| Measure | Value |
+|---|---|
+| Component | 29.8 MiB raw, 7.8 MiB zstd |
+| Precompiled for the host (`.cwasm`) | 60.5 MiB |
+| Load precompiled | 3 ms |
+| Instantiate | 0.38 ms |
+| Warm step | 0.38 ms, about 1.3× native CPython (0.29 ms) |
+| Linear memory per instance | about 22 MiB, flat over 500 calls |
+
+**Pre-initialisation is confirmed.** componentize-py runs the guest's module-level code at build time and snapshots the heap, so instantiation is 0.38 ms with 374 modules already imported, against about 100 ms of imports natively. The consequence for authors: anything read from the environment, seeded or timestamped at import time is frozen into the artifact, so portable monitors read configuration at run time.
+
+### pydantic-core for WASI
+
+No published WASI wheel of pydantic-core matches the CPython that componentize-py embeds (measured 2026-10-06). Wheels exist for cp312 and cp313; componentize-py has embedded CPython 3.14 since 0.18, and gained async in 0.19. Building it is easy: the spike cross-compiled pydantic-core 2.46.5 for cp314 `wasm32-wasip1` in about 30 s, with no CPython WASI build and one linker flag beyond the published recipe (`--unresolved-symbols=import-dynamic`). The wasi-sdk version must match the one componentize-py's CPython was built with.
+
+Recommendation: own a CI job that builds pydantic-core for each supported pydantic release and the CPython that componentize-py embeds, and pin componentize-py, wasmtime and wasi-sdk together, since the component-model async ABI still changes between releases.
+
+### What the guest can reach
+
+The WASI context is empty unless the host grants something. Measured in the spike with an empty context: opening or listing files fails (no preopened directories), the environment is empty, sockets raise `PermissionError`, and subprocesses and threads cannot start. Host-mediated calls work: `generate`, and `fetch` by endpoint name, where a URL is refused as an unknown endpoint and the host attaches the credential. Granting a preopened directory or an environment variable gives the guest exactly that.
+
+**File access is a grant, not a prohibition.** Decided by the maintainer on 2026-10-06: the sidecar gives the guest read-only access to files bundled with the monitor (word lists, prompt templates, policy files), as a read-only preopened bundle data directory or through `importlib.resources`, and nothing else by default. Arbitrary host paths are never granted. State belongs in `context.store_as()`, not in files: a write in a proxy is per instance and lost. The `portable=True` check does not check file access; the grant is the boundary.
+
+This is the real enforcement of "effects only through `context`" (mitigation 1 in "Keeping monitors portable"). The static `portable=True` check is early feedback: it fails in an eval, before a monitor reaches a deployment, but the sandbox is what holds in one.
+
+Resource limits work too: an epoch deadline and a fuel limit each trapped a spinning guest, and a memory cap made an oversized allocation raise `MemoryError` in the guest. A trapped instance is discarded and a fresh one costs 0.4 ms.
 
 ## What gets bundled
 
@@ -332,13 +370,17 @@ This works *only* because monitors are top-level functions. A class body is an `
 
 What is *not* statically available is the stage, since the annotation sits on the inner function a factory returns. That is fine and worth stating plainly so nobody designs around it: the bundler needs enumeration and the closure, both of which it has. Stages resolve at load time, once, inside the bundle.
 
+### Imports inside function bodies
+
+componentize-py bundles only the modules imported during build-time initialisation ("WASM", above), so a module first imported inside a function body is missing from the component and raises `ModuleNotFoundError` at run time. Decided by the maintainer on 2026-10-06: this is the bundler's job, not the portability check's. The bundler imports what portable functions' bodies import as well as module-level imports, or bundles whole packages.
+
 One caveat if the existing helper is reused: `_util/decorator.py` imports `_util.file` for S3 support, which pulls `fsspec` and `s3fs`. The concept is \~40 lines of stdlib `ast`; a bundler-side scanner wants a local-path-only variant rather than the shipped helper.
 
 ### The module is a manifest entry, not a bundle boundary
 
-One bundle per module is the wrong instinct. The Python runtime plus Pydantic plus `inspect_core` dominates the artifact (\~10–20MB, above), so N bundles means N copies of the expensive part while the monitors themselves are kilobytes.
+One bundle per module is the wrong instinct. The Python runtime plus Pydantic plus `inspect_core` dominates the artifact (29.8 MiB raw in spike #58, above), so N bundles means N copies of the expensive part while the monitors themselves are kilobytes.
 
-So: one bundle holding every selected module, with the module as the unit of *inclusion* and of the portability verdict. A module whose closure fails the check is dropped by itself, and the report names it — which it can, because the verdict was computed per module rather than per bundle.
+So: one bundle holding every selected module, with the module as the unit of *inclusion*. The `portable=True` check is per function; whether a module's import closure can be bundled is the bundler's per-module verdict. A module whose closure fails is dropped by itself, and the report names it — which it can, because that verdict is computed per module rather than per bundle.
 
 ### Selection stays an explicit list
 
@@ -355,7 +397,8 @@ Enablement is an explicit list in both deployments. A bundle may therefore conta
 | **Go — embedded** | CPython in wazero | ABI + normalizer | Go structs (required) | high | no sum types; pooling; memory ratchet |
 | **Rust — sidecar** | Python service | HTTP client | Rust types (optional) | low | as Go |
 | **Rust — embedded** | CPython in wasmtime | ABI + normalizer | Rust types (required) | medium | best tooling of the four |
-| **Envoy** | ext_proc service | gRPC stream | optional | low–medium | cannot own the host |
+| **Envoy — native sidecar** | Python `ext_proc` service | gRPC stream | none | low | second deployable; no isolation between monitors and the sidecar |
+| **Envoy — WASM sidecar** | CPython in wasmtime, inside an `ext_proc` sidecar | ABI as WIT imports + normalizer | optional | medium | loop patch and pydantic-core build to own (spike #58) |
 
 **Python proxy** — none of this document's discipline applies. Import `inspect_ai`, use `ChatMessage`, call the monitor.
 
@@ -363,7 +406,7 @@ Enablement is an explicit list in both deployments. A bundle may therefore conta
 
 **Rust** — quietly the best target on both paths: `serde` tagged enums fit the discriminated unions, `typify`/`progenitor` generate clean types, `wasmtime` has the strongest component tooling. A Rust shop may prefer writing monitors *in* Rust for a few-hundred-KB module — the genuinely lightweight path, at the cost of the Python ecosystem.
 
-**Envoy** — most constrained, because the host is not yours. `ext_proc` is the answer; `proxy-wasm` is where the async problem is hardest, since the callback ABI is imposed rather than chosen.
+**Envoy** — most constrained, because the host is not yours, so the sentinel runs beside it in an `ext_proc` sidecar. The native-Python sidecar is the simplest option: it runs `run_sentinel` directly. When the deployment needs more, the sidecar embeds wasmtime and hosts the sentinel as a CPython-in-WASM component; spike #58 built that host in Rust (2026-10-06). WASM earns its keep where the sidecar must isolate monitors: from credentials, which the host keeps and attaches to named endpoints; from each other, for tenants; and from the request path's resources, with hard limits (an epoch deadline, fuel and a memory cap, all demonstrated in the spike). proxy-wasm inside Envoy is out: there is no Python proxy-wasm SDK, and its callback ABI is imposed rather than chosen and has no component-model async.
 
 Embedding CPython in Go via CGo is the one option to avoid outright: goroutines and the GIL are a bad marriage, and you inherit libpython plus a venv as deployment artifacts.
 
@@ -383,18 +426,22 @@ Mitigations, in order of how much they matter:
 6.  **Ban the ambient escapes.** Chiefly `get_model()`, which bypasses `context.host`; the `portable=True` check refuses it, with the rest of inspect_ai outside `inspect_ai.core`. There is no ambient store accessor to ban, by design.
 7.  **Make the portable path not feel like a downgrade.** If it is painful, authors escape and the check becomes an obstacle to route around. This is where `inspect-core.md` pays off twice: portable monitors get the *real* `ChatMessage` and `Content`, not a stripped parallel API. The restriction should be fewer dependencies, not worse ergonomics.
 
+**Module-level code runs at build time** in a pre-initialised WASM component ("WASM", above): anything a module reads from the environment, seeds or timestamps when imported is frozen into the artifact. Portable monitors read configuration at run time, through their parameters.
+
 Expect two tiers regardless, and design for them: portable monitors that run anywhere, and eval monitors using the full ecosystem in-process. An eval-time monitor doing sklearn classification over a trajectory is legitimate work that should not be constrained by a deployment it will never see. What matters is that monitors *intended* to be portable actually are — verified continuously rather than asserted — and that the default pulls toward portable so the choice is conscious.
 
 ## Status
 
 **Measured:** `_bridge/_approval.py`'s restrictions and their stated rationales; the bridge provider-normalization layer; the import-closure figures in `inspect-core.md`.
 
-**Reasoned, not verified:** every WASM claim (build size, instance behavior, asyncio-on-WASI), serialization throughput, and `ext_proc` latency figures. None of this has been built.
+**Measured (spike #58, 2026-10-06):** asyncio in a WASM guest (componentize-py's loop with the spike's patch) and the blocking fiber model; component size, load, instantiation, per-step time and memory per instance; pre-initialisation; building pydantic-core for WASI; the empty WASI sandbox and host-mediated calls; epoch, fuel and memory limits.
+
+**Reasoned, not verified:** serialization throughput, `ext_proc` latency figures, memory with large conversations, and WASM hosts other than wasmtime.
 
 ## Open questions
 
 1.  **Is portability a goal or an observation?** If a goal, the portable core should be the shape the protocol is designed around and the in-process extras visibly additive.
-2.  **Does CPython-on-WASI have a working asyncio loop over `wasi:io/poll`?** The one prototype that resolves the WASM path.
+2.  **Does CPython-on-WASI have a working asyncio loop over `wasi:io/poll`?** Answered by spike #58 (2026-10-06): not the stock loop, but componentize-py's loop over component-model async host calls works with a small guest patch, and one instance serves many concurrent steps. See "WASM".
 3.  **What owns the lifecycle a proxy's `terminate` reaches?** The mechanism is settled (an error response, or `host.terminate()` out-of-band); what is open is who implements the latter — an orchestrator API, a session store, a container control plane — and whether a monitor should be able to tell which it got before deciding.
 4.  **Streaming versus buffering.** `BUFFERED` gives a complete `ModelOutput` at the cost of time-to-first-token; `STREAMED` preserves TTFT but forces judgment on partial output, after some tokens have reached the agent. A custom proxy can do better than either — forward text blocks while withholding `tool_use` blocks until cleared — which is a real capability difference from Envoy worth weighing in a build-versus-adopt decision.
 5.  **Recursion guard.** The monitor's own LLM call must not traverse the proxy it runs inside; it needs a distinct route, upstream, or skipped header.
@@ -403,3 +450,11 @@ Expect two tiers regardless, and design for them: portable monitors that run any
 8.  **Fail open or closed** when the processor is down. A safety monitor wants closed, which makes it a hard dependency on the request path.
 9.  **Does the `portable=True` check run per module or per function?** Decided 2026-10-05: per function, by what its code references. The per-module verdict (a module's import closure) belongs to the bundler.
 10. **Should the store behind `store_as()` be a Protocol** rather than the concrete `Store`? `Store` is in `inspect_ai.core` and holds only a dict; the transcript diffing is in `inspect_ai.util`. An interface would let a proxy back it with the keyed store directly. The cost is one more abstraction on a type authors already know.
+
+From spike #58 (2026-10-06):
+
+11. **Instance reuse versus isolation.** Module globals persist across steps in a reused instance, and so across conversations or tenants. A fresh instance per step costs 0.4 ms plus a 2 ms first call; the alternatives are an instance per conversation, or per worker with a reset discipline.
+12. **Cancelling host calls.** Without subtask cancellation, a `terminate` or timeout cannot stop the host's in-flight request. The host could cancel on its side when the guest drops interest, but that needs a signal in the ABI.
+13. **Memory with large conversations.** Linear memory stayed flat over 500 small steps; a long history was not tested.
+14. **WASIp3 maturity.** Component-model async is not final. componentize-py's WASIp2 loop over `wasi:io/poll` is the untried fallback if a host runtime lags.
+15. **A Go host.** Whether wazero supports components and component-model async is untested; the spike used only wasmtime.
