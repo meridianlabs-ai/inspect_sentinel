@@ -21,7 +21,7 @@ Two things belong in `core`:
 
 Event types are not in `core`. `BaseEvent.working_start` defaults to `sample_working_time()`, which is eval machinery.
 
-`inspect_sentinel` imports only `inspect_ai.core`, `anyio` and `exceptiongroup`. `tests/test_package.py` checks this with `check_imports`. `core` is a subpackage of `inspect_ai`, so importing it still runs `inspect_ai/__init__.py`. Running sentinel without inspect_ai installed needs the separate distribution in open question 2.
+`inspect_sentinel` imports from `inspect_ai` only through `inspect_ai.core`, and otherwise imports only the standard library, `pydantic`, `anyio` and `exceptiongroup`. `tests/test_package.py` checks this with `check_imports`, which also allows the packages `core` itself imports. `core` is a subpackage of `inspect_ai`, so importing it still runs `inspect_ai/__init__.py`. Running sentinel without inspect_ai installed needs the separate distribution in open question 2.
 
 ## The measurement
 
