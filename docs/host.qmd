@@ -14,7 +14,7 @@ How a monitor or protocol calls a model. Covers `context.host.generate()` and wh
 
 ## Planned Sections
 
-- `context.host.generate()`: prompts, messages, tools and `GenerateConfig`
+- `context.host.generate()`: prompts, messages, tools, `tool_choice` and `GenerateConfig`
 - `model=` and `role=` on an LLM monitor's factory: `model` is a model name, `role` a model role; a configured role wins, then `model`, and with neither the role is `monitor`
 - The `monitor` role: `--model-role monitor=...` and `Task(model_roles=...)`, and the fallback to the agent's model
 - Structured output with `ResponseSchema`

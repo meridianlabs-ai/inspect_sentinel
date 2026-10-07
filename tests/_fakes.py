@@ -8,7 +8,7 @@ from inspect_ai.model import (
     GenerateConfig,
     ModelOutput,
 )
-from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolInfo
+from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolChoice, ToolInfo
 from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context, EvalContext
@@ -40,6 +40,7 @@ class FakeHost:
         model: str | None = None,
         role: str | None = None,
         tools: list[ToolInfo] | None = None,
+        tool_choice: ToolChoice | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
         self.models.append((model, role))

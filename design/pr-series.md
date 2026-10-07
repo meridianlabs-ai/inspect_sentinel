@@ -124,6 +124,7 @@ class Reported(Generic[R_co]):
 class Host(typing.Protocol):
     async def generate(self, input: str | list[ChatMessage], *, model: str | None = None,
                        role: str | None = None, tools: list[ToolInfo] | None = None,
+                       tool_choice: ToolChoice | None = None,
                        config: GenerateConfig | None = None) -> ModelOutput: ...
 
 class Recorder(typing.Protocol):
@@ -443,10 +444,11 @@ Decided by the maintainer on 2026-10-06, before the first release, so nothing is
 
 Decided by the maintainer on 2026-10-07, before the first release, so nothing is kept for compatibility. Supersedes [Host.generate takes one model string](#hostgenerate-takes-one-model-string); there is no `/`-based rule.
 
-- `Host.generate(input, *, model: str | None = None, role: str | None = None, tools=None, config=None)`. `model` is always a model name, `role` always a model role.
+- `Host.generate(input, *, model: str | None = None, role: str | None = None, tools=None, tool_choice=None, config=None)`. `model` is always a model name, `role` always a model role.
 - With neither, the role is `monitor`. A configured role (given or defaulted) wins. A given role that is not configured falls back to `model` if given, without a warning, as inspect_ai scorers' `model` and `model_role` do. A `model` without a `role` is used as given; the default `monitor` role is consulted only when `model` is None. A role that is not configured with no `model` is up to the host; inspect_ai falls back to the agent's model with the once-per-eval warning naming the role.
 - A `Model` instance for `model` is a `TypeError` pointing at `Task(model_roles=...)` or `--model-role`, and an empty `model` or `role` is a `ValueError`.
 - An LLM monitor's factory takes `model=None, role=None` and passes both through (`examples/llm_suspicion.py`).
+- `tool_choice` is added beside `tools`, so a protocol that regenerates (`resample`) repeats exactly the request the agent made.
 
 ## Deferred
 

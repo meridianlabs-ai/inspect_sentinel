@@ -7,7 +7,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
-from inspect_ai.core import ChatMessage, GenerateConfig, ModelOutput, ToolCall, ToolInfo
+from inspect_ai.core import (
+    ChatMessage,
+    GenerateConfig,
+    ModelOutput,
+    ToolCall,
+    ToolChoice,
+    ToolInfo,
+)
 from inspect_ai.util import Store
 
 from ._report import Decision, Failed, Report, Reported
@@ -44,6 +51,7 @@ class Host(TypingProtocol):
         model: str | None = None,
         role: str | None = None,
         tools: list[ToolInfo] | None = None,
+        tool_choice: ToolChoice | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
         """Generate with a model the host resolves.
@@ -55,6 +63,7 @@ class Host(TypingProtocol):
             model: A model name, used when `role` is not given or not configured.
             role: A model role. Defaults to `monitor` when `model` is None.
             tools: Tool definitions to offer the model.
+            tool_choice: Which of `tools` the model may or must call.
             config: Generation configuration.
         """
         ...

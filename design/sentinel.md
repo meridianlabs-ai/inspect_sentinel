@@ -733,7 +733,11 @@ def resample(monitors: Monitor | MonitorGroup | Monitors, threshold: float, n: i
         best_score, best_message = score, step.output.message
         for _ in range(n):
             output = await context.host.generate(
-                step.input, model=step.model, tools=step.tools, config=step.config
+                step.input,
+                model=step.model,
+                tools=step.tools,
+                tool_choice=step.tool_choice,
+                config=step.config,
             )
             reports = await run_monitors(monitors, context, replace(step, output=output))
             candidate = reports.max_suspicion() or 0.0

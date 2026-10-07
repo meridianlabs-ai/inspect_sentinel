@@ -85,6 +85,7 @@ class Host(typing.Protocol):
         model: str | None = None,  # a model name; used when role is not given or not configured
         role: str | None = None,   # a model role; neither means "monitor"
         tools: list[ToolInfo] | None = None,
+        tool_choice: ToolChoice | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput: ...
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
