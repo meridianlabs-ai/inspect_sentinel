@@ -11,6 +11,7 @@
 - Never swallow an exception from a monitor, a protocol, or the recorder, and never log-and-continue in their place. A raising protocol or recorder fails the layer. A raising monitor is recorded as failed by the runner, and reading the scores of a run with a failed monitor raises; that failure policy (design/sentinel.md, "Failure semantics") is the one sanctioned place a failure is tolerated, and only where a protocol handles `observations.failed` explicitly.
 - Respect existing patterns
 - Before committing, run the appropriate checks for code you touched (lint, typecheck, test)
+- After changing `src/` or `examples/`, run the `verify-sentinel` skill (`.agents/skills/verify-sentinel/scripts/verify run all`) and report its results, and the diff against origin/main for any behavior change.
 
 ### Testing
 - Test observable behavior, not internal implementation details
