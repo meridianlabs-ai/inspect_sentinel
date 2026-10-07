@@ -6,10 +6,9 @@ from inspect_ai.model import (
     ChatMessage,
     ChatMessageTool,
     GenerateConfig,
-    Model,
     ModelOutput,
 )
-from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolInfo
+from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolChoice, ToolInfo
 from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context, EvalContext
@@ -24,9 +23,11 @@ class Asked(NamedTuple):
 
 
 class FakeHost:
-    def __init__(self, *answers: HumanAnswer) -> None:
+    def __init__(self, *answers: HumanAnswer, completion: str = "ok") -> None:
         self.answers = list(answers)
         self.asked: list[Asked] = []
+        self.completion = completion
+        self.models: list[tuple[str | None, str | None]] = []
 
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
         self.asked.append(Asked(step, tuple(choices)))
@@ -36,12 +37,14 @@ class FakeHost:
         self,
         input: str | list[ChatMessage],
         *,
-        model: str | Model | None = None,
+        model: str | None = None,
         role: str | None = None,
         tools: list[ToolInfo] | None = None,
+        tool_choice: ToolChoice | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
-        return ModelOutput.from_content(model="fake", content="ok")
+        self.models.append((model, role))
+        return ModelOutput.from_content(model="fake", content=self.completion)
 
 
 class Recorded(NamedTuple):

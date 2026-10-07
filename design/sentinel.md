@@ -110,7 +110,7 @@ def no_curl() -> Protocol:
 
 
 @monitor
-def suspicion_monitor(model: str | None = None) -> Monitor:
+def suspicion_monitor(model: str | None = None, role: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         """A monitor: scores the step, never acts on the score."""
         ...
@@ -733,7 +733,11 @@ def resample(monitors: Monitor | MonitorGroup | Monitors, threshold: float, n: i
         best_score, best_message = score, step.output.message
         for _ in range(n):
             output = await context.host.generate(
-                step.input, model=step.model, tools=step.tools, config=step.config
+                step.input,
+                model=step.model,
+                tools=step.tools,
+                tool_choice=step.tool_choice,
+                config=step.config,
             )
             reports = await run_monitors(monitors, context, replace(step, output=output))
             candidate = reports.max_suspicion() or 0.0
@@ -751,7 +755,7 @@ Each candidate's scores go through the runner, so the log holds every draw, not 
 Three things follow for the rest of the design:
 
 - **`AfterGenerate` carries the request.** `tools`, `tool_choice` and `config` join `input`, so a protocol regenerates with exactly what the agent was given.
-- **`Host.generate` is a real generate.** Messages or a string in, `ModelOutput` out, with `model`, `role`, `tools` and `config`. `model` is always a model (a name or a `Model`) and `role` always a role, so a role name can never be mistaken for a model name. As with inspect's `get_model(model=, role=)`, a configured role wins, then `model`, then the agent's model with a warning, once per eval, naming the role to set; with neither, the role is `monitor`. Under a proxy, generating as the agent's model is a re-issued upstream request. `sentinel-deployment.md` carries the signature.
+- **`Host.generate` is a real generate.** Messages or a string in, `ModelOutput` out, with `model`, `role`, `tools` and `config`. `model` is always a model name and `role` always a model role. A configured role wins, then `model`; with neither, the role is `monitor`, and a `model` alone is used without consulting it. In an eval an unconfigured role with no `model` falls back to the agent's model with a warning, once per eval, naming the role to set. A `Model` instance is not accepted; a configured client goes in `model_roles`. Under a proxy, generating as the agent's model is a re-issued upstream request. `sentinel-deployment.md` carries the signature.
 - **Protocol inference has its own usage bucket.** `resample` spends up to `n` times the agent's tokens on the agent's model. It is recorded under a `protocol` bucket in `ModelUsage`, separate from both agent and monitor usage and not charged to the agent's limits, because the protocol chose to spend it. See open question 8.
 
 It is `AfterGenerate`-only, and its signature says so rather than annotating `Step`.
@@ -1077,7 +1081,7 @@ The `run_monitors()` seam is what makes that credible rather than aspirational. 
 
 ``` python
 @monitor
-def suspicion_monitor(model: str | Model | None = None, dimensions: list[str] | None = None) -> Monitor:
+def suspicion_monitor(model: str | None = None, dimensions: list[str] | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         ...
 
@@ -1221,7 +1225,7 @@ Injecting the store is also what keeps `StoreModel` usable outside an eval. `Sto
 
 Neither is there a `monitor_host()`, and here the argument above is reinforced by a second one. The store case rests only on helpers being able to take a parameter; the host case rests on that **and** on ambient authority being a thing to avoid on its own terms. The value of `context.host` is that it is the only portable route out of a monitor — everything a portable monitor can do to the outside world is enumerable from one interface — and any global reopens that. Today it carries inference and asking a person (`generate` and `ask_human`); outbound HTTP is planned as `fetch` through named endpoints (`sentinel-deployment.md`). Meanwhile an in-process monitor may call inspect_ai APIs directly, such as `sandbox()` or `logging`, if it is declared `portable=False`, at the cost of portability to a proxy.
 
-The leak that already exists is `get_model()`. A monitor can call it and bypass `context.host` entirely, and the `portable=True` check refuses it. There is in-process value in routing through the host too, not only portability: `context.host.generate()` can default to `role="monitor"` and let the host record monitor inference distinctly from the agent's, neither of which a direct `get_model()` gets.
+The leak that already exists is `get_model()`. A monitor can call it and bypass `context.host` entirely, and the `portable=True` check refuses it. There is in-process value in routing through the host too, not only portability: `context.host.generate()` can default to the `monitor` role and let the host record monitor inference distinctly from the agent's, neither of which a direct `get_model()` gets.
 
 
 ### Per-task
@@ -1555,7 +1559,7 @@ An LLM monitor built from them:
 
 ``` python
 @monitor
-def suspicion_monitor(model: str | Model | None = None, role: str = "monitor") -> Monitor:
+def suspicion_monitor(model: str | None = None, role: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
@@ -1565,9 +1569,7 @@ def suspicion_monitor(model: str | Model | None = None, role: str = "monitor") -
             history=new_since_last_report(context, step.history),
             messages_as_str=messages_as_str,
         )
-        output = await context.host.generate(
-            prompt, model=model, role=role
-        )
+        output = await context.host.generate(prompt, model=model, role=role)
         score, explanation = parse_score(output.completion)
         return Observation(
             suspicion=score,
