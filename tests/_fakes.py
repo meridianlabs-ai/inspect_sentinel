@@ -2,15 +2,17 @@ from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import Any, NamedTuple
 
-from inspect_ai.model import (
+from inspect_ai.core import (
     ChatMessage,
     ChatMessageTool,
     GenerateConfig,
-    Model,
     ModelOutput,
+    Store,
+    ToolCall,
+    ToolCallError,
+    ToolCallView,
+    ToolInfo,
 )
-from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolInfo
-from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context, EvalContext
 from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step
@@ -36,7 +38,7 @@ class FakeHost:
         self,
         input: str | list[ChatMessage],
         *,
-        model: str | Model | None = None,
+        model: str | None = None,
         role: str | None = None,
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,

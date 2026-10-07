@@ -1,9 +1,8 @@
 from typing import Any, NamedTuple
 
 import pytest
-from inspect_ai._util.registry import registry_info
-from inspect_ai.log import SentinelConfig
-from inspect_ai.util import Store, StoreModel
+from inspect_ai.core import SentinelConfig, Store, StoreModel
+from inspect_ai.core._registry import registry_info
 
 from inspect_sentinel import sequential
 from inspect_sentinel._context import Context

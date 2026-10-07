@@ -7,8 +7,7 @@ import json
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
-from inspect_ai.core import ChatMessage, GenerateConfig, ModelOutput, ToolInfo
-from inspect_ai.util import Store
+from inspect_ai.core import ChatMessage, GenerateConfig, ModelOutput, Store, ToolInfo
 from pydantic import TypeAdapter
 
 from inspect_sentinel import BeforeToolCall, Context, HumanAnswer, Step

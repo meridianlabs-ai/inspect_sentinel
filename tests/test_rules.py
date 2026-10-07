@@ -2,8 +2,13 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from inspect_ai.model import ChatMessageTool, ContentImage, ContentText
-from inspect_ai.tool import ToolCall, ToolCallError
+from inspect_ai.core import (
+    ChatMessageTool,
+    ContentImage,
+    ContentText,
+    ToolCall,
+    ToolCallError,
+)
 
 from inspect_sentinel import (
     AfterToolCall,

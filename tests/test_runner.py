@@ -4,9 +4,8 @@ from typing import Any, cast
 
 import anyio
 import pytest
-from inspect_ai._util.registry import registry_info
-from inspect_ai.tool import ToolCall
-from inspect_ai.util import Store, StoreModel
+from inspect_ai.core import Store, StoreModel, ToolCall
+from inspect_ai.core._registry import registry_info
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import (

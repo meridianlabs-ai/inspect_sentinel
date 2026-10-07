@@ -2,8 +2,13 @@ from dataclasses import FrozenInstanceError, replace
 from typing import Any, cast, get_type_hints
 
 import pytest
-from inspect_ai.model import ChatMessage, ChatMessageSystem, ChatMessageUser
-from inspect_ai.util import Store, StoreModel
+from inspect_ai.core import (
+    ChatMessage,
+    ChatMessageSystem,
+    ChatMessageUser,
+    Store,
+    StoreModel,
+)
 from pydantic import ValidationError
 
 from inspect_sentinel import (

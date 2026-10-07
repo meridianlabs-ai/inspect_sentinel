@@ -14,7 +14,7 @@ from types import ModuleType
 from typing import Any, NamedTuple, cast
 
 import pytest
-from inspect_ai._util.registry import is_registry_object, registry_info
+from inspect_ai.core._registry import is_registry_object, registry_info
 
 from inspect_sentinel import (
     BeforeToolCall,
