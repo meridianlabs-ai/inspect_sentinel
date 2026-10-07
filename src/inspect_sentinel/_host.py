@@ -47,7 +47,7 @@ class Host(TypingProtocol):
     ) -> ModelOutput:
         """Generate with a model the host resolves.
 
-        `model` names a role or a model, decided by its form: a name containing `/` is a model name, e.g. `openai/gpt-4o-mini`; a plain word is a model role, e.g. `monitor` or `judge`; `None` is the `monitor` role. A role resolves through the host's role configuration (in an eval, `Task(model_roles=...)` or `--model-role`). A role is portable, since the deployer picks its model; a model name suits quick experiments.
+        `model` names a role or a model, decided by its form: a name containing `/` is a model name, e.g. `openai/gpt-4o-mini`; a plain word is a model role, e.g. `monitor` or `judge`; `None` is the `monitor` role. A role resolves through the host's role configuration (in an eval, `Task(model_roles=...)` or `--model-role`); what an unconfigured role does is up to the host, and inspect_ai falls back to the agent's model with a warning. A role is portable, since the deployer picks its model; a model name suits quick experiments.
 
         Args:
             input: A prompt string or a list of chat messages.
