@@ -1,15 +1,15 @@
 .PHONY: typecheck
 typecheck:
-	uv run pyright
+	pyright
 
 .PHONY: check
 check: typecheck
-	uv run ruff check --fix
-	uv run ruff format
+	ruff check --fix
+	ruff format
 
 .PHONY: test
 test:
-	uv run pytest
+	pytest
 
 .PHONY: docs
 docs:

@@ -67,10 +67,10 @@ In `report.txt`, the work path is written as `$VERIFY_WORK`, so a PR run and a b
 
 ### Unit tests, types, lint
 
-The repo's own checks are `pytest`, `pyright` (strict, Python 3.10 floor) and `ruff`. CI runs them with `uv sync --group dev` then `uv run ...`, and `make test` / `make typecheck` use `uv run`.
+The repo's own checks are `make check` (pyright, `ruff check --fix`, `ruff format`) and `make test` (pytest). They call the tools directly, so run them with `.venv/bin` on `PATH` (an activated venv).
 
-- **Do not run `uv sync`, `uv run` or `make test` / `make typecheck` / `make check` in a checkout whose `.venv` has an editable inspect_ai.** `uv run` syncs first. It replaces the editable inspect_ai with the version pinned in `uv.lock`, so you stop testing the inspect_ai you meant to test.
-- If pytest, pyright and ruff are not in `.venv` (check `ls .venv/bin`), ask the user before installing anything. Without them, report that unit tests, types and lint were not run. Don't claim they pass.
+- **Do not run `uv sync` or `uv run` in a checkout whose `.venv` has an editable inspect_ai.** They sync to `uv.lock` first and replace the editable inspect_ai with the pinned git commit, so you stop testing the inspect_ai you meant to test.
+- If the tools are missing from `.venv` (check `ls .venv/bin`), the venv was set up without the `dev` extra. Ask the user before installing anything. The fix is `uv pip install -e ".[dev]"` followed by re-installing the editable inspect_ai (`uv pip install -e <inspect_ai checkout>`), because the first command also replaces it with the git pin. Without the tools, report that unit tests, types and lint were not run. Don't claim they pass.
 
 ## Evidence
 

@@ -9,19 +9,23 @@ Inspect Sentinel uses [uv](https://docs.astral.sh/uv/) for environment and depen
 The development environment pins 3.13 (`.python-version`). CI covers both ends of the supported range: 3.10 proves the floor still works, and 3.14 exercises the newest interpreter. `make check` only ever sees the 3.13 environment, so a construct that is new in 3.11 or later passes locally and fails in CI on 3.10. To reproduce the floor locally:
 
 ```bash
-uv venv --python 3.10 /tmp/py310 && uv pip install --python /tmp/py310/bin/python -e . --group dev
+uv venv --python 3.10 /tmp/py310 && uv pip install --python /tmp/py310/bin/python -e ".[dev]"
 .venv/bin/pyright --pythonpath /tmp/py310/bin/python
 ```
 
 ```bash
 git clone https://github.com/meridianlabs-ai/inspect_sentinel
 cd inspect_sentinel
-uv sync --group dev
+uv venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
 ```
 
-This installs the package in editable mode along with the dev tools (ruff, pyright, pytest).
+This installs the package in editable mode along with the dev tools (ruff, pyright, pytest). Run Python commands from the activated venv, or reference `.venv/bin/` directly; `make check` and `make test` call the tools directly.
 
-Development tracks `inspect_ai` from `main`: the dependency in `pyproject.toml` is a git reference, so `uv sync` clones and builds inspect_ai's current `main` rather than installing a PyPI release. That is deliberate, because sentinel and inspect_ai co-develop and most sentinel changes need hooks that have not shipped yet. To pick up new inspect_ai commits, run `uv lock --upgrade-package inspect-ai && uv sync --group dev`.
+To develop against a local inspect_ai checkout, install it editable after the line above: `uv pip install -e ../inspect_ai`. Then don't use `uv sync` or `uv run`: they re-sync to `uv.lock` and silently replace the editable inspect_ai with the pinned git commit.
+
+Development tracks `inspect_ai` from `main`: the dependency in `pyproject.toml` is a git reference, so installing clones and builds inspect_ai's current `main` rather than installing a PyPI release. That is deliberate, because sentinel and inspect_ai co-develop and most sentinel changes need hooks that have not shipped yet. To pick up new inspect_ai commits, run `uv pip install -e ".[dev]" --upgrade-package inspect-ai`, and `uv lock --upgrade-package inspect-ai` to move the commit CI installs from `uv.lock`.
 
 ## Checks and tests
 
@@ -35,7 +39,7 @@ make test    # pytest
 To run a single test:
 
 ```bash
-uv run pytest tests/path/to/test.py::test_name -v
+pytest tests/path/to/test.py::test_name -v
 ```
 
 ## Code style
@@ -53,10 +57,10 @@ See [`AGENTS.md`](AGENTS.md) for the full conventions used in this repo.
 
 ## Building the docs
 
-Docs live in `docs/` and are built with [Quarto](https://quarto.org). The Quarto CLI and the doc-build dependencies are in the `doc` group:
+Docs live in `docs/` and are built with [Quarto](https://quarto.org). The Quarto CLI and the doc-build dependencies are in the `doc` extra, which `dev` includes:
 
 ```bash
-uv sync --group doc
+uv pip install -e ".[doc]"
 cd docs
 source ../.venv/bin/activate
 quarto render        # outputs to docs/_site/

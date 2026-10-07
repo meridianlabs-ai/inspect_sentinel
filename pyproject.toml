@@ -53,7 +53,7 @@ inspect_sentinel = "inspect_sentinel._entrypoint"
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
     "ruff",
     "pytest",
@@ -64,7 +64,7 @@ dev = [
     "exceptiongroup>=1.0",
     # async tests run on both anyio backends (tests/conftest.py)
     "trio",
-    {include-group = "doc"},
+    "inspect_sentinel[doc]",
 ]
 doc = [
     "jupyter",
@@ -77,6 +77,10 @@ doc = [
     "quarto-cli>=1.9.36",
 ]
 dist = ["twine", "build"]
+
+# lets `uv sync --group dev` keep working; the lists live in the extras above
+[dependency-groups]
+dev = ["inspect_sentinel[dev]"]
 
 [tool.hatch.build]
 only-packages = true

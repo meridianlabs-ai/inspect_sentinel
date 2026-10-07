@@ -15,7 +15,9 @@ from inspect_ai.model import get_model
 from inspect_ai.solver import generate, use_tools
 from inspect_ai.tool import bash
 
-EXAMPLES = os.environ.get("VERIFY_EXAMPLES", str(Path(__file__).resolve().parents[4] / "examples"))
+EXAMPLES = os.environ.get(
+    "VERIFY_EXAMPLES", str(Path(__file__).resolve().parents[4] / "examples")
+)
 sys.path.insert(0, EXAMPLES)
 
 from llm_suspicion import suspicion  # noqa: E402

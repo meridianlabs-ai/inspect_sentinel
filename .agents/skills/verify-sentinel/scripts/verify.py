@@ -25,7 +25,9 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[3]
 VENV = REPO / ".venv" / "bin"
 BASE = Path(os.environ.get("VERIFY_BASE", REPO)).resolve()
-OUT = Path(os.environ.get("VERIFY_OUT", Path(tempfile.gettempdir()) / "verify-sentinel"))
+OUT = Path(
+    os.environ.get("VERIFY_OUT", Path(tempfile.gettempdir()) / "verify-sentinel")
+)
 
 YAML_RULE = "sentinel:\n  name: no_network\n"
 
@@ -55,7 +57,11 @@ class Result:
     work: set[str]
 
     def at(self, path: str, kind: str = "decision") -> list[Ev]:
-        return [e for e in self.events if e.type == "sentinel" and e.path == path and e.kind == kind]
+        return [
+            e
+            for e in self.events
+            if e.type == "sentinel" and e.path == path and e.kind == kind
+        ]
 
     def tool_errors(self) -> list[str | None]:
         return [e.error for e in self.events if e.type == "tool"]
@@ -65,49 +71,132 @@ Check = tuple[str, Callable[[Result], bool]]
 
 COMMON: list[Check] = [
     ("eval log status is success", lambda r: r.status == "success"),
-    ("no sentinel event has status error", lambda r: all(e.status != "error" for e in r.events if e.type == "sentinel")),
+    (
+        "no sentinel event has status error",
+        lambda r: all(e.status != "error" for e in r.events if e.type == "sentinel"),
+    ),
 ]
 
 RULE: list[Check] = [
-    ("root no_network decides continue, then reject", lambda r: [e.action for e in r.at("")] == ["continue", "reject"]),
-    ("agent sees the rule's message as the curl call's error", lambda r: "needs the network" in str(r.tool_errors()[-1])),
-    ("allowed call ran, rejected call did not (work dir)", lambda r: r.work == {"allowed.txt"}),
+    (
+        "root no_network decides continue, then reject",
+        lambda r: [e.action for e in r.at("")] == ["continue", "reject"],
+    ),
+    (
+        "agent sees the rule's message as the curl call's error",
+        lambda r: "needs the network" in str(r.tool_errors()[-1]),
+    ),
+    (
+        "allowed call ran, rejected call did not (work dir)",
+        lambda r: r.work == {"allowed.txt"},
+    ),
 ]
 
 FEATURES: dict[str, tuple[str, list[Check]]] = {
     "rule": (
         "rule",
-        [*RULE, ("log records sentinel config no_network", lambda r: "name='no_network'" in repr(r.config))],
+        [
+            *RULE,
+            (
+                "log records sentinel config no_network",
+                lambda r: "name='no_network'" in repr(r.config),
+            ),
+        ],
     ),
     "yaml-config": (
         "unwatched",
-        [*RULE, ("log records the YAML config as no_network", lambda r: "name='no_network'" in repr(r.config))],
+        [
+            *RULE,
+            (
+                "log records the YAML config as no_network",
+                lambda r: "name='no_network'" in repr(r.config),
+            ),
+        ],
     ),
     "llm-monitor": (
         "llm_monitor",
         [
-            ("monitor observes 0.1, then 0.9", lambda r: [e.suspicion for e in r.at("suspicion", "observation")] == [0.1, 0.9]),
-            ("threshold decides continue, then reject", lambda r: [e.action for e in r.at("")] == ["continue", "reject"]),
-            ("allowed call ran, rejected call did not (work dir)", lambda r: r.work == {"allowed.txt"}),
+            (
+                "monitor observes 0.1, then 0.9",
+                lambda r: (
+                    [e.suspicion for e in r.at("suspicion", "observation")]
+                    == [0.1, 0.9]
+                ),
+            ),
+            (
+                "threshold decides continue, then reject",
+                lambda r: [e.action for e in r.at("")] == ["continue", "reject"],
+            ),
+            (
+                "allowed call ran, rejected call did not (work dir)",
+                lambda r: r.work == {"allowed.txt"},
+            ),
         ],
     ),
     "trajectory": (
         "trajectory",
         [
-            ("before() suspicion rises with stored failure count", lambda r: [e.suspicion for e in r.at("failure_count", "observation") if e.function == "before"] == [0.0, 0.2, 0.4]),
-            ("after() sees failed, failed, succeeded", lambda r: [e.explanation for e in r.at("failure_count", "observation") if e.function == "after"] == ["call failed", "call failed", "call succeeded"]),
-            ("observe_only acts on nothing", lambda r: not any(e.action == "reject" for e in r.events)),
+            (
+                "before() suspicion rises with stored failure count",
+                lambda r: (
+                    [
+                        e.suspicion
+                        for e in r.at("failure_count", "observation")
+                        if e.function == "before"
+                    ]
+                    == [0.0, 0.2, 0.4]
+                ),
+            ),
+            (
+                "after() sees failed, failed, succeeded",
+                lambda r: (
+                    [
+                        e.explanation
+                        for e in r.at("failure_count", "observation")
+                        if e.function == "after"
+                    ]
+                    == ["call failed", "call failed", "call succeeded"]
+                ),
+            ),
+            (
+                "observe_only acts on nothing",
+                lambda r: not any(e.action == "reject" for e in r.events),
+            ),
             ("all calls ran (work dir)", lambda r: r.work == {"allowed.txt"}),
         ],
     ),
     "composition": (
         "composition",
         [
-            ("guard/protected rejects the /etc call with decide_final", lambda r: [e.action for e in r.at("guard/protected")] == ["continue", "reject", "continue"]),
-            ("decide_final bypasses guard and root on that step", lambda r: [e.status for e in r.at("guard")][1] == "bypassed" and [e.status for e in r.at("")][1] == "bypassed"),
-            ("guard/network rejects curl, and guard and root return it", lambda r: [e.action for e in r.at("guard")][-1] == "reject" and [e.action for e in r.at("")][-1] == "reject"),
-            ("audit monitor observes every step", lambda r: len(r.at("audit", "observation")) == 3),
-            ("only the allowed call ran (work dir)", lambda r: r.work == {"allowed.txt"}),
+            (
+                "guard/protected rejects the /etc call with decide_final",
+                lambda r: (
+                    [e.action for e in r.at("guard/protected")]
+                    == ["continue", "reject", "continue"]
+                ),
+            ),
+            (
+                "decide_final bypasses guard and root on that step",
+                lambda r: (
+                    [e.status for e in r.at("guard")][1] == "bypassed"
+                    and [e.status for e in r.at("")][1] == "bypassed"
+                ),
+            ),
+            (
+                "guard/network rejects curl, and guard and root return it",
+                lambda r: (
+                    [e.action for e in r.at("guard")][-1] == "reject"
+                    and [e.action for e in r.at("")][-1] == "reject"
+                ),
+            ),
+            (
+                "audit monitor observes every step",
+                lambda r: len(r.at("audit", "observation")) == 3,
+            ),
+            (
+                "only the allowed call ran (work dir)",
+                lambda r: r.work == {"allowed.txt"},
+            ),
         ],
     ),
 }
@@ -122,24 +211,37 @@ def doctor() -> int:
         print(f"{'ok  ' if good else 'FAIL'} {text}")
 
     def git(repo: Path, *args: str) -> str:
-        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True).stdout.strip()
+        return subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True
+        ).stdout.strip()
 
     import inspect_ai
+
     import inspect_sentinel
 
     ia_src = Path(inspect_ai.__file__).resolve().parents[2]
     is_src = Path(inspect_sentinel.__file__).resolve().parents[2]
     line(Path(sys.executable).parent == VENV, f"python {sys.executable}")
     line(is_src == BASE, f"inspect_sentinel imported from {is_src}")
-    print(f"     inspect_sentinel at {git(BASE, 'log', '-1', '--format=%h %D') or BASE}")
-    print(f"     inspect_ai {importlib.metadata.version('inspect_ai')} from {ia_src} ({git(ia_src, 'log', '-1', '--format=%h %D')})")
+    print(
+        f"     inspect_sentinel at {git(BASE, 'log', '-1', '--format=%h %D') or BASE}"
+    )
+    print(
+        f"     inspect_ai {importlib.metadata.version('inspect_ai')} from {ia_src} ({git(ia_src, 'log', '-1', '--format=%h %D')})"
+    )
     dirty = git(BASE, "status", "--porcelain", "--", "src", "examples")
-    line(not dirty, "src/ and examples/ have no local changes" + (f":\n{dirty}" if dirty else ""))
+    line(
+        not dirty,
+        "src/ and examples/ have no local changes" + (f":\n{dirty}" if dirty else ""),
+    )
 
     from inspect_ai.core._imports import check_imports
 
     violations = check_imports("inspect_sentinel", allowed=["anyio", "exceptiongroup"])
-    line(not violations, f"inspect_sentinel imports only inspect_ai.core {sorted({v.module for v in violations}) or ''}")
+    line(
+        not violations,
+        f"inspect_sentinel imports only inspect_ai.core {sorted({v.module for v in violations}) or ''}",
+    )
 
     from inspect_ai._sentinel._dispatch import _Host
 
@@ -147,14 +249,22 @@ def doctor() -> int:
 
     want = set(pyinspect.signature(Host.generate).parameters)
     have = set(pyinspect.signature(_Host.generate).parameters)
-    line(want == have, f"inspect_ai _Host.generate takes sentinel Host.generate's params (missing {sorted(want - have)}, extra {sorted(have - want)})")
+    line(
+        want == have,
+        f"inspect_ai _Host.generate takes sentinel Host.generate's params (missing {sorted(want - have)}, extra {sorted(have - want)})",
+    )
     line((VENV / "inspect").exists(), "inspect CLI in .venv")
     return 0 if ok else 1
 
 
 def _env(work: Path | None = None) -> dict[str, str]:
     base = {"PYTHONPATH": str(BASE / "src")} if BASE != REPO else {}
-    return {**os.environ, **base, "VERIFY_EXAMPLES": str(BASE / "examples"), **({"VERIFY_WORK": str(work)} if work else {})}
+    return {
+        **os.environ,
+        **base,
+        "VERIFY_EXAMPLES": str(BASE / "examples"),
+        **({"VERIFY_WORK": str(work)} if work else {}),
+    }
 
 
 def _read(log_path: Path, work: Path) -> Result:
@@ -163,15 +273,34 @@ def _read(log_path: Path, work: Path) -> Result:
 
     log = read_eval_log(str(log_path), resolve_attachments=True)
     events = [
-        Ev("sentinel", e.path, e.kind, e.status, e.factory, e.function, e.suspicion, e.action, e.explanation, e.error)
+        Ev(
+            "sentinel",
+            e.path,
+            e.kind,
+            e.status,
+            e.factory,
+            e.function,
+            e.suspicion,
+            e.action,
+            e.explanation,
+            e.error,
+        )
         if isinstance(e, SentinelEvent)
-        else Ev("tool", error=e.error.message if e.error else None, command=str(e.arguments.get("command", "")).replace(str(work), "$VERIFY_WORK"))
+        else Ev(
+            "tool",
+            error=e.error.message if e.error else None,
+            command=str(e.arguments.get("command", "")).replace(
+                str(work), "$VERIFY_WORK"
+            ),
+        )
         for sample in log.samples or []
         for e in sample.events
         if isinstance(e, SentinelEvent | ToolEvent)
     ]
     status = log.status if not log.error else f"{log.status}: {log.error.message}"
-    return Result(status, log.eval.config.sentinel, events, {p.name for p in work.iterdir()})
+    return Result(
+        status, log.eval.config.sentinel, events, {p.name for p in work.iterdir()}
+    )
 
 
 def _row(e: Ev) -> str:
@@ -188,16 +317,34 @@ def run(feature: str) -> int:
     evidence, work = run_dir / "evidence", run_dir / "work"
     evidence.mkdir(parents=True)
     work.mkdir()
-    args = [str(VENV / "inspect"), "eval", f"{HERE / 'tasks.py'}@{task}", "--display", "plain", "--log-dir", str(evidence / "logs"), "--log-format", "json"]
+    args = [
+        str(VENV / "inspect"),
+        "eval",
+        f"{HERE / 'tasks.py'}@{task}",
+        "--display",
+        "plain",
+        "--log-dir",
+        str(evidence / "logs"),
+        "--log-format",
+        "json",
+    ]
     if feature == "yaml-config":
         (evidence / "sentinel.yaml").write_text(YAML_RULE)
         args += ["--sentinel", str(evidence / "sentinel.yaml")]
-    proc = subprocess.run(args, capture_output=True, text=True, env=_env(work), cwd=REPO)
-    (evidence / "command.txt").write_text(f"sentinel src: {BASE / 'src'}\n" + " ".join(args) + f"\nexit={proc.returncode}\n")
+    proc = subprocess.run(
+        args, capture_output=True, text=True, env=_env(work), cwd=REPO
+    )
+    (evidence / "command.txt").write_text(
+        f"sentinel src: {BASE / 'src'}\n"
+        + " ".join(args)
+        + f"\nexit={proc.returncode}\n"
+    )
     (evidence / "stdout.txt").write_text(proc.stdout)
     (evidence / "stderr.txt").write_text(proc.stderr)
     logs = sorted((evidence / "logs").glob("*.json"))
-    assert logs, f"inspect eval wrote no log (exit {proc.returncode}); see {evidence / 'stderr.txt'}"
+    assert logs, (
+        f"inspect eval wrote no log (exit {proc.returncode}); see {evidence / 'stderr.txt'}"
+    )
     result = _read(logs[-1], work)
 
     def passes(check: Check) -> bool:
@@ -231,7 +378,9 @@ def cleanup(run_dir: str) -> int:
 
 
 COMMANDS: dict[str, Callable[[list[str]], int]] = {
-    "doctor": lambda a: subprocess.run([sys.executable, __file__, "_doctor"], env=_env()).returncode,
+    "doctor": lambda a: (
+        subprocess.run([sys.executable, __file__, "_doctor"], env=_env()).returncode
+    ),
     "_doctor": lambda a: doctor(),
     "run": lambda a: max(run(f) for f in FEATURES) if a[0] == "all" else run(a[0]),
     "cleanup": lambda a: cleanup(a[0]),
