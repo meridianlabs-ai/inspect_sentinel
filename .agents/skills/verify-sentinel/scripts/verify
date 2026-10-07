@@ -1,0 +1,4 @@
+#!/bin/sh
+# Run verify.py with this checkout's .venv python.
+here="$(cd "$(dirname "$0")" && pwd)"
+exec "$(git -C "$here" rev-parse --show-toplevel)/.venv/bin/python" "$here/verify.py" "$@"

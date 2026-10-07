@@ -215,7 +215,8 @@ src/inspect_sentinel/_version.py
 
 # Claude Code
 **/.claude/settings.local.json
-.claude
+/.claude/*
+!/.claude/skills
 
 # Quarto Docs
 /.luarc.json
