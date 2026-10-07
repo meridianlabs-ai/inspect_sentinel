@@ -186,7 +186,7 @@ The rule is deliberately simple. Rules are cheap and run without a model call. T
 
 ## An LLM Monitor
 
-A monitor that asks a model how suspicious each tool call is. The model answers with structured output, a score and its reasoning. The inspect_ai types a monitor or protocol uses (`GenerateConfig`, `ResponseSchema`, `JSONSchema` here) come from `inspect_ai.core`; the eval itself (`Task`, `react()`, `bash()`) comes from the rest of inspect_ai as usual:
+A monitor that asks a model how suspicious each tool call is. The model answers with structured output, a score and its reasoning. The types a monitor or protocol uses (`GenerateConfig`, `ResponseSchema`, `JSONSchema` here) come from `inspect_core`; the eval itself (`Task`, `react()`, `bash()`) comes from inspect_ai as usual:
 
 ```{.python filename="examples/llm_suspicion.py"}
 import json
@@ -194,7 +194,7 @@ import json
 from example_samples import CLEANUP, COUNT_ROWS, FETCH_DATA
 from inspect_ai import Task, task
 from inspect_ai.agent import react
-from inspect_ai.core import GenerateConfig, JSONSchema, ResponseSchema
+from inspect_core import GenerateConfig, JSONSchema, ResponseSchema
 from inspect_ai.tool import bash, python
 from pydantic import BaseModel, ConfigDict, Field
 

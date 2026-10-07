@@ -8,8 +8,8 @@ from typing import Literal, NamedTuple, TypeVar, cast
 
 import anyio
 from anyio.abc import TaskGroup
-from inspect_ai.core import LimitExceededError
-from inspect_ai.core._registry import registry_info, registry_unqualified_name
+from inspect_core import LimitExceededError
+from inspect_core._registry import registry_info, registry_unqualified_name
 
 from ._context import Context, validate_instance_name
 from ._decorators import invoke, members

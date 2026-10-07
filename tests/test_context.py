@@ -2,7 +2,7 @@ from dataclasses import FrozenInstanceError, replace
 from typing import Any, cast, get_type_hints
 
 import pytest
-from inspect_ai.core import (
+from inspect_core import (
     ChatMessage,
     ChatMessageSystem,
     ChatMessageUser,

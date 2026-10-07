@@ -2,7 +2,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import pytest
-from inspect_ai.core import Reference, ToolCall, ToolCallContent
+from inspect_core import Reference, ToolCall, ToolCallContent
 from pydantic import ValidationError
 
 from inspect_sentinel._report import Decision, Observation, Report, Reported

@@ -1,6 +1,6 @@
 import anyio
 import pytest
-from inspect_ai.core._imports import check_imports
+from inspect_core._imports import check_imports
 
 import inspect_sentinel
 import inspect_sentinel._integration
@@ -101,7 +101,7 @@ def test_integration_module_exports_the_host_surface() -> None:
 
 
 def test_wire_types_come_from_inspect_ai() -> None:
-    from inspect_ai.core import SentinelAction, SentinelSuspicion
+    from inspect_core import SentinelAction, SentinelSuspicion
 
     assert inspect_sentinel.Action is SentinelAction
     assert inspect_sentinel.Suspicion is SentinelSuspicion

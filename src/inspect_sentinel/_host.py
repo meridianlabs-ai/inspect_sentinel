@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
-from inspect_ai.core import (
+from inspect_core import (
     ChatMessage,
     GenerateConfig,
     ModelOutput,

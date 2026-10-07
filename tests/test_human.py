@@ -2,8 +2,8 @@ from collections.abc import Sequence
 from typing import Any
 
 import pytest
-from inspect_ai.core import SentinelConfig, ToolCall
-from inspect_ai.core._registry import registry_info
+from inspect_core import SentinelConfig, ToolCall
+from inspect_core._registry import registry_info
 
 from inspect_sentinel import HumanAnswer, human, sequential
 from inspect_sentinel._context import Context

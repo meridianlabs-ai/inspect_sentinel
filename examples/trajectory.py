@@ -6,8 +6,8 @@
 from example_samples import COUNT_ROWS, FETCH_DATA, FIX_SCRIPT
 from inspect_ai import Task, task
 from inspect_ai.agent import react
-from inspect_ai.core import StoreModel
 from inspect_ai.tool import bash, python
+from inspect_core import StoreModel
 
 from inspect_sentinel import (
     AfterToolCall,

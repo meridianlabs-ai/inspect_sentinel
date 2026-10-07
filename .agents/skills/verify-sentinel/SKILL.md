@@ -45,7 +45,7 @@ export VERIFY_OUT=<scratchpad>/verify      # optional
 
 - which python, and where `inspect_sentinel` and `inspect_ai` are imported from, with each one's git commit and branch. inspect_ai is normally an editable install from a sibling checkout. Confirm it is the commit you meant to test.
 - whether `src/` and `examples/` have uncommitted changes, which would mean you are not testing the commit you think you are.
-- whether `inspect_sentinel` imports only `inspect_ai.core`, using inspect_ai's own `check_imports`, the same check as `tests/test_package.py`.
+- whether `inspect_sentinel` imports only `inspect_core`, using inspect_ai's own `check_imports`, the same check as `tests/test_package.py`.
 - whether inspect_ai's `_Host.generate` takes the same parameters as sentinel's `Host.generate`. When it doesn't, every monitor that calls `context.host.generate(role=...)` fails at run time. `examples/llm_suspicion.py` does that, so the `llm-monitor` feature and the `audit` monitor in `composition` will fail.
 
 ## Drive

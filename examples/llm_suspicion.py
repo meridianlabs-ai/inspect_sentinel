@@ -8,8 +8,8 @@ import json
 from example_samples import CLEANUP, COUNT_ROWS, FETCH_DATA
 from inspect_ai import Task, task
 from inspect_ai.agent import react
-from inspect_ai.core import GenerateConfig, JSONSchema, ResponseSchema
 from inspect_ai.tool import bash, python
+from inspect_core import GenerateConfig, JSONSchema, ResponseSchema
 from pydantic import BaseModel, ConfigDict, Field
 
 from inspect_sentinel import (

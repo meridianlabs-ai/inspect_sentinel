@@ -1,6 +1,6 @@
 from typing import get_args
 
-from inspect_ai.core import (
+from inspect_core import (
     ChatMessage,
     ChatMessageAssistant,
     ChatMessageSystem,

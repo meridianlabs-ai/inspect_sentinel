@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TypeAlias
 
-from inspect_ai.core import (
+from inspect_core import (
     ChatMessage,
     ChatMessageTool,
     ToolCall,

@@ -14,7 +14,7 @@ from types import ModuleType
 from typing import Any, NamedTuple, cast
 
 import pytest
-from inspect_ai.core._registry import is_registry_object, registry_info
+from inspect_core._registry import is_registry_object, registry_info
 
 from inspect_sentinel import (
     BeforeToolCall,
@@ -40,7 +40,8 @@ DOCS = Path(__file__).parent.parent / "docs"
 ENVIRONMENT = "a portable function has no environment variables"
 PROCESSES = "a portable function cannot start processes or threads"
 NETWORK = "a portable function has no network access"
-INSPECT = "inspect_ai is portable only through `inspect_ai.core`"
+INSPECT = "inspect_ai is not portable; use `inspect_core`"
+CORE_PRIVATE = "only the names `inspect_core` exports are portable"
 
 HEADER = """\
 from inspect_sentinel import BeforeToolCall, Context, Monitor, Observation, monitor
@@ -122,33 +123,36 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.mark.parametrize(
-    "setup,body,reference,resolved",
+    "setup,body,reference,resolved,reason",
     [
         (
             "from inspect_ai.model import get_model",
             "get_model()",
             "get_model",
             "function `get_model` from `inspect_ai.model._model`",
+            INSPECT,
         ),
         (
             "import inspect_ai.util",
             "inspect_ai.util.sandbox()",
             "inspect_ai.util.sandbox",
             "function `sandbox` from `inspect_ai.util._sandbox.context`",
+            INSPECT,
         ),
         (
             "from inspect_ai.util import store",
             "store()",
             "store",
-            "function `store` from `inspect_ai.core._store`",
+            "function `store` from `inspect_core._store`",
+            CORE_PRIVATE,
         ),
     ],
 )
 def test_inspect_ai_outside_core_fails(
-    load: Load, setup: str, body: str, reference: str, resolved: str
+    load: Load, setup: str, body: str, reference: str, resolved: str, reason: str
 ) -> None:
     message = refused(load, body, setup)
-    assert f"`{reference}` is {resolved}, and {INSPECT}" in message
+    assert f"`{reference}` is {resolved}, and {reason}" in message
 
 
 @pytest.mark.parametrize(
@@ -362,10 +366,10 @@ def test_pydantic_core_passes(load: Load) -> None:
     "setup,body",
     [
         (
-            "from inspect_ai.core import ChatMessageUser, ToolCall",
+            "from inspect_core import ChatMessageUser, ToolCall",
             "ChatMessageUser(content='a')\nToolCall",
         ),
-        ("import inspect_ai.core", "inspect_ai.core.ModelOutput"),
+        ("import inspect_core", "inspect_core.ModelOutput"),
         (
             "from inspect_ai.model import ChatMessage, ChatMessageUser, GenerateConfig, StopReason",
             "ChatMessage\nChatMessageUser\nGenerateConfig()\nStopReason",
@@ -602,7 +606,7 @@ def test_an_import_inside_the_factory_is_judged(
     "body",
     [
         "import json\njson.dumps({})",
-        "from inspect_ai.core import ToolCall",
+        "from inspect_core import ToolCall",
         "from inspect_ai.model import ChatMessageUser",
         "import os\nos.path.join('a', 'b')",
     ],

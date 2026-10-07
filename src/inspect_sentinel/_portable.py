@@ -16,14 +16,15 @@ import types
 from collections.abc import Callable, Iterable, Iterator
 from typing import NamedTuple, TypeGuard, cast
 
-import inspect_ai.core
+import inspect_core
 
-_CORE = "inspect_ai.core"
+_CORE = "inspect_core"
 
 _ENVIRONMENT = "and a portable function has no environment variables; take configuration as factory parameters"
 _PROCESSES = "and a portable function cannot start processes or threads"
 _NETWORK = "and a portable function has no network access; call a model with `context.host.generate()`"
-_INSPECT = f"and inspect_ai is portable only through `{_CORE}`"
+_INSPECT = f"and inspect_ai is not portable; use `{_CORE}`"
+_CORE_PRIVATE = f"and only the names `{_CORE}` exports are portable"
 
 _OS_ENVIRONMENT = ("environ", "environb", "getenv", "getenvb", "putenv", "unsetenv")
 _OS_PROCESSES = ("system", "popen", "kill", "killpg", "startfile")
@@ -426,7 +427,7 @@ def _allowed(value: object) -> bool:
 @functools.cache
 def _core_values() -> frozenset[int]:
     return frozenset(
-        id(value) for name, value in vars(inspect_ai.core).items() if name[:1] != "_"
+        id(value) for name, value in vars(inspect_core).items() if name[:1] != "_"
     )
 
 
@@ -448,7 +449,9 @@ def _judge_name(name: str) -> str | None:
             return reason
     top = name.partition(".")[0]
     if top == "inspect_ai":
-        return None if name == _CORE else _INSPECT
+        return _INSPECT
+    if top == _CORE:
+        return None if name == _CORE else _CORE_PRIVATE
     if top in sys.stdlib_module_names or top in _WASI_BUILT:
         return None
     if top and top in _compiled_packages(tuple(sys.path)):

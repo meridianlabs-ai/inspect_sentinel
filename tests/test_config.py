@@ -2,9 +2,9 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 import pytest
-from inspect_ai.core import SentinelConfig
-from inspect_ai.core import _registry as registry
-from inspect_ai.core._registry import registry_info, registry_params
+from inspect_core import SentinelConfig
+from inspect_core import _registry as registry
+from inspect_core._registry import registry_info, registry_params
 from pydantic import ValidationError
 
 from inspect_sentinel._context import Context

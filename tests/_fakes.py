@@ -2,7 +2,7 @@ from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import Any, NamedTuple
 
-from inspect_ai.core import (
+from inspect_core import (
     ChatMessage,
     ChatMessageTool,
     GenerateConfig,

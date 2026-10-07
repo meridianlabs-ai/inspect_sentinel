@@ -4,8 +4,8 @@ from typing import Any, cast
 
 import anyio
 import pytest
-from inspect_ai.core import Store, StoreModel, ToolCall
-from inspect_ai.core._registry import registry_info
+from inspect_core import Store, StoreModel, ToolCall
+from inspect_core._registry import registry_info
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import (
@@ -982,7 +982,7 @@ async def test_non_string_mapping_keys_are_a_configuration_error(key: Any) -> No
 async def test_packaged_children_are_named_without_the_package_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import inspect_ai.core._registry as registry
+    import inspect_core._registry as registry
 
     def packaged(o: object) -> str:
         return "acme"

@@ -4,7 +4,7 @@ from typing import Any, cast
 
 import pytest
 from inspect_ai._util.registry import registry_create
-from inspect_ai.core._registry import (
+from inspect_core._registry import (
     RegistryType,
     create_registry_object,
     registry_info,

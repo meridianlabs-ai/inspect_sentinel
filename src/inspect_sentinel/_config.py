@@ -5,8 +5,8 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any, NamedTuple, cast
 
-from inspect_ai.core import SentinelConfig, SentinelEntry
-from inspect_ai.core._registry import (
+from inspect_core import SentinelConfig, SentinelEntry
+from inspect_core._registry import (
     RegistryDict,
     RegistryInfo,
     RegistryType,

@@ -2,7 +2,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
-from inspect_ai.core._registry import registry_info
+from inspect_core._registry import registry_info
 
 from inspect_sentinel import Sentinels
 from inspect_sentinel._context import Context

@@ -9,11 +9,11 @@ import sys
 from pathlib import Path
 
 from inspect_ai import Task, task
-from inspect_ai.core import ChatMessage, ChatMessageAssistant, ModelOutput
 from inspect_ai.dataset import Sample
 from inspect_ai.model import get_model
 from inspect_ai.solver import generate, use_tools
 from inspect_ai.tool import bash
+from inspect_core import ChatMessage, ChatMessageAssistant, ModelOutput
 
 EXAMPLES = os.environ.get(
     "VERIFY_EXAMPLES", str(Path(__file__).resolve().parents[4] / "examples")

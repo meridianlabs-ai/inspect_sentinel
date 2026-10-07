@@ -235,12 +235,12 @@ def doctor() -> int:
         "src/ and examples/ have no local changes" + (f":\n{dirty}" if dirty else ""),
     )
 
-    from inspect_ai.core._imports import check_imports
+    from inspect_core._imports import check_imports
 
     violations = check_imports("inspect_sentinel", allowed=["anyio", "exceptiongroup"])
     line(
         not violations,
-        f"inspect_sentinel imports only inspect_ai.core {sorted({v.module for v in violations}) or ''}",
+        f"inspect_sentinel imports only inspect_core {sorted({v.module for v in violations}) or ''}",
     )
 
     from inspect_ai._sentinel._dispatch import _Host

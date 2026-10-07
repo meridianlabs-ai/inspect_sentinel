@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
-from inspect_ai.core import ChatMessage, StoreModel, Target
+from inspect_core import ChatMessage, StoreModel, Target
 
 from ._host import Host, active_step
 

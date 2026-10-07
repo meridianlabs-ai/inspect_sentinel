@@ -2,7 +2,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from inspect_ai.core import (
+from inspect_core import (
     ChatMessageTool,
     ContentImage,
     ContentText,
