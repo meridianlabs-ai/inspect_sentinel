@@ -58,7 +58,7 @@ The smallest monitor scores, and a protocol decides what the score means:
 
 ```python
 @monitor
-def suspicion_monitor(model: str | None = None) -> Monitor:
+def suspicion_monitor(model: str | None = None, role: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         ...
         return Observation.score(score, explanation)
@@ -488,8 +488,8 @@ There is no `monitor_store_as()` or `monitor_host()` global. Helpers take what t
 
 Rules:
 
-- **Call `context.host.generate()` for inference, never `get_model()`.** It takes a prompt string or a message list, with optional `model`, `tools` and `config`, and returns a `ModelOutput`. `model` is a model role (a plain word, e.g. `judge`) or a model name (containing `/`, e.g. `openai/gpt-4o-mini`), decided by its form; `None` is the `monitor` role. In an eval an unconfigured role falls back to the agent's model with a warning once per eval naming the role to set. A `Model` instance is not accepted; put a configured client in `model_roles`. It records monitor inference separately from the agent's. The `portable=True` check bans `get_model()`.
-- **Expose `model: str | None = None` on an LLM monitor's factory** and pass it through, so a task can point it at another role or model without editing it.
+- **Call `context.host.generate()` for inference, never `get_model()`.** It takes a prompt string or a message list, with optional `model` (a model name, e.g. `openai/gpt-4o-mini`), `role` (a model role, e.g. `trusted`), `tools` and `config`, and returns a `ModelOutput`. A configured role wins, then `model`; with neither, the role is `monitor`. In an eval an unconfigured role with no `model` falls back to the agent's model with a warning once per eval naming the role to set. A `Model` instance is not accepted; put a configured client in `model_roles`. It records monitor inference separately from the agent's. The `portable=True` check bans `get_model()`.
+- **Expose `model` and `role` on an LLM monitor's factory**, both defaulting to None, and pass them through, so a task can point it at another role or model without editing it.
 - **Monitor inference is not charged to the agent's limits.** Approvers get the same exemption today via `suspend_token_limit()` and `suspend_turn_limit()`. Monitor usage is separable from agent usage in `ModelUsage`.
 - **Treat model completions, tool arguments, and tool output as untrusted.** The monitor's output decides whether the sample stops, so a successful injection against the monitor can stop a sample or prevent it from being stopped. `monitor_prompt` delivers evidence in a delimited, clearly-untrusted envelope by default; see [View](#view).
 - **Classify incrementally.** Judge the newest turn and fold the verdict into stored state rather than re-judging the whole trajectory each step. Re-judging is quadratic in inference cost and linear in deserialization cost, and under WASM the memory never shrinks.
@@ -535,7 +535,7 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 
 ```python
 @monitor
-def suspicion_monitor(model: str | None = None) -> Monitor:
+def suspicion_monitor(model: str | None = None, role: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
@@ -545,7 +545,7 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
             history=new_since_last_report(context, step.history),
             messages_as_str=messages_as_str,
         )
-        output = await context.host.generate(prompt, model=model)
+        output = await context.host.generate(prompt, model=model, role=role)
         score, explanation = parse_score(output.completion)
         return Observation(suspicion=score, explanation=explanation,
                            references=extract_refs(explanation))

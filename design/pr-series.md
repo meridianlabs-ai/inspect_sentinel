@@ -263,7 +263,7 @@ Decided with the user 2026-09-30, before the first release, so nothing is kept f
 
 - The `Context` docstrings say what fills: `task_description` and `sample_description` are None until inspect_ai has `Task(description=)` and `Sample(description=)`, and `target` is None until the `target=True` opt-in exists (both under [Deferred](#deferred)). `Context.store` is the whole sample store, the agent's state included, and is not namespaced; `store_as` is the namespaced way in. *Superseded: `Context.store` was removed and the descriptions moved to `EvalContext` ([Interface cleanup](#interface-cleanup), [Eval-only context](#eval-only-context-under-contexteval)).*
 - `store_as` is keyed by the instance path, so renaming a mapping key or wrapping a monitor in another layer moves its state. The docs say so; there is no `namespace=` override.
-- *Superseded: one `model` string names a role or a model ([Host.generate takes one model string](#hostgenerate-takes-one-model-string)).* `Host.generate(input, *, model: str | Model | None = None, role: str | None = None, tools=None, config=None)`. `model` is always a model (a name or an instance), `role` always a role, and passing both is an error the host raises. With neither, the host uses the `monitor` role; if that role is not configured, it falls back to the agent's model and logs a warning once per eval naming the role to set. LLM monitors expose `model=` and `role=` on their factory, `role` defaulting to `"monitor"`, and pass them through. `defer_to_trusted` and `resample` will use a `trusted` role, so a task declares `monitor` and `trusted` separately with `Task(model_roles=...)` or `--model-role`. The inspect_ai `Host` implementation follows in inspect_ai.
+- *Superseded: separate `model` and `role` strings, a configured role winning ([Host.generate takes separate model and role strings](#hostgenerate-takes-separate-model-and-role-strings)).* `Host.generate(input, *, model: str | Model | None = None, role: str | None = None, tools=None, config=None)`. `model` is always a model (a name or an instance), `role` always a role, and passing both is an error the host raises. With neither, the host uses the `monitor` role; if that role is not configured, it falls back to the agent's model and logs a warning once per eval naming the role to set. LLM monitors expose `model=` and `role=` on their factory, `role` defaulting to `"monitor"`, and pass them through. `defer_to_trusted` and `resample` will use a `trusted` role, so a task declares `monitor` and `trusted` separately with `Task(model_roles=...)` or `--model-role`. The inspect_ai `Host` implementation follows in inspect_ai.
 - The docs no longer call `context.host` the only route out of a monitor. Outbound HTTP is planned as `fetch` through named endpoints (`sentinel-deployment.md`); meanwhile an in-process monitor may call inspect_ai APIs directly, such as `sandbox()` or `logging`, at the cost of portability to a proxy, which a future `portable=False` will declare. *Superseded: `portable=` exists, default `True` ([Portable monitors](#portable-monitors-and-protocols-are-checked-when-configured)).*
 
 ## Root and escalate
@@ -308,7 +308,7 @@ Decided 2026-10-01. Each function a `@monitor` or `@protocol` factory returns ha
 
 Decided with the user 2026-10-01, before the first release, so nothing is kept for compatibility:
 
-- *Superseded: one `model` string names a role or a model ([Host.generate takes one model string](#hostgenerate-takes-one-model-string)).* `Host.generate` resolves `model` and `role` as inspect's `get_model(model=, role=)` does instead of raising when both are given: the role's model if that role is configured for the task or eval, otherwise `model`, otherwise the agent's model with the one-time warning. With neither, the role is `monitor`. An LLM monitor's factory takes `model=None, role="monitor"` and passes both straight through.
+- *Superseded: separate `model` and `role` strings, a configured role winning ([Host.generate takes separate model and role strings](#hostgenerate-takes-separate-model-and-role-strings)).* `Host.generate` resolves `model` and `role` as inspect's `get_model(model=, role=)` does instead of raising when both are given: the role's model if that role is configured for the task or eval, otherwise `model`, otherwise the agent's model with the one-time warning. With neither, the role is `monitor`. An LLM monitor's factory takes `model=None, role="monitor"` and passes both straight through.
 - *Superseded: renamed `sample_input_text` ([Interface cleanup](#interface-cleanup)), then moved to `context.eval.sample_input_text` ([Eval-only context](#eval-only-context-under-contexteval)).* `Context.input_text` is the sample input as one string: `input` itself if a string, else its messages' text joined with newlines.
 - The examples pass a single instance where they mean one, `threshold(suspicion(), reject_at=0.8)`, rather than a one-element list.
 - `concurrent` lists the votes in its explanation only when they are not all `continue`; an all-continue layer keeps the winner's own explanation, if any.
@@ -424,9 +424,11 @@ The `portable=True` check ([workstreams.md](workstreams.md), workstream 11), as 
 
 ## Imports from `inspect_ai.core`
 
-Sentinel #59 and #60, merged 2026-10-06, toward a sentinel that needs only `inspect_ai.core` in a proxy ([workstreams.md](workstreams.md), workstream 1). #59 imports the ten wire types already in `inspect_ai.core` from there (`ChatMessage`, `ChatMessageTool`, `GenerateConfig`, `ModelOutput`, `Reference`, `Target`, `ToolCall`, `ToolCallView`, `ToolInfo`, `ToolResult`); #60 does the same for `SentinelAction` and `SentinelSuspicion`, which inspect_ai `feature/sentinel` moved into `inspect_ai.core`. The old paths re-export the same objects, so behavior does not change. The registry primitives, `Store` and `StoreModel`, `LimitExceededError` and the configuration types still come from the rest of inspect_ai; `Model` is no longer imported ([Host.generate takes one model string](#hostgenerate-takes-one-model-string)).
+Sentinel #59 and #60, merged 2026-10-06, toward a sentinel that needs only `inspect_ai.core` in a proxy ([workstreams.md](workstreams.md), workstream 1). #59 imports the ten wire types already in `inspect_ai.core` from there (`ChatMessage`, `ChatMessageTool`, `GenerateConfig`, `ModelOutput`, `Reference`, `Target`, `ToolCall`, `ToolCallView`, `ToolInfo`, `ToolResult`); #60 does the same for `SentinelAction` and `SentinelSuspicion`, which inspect_ai `feature/sentinel` moved into `inspect_ai.core`. The old paths re-export the same objects, so behavior does not change. The registry primitives, `Store` and `StoreModel`, `LimitExceededError` and the configuration types still come from the rest of inspect_ai; `Model` is no longer imported ([Host.generate takes separate model and role strings](#hostgenerate-takes-separate-model-and-role-strings)).
 
 ## `Host.generate` takes one model string
+
+*Superseded by [Host.generate takes separate model and role strings](#hostgenerate-takes-separate-model-and-role-strings) (2026-10-07).*
 
 Decided by the maintainer on 2026-10-06, before the first release, so nothing is kept for compatibility. Supersedes the separate `model` and `role` parameters ([Context and Host](#context-and-host), [API friction fixes](#api-friction-fixes)).
 
@@ -436,6 +438,15 @@ Decided by the maintainer on 2026-10-06, before the first release, so nothing is
 - An LLM monitor's factory takes `model: str | None = None` and passes it through (`examples/llm_suspicion.py`).
 - Why: one parameter; an author picks a role (portable: the deployer picks the model and credentials stay on the host) or a model name (quick experiments); hosts implement one rule; sentinel no longer imports `inspect_ai.model.Model`, which a WASM guest could not import; and a `Model` instance could never reach a deployed monitor through a configuration file.
 - The inspect_ai `Host` implementation follows on `feature/sentinel`. A proxy host maps roles to configured endpoints and applies a policy to model names ([proxy-host.md](proxy-host.md), section 3).
+
+## `Host.generate` takes separate model and role strings
+
+Decided by the maintainer on 2026-10-07, before the first release, so nothing is kept for compatibility. Supersedes [Host.generate takes one model string](#hostgenerate-takes-one-model-string); there is no `/`-based rule.
+
+- `Host.generate(input, *, model: str | None = None, role: str | None = None, tools=None, config=None)`. `model` is always a model name, `role` always a model role.
+- With neither, the role is `monitor`. A configured role (given or defaulted) wins. A given role that is not configured falls back to `model` if given, without a warning, as inspect_ai scorers' `model` and `model_role` do. A `model` without a `role` is used as given; the default `monitor` role is consulted only when `model` is None. A role that is not configured with no `model` is up to the host; inspect_ai falls back to the agent's model with the once-per-eval warning naming the role.
+- A `Model` instance for `model` is a `TypeError` pointing at `Task(model_roles=...)` or `--model-role`, and an empty `model` or `role` is a `ValueError`.
+- An LLM monitor's factory takes `model=None, role=None` and passes both through (`examples/llm_suspicion.py`).
 
 ## Deferred
 

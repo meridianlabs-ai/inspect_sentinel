@@ -110,7 +110,7 @@ def no_curl() -> Protocol:
 
 
 @monitor
-def suspicion_monitor(model: str | None = None) -> Monitor:
+def suspicion_monitor(model: str | None = None, role: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         """A monitor: scores the step, never acts on the score."""
         ...
@@ -751,7 +751,7 @@ Each candidate's scores go through the runner, so the log holds every draw, not 
 Three things follow for the rest of the design:
 
 - **`AfterGenerate` carries the request.** `tools`, `tool_choice` and `config` join `input`, so a protocol regenerates with exactly what the agent was given.
-- **`Host.generate` is a real generate.** Messages or a string in, `ModelOutput` out, with `model`, `tools` and `config`. `model` names a role or a model by its form: containing `/` it is a model name, a plain word is a role, and `None` is the `monitor` role. A role resolves through the host's role configuration; in an eval an unconfigured role falls back to the agent's model with a warning, once per eval, naming the role to set. A `Model` instance is not accepted; a configured client goes in `model_roles`. Under a proxy, generating as the agent's model is a re-issued upstream request. `sentinel-deployment.md` carries the signature.
+- **`Host.generate` is a real generate.** Messages or a string in, `ModelOutput` out, with `model`, `role`, `tools` and `config`. `model` is always a model name and `role` always a model role. A configured role wins, then `model`; with neither, the role is `monitor`, and a `model` alone is used without consulting it. In an eval an unconfigured role with no `model` falls back to the agent's model with a warning, once per eval, naming the role to set. A `Model` instance is not accepted; a configured client goes in `model_roles`. Under a proxy, generating as the agent's model is a re-issued upstream request. `sentinel-deployment.md` carries the signature.
 - **Protocol inference has its own usage bucket.** `resample` spends up to `n` times the agent's tokens on the agent's model. It is recorded under a `protocol` bucket in `ModelUsage`, separate from both agent and monitor usage and not charged to the agent's limits, because the protocol chose to spend it. See open question 8.
 
 It is `AfterGenerate`-only, and its signature says so rather than annotating `Step`.
@@ -1478,7 +1478,7 @@ Open: whether `SentinelEvent` replaces `ApprovalEvent`/`ReviewEvent` when the re
 ## Inference, budget, and injection {#inference-budget-and-injection}
 
 - **Budget.** Monitor inference must not be charged to the agent's limits, the same exemption approvers get today (`suspend_token_limit()`, `suspend_turn_limit()` in `approval/_apply.py`). A monitor that terminates a sample for exceeding a token limit its own inference consumed is a trap worth closing up front.
-- **Model role.** The `monitor` role is the default for `context.host.generate()` without `model`, and `"monitor"` is already the example role name in `docs/models.qmd`. Monitor usage should be separable from agent usage in `ModelUsage`.
+- **Model role.** The `monitor` role is the default for `context.host.generate()` with neither `model` nor `role`, and `"monitor"` is already the example role name in `docs/models.qmd`. Monitor usage should be separable from agent usage in `ModelUsage`.
 - **Injection.** A monitor reads model completions, tool arguments, and tool output, all of which are agent-controlled text. `docs/control-channel.qmd` already makes this point for monitoring agents reading the control channel; it applies with more force here, because this monitor's output decides whether the sample stops. Worth a docs section, and the framework should structurally help rather than only warn: [Views](#views) proposes a shared rendering path whose default output is a delimited, clearly-untrusted evidence envelope.
 
 ## Views: what a monitor sees, and how it is rendered {#views}
@@ -1555,7 +1555,7 @@ An LLM monitor built from them:
 
 ``` python
 @monitor
-def suspicion_monitor(model: str | None = None) -> Monitor:
+def suspicion_monitor(model: str | None = None, role: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
@@ -1565,7 +1565,7 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
             history=new_since_last_report(context, step.history),
             messages_as_str=messages_as_str,
         )
-        output = await context.host.generate(prompt, model=model)
+        output = await context.host.generate(prompt, model=model, role=role)
         score, explanation = parse_score(output.completion)
         return Observation(
             suspicion=score,

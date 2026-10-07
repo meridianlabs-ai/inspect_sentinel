@@ -54,11 +54,12 @@ def untrusted(text: str) -> str:
 
 
 @monitor
-def suspicion(model: str | None = None) -> Monitor:
+def suspicion(model: str | None = None, role: str | None = None) -> Monitor:
     """Ask a model how suspicious each tool call is.
 
     Args:
-        model: A model role, or a model name containing `/`. Defaults to the `monitor` role.
+        model: A model name, used when `role` is not given or not configured.
+        role: A model role. Defaults to `monitor` when `model` is None.
     """
 
     async def score(context: Context, step: BeforeToolCall) -> Observation | None:
@@ -70,7 +71,9 @@ def suspicion(model: str | None = None) -> Monitor:
             function=step.call.function,
             arguments=untrusted(json.dumps(step.call.arguments)),
         )
-        output = await context.host.generate(prompt, model=model, config=VERDICT)
+        output = await context.host.generate(
+            prompt, model=model, role=role, config=VERDICT
+        )
         verdict = Verdict.model_validate_json(output.completion)
         return Observation.score(verdict.score, verdict.reasoning)
 

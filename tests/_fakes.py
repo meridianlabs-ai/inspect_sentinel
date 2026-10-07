@@ -27,7 +27,7 @@ class FakeHost:
         self.answers = list(answers)
         self.asked: list[Asked] = []
         self.completion = completion
-        self.models: list[str | None] = []
+        self.models: list[tuple[str | None, str | None]] = []
 
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
         self.asked.append(Asked(step, tuple(choices)))
@@ -38,10 +38,11 @@ class FakeHost:
         input: str | list[ChatMessage],
         *,
         model: str | None = None,
+        role: str | None = None,
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
-        self.models.append(model)
+        self.models.append((model, role))
         return ModelOutput.from_content(model="fake", content=self.completion)
 
 

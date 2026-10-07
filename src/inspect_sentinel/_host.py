@@ -42,16 +42,18 @@ class Host(TypingProtocol):
         input: str | list[ChatMessage],
         *,
         model: str | None = None,
+        role: str | None = None,
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
         """Generate with a model the host resolves.
 
-        `model` names a role or a model, decided by its form: a name containing `/` is a model name, e.g. `openai/gpt-4o-mini`; a plain word is a model role, e.g. `monitor` or `judge`; `None` is the `monitor` role. A role resolves through the host's role configuration (in an eval, `Task(model_roles=...)` or `--model-role`); what an unconfigured role does is up to the host, and inspect_ai falls back to the agent's model with a warning. A role is portable, since the deployer picks its model; a model name suits quick experiments.
+        `model` is a model name, e.g. `openai/gpt-4o-mini`; `role` is a model role, e.g. `monitor` or `trusted`, which resolves through the host's role configuration (in an eval, `Task(model_roles=...)` or `--model-role`). A configured `role` wins; otherwise `model`; with neither, the role is `monitor`. When the role is not configured and no `model` is given, what happens is up to the host, and inspect_ai falls back to the agent's model with a warning. A role is portable, since the deployer picks its model; a model name suits quick experiments.
 
         Args:
             input: A prompt string or a list of chat messages.
-            model: A model role, or a model name containing `/`. Defaults to the `monitor` role.
+            model: A model name, used when `role` is not given or not configured.
+            role: A model role. Defaults to `monitor` when `model` is None.
             tools: Tool definitions to offer the model.
             config: Generation configuration.
         """

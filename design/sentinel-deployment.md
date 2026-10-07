@@ -82,7 +82,8 @@ class Host(typing.Protocol):
         self,
         input: str | list[ChatMessage],
         *,
-        model: str | None = None,  # a role, or a model name containing "/"; None means "monitor"
+        model: str | None = None,  # a model name; used when role is not given or not configured
+        role: str | None = None,   # a model role; neither means "monitor"
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput: ...
@@ -119,7 +120,7 @@ Only `generate` and `ask_human` are built; `fetch`, `get`/`put` and `terminate` 
 
 Known limits of inspect_ai's surfaces: ACP cannot withdraw a permission request when the ask is cancelled, so the card stays and a later click on it is discarded; an ACP ask after a call resets the call's card to pending; and inspect_ai's surfaces return fixed reason text and cannot modify a call.
 
-`model` names a role or a model, decided by its form rather than by lookup order: a string containing `/` is a model name (`openai/gpt-4o-mini`), a plain word is a role (`monitor`, `judge`), and `None` is the `monitor` role. Role names may not contain `/`. A role resolves through the host's role configuration; in an eval an unconfigured role falls back to the agent's model with a warning once per eval naming the role to set, and a misspelled model name gets the provider's usual error. A `Model` instance is not accepted: a configured client goes in the host's role configuration (`model_roles`, which accepts instances), and an instance could not reach a deployed monitor through a configuration file anyway. An author picks a role for a portable monitor, where the deployer chooses the model and the credentials stay with the host, or a model name for a quick experiment. Decided by the maintainer on 2026-10-06, superseding the separate `model` and `role` parameters of 2026-09-30.
+`model` is always a model name (`openai/gpt-4o-mini`) and `role` always a model role (`monitor`, `trusted`), so neither is read as the other and no naming rule is needed. A role resolves through the host's role configuration. A configured `role` wins; otherwise `model`; with neither, the role is `monitor`. A `model` without a `role` is used as given, and the default `monitor` role is not consulted. An unconfigured role with no `model` is up to the host: in an eval it falls back to the agent's model with a warning once per eval naming the role to set. This mirrors inspect_ai scorers' `model` and `model_role`, where `model` is the fallback for an unconfigured role. A `Model` instance is not accepted: a configured client goes in the host's role configuration (`model_roles`, which accepts instances), and an instance could not reach a deployed monitor through a configuration file anyway. An author picks a role for a portable monitor, where the deployer chooses the model and the credentials stay with the host, or a model name for a quick experiment. Decided by the maintainer on 2026-10-07, superseding the single `model` string of 2026-10-06.
 
 `generate` returns a `ModelOutput` rather than a string because a protocol that substitutes an action (`resample`) regenerates with the agent's tools and need the whole response; a text-prompt monitor reads `.completion`. Generating as the agent's own model is, in a proxy, a re-issued upstream request.
 

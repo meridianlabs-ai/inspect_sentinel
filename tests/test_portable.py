@@ -961,19 +961,27 @@ def test_examples(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("model", [None, "judge", "openai/gpt-4o-mini"])
+@pytest.mark.parametrize(
+    "model,role",
+    [
+        (None, None),
+        (None, "judge"),
+        ("openai/gpt-4o-mini", None),
+        ("openai/gpt-4o-mini", "judge"),
+    ],
+)
 async def test_llm_suspicion_passes_model_through(
-    modules_from: Callable[[Path], None], model: str | None
+    modules_from: Callable[[Path], None], model: str | None, role: str | None
 ) -> None:
     modules_from(EXAMPLES)
     suspicion = importlib.import_module("llm_suspicion").suspicion
     host = FakeHost(completion='{"reasoning": "deletes files", "score": 0.9}')
     decision = await run_sentinel(
-        resolve_sentinel(threshold(suspicion(model=model), reject_at=0.8)),
+        resolve_sentinel(threshold(suspicion(model=model, role=role), reject_at=0.8)),
         host_context(host=host),
         before_tool_call("bash", cmd="rm -rf /"),
     )
-    assert host.models == [model]
+    assert host.models == [(model, role)]
     assert decision is not None and decision.action == "reject"
 
 

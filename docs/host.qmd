@@ -10,12 +10,12 @@ This page is an outline: a summary and the sections planned for it, not yet the 
 
 ## Overview
 
-How a monitor or protocol calls a model. Covers `context.host.generate()` and why it is used instead of `get_model()`, the `model=` convention for LLM monitors (a role, or a model name containing `/`), the `monitor` model role and its fallback, how monitor usage is recorded and kept off the agent's limits, and structured output. Outbound HTTP through `fetch` is planned.
+How a monitor or protocol calls a model. Covers `context.host.generate()` and why it is used instead of `get_model()`, the `model=` and `role=` convention for LLM monitors, the `monitor` model role and its fallback, how monitor usage is recorded and kept off the agent's limits, and structured output. Outbound HTTP through `fetch` is planned.
 
 ## Planned Sections
 
 - `context.host.generate()`: prompts, messages, tools and `GenerateConfig`
-- `model=` on an LLM monitor's factory: a plain word names a role, a name containing `/` names a model, and None is the `monitor` role
+- `model=` and `role=` on an LLM monitor's factory: `model` is a model name, `role` a model role; a configured role wins, then `model`, and with neither the role is `monitor`
 - The `monitor` role: `--model-role monitor=...` and `Task(model_roles=...)`, and the fallback to the agent's model
 - Structured output with `ResponseSchema`
 - Usage: monitor calls recorded separately and not charged to the agent's limits
