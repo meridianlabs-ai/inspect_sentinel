@@ -86,9 +86,9 @@ def _format(step: BeforeToolCall) -> str:
 
 # 1 LLM monitor, pydantic response parsed from completion
 @monitor
-def llm_judge(model: str | None = None, role: str = "monitor") -> Monitor:
+def llm_judge(model: str | None = None) -> Monitor:
     async def judge(context: Context, step: BeforeToolCall) -> Observation:
-        output = await context.host.generate(_format(step), model=model, role=role)
+        output = await context.host.generate(_format(step), model=model)
         try:
             verdict = Verdict.model_validate_json(output.completion)
         except ValidationError as ex:

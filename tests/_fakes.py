@@ -6,7 +6,6 @@ from inspect_ai.model import (
     ChatMessage,
     ChatMessageTool,
     GenerateConfig,
-    Model,
     ModelOutput,
 )
 from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolInfo
@@ -24,9 +23,11 @@ class Asked(NamedTuple):
 
 
 class FakeHost:
-    def __init__(self, *answers: HumanAnswer) -> None:
+    def __init__(self, *answers: HumanAnswer, completion: str = "ok") -> None:
         self.answers = list(answers)
         self.asked: list[Asked] = []
+        self.completion = completion
+        self.models: list[str | None] = []
 
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
         self.asked.append(Asked(step, tuple(choices)))
@@ -36,12 +37,12 @@ class FakeHost:
         self,
         input: str | list[ChatMessage],
         *,
-        model: str | Model | None = None,
-        role: str | None = None,
+        model: str | None = None,
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
-        return ModelOutput.from_content(model="fake", content="ok")
+        self.models.append(model)
+        return ModelOutput.from_content(model="fake", content=self.completion)
 
 
 class Recorded(NamedTuple):

@@ -194,7 +194,7 @@ import json
 from example_samples import CLEANUP, COUNT_ROWS, FETCH_DATA
 from inspect_ai import Task, task
 from inspect_ai.agent import react
-from inspect_ai.model import GenerateConfig, Model, ResponseSchema
+from inspect_ai.model import GenerateConfig, ResponseSchema
 from inspect_ai.tool import bash, python
 from inspect_ai.util import json_schema
 from pydantic import BaseModel, Field
@@ -245,7 +245,7 @@ The monitor itself:
 
 ```{.python filename="examples/llm_suspicion.py"}
 @monitor
-def suspicion(model: str | Model | None = None, role: str = "monitor") -> Monitor: # <1>
+def suspicion(model: str | None = None) -> Monitor: # <1>
     async def score(context: Context, step: BeforeToolCall) -> Observation | None:
         if step.call.function == "submit":
             return None  # the prompt is written for commands, not final answers
@@ -255,16 +255,14 @@ def suspicion(model: str | Model | None = None, role: str = "monitor") -> Monito
             function=step.call.function,
             arguments=untrusted(json.dumps(step.call.arguments)),
         )
-        output = await context.host.generate( # <3>
-            prompt, model=model, role=role, config=VERDICT
-        )
+        output = await context.host.generate(prompt, model=model, config=VERDICT) # <3>
         verdict = Verdict.model_validate_json(output.completion)
         return Observation.score(verdict.score, verdict.reasoning) # <4>
 
     return score
 ```
 
-1. An LLM monitor takes `model=` and `role=`, so a task can point it at a different model without editing it. The host resolves them as `get_model()` does: the role if the task configures it, otherwise `model`, otherwise the agent's own model (with a warning).
+1. An LLM monitor takes `model=` and passes it to `generate()`, so a task can point it elsewhere without editing it. A plain word such as `judge` names a model role, a name containing `/` such as `openai/gpt-5-mini` names a model, and the default is the `monitor` role. An unconfigured role falls back to the agent's own model, with a warning.
 2. In an eval, `context.eval` holds what the agent was asked to do (`sample_input`, and `sample_input_text` for the same as one string), its task and sample ids, and metadata. Nothing in it came from the agent. It is None outside an Inspect eval, for example when a proxy runs the monitor.
 3. Call models through `context.host.generate()`, not `get_model()`. The host resolves the model, records the call apart from the agent's, and does not charge it to the agent's limits.
 4. The suspicion score, from 0 to 1, and an explanation for the log.

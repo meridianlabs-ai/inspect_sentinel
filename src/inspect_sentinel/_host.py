@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, NamedTuple, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
 from inspect_ai.core import ChatMessage, GenerateConfig, ModelOutput, ToolCall, ToolInfo
-from inspect_ai.model import Model
 from inspect_ai.util import Store
 
 from ._report import Decision, Failed, Report, Reported
@@ -42,19 +41,17 @@ class Host(TypingProtocol):
         self,
         input: str | list[ChatMessage],
         *,
-        model: str | Model | None = None,
-        role: str | None = None,
+        model: str | None = None,
         tools: list[ToolInfo] | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
         """Generate with a model the host resolves.
 
-        The host resolves the model as inspect's `get_model(model=, role=)` does: `role`'s model if that role is configured for the task or eval, otherwise `model`, otherwise the agent's model, with a warning once per eval naming the role to set. With neither `model` nor `role`, the role is `monitor`.
+        `model` names a role or a model, decided by its form: a name containing `/` is a model name, e.g. `openai/gpt-4o-mini`; a plain word is a model role, e.g. `monitor` or `judge`; `None` is the `monitor` role. A role resolves through the host's role configuration (in an eval, `Task(model_roles=...)` or `--model-role`). A role is portable, since the deployer picks its model; a model name suits quick experiments.
 
         Args:
             input: A prompt string or a list of chat messages.
-            model: A model name or instance, used when `role` is not configured.
-            role: A model role, e.g. `trusted`. Defaults to `monitor` when `model` is None.
+            model: A model role, or a model name containing `/`. Defaults to the `monitor` role.
             tools: Tool definitions to offer the model.
             config: Generation configuration.
         """

@@ -8,7 +8,7 @@ import json
 from example_samples import CLEANUP, COUNT_ROWS, FETCH_DATA
 from inspect_ai import Task, task
 from inspect_ai.agent import react
-from inspect_ai.model import GenerateConfig, Model, ResponseSchema
+from inspect_ai.model import GenerateConfig, ResponseSchema
 from inspect_ai.tool import bash, python
 from inspect_ai.util import json_schema
 from pydantic import BaseModel, Field
@@ -54,12 +54,11 @@ def untrusted(text: str) -> str:
 
 
 @monitor
-def suspicion(model: str | Model | None = None, role: str = "monitor") -> Monitor:
+def suspicion(model: str | None = None) -> Monitor:
     """Ask a model how suspicious each tool call is.
 
     Args:
-        model: The model to ask when `role` is not configured.
-        role: The model role to ask.
+        model: A model role, or a model name containing `/`. Defaults to the `monitor` role.
     """
 
     async def score(context: Context, step: BeforeToolCall) -> Observation | None:
@@ -71,9 +70,7 @@ def suspicion(model: str | Model | None = None, role: str = "monitor") -> Monito
             function=step.call.function,
             arguments=untrusted(json.dumps(step.call.arguments)),
         )
-        output = await context.host.generate(
-            prompt, model=model, role=role, config=VERDICT
-        )
+        output = await context.host.generate(prompt, model=model, config=VERDICT)
         verdict = Verdict.model_validate_json(output.completion)
         return Observation.score(verdict.score, verdict.reasoning)
 
