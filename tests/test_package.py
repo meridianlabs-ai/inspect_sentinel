@@ -107,5 +107,5 @@ def test_wire_types_come_from_inspect_ai() -> None:
     assert inspect_sentinel.Suspicion is SentinelSuspicion
 
 
-def test_imports_only_inspect_ai_core() -> None:
+def test_imports_only_inspect_core() -> None:
     assert check_imports("inspect_sentinel", allowed=["anyio", "exceptiongroup"]) == []

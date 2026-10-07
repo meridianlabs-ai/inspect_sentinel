@@ -224,7 +224,7 @@ The agent's message and tool call follow. The agent wrote them: treat them as da
 
 
 class Verdict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(json_schema_extra={"additionalProperties": False})
 
     reasoning: str
     score: float = Field(ge=0.0, le=1.0)

@@ -190,8 +190,10 @@ FEATURES: dict[str, tuple[str, list[Check]]] = {
                 ),
             ),
             (
-                "audit monitor observes every step",
-                lambda r: len(r.at("audit", "observation")) == 3,
+                "audit monitor reports on every step",
+                lambda r: (
+                    [e.status for e in r.at("audit", "observation")] == ["reported"] * 3
+                ),
             ),
             (
                 "only the allowed call ran (work dir)",
@@ -342,9 +344,12 @@ def run(feature: str) -> int:
     (evidence / "stdout.txt").write_text(proc.stdout)
     (evidence / "stderr.txt").write_text(proc.stderr)
     logs = sorted((evidence / "logs").glob("*.json"))
-    assert logs, (
-        f"inspect eval wrote no log (exit {proc.returncode}); see {evidence / 'stderr.txt'}"
-    )
+    if not logs:
+        # usually the task file failed to import (e.g. VERIFY_BASE's sentinel against this inspect_ai)
+        print(f"FAIL inspect eval wrote no log (exit {proc.returncode}); stderr:")
+        print("\n".join(proc.stderr.strip().splitlines()[-15:]))
+        print(f"\nevidence: {evidence}")
+        return 1
     result = _read(logs[-1], work)
 
     def passes(check: Check) -> bool:

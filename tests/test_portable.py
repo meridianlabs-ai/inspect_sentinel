@@ -148,7 +148,7 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         ),
     ],
 )
-def test_inspect_ai_outside_core_fails(
+def test_inspect_ai_and_unexported_core_names_fail(
     load: Load, setup: str, body: str, reference: str, resolved: str, reason: str
 ) -> None:
     message = refused(load, body, setup)
@@ -383,7 +383,7 @@ def test_pydantic_core_passes(load: Load) -> None:
         ("from inspect_ai.tool import ToolCall", "ToolCall"),
     ],
 )
-def test_inspect_ai_core_and_its_aliases_pass(
+def test_inspect_core_exports_and_their_aliases_pass(
     load: Load, setup: str, body: str
 ) -> None:
     configure(load(monitor_source(body, setup)))
@@ -593,6 +593,11 @@ def watched() -> Monitor:
             "from inspect_ai.model import get_model",
             "from inspect_ai.model import get_model",
         ),
+        (
+            "from inspect_ai.model import ChatMessageUser",
+            "from inspect_ai.model import ChatMessageUser",
+        ),
+        ("import inspect_core._store", "import inspect_core._store"),
         ("import xmlrpc.client", "import xmlrpc.client"),
     ],
 )
@@ -607,7 +612,6 @@ def test_an_import_inside_the_factory_is_judged(
     [
         "import json\njson.dumps({})",
         "from inspect_core import ToolCall",
-        "from inspect_ai.model import ChatMessageUser",
         "import os\nos.path.join('a', 'b')",
     ],
 )

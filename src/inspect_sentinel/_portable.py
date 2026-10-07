@@ -320,6 +320,10 @@ def _judge_import(node: ast.Import | ast.ImportFrom) -> Iterator[_Result]:
             value = _loaded(alias.name)
         elif node.level == 0 and node.module:
             reference = f"from {node.module} import {alias.name}"
+            # the import itself runs in the guest, which cannot import inspect_ai
+            if node.module.partition(".")[0] == "inspect_ai":
+                yield _Result(reference, f"an import from `{node.module}`", _INSPECT)
+                continue
             module = sys.modules.get(node.module)
             value, read_from = _attribute(module, node.module, alias.name)
         else:
