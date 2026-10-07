@@ -589,6 +589,7 @@ def watched() -> Monitor:
             "from inspect_ai.model import get_model",
             "from inspect_ai.model import get_model",
         ),
+        ("import inspect_ai.core._store", "import inspect_ai.core._store"),
         ("import xmlrpc.client", "import xmlrpc.client"),
     ],
 )

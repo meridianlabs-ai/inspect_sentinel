@@ -24,7 +24,7 @@ Preconditions:
 - **Step 2 (/etc).** `guard` and `''` record `bypassed`, `guard/protected` records `reject` (`command mentions /etc`), and the tool error is `` `/etc` is off limits; work only under /work. ``.
 - **Step 3 (curl).** `guard/network` rejects. `guard` and `''` record `reject` with explanation `command uses curl (network: reject; protected: continue)`.
 - **Side effect.** `work files: ['allowed.txt']`. Neither `protected-ran.txt` nor `network-ran.txt` exists.
-- **Proof.** All checks PASS. Under the known `role=` mismatch, only "no sentinel event has status error" fails, because the three `audit` observations are `status=error`.
+- **Proof.** All checks PASS. Under the known `role=` mismatch, "no sentinel event has status error" and "audit monitor reports on every step" fail, because the three `audit` observations are `status=error`.
 
 ## Gotchas
 

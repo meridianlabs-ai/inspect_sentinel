@@ -54,7 +54,7 @@ Each feature in `features/` names its task in `scripts/tasks.py`, the commands t
 
 ### Regression baseline against another checkout
 
-`VERIFY_BASE=<dir>` runs another checkout's `src/` and `examples/` with this checkout's `.venv` and harness. It works by prepending `<dir>/src` to `PYTHONPATH`, ahead of the editable install. Use it to compare a PR against `origin/main`. Extract main without touching git state:
+`VERIFY_BASE=<dir>` runs another checkout's `src/` and `examples/` with this checkout's `.venv` and harness. It works by prepending `<dir>/src` to `PYTHONPATH`, ahead of the editable install. Use it to compare a PR against `origin/main`. The base runs against the inspect_ai installed in this `.venv`, so it must be able to import it: when the PR moves with an inspect_ai change the base can't import (for example, an import path the installed inspect_ai no longer has), `doctor` fails on the import and `run` reports that no log was written. Then compare at an inspect_ai commit both can import, or report that no baseline was possible. Extract main without touching git state:
 
 ```bash
 mkdir -p <scratch>/main && git archive origin/main src examples | tar -x -C <scratch>/main
