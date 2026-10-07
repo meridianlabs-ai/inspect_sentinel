@@ -30,7 +30,7 @@ Lives in inspect_ai's model path and sentinel's step types. Best after inspect_c
 
 ## 3. LLM affordances for monitors
 
-**Priority:** high. **Owner:** epatey. **Design:** [sentinel.md](sentinel.md), "Views" and "Inference, budget, and injection".
+**Priority:** high. **Owner:** epatey. **Design:** [inspect-judge.md](inspect-judge.md); [sentinel.md](sentinel.md), "Views" and "Inference, budget, and injection".
 
 Raised by the maintainer on 2026-10-02, as a peer to workstream 7: what a monitor that calls a model needs, so each author does not rebuild it. Scope:
 
@@ -39,7 +39,7 @@ Raised by the maintainer on 2026-10-02, as a peer to workstream 7: what a monito
 - Prompt caching: keep a stable prefix across steps and avoid changes that break the cache.
 - Helpers that build views for the model, turning the conversation and the call into a prompt.
 
-Prior art: Kai's structured-approval approver in Petri, built on the LLM scanner. Lives in inspect_sentinel over `Host.generate`; shares the view helpers with workstream 7.
+Prior art: Kai's structured-approval approver in Petri, built on the LLM scanner. Shares its model interaction with Scout through a new package, `inspect_judge`, that `Host.generate` uses ([inspect-judge.md](inspect-judge.md), plan of 2026-10-07); shares the view helpers with workstream 7.
 
 ## 4. Host in a proxy
 
