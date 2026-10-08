@@ -8,7 +8,7 @@ A **monitor** observes a step of an agent's execution and reports a suspicion sc
 pip install git+https://github.com/meridianlabs-ai/inspect_sentinel
 ```
 
-This also installs the development version of `inspect_ai` from its `feature/sentinel` branch, which Sentinel tracks until that branch merges.
+This also installs the development version of `inspect_ai` from its `main` branch, which Sentinel tracks until `inspect_ai` releases the sentinel hooks.
 
 The package is under active design. The design documents are in [`design/`](design/); start with [`sentinel-overview.md`](design/sentinel-overview.md).
 
