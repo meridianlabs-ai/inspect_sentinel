@@ -2,7 +2,7 @@
 
 Areas of sentinel that can be owned separately, as of 2026-10-06. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 6), next (7 to 11), lower priority (12 to 14), then done; 5 and 6 were added on 2026-10-05. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred".
 
-Work on your own branches and open PRs into `feature/sentinel`, in inspect_ai and in ts-mono alike. Pushing directly to the shared branch collides.
+inspect_ai #5514 and ts-mono #716 merged on 2026-10-08, so open inspect_ai and ts-mono PRs against `main`.
 
 ## 1. inspect_core
 
@@ -68,8 +68,8 @@ Decide first, as a short review of the public surface:
 Then land, in order:
 
 1. The open sentinel PRs, and any renames the review decides.
-2. ts-mono `feature/sentinel` (#716) into ts-mono `main`.
-3. inspect_ai #5514: point the submodule at the merged ts-mono commit and rebuild the viewer (the land-ts-mono flow), un-dark-launch it (the `--sentinel` option visible, the experimental notes on the API revisited, the sentinel docs pages and a CHANGELOG entry), and merge.
+2. Done 2026-10-08: ts-mono #716 and inspect_ai #5514 merged, dark-launched.
+3. Un-dark-launch in inspect_ai: the `--sentinel` option visible, the experimental notes on the API revisited, the sentinel docs pages and a CHANGELOG entry.
 4. Release inspect_ai with the sentinel hooks, so sentinel can depend on a released version.
 5. Release inspect_sentinel: replace the git dependency on inspect_ai with a version floor (release-pin-deps.yml does this on the Release Please PR, and release-dep-guard.yml blocks a git ref), unpause Release Please, publish to PyPI, and publish the docs.
 6. In inspect_ai, replace the temporary pinned `--no-deps` CI install of sentinel with the released package.

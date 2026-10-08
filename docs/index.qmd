@@ -25,7 +25,7 @@ Install Inspect Sentinel from GitHub:
 pip install git+https://github.com/meridianlabs-ai/inspect_sentinel
 ```
 
-This also installs `inspect_ai` from its `feature/sentinel` branch, which adds `Task(sentinel=...)` and the transcript events and viewer support that sentinels use, until that branch is merged.
+This also installs `inspect_ai` from its `main` branch, which has `Task(sentinel=...)` and the transcript events and viewer support that sentinels use, until `inspect_ai` releases them.
 
 The example below uses an OpenAI model for the agent and an Anthropic model for the monitor, so install those providers' packages and set their API keys:
 
