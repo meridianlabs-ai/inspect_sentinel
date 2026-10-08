@@ -20,6 +20,21 @@ Scout's answer support is also broad, because a scanner can ask for almost anyth
 
 Monitor-facing design in other documents, and how it relates to this plan, is tracked in [inspect-judge-related.md](inspect-judge-related.md).
 
+## Terms
+
+- **Agent:** the AI system being monitored. Never the monitor.
+- **Monitor:** a sentinel function that looks at one step of the agent and returns an `Observation`, or abstains.
+- **Monitor model:** the model a monitor asks for its judgement, through the host.
+- **Step:** one point in the agent's run where monitors are called, such as `BeforeToolCall`.
+- **Subject:** what a monitor judges at a step, decided by the stage: the call, its result, the request, or the reply.
+- **History:** earlier messages of the agent's conversation, passed to the monitor model as context for the subject. The author chooses how many.
+- **Dimension:** one named score, with the prompt text that says what it measures and how to score it.
+- **Answer:** the monitor model's parsed response: the typed value, the raw text, the explanation and the `ModelOutput`. An **answer spec** (`AnswerSpec`) says what kind of answer to ask for. The **answer tool** is a tool the model calls to give a structured answer, so its arguments can be validated.
+- **Host:** everything that runs monitors and implements sentinel's `Host` interface (`generate`, `score`, `ask_human` and the rest). In an eval it is inspect_ai, in one Python process. In a proxy it has two parts:
+  - **The native host:** the proxy's own process, such as the `ext_proc` sidecar, and in the WASM phase a Rust program embedding wasmtime. It holds the credentials and makes the HTTP request to the model provider.
+  - **The Python host code:** Meridian's Python code that implements `Host` on top of the native host. Most of it is shared by all hosts; the author of each host adds a small binding for their proxy. It runs the `inspect_judge` loops. In WASM it runs in the same guest interpreter as the monitors, so it is trusted code, not an isolation boundary.
+- **Raw generate:** what the native host gives the Python host code: one model request in, one `ModelOutput` out. No answer tool and no format retries; those happen in the Python host code. In an eval it is `Model.generate`.
+
 ## Decisions (maintainer)
 
 - **Its own repo,** named `inspect_judge` (tentative).
@@ -28,12 +43,12 @@ Monitor-facing design in other documents, and how it relates to this plan, is tr
 - **Structured answers use an answer tool.** Validation errors go back to the model as tool errors so it can correct itself, as in Scout today. Implemented without `execute_tools`: the loop validates the call's arguments with pydantic and writes the `ChatMessageTool` errors and the replies to context-tool calls itself.
 - **Answer and result are separate.** An answer is the parsed model response: the typed value, the raw answer text, the explanation, and the `ModelOutput`. Scout's `Result` and sentinel's `Observation` are each built from one.
 - **Scout's public API does not change.** Moved names are re-exported where Scout defines them today (`from inspect_judge import X as X`), the pattern used for `inspect_ai.core`. `generate_answer` and `parse_answer` become wrappers: they resolve the model, convert `context_tools`, and build `Result` (references, `value_to_float`).
-- **Monitors get a narrow `Host.score`** (2026-10-08). A monitor can only use an answer that becomes an `Observation`, so sentinel exposes only that: one score, or one per named dimension, from 0.0 to 1.0, with one explanation. Combinations that make no sense to a monitor, such as text, string or label answers, cannot be written. `inspect_judge` stays general; `score` is one use of it ([Host.score](#hostscore)). The structured loop runs on the Python side of the host, never in a non-Python host such as the Rust WASM embedder.
+- **Monitors get a narrow `Host.score`** (2026-10-08). A monitor can only use an answer that becomes an `Observation`, so sentinel exposes only that: one score, or one per named dimension, from 0.0 to 1.0, with one explanation. Combinations that make no sense to a monitor, such as text, string or label answers, cannot be written. `inspect_judge` stays general; `score` is one use of it ([Host.score](#hostscore)). The structured loop runs in the Python host code, never in the native host.
 - **`Host.generate` is unchanged.** `score` sits beside it; `generate` serves monitors with their own flow, such as several turns.
 - **Resample is a host action, not a use of `Host.generate`.** At `AfterGenerate` the host resends the agent's own request: in a proxy, the request body it already holds. A method on the step or on the host; open, with cteague.
 - **A model that never gives a valid answer is a monitor failure** (2026-10-08). When the retries run out, `inspect_judge` returns the answer with no value, as Scout's `generate_answer` returns `parsed=None` today, so Scout needs no change. `Host.score` raises in that case, so the error reaches the runner and is recorded as a failed monitor ([Failure semantics](sentinel.md#failure-semantics)): the format retries play the part `max_retries` plays for transients.
 - **`MessagesPreprocessor`, `message_numbering` and `extract_refs` move into `inspect_judge`** (2026-10-08). Monitors need them and cannot import from Scout, which sits above sentinel. Scout re-exports them, as for the other moved names.
-- **Host code is mostly shared** (2026-10-08). Most of Meridian's host code is common to all hosts, and each host author supplies a binding specific to their proxy. The mechanism is not settled.
+- **Host code is mostly shared** (2026-10-08). Most of the Python host code is common to all hosts, and each host author supplies a binding specific to their proxy. The mechanism is not settled.
 
 ## Host.score
 
@@ -96,9 +111,9 @@ with `{{ answer_prompt }}` either "Score the agent's step above from 0.0 to 1.0 
 
 Text that applies to every dimension, such as the policy or the monitor's role, goes in a custom template, which is fixed text the author writes once. A custom template must include `{{ step }}` and `{{ answer_format }}`; `score` checks this, so a template without them fails at once rather than costing retries. Only these variables are substituted; there are no other template features.
 
-### Inside
+### Inside `score`
 
-On the Python side of the host, using `inspect_judge` (pseudocode):
+In the Python host code, using `inspect_judge` (pseudocode):
 
 ```python
 async def score(self, step, dimensions, *, history=None, template=None, model=None, role=None, config=None) -> Observation:
