@@ -16,9 +16,9 @@ What sentinel needs from Scout's machinery:
 - **The explanation as its own field** of the answer, rather than text parsed out of the reply.
 - **Chunking and reducing, in rare cases:** a monitor that includes the whole transcript can exceed the model's context, so the transcript is split, each part scored, and the scores combined.
 
-Scout's answer support is also broad, because a scanner can ask for almost anything: text, numbers, booleans, labels, arbitrary pydantic models. Sentinel uses only a small part of that range: a monitor turns every answer into an `Observation`, a score or one score per dimension with an explanation. So the answer is an implementation detail of the host, not part of sentinel's API. Monitor authors call [`Host.score`](#hostscore) and never see `AnswerSpec`.
+Scout's answer support is also broad, because a scanner can ask for almost anything: text, numbers, booleans, labels, arbitrary pydantic models. Sentinel uses only a small part of that range: a monitor turns every answer into an `Observation`, a score or one score per dimension with an explanation. So the answer is an implementation detail of the host, not part of sentinel's API. Monitor authors call [`Host.score`](#hostscore).
 
-## Decisions (maintainer, 2026-10-07)
+## Decisions (maintainer)
 
 - **Its own repo,** named `inspect_judge` (tentative).
 - **Portable.** It imports only `inspect_ai.core` and pydantic, so it runs inside a WASM guest. It has its own CI test of everything it imports, because sentinel's `portable=True` check does not follow a package's own imports.
@@ -26,8 +26,8 @@ Scout's answer support is also broad, because a scanner can ask for almost anyth
 - **Structured answers use an answer tool.** Validation errors go back to the model as tool errors so it can correct itself, as in Scout today. Implemented without `execute_tools`: the loop validates the call's arguments with pydantic and writes the `ChatMessageTool` errors and the replies to context-tool calls itself.
 - **Answer and result are separate.** An answer is the parsed model response: the typed value, the raw answer text, the explanation, and the `ModelOutput`. Scout's `Result` and sentinel's `Observation` are each built from one.
 - **Scout's public API does not change.** Moved names are re-exported where Scout defines them today (`from inspect_judge import X as X`), the pattern used for `inspect_ai.core`. `generate_answer` and `parse_answer` become wrappers: they resolve the model, convert `context_tools`, and build `Result` (references, `value_to_float`).
-- **Monitors get a narrow `Host.score`, not `AnswerSpec`** (2026-10-08). A monitor can only use an answer that becomes an `Observation`, so sentinel exposes only that: one score, or one per named dimension, from 0.0 to 1.0, with one explanation. Combinations that make no sense to a monitor, such as text, string or label answers, cannot be written. `inspect_judge` stays general; `score` is one use of it ([Host.score](#hostscore)). The structured loop runs on the Python side of the host, never in a non-Python host such as the Rust WASM embedder.
-- **`Host.generate` is left alone for now.** `score` is added beside it, and raw `generate` stays as the escape hatch for monitors with their own flow, such as several turns.
+- **Monitors get a narrow `Host.score`** (2026-10-08). A monitor can only use an answer that becomes an `Observation`, so sentinel exposes only that: one score, or one per named dimension, from 0.0 to 1.0, with one explanation. Combinations that make no sense to a monitor, such as text, string or label answers, cannot be written. `inspect_judge` stays general; `score` is one use of it ([Host.score](#hostscore)). The structured loop runs on the Python side of the host, never in a non-Python host such as the Rust WASM embedder.
+- **`Host.generate` is unchanged.** `score` sits beside it; `generate` serves monitors with their own flow, such as several turns.
 - **Resample is a host action, not a use of `Host.generate`.** At `AfterGenerate` the host resends the agent's own request: in a proxy, the request body it already holds. A method on the step or on the host; open, with cteague.
 - **A model that never gives a valid answer is a monitor failure** (2026-10-08). When the retries run out, `inspect_judge` returns the answer with no value, as Scout's `generate_answer` returns `parsed=None` today, so Scout needs no change. `Host.score` raises in that case, so the error reaches the runner and is recorded as a failed monitor ([Failure semantics](sentinel.md#failure-semantics)): the format retries play the part `max_retries` plays for transients.
 - **`MessagesPreprocessor`, `message_numbering` and `extract_refs` move into `inspect_judge`** (2026-10-08). Monitors need them and cannot import from Scout, which sits above sentinel. Scout re-exports them, as for the other moved names.
@@ -78,7 +78,7 @@ async def score(self, question, *, dimensions=None, template=None, model=None, r
 
 - `structured_answer` and `_generate_raw` are placeholders: the loop's name is not settled, and the raw generate depends on how the shared host code is packaged.
 - The check that a custom template has both placeholders is left out.
-- `RuntimeError` is a stand-in; there is no dedicated error type.
+- The error type is not settled; `RuntimeError` stands in.
 
 > **Decision (2026-10-08): structured even for one score.** A single score could use Scout's numeric answer (reasoning, then `ANSWER: 0.7` parsed from the text), but structured wins on range checking: pydantic rejects a score outside 0.0 to 1.0 and the tool error tells the model why, whereas the numeric answer does not check the range. It also keeps one code path for one dimension or many. To keep the model reasoning before it scores, the explanation field should come before the score fields in the answer tool's schema; check where Scout puts it. The numeric answer would be worth revisiting only for scores weighted by token probabilities, which tool-call arguments make hard; the narrow API means that would change only the implementation.
 
@@ -152,13 +152,12 @@ Score this tool call on each dimension.
 ```
 
 - The observation's `suspicion` is `{"exfiltration": ..., "sabotage": ...}`.
-- The author never sees `AnswerSpec` or the answer instructions, so the prompt and the spec cannot disagree.
 - Out-of-range scores never reach the monitor: pydantic rejects them inside the loop and the model is asked again.
 - The escaping of the agent's text that `examples/llm_suspicion.py` does is left out for clarity.
 
 ## Related design in other documents
 
-Monitor-facing model and prompt work already designed elsewhere, so this plan builds on it rather than past it. Each row is a placeholder until this plan says how it fits.
+Monitor-facing model and prompt work designed in other documents, and how it relates to this plan.
 
 | Item | Where | Status there | Bearing on this plan |
 |---|---|---|---|
@@ -168,7 +167,7 @@ Monitor-facing model and prompt work already designed elsewhere, so this plan bu
 | `step_as_str`, `briefing_as_str`, `call_as_str`, `result_as_str` | `sentinel.md`; `sentinel-reference.md`; `pr-series.md` (`step_as_str` spec) | Designed, not built. Sentinel keeps `step_as_str`. | Sentinel's, not `inspect_judge`'s. They build the `question` for `score`. |
 | `monitor_prompt(context, step, *, question, answer=..., history=...)` and the evidence envelope | `sentinel.md`, "The helpers" and feature direction 2; `sentinel-reference.md`; open question 17 (default history window) | Designed, not built. | Overlaps `score`: `monitor_prompt` would build the question and drop `answer=`; `score` adds the answer instructions. Its example's `parse_score` is what `score` replaces. |
 | A helper for escaping untrusted agent text | `pr-series.md`, "Views and prompt helpers" | Raised, not designed. | Belongs with the envelope; the examples here leave escaping out. |
-| A structured-verdict helper | `pr-series.md`, "Views and prompt helpers" | Raised, not designed. | `Host.score` is this helper (confirmed 2026-10-08). |
+| A structured-verdict helper | `pr-series.md`, "Views and prompt helpers" | Raised, not designed. | `Host.score` is this helper. |
 | Chunking long inputs and reducing | `workstreams.md` §3 | Scope only. | Rare for monitors (incremental by default, `sentinel.md`). |
 | Prompt caching: a stable prefix across steps | `workstreams.md` §3; `pr-series.md` (`step_as_str` renders oldest first); `sentinel-development.md`, "Cost and parallelism" | Scope and a rendering rule. | The default template puts the question first and the answer instructions last, which keeps the prefix stable. |
 | Monitor inference exempt from the agent's limits; `monitor` default role; usage separable from the agent's | `sentinel.md`, "Inference, budget, and injection" | Decided. | Applies to `score` as to `generate`. |
@@ -180,7 +179,7 @@ Monitor-facing model and prompt work already designed elsewhere, so this plan bu
 
 0. **Record the decisions** in sentinel's design docs: workstream 3, `sentinel.md` "One that generates", and the `Host` paragraph in `sentinel-deployment.md`.
 1. **Golden tests in Scout,** before anything moves, with mockllm: prompts and both retry messages; the structured tool-error text and context-tool replies; attempt counts and `parallel_tool_calls=False`; what each answer kind parses to; `ValidationError` from `parse_answer` against `parsed=None` from `generate_answer`; `RefusalError`; `stop_reason` in metadata.
-2. **The `inspect_judge` repo:** answer specs, answer resolution and parsing (with copies of the private inspect_ai helpers it uses), prompt constants, refusal retry and `RefusalError`, the text loop, the structured loop rewritten as above, the answer type.
+2. **The `inspect_judge` repo:** answer specs, answer resolution and parsing (with copies of the private inspect_ai helpers it uses), prompt constants, refusal retry and `RefusalError`, the text loop, the structured loop rewritten as above, the answer type, and `MessagesPreprocessor`, `message_numbering` and `extract_refs`.
 3. **Scout switches:** re-exports and wrappers; the golden tests pass unchanged.
 4. **Sentinel uses it:** `Host.score`; `examples/llm_suspicion.py` rewritten along the lines of the example.
 5. **Resample as a host action,** with cteague.
@@ -194,7 +193,8 @@ Monitor-facing model and prompt work already designed elsewhere, so this plan bu
 - **Format failures at a low rate.** A monitor whose model sometimes gives no valid answer fails on a steady fraction of steps; that makes `sentinel.md` open question 15 (failure tolerance across many samples) more pressing.
 - **References in `score`:** for now the monitor adds them after the call, `observation.model_copy(update={"references": extract_refs(observation.explanation)})`; `score` could take `extract_refs` instead.
 - **Images in `score`:** `question` is a string, so a monitor of a computer-use agent cannot show the model a screenshot through it; accepting messages means the template must work on messages too.
-- **Scope** beyond the loops, answer specs and the prompt helper: message rendering, chunking and reducing, token counting (`Host` has none).
+- **Scope** beyond step 2's list: chunking and reducing, token counting (`Host` has none).
 - **jinja2,** if the package ends up needing it (its dependency MarkupSafe has an optional compiled part).
-- **The answer type's name, and references:** `[M1]` ids depend on Scout's message numbering, and `Reference` is not in `inspect_ai.core`.
+- **The answer type's name.**
+- **`Reference` is not in `inspect_ai.core`,** and `extract_refs` in `inspect_judge` returns it.
 - **Install weight:** depending on `inspect_ai` for `inspect_ai.core` still installs all of inspect_ai.
