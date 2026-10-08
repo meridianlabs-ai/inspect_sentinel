@@ -303,7 +303,7 @@ How the fields are populated:
 
 A proxy answers requests that are not Inspect evals and have no task, sample or epoch, so it passes `eval=None` rather than stand-ins a monitor could not tell from real values; in an eval, `task`, `sample_id` and `epoch` are always present. Decided by the maintainer on 2026-10-05. A proxy's equivalent of the briefing (a deployment's charter, say) is open; see `proxy-host.md`.
 
-`Task(description=)` and `Sample(description=)` do not exist yet, so in an eval `eval.task_description` and `eval.sample_description` are always None. They are the proposed home for the assignment text; the fallback is a `metadata` convention. See [Open questions](#open-questions) item 13. Structured context goes in `metadata` either way.
+inspect_ai fills `eval.task_description` and `eval.sample_description` from `Task(description=)` and `Sample(description=)` (inspect_ai #5667), in the first release that includes them; they are None when the task or sample sets no description, and under a host that does not provide them. Structured context goes in `metadata`.
 
 ### Reports
 
@@ -1417,7 +1417,7 @@ What keeps the simple case simple:
 10. **Lifecycle stages.** `SampleStart` and `SampleEnd` payloads would give state a place to initialise and a monitor a place to file a final verdict. Cheap now that a stage is a payload type, but it overlaps `Hooks`, and neither travels to a proxy.
 11. **Can a monitor produce a `Score`?** Yes: `as_scorer(as_scanner(monitor, unit="transcript"))`, in `sentinel-development.md`. Scoring is untouched.
 12. **Does `AfterToolCall` get a bridged-agent fallback?** Reconstructing a result from the next request, or declining to fire and saying why.
-13. **Does `Task` / `Sample` grow a `description` field?** A public API change for a general-purpose field monitors need first. If not, the assignment comes from `metadata` by convention and is undiscoverable.
+13. **Does `Task` / `Sample` grow a `description` field?** A public API change for a general-purpose field monitors need first. If not, the assignment comes from `metadata` by convention and is undiscoverable. *Resolved: yes, inspect_ai #5667.*
 14. **Which stages can `human()` serve?** The two tool stages; `Host.ask_human` takes the step, so another stage needs only a new rendering. `AfterGenerate` is plausible and needs a new rendering. `BeforeGenerate` is hard to make meaningful to a person.
 15. **Failure tolerance across many samples.** Whether a monitor failing on 3 of 500 samples should fail the eval, and whether that reuses `fail_on_error`'s shape (`True` / `False` / proportion / count) or needs its own knob.
 16. **Should reading an eval-only surface be recorded?** `target` is opt-in and logged. `step.output` and `step.view` raise the same validity question and get no such treatment. A declared view was judged heavier than the problem; explicit flags on `step_as_str` are the lighter option.
