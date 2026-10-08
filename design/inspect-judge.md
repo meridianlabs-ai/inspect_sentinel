@@ -63,7 +63,7 @@ As in Scout's `llm_scanner`, a default template with well-known variables that `
 
 | Variable | Contents |
 |---|---|
-| `{{ task }}` | the task the agent was given, from the eval context the host holds; empty in a proxy, where there is none |
+| `{{ task }}` | the task the agent was given, from whatever task information the host has: the eval context in an eval; in a proxy, perhaps facts about the task it can fetch on demand (a possible later feature, not designed); empty when the host has none |
 | `{{ history }}` | the `history` messages, numbered so the explanation can cite them; empty when `history` is `None` |
 | `{{ step }}` | the step's subject, rendered with `step_as_str` |
 | `{{ answer_prompt }}` | one fixed line for a single score, another for several dimensions |
