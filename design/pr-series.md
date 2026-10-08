@@ -454,12 +454,6 @@ Decided by the maintainer on 2026-10-07, before the first release, so nothing is
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands. Grouped by priority, decided by the maintainer on 2026-10-02, in the order to take them.
 
-### Next: interface changes
-
-Do as soon as possible.
-
-- **`Task(description=)` and `Sample(description=)` in inspect_ai.** No longer held. A separate inspect_ai PR against `main`, not part of the cleanup: `Task(description: str | None = None)`, recorded in the log header and carried by `task_with()` and eval sets; `Sample(description: str | None = None)`, recorded per sample, with `FieldSpec(description=)`. Decided: no default from the `@task` docstring, and a `description` column in `evals_df` and `samples_df`. With it, the schema and ts-mono types regenerated, round-trip tests, docs and a CHANGELOG entry; showing the descriptions in the viewer is a follow-up (below). Opened as inspect_ai #5667 (Fixes #5666), with ts-mono #733 for the types; `evals_df` names its column `task_description`, matching the other `task_*` columns. Then `feature/sentinel` fills `Context.eval.task_description` and `Context.eval.sample_description`, which until then are always None in an eval.
-
 ### Then: helpers for tool-stage rules
 
 - **Views and prompt helpers** (`monitor_prompt` and the view helpers): designed, not yet built. Add with them a structured-verdict helper, since today a structured verdict takes a pydantic model, a `GenerateConfig` with `ResponseSchema` and `json_schema`, `model_validate_json` and `Observation.score`; and helpers for escaping untrusted agent text and laying out a trusted/untrusted prompt, which `examples/llm_suspicion.py` writes by hand. Raised by the maintainer on 2026-10-02: views of the messages (for example the last six); the model-facing helpers are [workstreams.md](workstreams.md), workstream 3. The message views come first. The rule helpers, including the call's arguments as text, are done (see "Helpers for rules" above).

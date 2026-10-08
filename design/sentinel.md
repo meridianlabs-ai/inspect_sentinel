@@ -236,15 +236,15 @@ class EvalContext:
 
     task_description: str | None
     """What agents in this setting are asked to do, and what is in bounds.
-    None until inspect_ai has `Task(description=)`."""
+    None when the task sets no `description` or the host does not provide it."""
 
     # this particular instance of it
     sample_id: str | int
     epoch: int
 
     sample_description: str | None
-    """What is distinctive about this instance. None until inspect_ai has
-    `Sample(description=)`."""
+    """What is distinctive about this instance. None when the sample sets no
+    `description` or the host does not provide it."""
 
     sample_input: str | list[ChatMessage]
     """The prompt this agent was given; `step.input` is what the model was sent."""
