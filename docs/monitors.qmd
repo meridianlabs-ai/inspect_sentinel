@@ -22,6 +22,7 @@ How to write a monitor: a `@monitor` factory returning a function that takes a `
 - Abstaining with `None`
 - Monitor or protocol? Keeping thresholds out of monitors
 - Several functions in one monitor: `MonitorGroup`
+- An LLM monitor's `model=` and `role=` parameters, passed to `context.host.generate()`: a model name and a model role (see [The Host and Model Roles](host.qmd))
 - Prompting an LLM monitor safely: separating instructions from evidence; prompt helpers such as `monitor_prompt()` (planned)
 - Failures: a monitor that raises is recorded as failed and the step goes on; a protocol that reads its scores fails unless it checks `observations.failed`
 - Testing a monitor

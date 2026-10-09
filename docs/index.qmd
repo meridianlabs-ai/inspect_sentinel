@@ -25,7 +25,7 @@ Install Inspect Sentinel from GitHub:
 pip install git+https://github.com/meridianlabs-ai/inspect_sentinel
 ```
 
-This also installs `inspect_ai` from its `feature/sentinel` branch, which adds `Task(sentinel=...)` and the transcript events and viewer support that sentinels use, until that branch is merged.
+This also installs `inspect_ai` from its `main` branch, which has `Task(sentinel=...)` and the transcript events and viewer support that sentinels use, until `inspect_ai` releases them.
 
 The example below uses an OpenAI model for the agent and an Anthropic model for the monitor, so install those providers' packages and set their API keys:
 
@@ -249,7 +249,7 @@ The monitor itself:
 
 ```{.python filename="examples/llm_suspicion.py"}
 @monitor
-def suspicion(model: str | None = None, role: str = "monitor") -> Monitor: # <1>
+def suspicion(model: str | None = None, role: str | None = None) -> Monitor: # <1>
     async def score(context: Context, step: BeforeToolCall) -> Observation | None:
         if step.call.function == "submit":
             return None  # the prompt is written for commands, not final answers
@@ -268,7 +268,7 @@ def suspicion(model: str | None = None, role: str = "monitor") -> Monitor: # <1>
     return score
 ```
 
-1. An LLM monitor takes `model=` and `role=`, so a task can point it at a different model without editing it. The host resolves them as `get_model()` does: the role if the task configures it, otherwise `model`, otherwise the agent's own model (with a warning).
+1. An LLM monitor takes `model=` and `role=` and passes them to `generate()`, so a task can point it elsewhere without editing it. `role` is a model role such as `trusted`, `model` a model name such as `openai/gpt-5-mini`. A configured role wins, then `model`; with neither, the role is `monitor`. An unconfigured role with no `model` falls back to the agent's own model, with a warning.
 2. In an eval, `context.eval` holds what the agent was asked to do (`sample_input`, and `sample_input_text` for the same as one string), its task and sample ids, and metadata. Nothing in it came from the agent. It is None outside an Inspect eval, for example when a proxy runs the monitor.
 3. Call models through `context.host.generate()`, not `get_model()`. The host resolves the model, records the call apart from the agent's, and does not charge it to the agent's limits.
 4. The suspicion score, from 0 to 1, and an explanation for the log.

@@ -18,7 +18,7 @@ This directory is the maintained source for verifying inspect_sentinel's user-fa
 ## Proof and skip reporting
 
 - Proof is a run whose `report.txt` shows all PASS, together with that run's `evidence/` path.
-- A check that fails because of the `role=` mismatch flagged by `doctor` is reported as that, with the error string from `report.txt`, not as verified and not as a new regression.
+- A check that fails because of a `Host.generate` mismatch flagged by `doctor` is reported as that, with the error string from `report.txt`, not as verified and not as a new regression.
 - A regression claim, or a no-regression claim, names the base checkout (`VERIFY_BASE`) and shows the `diff` of the two `report.txt` files.
 - Do not report a feature as verified through a different feature's run.
 

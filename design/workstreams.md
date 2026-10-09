@@ -2,7 +2,7 @@
 
 Areas of sentinel that can be owned separately, as of 2026-10-06. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 6), next (7 to 11), lower priority (12 to 14), then done; 5 and 6 were added on 2026-10-05. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred".
 
-Work on your own branches and open PRs into `feature/sentinel`, in inspect_ai and in ts-mono alike. Pushing directly to the shared branch collides.
+inspect_ai #5514 and ts-mono #716 merged on 2026-10-08, so open inspect_ai and ts-mono PRs against `main`.
 
 ## 1. inspect_core
 
@@ -14,7 +14,7 @@ Extract Inspect's wire types (`ChatMessage`, `ToolCall`, `ModelOutput` and what 
 - `@monitor` and `@protocol` register through the shared registry with no import-order hazard.
 - The wire types get a contract, which the proxy and codegen work in [sentinel-deployment.md](sentinel-deployment.md) need.
 - Sentinel can release against a version floor of the leaf package rather than an inspect_ai branch.
-- A WASM guest can run `run_sentinel` with only `inspect_ai.core`, pydantic and anyio. The WASM sidecar spike (sentinel #58, 2026-10-06) needed about 250 lines of stand-ins for what sentinel imports beyond core, and an empty `inspect_ai/__init__`. Making `inspect_ai.core` importable on its own and sentinel's other imports lazy or interface-based is part of this workstream, not a separate sentinel PR (maintainer, 2026-10-06): the registry primitives into core (`SentinelAction` and `SentinelSuspicion` already moved, sentinel #60), a host-supplied store interface with `StoreModel` in core, `LimitExceededError` lazy or checked by name, `Model` `TYPE_CHECKING`-only, and configuration loading (`SentinelConfig`, `SentinelEntry`, fsspec, yaml) split off the runner's import path. [inspect-core.md](inspect-core.md), "What a WASM guest imports", gives what each import is used for and the proposed change.
+- A WASM guest can run `run_sentinel` with only `inspect_ai.core`, pydantic and anyio. The WASM sidecar spike (sentinel #58, 2026-10-06) needed about 250 lines of stand-ins for what sentinel imports beyond core, and an empty `inspect_ai/__init__`. Making `inspect_ai.core` importable on its own and sentinel's other imports lazy or interface-based is part of this workstream, not a separate sentinel PR (maintainer, 2026-10-06): the registry primitives into core (`SentinelAction` and `SentinelSuspicion` already moved, sentinel #60), a host-supplied store interface with `StoreModel` in core, `LimitExceededError` lazy or checked by name, and configuration loading (`SentinelConfig`, `SentinelEntry`, fsspec, yaml) split off the runner's import path. [inspect-core.md](inspect-core.md), "What a WASM guest imports", gives what each import is used for and the proposed change. `Model` is no longer imported, since `Host.generate` takes a model name as a string (2026-10-06).
 
 inspect_core is `inspect_ai.core`, a subpackage of inspect_ai (UK AISI). When names move there, inspect_sentinel and inspect_ai re-export them, so user imports do not change (maintainer, 2026-10-02; the subpackage form per [inspect-core.md](inspect-core.md), open question 2). Sentinel imports its wire types from it since sentinel #59 and #60 (2026-10-06).
 
@@ -68,8 +68,8 @@ Decide first, as a short review of the public surface:
 Then land, in order:
 
 1. The open sentinel PRs, and any renames the review decides.
-2. ts-mono `feature/sentinel` (#716) into ts-mono `main`.
-3. inspect_ai #5514: point the submodule at the merged ts-mono commit and rebuild the viewer (the land-ts-mono flow), un-dark-launch it (the `--sentinel` option visible, the experimental notes on the API revisited, the sentinel docs pages and a CHANGELOG entry), and merge.
+2. Done 2026-10-08: ts-mono #716 and inspect_ai #5514 merged, dark-launched.
+3. Un-dark-launch in inspect_ai: the `--sentinel` option visible, the experimental notes on the API revisited, the sentinel docs pages and a CHANGELOG entry.
 4. Release inspect_ai with the sentinel hooks, so sentinel can depend on a released version.
 5. Release inspect_sentinel: replace the git dependency on inspect_ai with a version floor (release-pin-deps.yml does this on the Release Please PR, and release-dep-guard.yml blocks a git ref), unpause Release Please, publish to PyPI, and publish the docs.
 6. In inspect_ai, replace the temporary pinned `--no-deps` CI install of sentinel with the released package.

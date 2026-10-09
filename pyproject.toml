@@ -25,9 +25,8 @@ dependencies = [
     # The git ref never reaches PyPI: release-pin-deps.yml rewrites it to a
     # `>=<latest>` floor on the Release Please release PR, and
     # release-dep-guard.yml blocks the release if it is still a git ref.
-    # Currently the feature/sentinel-eric branch, cut from feature/sentinel, which
-    # carries the "monitor" and "protocol" registry types and the inspect_ai.core
-    # modules sentinel imports; back to main when it merges.
+    # Currently the feature/sentinel-eric branch, which adds to inspect_ai main
+    # the inspect_ai.core modules sentinel imports; back to main when it merges.
     "inspect-ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@feature/sentinel-eric",
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.

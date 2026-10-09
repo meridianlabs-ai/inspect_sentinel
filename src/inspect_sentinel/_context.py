@@ -18,7 +18,7 @@ class EvalContext:
     """Task name."""
 
     task_description: str | None
-    """What agents in this setting are asked to do. None until inspect_ai has `Task(description=)`."""
+    """What agents in this setting are asked to do: the task's `description`. None when the task sets none or the host does not provide it."""
 
     sample_id: str | int
     """Dataset sample identifier."""
@@ -27,7 +27,7 @@ class EvalContext:
     """Epoch of the sample: 1 unless the task runs several."""
 
     sample_description: str | None
-    """What is distinctive about this instance. None until inspect_ai has `Sample(description=)`."""
+    """What is distinctive about this instance: the sample's `description`. None when the sample sets none or the host does not provide it."""
 
     sample_input: str | list[ChatMessage]
     """The sample's input: the assignment the agent was given. Judge a step against `step.input`, which is exactly what the model was sent; use this for what the agent was asked to do."""

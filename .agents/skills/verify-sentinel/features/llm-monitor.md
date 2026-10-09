@@ -4,7 +4,7 @@ A monitor asks a model how suspicious each call is and returns a score. It canno
 
 ## Sub-features
 
-- `monitor-host-generate`: the monitor calls `context.host.generate(prompt, model=None, role="monitor", config=...)`, and the host answers with the `monitor` role's model.
+- `monitor-host-generate`: the monitor calls `context.host.generate(prompt, model=None, role=None, config=...)`; with neither, the host uses the `monitor` role's model.
 - `monitor-observation`: the monitor's score is recorded as an `observation` at path `suspicion`.
 - `threshold-decision`: `threshold` records `continue` below 0.8 and `reject` at or above it, at the root path.
 - `monitor-failure`: if the monitor raises, it is recorded with `status=error`, and `threshold` reading its scores raises `MonitorFailedError`, which fails the sample (design/sentinel.md, "Failure semantics").
@@ -27,6 +27,6 @@ Preconditions:
 
 ## Gotchas
 
-- Known mismatch: at inspect_ai `feature/sentinel-eric` 8ec741a58, `_Host.generate` takes `model` but no `role`, and `examples/llm_suspicion.py` passes `role=`. The monitor fails with `TypeError: _Host.generate() got an unexpected keyword argument 'role'`. The sample errors with `MonitorFailedError` on the first call, so no tool runs and `work/` is empty. This happens on origin/main too: it is not a regression from the PR. On this failure path, the `monitor-failure` sub-feature is what the run verifies.
+- When `doctor` flags a `Host.generate` mismatch, the monitor fails with a `TypeError` naming the parameter. The sample errors with `MonitorFailedError` on the first call, so no tool runs and `work/` is empty. On that failure path, the `monitor-failure` sub-feature is what the run verifies.
 - The mock monitor reads only the part of the prompt after `<agent>`. The task text above it lists every scripted command, including curl.
 - `inspect eval` exits 0 even when the sample errors. Read `log status`.

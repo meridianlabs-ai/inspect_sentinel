@@ -11,6 +11,7 @@ from inspect_ai.core import (
     ToolCall,
     ToolCallError,
     ToolCallView,
+    ToolChoice,
     ToolInfo,
 )
 
@@ -26,9 +27,11 @@ class Asked(NamedTuple):
 
 
 class FakeHost:
-    def __init__(self, *answers: HumanAnswer) -> None:
+    def __init__(self, *answers: HumanAnswer, completion: str = "ok") -> None:
         self.answers = list(answers)
         self.asked: list[Asked] = []
+        self.completion = completion
+        self.models: list[tuple[str | None, str | None]] = []
 
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
         self.asked.append(Asked(step, tuple(choices)))
@@ -41,9 +44,11 @@ class FakeHost:
         model: str | None = None,
         role: str | None = None,
         tools: list[ToolInfo] | None = None,
+        tool_choice: ToolChoice | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
-        return ModelOutput.from_content(model="fake", content="ok")
+        self.models.append((model, role))
+        return ModelOutput.from_content(model="fake", content=self.completion)
 
 
 class Recorded(NamedTuple):

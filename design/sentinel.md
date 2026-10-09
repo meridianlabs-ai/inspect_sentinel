@@ -110,7 +110,7 @@ def no_curl() -> Protocol:
 
 
 @monitor
-def suspicion_monitor(model: str | None = None) -> Monitor:
+def suspicion_monitor(model: str | None = None, role: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         """A monitor: scores the step, never acts on the score."""
         ...
@@ -236,15 +236,15 @@ class EvalContext:
 
     task_description: str | None
     """What agents in this setting are asked to do, and what is in bounds.
-    None until inspect_ai has `Task(description=)`."""
+    None when the task sets no `description` or the host does not provide it."""
 
     # this particular instance of it
     sample_id: str | int
     epoch: int
 
     sample_description: str | None
-    """What is distinctive about this instance. None until inspect_ai has
-    `Sample(description=)`."""
+    """What is distinctive about this instance. None when the sample sets no
+    `description` or the host does not provide it."""
 
     sample_input: str | list[ChatMessage]
     """The prompt this agent was given; `step.input` is what the model was sent."""
@@ -733,7 +733,11 @@ def resample(monitors: Monitor | MonitorGroup | Monitors, threshold: float, n: i
         best_score, best_message = score, step.output.message
         for _ in range(n):
             output = await context.host.generate(
-                step.input, model=step.model, tools=step.tools, config=step.config
+                step.input,
+                model=step.model,
+                tools=step.tools,
+                tool_choice=step.tool_choice,
+                config=step.config,
             )
             reports = await run_monitors(monitors, context, replace(step, output=output))
             candidate = reports.max_suspicion() or 0.0
@@ -751,7 +755,7 @@ Each candidate's scores go through the runner, so the log holds every draw, not 
 Three things follow for the rest of the design:
 
 - **`AfterGenerate` carries the request.** `tools`, `tool_choice` and `config` join `input`, so a protocol regenerates with exactly what the agent was given.
-- **`Host.generate` is a real generate.** Messages or a string in, `ModelOutput` out, with `model`, `role`, `tools` and `config`. `model` is always a model name and `role` always a role, so a role name can never be mistaken for a model name. As with inspect's `get_model(model=, role=)`, a configured role wins, then `model`, then the agent's model with a warning, once per eval, naming the role to set; with neither, the role is `monitor`. Under a proxy, generating as the agent's model is a re-issued upstream request. `sentinel-deployment.md` carries the signature.
+- **`Host.generate` is a real generate.** Messages or a string in, `ModelOutput` out, with `model`, `role`, `tools`, `tool_choice` and `config`. `model` is always a model name and `role` always a model role. A configured role wins, then `model`; with neither, the role is `monitor`, and a `model` alone is used without consulting it. In an eval an unconfigured role with no `model` falls back to the agent's model with a warning, once per process for each role, naming the role to set. A `Model` instance is not accepted; a configured client goes in `model_roles`. Under a proxy, generating as the agent's model is a re-issued upstream request. `sentinel-deployment.md` carries the signature.
 - **Protocol inference has its own usage bucket.** `resample` spends up to `n` times the agent's tokens on the agent's model. It is recorded under a `protocol` bucket in `ModelUsage`, separate from both agent and monitor usage and not charged to the agent's limits, because the protocol chose to spend it. See open question 8.
 
 It is `AfterGenerate`-only, and its signature says so rather than annotating `Step`.
@@ -1177,11 +1181,11 @@ One thing it does **not** buy, which is worth stating rather than implying: a cl
 
 ### Where the decorator lives
 
-A monitor author should be able to depend on the wire types and nothing else. That works without a bridge: the registry is a leaf. `inspect_ai.core._registry` imports only the stdlib, pydantic and other `core` modules, and `registry_create`, whose overloads name `Task`, `Agent`, `Solver`, `Tool` and the rest, stays in `inspect_ai._util.registry`. `registry_tag` is two `setattr` calls and `extract_named_params` is stdlib `inspect.signature().bind()`.
+A monitor author should be able to depend on the wire types and nothing else. That works without a bridge: `_util/registry.py` is already a leaf — its runtime imports are stdlib plus pydantic plus four small `_util` modules, and every reference to `Task`, `Agent`, `Approver`, `Solver`, `Tool` and the rest is `TYPE_CHECKING`-only, present for `registry_create`'s overloads. `registry_tag` is two `setattr` calls and `extract_named_params` is stdlib `inspect.signature().bind()`.
 
-So the registry primitives live in `inspect_ai.core` alongside the types (`inspect-core.md`), and `@monitor` defined there registers for real — no marker attributes, no deferred drain, no import-ordering hazard. Module identity gives a shared singleton registry: `inspect_ai` imports the same module object, so there is one dict rather than two to keep coherent.
+So the registry primitives move into `inspect_core` alongside the types (`inspect-core.md`), and `@monitor` defined there registers for real — no marker attributes, no deferred drain, no import-ordering hazard. Module identity gives a shared singleton registry: `inspect_ai` imports the same module object, so there is one dict rather than two to keep coherent.
 
-Two details. `ensure_entry_points()` moves with the registry. It loads plugin entry points and can therefore import arbitrary third-party packages at runtime; a bundle has no installed entry points, so there it finds none. And because `@monitor` decorates a factory, parameter capture is the ordinary `registry_tag(factory, monitor, info, *args, **kwargs)` call that `@scorer` already makes; route it through the existing `extract_named_params` rather than reimplementing it, since that carries the VAR_KEYWORD flattening from #4374 which makes capture-then-replay idempotent.
+Two details. `ensure_entry_points()`, called from `registry.py`, loads plugin entry points and can therefore import arbitrary third-party packages at runtime — it has to be injectable or a no-op in the leaf. And because `@monitor` decorates a factory, parameter capture is the ordinary `registry_tag(factory, monitor, info, *args, **kwargs)` call that `@scorer` already makes; route it through the existing `extract_named_params` rather than reimplementing it, since that carries the VAR_KEYWORD flattening from #4374 which makes capture-then-replay idempotent.
 
 ## State {#state}
 
@@ -1221,7 +1225,7 @@ Injecting the store is also what keeps `StoreModel` usable outside an eval. `Sto
 
 Neither is there a `monitor_host()`, and here the argument above is reinforced by a second one. The store case rests only on helpers being able to take a parameter; the host case rests on that **and** on ambient authority being a thing to avoid on its own terms. The value of `context.host` is that it is the only portable route out of a monitor — everything a portable monitor can do to the outside world is enumerable from one interface — and any global reopens that. Today it carries inference and asking a person (`generate` and `ask_human`); outbound HTTP is planned as `fetch` through named endpoints (`sentinel-deployment.md`). Meanwhile an in-process monitor may call inspect_ai APIs directly, such as `sandbox()` or `logging`, if it is declared `portable=False`, at the cost of portability to a proxy.
 
-The leak that already exists is `get_model()`. A monitor can call it and bypass `context.host` entirely, and the `portable=True` check refuses it. There is in-process value in routing through the host too, not only portability: `context.host.generate()` can default to `role="monitor"` and let the host record monitor inference distinctly from the agent's, neither of which a direct `get_model()` gets.
+The leak that already exists is `get_model()`. A monitor can call it and bypass `context.host` entirely, and the `portable=True` check refuses it. There is in-process value in routing through the host too, not only portability: `context.host.generate()` can default to the `monitor` role and let the host record monitor inference distinctly from the agent's, neither of which a direct `get_model()` gets.
 
 
 ### Per-task
@@ -1335,7 +1339,7 @@ The nested key is the factory's parameter name — `monitors:` for the protocols
 
 There is no `tools` key. An earlier draft borrowed it from `ApprovalPolicy` to scope the tool stages, but it was a wart: a `BeforeGenerate` monitor is not tool-scoped and would fire regardless, so the key could only mean "which tools this applies to, if it watches a tool stage at all". A monitor that cares about some tools filters on `step.call.function` itself, which it can already do and which is more honest about a monitor not being a per-tool policy. An entry takes `name`, `params`, `version`, `meta` and nested keys only, so a `tools:` carried over from an approval policy is an error, not a param.
 
-`sentinel_from_config` builds a configuration through `create_registry_object`, nested entries first, and returns the instance, list or mapping unresolved, for `resolve_sentinel`. It takes a bare registered name or the parsed shape. The host reads configuration files: inspect_ai reads a YAML or JSON file whose only key is `sentinel:` and passes that value. A name is looked up as both a monitor and a protocol, which is unambiguous because `@monitor` and `@protocol` refuse a name already registered as the other kind. A bare name that matches nothing exactly is then tried in `inspect_sentinel`, so `name: threshold` finds the shipped protocol, and a local `observe_only` shadows the shipped one, which stays reachable as `inspect_sentinel/observe_only`. A repeated key in a file is an error rather than the last one winning, which the host checks when it reads the file. Since `name`, `params`, `version` and `meta` are an entry's own keys, the decorators refuse a factory with a parameter of one of those names. Every error names the entry, as in `sentinel.attempt.children[1]`. `config_from_sentinel` is the inverse, from each instance's registry name, params and version, with a param holding monitors or protocols written as nested entries; it is what the log records and `eval_retry` rebuilds from. An entry records `version` when its factory's is not 0, and building an entry whose recorded version differs from the installed factory's logs a warning naming both and builds anyway. The shape is `SentinelConfig`, a pydantic model over one `SentinelEntry` (`name`, `params`, an optional `version`, an optional `meta` reserved for fields added later, which readers keep without interpreting and nothing writes yet, and nested entries), a list of them or a mapping of instance names to them; it lives in `inspect_ai.core` (and `inspect_ai.log` exports it), so logs load without `inspect_sentinel`.
+`sentinel_from_config` builds a configuration through `create_registry_object`, nested entries first, and returns the instance, list or mapping unresolved, for `resolve_sentinel`. It takes a YAML or JSON file whose only key is `sentinel:`, a bare registered name, or the parsed shape. A name is looked up as both a monitor and a protocol, which is unambiguous because `@monitor` and `@protocol` refuse a name already registered as the other kind. A bare name that matches nothing exactly is then tried in `inspect_sentinel`, so `name: threshold` finds the shipped protocol, and a local `observe_only` shadows the shipped one, which stays reachable as `inspect_sentinel/observe_only`. A repeated key in a file is an error rather than the last one winning. Since `name`, `params`, `version` and `meta` are an entry's own keys, the decorators refuse a factory with a parameter of one of those names. Every error names the entry, as in `sentinel.attempt.children[1]`. `config_from_sentinel` is the inverse, from each instance's registry name, params and version, with a param holding monitors or protocols written as nested entries; it is what the log records and `eval_retry` rebuilds from. An entry records `version` when its factory's is not 0, and building an entry whose recorded version differs from the installed factory's logs a warning naming both and builds anyway. The shape is `SentinelConfig`, a pydantic model over one `SentinelEntry` (`name`, `params`, an optional `version`, an optional `meta` reserved for fields added later, which readers keep without interpreting and nothing writes yet, and nested entries), a list of them or a mapping of instance names to them; it lives in inspect_ai (`inspect_ai.log`), so logs load without `inspect_sentinel`.
 
 ## Failure semantics {#failure-semantics}
 
@@ -1381,7 +1385,7 @@ Composition is the protocol's job: it collects reports from every configured chi
 
 **Aggregating suspicion.** `Observation`s from several monitors have to combine before thresholding. Max is the obvious default; per-dimension max is the right shape when scores are structured, since dimensions are meant to be independent (see [Prior art](#prior-art)). Weighted combinations and requiring agreement across monitors are protocol policy, not framework behavior.
 
-**Aggregating decisions.** Across `Decision`s, the strongest wins: `terminate` \> `reject` \> `modify` \> `escalate` \> `continue`. `escalate` means "I decline to decide; someone above should", so a peer's `continue` cannot override it, while anything stronger still wins, and a layer whose strongest decision is `escalate` escalates. At the root there is nobody to hand an `escalate` to. The host proceeds as for `continue`, records the escalate as the root's decision and warns once per eval that `sequential([..., human()])` sends escalations to a person. That is the current behaviour and is under review (see [Open questions](#open-questions) item 24): rejecting instead fails closed, as approval does when every approver escalates, at the cost of turning every unsure rule into a blocked call. One `Action` ordering covers all four stages, so this is a single comparison function rather than one per stage — it is `Decisions.strongest()`. Claude Code hooks land the same way — all hooks run in parallel, any `deny` blocks. `terminate` additionally cancels siblings still running, since nothing can outrank it.
+**Aggregating decisions.** Across `Decision`s, the strongest wins: `terminate` \> `reject` \> `modify` \> `escalate` \> `continue`. `escalate` means "I decline to decide; someone above should", so a peer's `continue` cannot override it, while anything stronger still wins, and a layer whose strongest decision is `escalate` escalates. At the root there is nobody to hand an `escalate` to. The host proceeds as for `continue`, records the escalate as the root's decision and warns once per process that `sequential([..., human()])` sends escalations to a person. That is the current behaviour and is under review (see [Open questions](#open-questions) item 24): rejecting instead fails closed, as approval does when every approver escalates, at the cost of turning every unsure rule into a blocked call. One `Action` ordering covers all four stages, so this is a single comparison function rather than one per stage — it is `Decisions.strongest()`. Claude Code hooks land the same way — all hooks run in parallel, any `deny` blocks. `terminate` additionally cancels siblings still running, since nothing can outrank it.
 
 **A final decision is not a vote**: a protocol may combine advisory decisions however it likes, but a child that calls [`decide_final()`](#authoritative-reports) ends the step before the protocol combines anything.
 
@@ -1555,7 +1559,7 @@ An LLM monitor built from them:
 
 ``` python
 @monitor
-def suspicion_monitor(model: str | None = None, role: str = "monitor") -> Monitor:
+def suspicion_monitor(model: str | None = None, role: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
@@ -1565,9 +1569,7 @@ def suspicion_monitor(model: str | None = None, role: str = "monitor") -> Monito
             history=new_since_last_report(context, step.history),
             messages_as_str=messages_as_str,
         )
-        output = await context.host.generate(
-            prompt, model=model, role=role
-        )
+        output = await context.host.generate(prompt, model=model, role=role)
         score, explanation = parse_score(output.completion)
         return Observation(
             suspicion=score,
@@ -1819,5 +1821,5 @@ ordered composition should be the default (no — see [Two compositions](#two-co
 21.  **What is the umbrella called?** Settled: `sentinel`, for the feature, `Task(sentinel=)`, the package and the event, with `monitor` kept for the scorer and `protocol` for the decider as the control literature and ControlArena use them. `Task(monitor=)` held protocols and rules and never a bare monitor, and reviewers read it as "the monitor plus the protocol". Renaming the scorer instead (`observer`) would have broken the literature's pair; `ranger`, `warden` and `oversight` were the runners-up for the umbrella.
 22.  **Where does `conversation` come from, and is `history` eager?** The id wants minting by the loop that owns the messages, which is `react`, the generate loop and each bridge in-process, and the proxy's session key outside; in-process the dispatcher takes the current agent span's id (the sample uuid outside any agent span), and whether `AgentState` should carry it instead is open. `history` on every payload is a reference to the scaffold's list in-process, but replay and a proxy must materialise it per step, which is O(n) per step over a long trajectory unless the runner hands out a shared, append-only view.
 23.  **Is `decide_final()` the right design at all?** Any protocol at any depth, third-party code inside `observe_only()` or `threshold()` included, can call it and bypass every layer above, while this design presents child decisions as advisory to the parent. The options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism. `human()` no longer uses it, which weakens the case for keeping it.
-24.  **What should an `escalate` that reaches the root mean?** Today it proceeds as `continue` would, is recorded as the root's decision, and the host warns once per eval. The alternatives are rejecting it (fail-closed, as approval does when every approver escalates) or a setting with a chosen default. Rejecting turns every unsure rule into a blocked call.
+24.  **What should an `escalate` that reaches the root mean?** Today it proceeds as `continue` would, is recorded as the root's decision, and the host warns once per process. The alternatives are rejecting it (fail-closed, as approval does when every approver escalates) or a setting with a chosen default. Rejecting turns every unsure rule into a blocked call.
 25.  **How do `review=` and tool approvers migrate?** Three parts are open. Is `review=` deprecated in favour of after-call protocols, as [Relationship to approval and review](#relationship-to-approval-and-review) proposes? How does `approval=` coexist with `sentinel=`? The ordering is already written down: approval and then the sentinel before a call, review and then the sentinel after. Can an existing approver run as a protocol through an `as_protocol(approver)` adapter, so that it composes with monitors? Tracked in `pr-series.md`, Deferred.

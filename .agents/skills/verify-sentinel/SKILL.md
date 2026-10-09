@@ -46,7 +46,7 @@ export VERIFY_OUT=<scratchpad>/verify      # optional
 - which python, and where `inspect_sentinel` and `inspect_ai` are imported from, with each one's git commit and branch. inspect_ai is normally an editable install from a sibling checkout. Confirm it is the commit you meant to test.
 - whether `src/` and `examples/` have uncommitted changes, which would mean you are not testing the commit you think you are.
 - whether `inspect_sentinel` imports only `inspect_ai.core`, using inspect_ai's own `check_imports`, the same check as `tests/test_package.py`.
-- whether inspect_ai's `_Host.generate` takes the same parameters as sentinel's `Host.generate`. When it doesn't, every monitor that calls `context.host.generate(role=...)` fails at run time. `examples/llm_suspicion.py` does that, so the `llm-monitor` feature and the `audit` monitor in `composition` will fail.
+- whether inspect_ai's `_Host.generate` takes the same parameters as sentinel's `Host.generate`. When it doesn't, a monitor that passes a parameter the host lacks fails at run time. `examples/llm_suspicion.py` passes `model`, `role` and `config`, so then the `llm-monitor` feature and the `audit` monitor in `composition` fail.
 
 ## Drive
 
@@ -86,7 +86,7 @@ Proof standards:
 
 - A pass needs both the log and the side effect. The sentinel event says `reject`, and the marker file is absent from `work/`. Either one alone is not proof.
 - Check the log's `status`, not the CLI exit code. `inspect eval` exits 0 even when the eval log ends with `status=error`. `verify.py` checks this, under "eval log status is success".
-- Report a failing check with its `report.txt` line and the event or error it saw. If a failure is the known `role=` mismatch that `doctor` flags, say so rather than calling it a regression.
+- Report a failing check with its `report.txt` line and the event or error it saw. If a failure comes from a `Host.generate` mismatch that `doctor` flags, say so rather than calling it a regression.
 - When you claim no regression, name the base you compared against and show the `diff` result.
 
 ## Cleanup

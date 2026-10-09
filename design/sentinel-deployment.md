@@ -82,9 +82,10 @@ class Host(typing.Protocol):
         self,
         input: str | list[ChatMessage],
         *,
-        model: str | None = None,          # a model name; used when role is not configured
-        role: str | None = None,           # a model role; neither means "monitor"
+        model: str | None = None,  # a model name; used when role is not given or not configured
+        role: str | None = None,   # a model role; neither means "monitor"
         tools: list[ToolInfo] | None = None,
+        tool_choice: ToolChoice | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput: ...
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
@@ -120,7 +121,7 @@ Only `generate` and `ask_human` are built; `fetch`, `get`/`put` and `terminate` 
 
 Known limits of inspect_ai's surfaces: ACP cannot withdraw a permission request when the ask is cancelled, so the card stays and a later click on it is discarded; an ACP ask after a call resets the call's card to pending; and inspect_ai's surfaces return fixed reason text and cannot modify a call.
 
-`model` and `role` are separate so a role name is never read as a model name; as with inspect's `get_model(model=, role=)`, a configured role wins, then `model`, then the agent's model with a warning once per eval naming the role to set. With neither, the role is `monitor`.
+`model` is always a model name (`openai/gpt-4o-mini`) and `role` always a model role (`monitor`, `trusted`), so neither is read as the other and no naming rule is needed. A role resolves through the host's role configuration. A configured `role` wins; otherwise `model`; with neither, the role is `monitor`. A `model` without a `role` is used as given, and the default `monitor` role is not consulted. An unconfigured role with no `model` is up to the host: in an eval it falls back to the agent's model with a warning, once per process for each role, naming the role to set. This mirrors inspect_ai scorers' `model` and `model_role`, where `model` is the fallback for an unconfigured role. A `Model` instance is not accepted: a configured client goes in the host's role configuration (`model_roles`, which accepts instances), and an instance could not reach a deployed monitor through a configuration file anyway. An author picks a role for a portable monitor, where the deployer chooses the model and the credentials stay with the host, or a model name for a quick experiment. Decided by the maintainer on 2026-10-07, superseding the single `model` string of 2026-10-06.
 
 `generate` returns a `ModelOutput` rather than a string because a protocol that substitutes an action (`resample`) regenerates with the agent's tools and need the whole response; a text-prompt monitor reads `.completion`. Generating as the agent's own model is, in a proxy, a re-issued upstream request.
 
@@ -243,7 +244,7 @@ What is open is the *backing*. In-process, `store_as()` is backed by the sample 
 
 `Store` records itself to the transcript as a *diff stream*: `store_changes()` runs at span boundaries to emit a `StoreEvent`, and `jsonpatch.apply_patch` replays those events in `store_from_events()`. The diff is not an implementation whim — `store.get("items", [])` hands back a mutable container that callers mutate in place, so no write hook on `Store` could be complete, and snapshot-before/compare-after at a boundary is the only reliable way to learn what changed (full snapshots per span would also be O(spans × store size) in the log).
 
-That machinery is therefore coupled to the transcript, and a proxy has no transcript. So the cut is a natural one rather than a nicety: typing the store the host puts in `HostContext` as a Protocol lets a proxy back it with its keyed store and carry none of the diffing. `Store` is thin enough (a dict wrapper; writes are plain dict operations) that a proxy *could* simply use it. `Store`, `StoreModel` and the active store are in `inspect_ai.core`; the diffing (`store_changes()`, `store_from_events()` and `jsonpatch`) is in `inspect_ai.util`, so a constrained build does not carry it.
+That machinery is therefore coupled to the transcript, and a proxy has no transcript. So the cut is a natural one rather than a nicety: typing the store the host puts in `HostContext` as a Protocol lets a proxy back it with its keyed store and carry none of the diffing. `Store` is thin enough (a dict wrapper; writes are plain dict operations) that a proxy *could* simply use it, in which case the only cost is closure weight — `jsonpatch` and `jsonpointer` are imported at module level in `util/_store.py` but used only on the transcript path, so a lazy import inside those two functions would keep them out of a constrained build.
 
 ### Operational consequences
 
@@ -449,7 +450,7 @@ Expect two tiers regardless, and design for them: portable monitors that run any
 7.  **Are `fetch` results part of a recorded decision?** Replaying a monitor from a transcript requires its external calls to be recorded, which means deciding what is safe to record (an allowlist response is fine; a credentialed payload may not be).
 8.  **Fail open or closed** when the processor is down. A safety monitor wants closed, which makes it a hard dependency on the request path.
 9.  **Does the `portable=True` check run per module or per function?** Decided 2026-10-05: per function, by what its code references. The per-module verdict (a module's import closure) belongs to the bundler.
-10. **Should the store behind `store_as()` be a Protocol** rather than the concrete `Store`? `Store` is in `inspect_ai.core` and holds only a dict; the transcript diffing is in `inspect_ai.util`. An interface would let a proxy back it with the keyed store directly. The cost is one more abstraction on a type authors already know.
+10. **Should the store behind `store_as()` be a Protocol** rather than the concrete `Store`? The concrete class carries transcript diffing a proxy never uses; an interface lets a proxy back it with the keyed store directly. The cost is one more abstraction on a type authors already know.
 
 From spike #58 (2026-10-06):
 

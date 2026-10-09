@@ -58,7 +58,7 @@ The smallest monitor scores, and a protocol decides what the score means:
 
 ```python
 @monitor
-def suspicion_monitor(model: str | None = None) -> Monitor:
+def suspicion_monitor(model: str | None = None, role: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         ...
         return Observation.score(score, explanation)
@@ -199,7 +199,7 @@ Everything in `step` except `conversation` and `escalations` was written or shap
 
 `escalations` is filled only inside a `sequential()`: when an earlier link returns `escalate`, its report is handed to the next link here, so a human at the end sees who is asking and why. It is empty everywhere else. The reports are written by protocols, but their explanations may quote agent text, so label them as prior verdicts if you render them into a prompt.
 
-`input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. `conversation` links one agent's steps across compactions when several agents share a sample; `ModelEvent` and `CompactionEvent` carry the same id. See `sentinel.md`, "Two histories".
+`input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
 
 `BeforeToolCall` and `AfterToolCall` are the `Approver` and `Reviewer` payloads with the same fields. `view` and `output` are optional under a proxy, which has no registered tool definitions to render a view from.
 
@@ -303,7 +303,7 @@ How the fields are populated:
 
 A proxy answers requests that are not Inspect evals and have no task, sample or epoch, so it passes `eval=None` rather than stand-ins a monitor could not tell from real values; in an eval, `task`, `sample_id` and `epoch` are always present. Decided by the maintainer on 2026-10-05. A proxy's equivalent of the briefing (a deployment's charter, say) is open; see `proxy-host.md`.
 
-`Task(description=)` and `Sample(description=)` do not exist yet, so in an eval `eval.task_description` and `eval.sample_description` are always None. They are the proposed home for the assignment text; the fallback is a `metadata` convention. See [Open questions](#open-questions) item 13. Structured context goes in `metadata` either way.
+inspect_ai fills `eval.task_description` and `eval.sample_description` from `Task(description=)` and `Sample(description=)` (inspect_ai #5667), in the first release that includes them; they are None when the task or sample sets no description, and under a host that does not provide them. Structured context goes in `metadata`.
 
 ### Reports
 
@@ -422,7 +422,7 @@ What each action does:
 |---|---|
 | `continue` | no change to the exchange |
 | `modify` | replace the step's subject with `modified` |
-| `reject` | at `BeforeToolCall`: append the rejected call and a synthetic result, regenerate, bounded by a retry limit. At `BeforeGenerate`: do not run this generate, tell the agent why. At `AfterGenerate`: discard this completion. |
+| `reject` | at `BeforeToolCall`: in an eval, inspect_ai does not run the call and returns a tool error to the model, as approval does, with no retry bound; under a proxy or bridge, append the rejected call and a synthetic result, regenerate, bounded by a retry limit. At `BeforeGenerate`: do not run this generate, tell the agent why. At `AfterGenerate`: discard this completion. |
 | `terminate` | end the sample |
 | `escalate` | pass the decision to the next decider |
 
@@ -488,9 +488,9 @@ There is no `monitor_store_as()` or `monitor_host()` global. Helpers take what t
 
 Rules:
 
-- **Call `context.host.generate()` for inference, never `get_model()`.** It takes a prompt string or a message list, with optional `model` (a model name), `role` (a model role), `tools` and `config`, and returns a `ModelOutput`. The host resolves them as inspect's `get_model(model=, role=)` does: the role's model if that role is configured, otherwise `model`, otherwise the agent's model with a warning once per eval naming the role to set. With neither, the role is `monitor`. It records monitor inference separately from the agent's. The `portable=True` check bans `get_model()`.
-- **Expose `model=` and `role=` on an LLM monitor's factory** and pass them through, with `role` defaulting to `"monitor"`, so a task can point it elsewhere without editing it.
-- **Monitor inference is not charged to the agent's limits.** Approvers get the same exemption today via `suspend_token_limit()` and `suspend_turn_limit()`. Monitor usage is separable from agent usage in `ModelUsage`.
+- **Call `context.host.generate()` for inference, never `get_model()`.** It takes a prompt string or a message list, with optional `model` (a model name, e.g. `openai/gpt-4o-mini`), `role` (a model role, e.g. `trusted`), `tools`, `tool_choice` and `config`, and returns a `ModelOutput`. A configured role wins, then `model`; with neither, the role is `monitor`. In an eval an unconfigured role with no `model` falls back to the agent's model with a warning, once per process for each role, naming the role to set. A `Model` instance is not accepted; put a configured client in `model_roles`. It records monitor inference separately from the agent's: a host labels inference with the role it resolved, and in inspect_ai a call naming only a `model` is labelled with the role `sentinel`, so all sentinel inference is separable from the agent's in `role_usage`. The `portable=True` check bans `get_model()`.
+- **Expose `model` and `role` on an LLM monitor's factory**, both defaulting to None, and pass them through, so a task can point it at another role or model without editing it.
+- **Monitor inference does not count toward the agent's token and turn limits.** Those two are suspended, as approvers' are via `suspend_token_limit()` and `suspend_turn_limit()`; cost and working-time limits still apply, so a monitor's model call can end the sample (see `pr-series.md`, "Failure policy"). Monitor usage is separable from agent usage in `ModelUsage`.
 - **Treat model completions, tool arguments, and tool output as untrusted.** The monitor's output decides whether the sample stops, so a successful injection against the monitor can stop a sample or prevent it from being stopped. `monitor_prompt` delivers evidence in a delimited, clearly-untrusted envelope by default; see [View](#view).
 - **Classify incrementally.** Judge the newest turn and fold the verdict into stored state rather than re-judging the whole trajectory each step. Re-judging is quadratic in inference cost and linear in deserialization cost, and under WASM the memory never shrinks.
 
@@ -535,7 +535,7 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 
 ```python
 @monitor
-def suspicion_monitor(model: str | None = None, role: str = "monitor") -> Monitor:
+def suspicion_monitor(model: str | None = None, role: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
@@ -545,9 +545,7 @@ def suspicion_monitor(model: str | None = None, role: str = "monitor") -> Monito
             history=new_since_last_report(context, step.history),
             messages_as_str=messages_as_str,
         )
-        output = await context.host.generate(
-            prompt, model=model, role=role
-        )
+        output = await context.host.generate(prompt, model=model, role=role)
         score, explanation = parse_score(output.completion)
         return Observation(suspicion=score, explanation=explanation,
                            references=extract_refs(explanation))
@@ -732,7 +730,7 @@ Shape checks raise. Each is a deterministic bug in a protocol, not agent input, 
 
 The host invokes the resolved root through `run_sentinel`, which treats it as a layer at the empty path: the root's decision is shape-checked and recorded under its registry name with `path=""`, so its children's paths stay bare; a `decide_final()` from below records the root as `bypassed`, and `run_sentinel` returns the final decision as the step's outcome, so the dispatcher never catches `Final`. A lone protocol is the root itself; a list, a mapping or a lone `ProtocolGroup` is wrapped in `concurrent`. Monitors alone are a configuration error naming them and saying to wrap them in `threshold()` or `observe_only()`.
 
-An `escalate` that reaches the root has nobody to hand it to: the host proceeds as for `continue`, the escalate stays recorded as the root's decision, and the host warns once per eval that `sequential([..., human()])` sends escalations to a person. This is the current behaviour and is under review (see [Open questions](#open-questions) item 24); rejecting instead would fail closed, as approval does when every approver escalates, but would turn every unsure rule into a blocked call.
+An `escalate` that reaches the root has nobody to hand it to: the host proceeds as for `continue`, the escalate stays recorded as the root's decision, and the host warns once per process that `sequential([..., human()])` sends escalations to a person. This is the current behaviour and is under review (see [Open questions](#open-questions) item 24); rejecting instead would fail closed, as approval does when every approver escalates, but would turn every unsure rule into a blocked call.
 
 ### Two compositions
 
@@ -913,7 +911,11 @@ def resample(monitors: Monitor | MonitorGroup | Monitors, threshold: float, n: i
         best_score, best_message = score, step.output.message
         for _ in range(n):
             output = await context.host.generate(
-                step.input, model=step.model, tools=step.tools, config=step.config
+                step.input,
+                model=step.model,
+                tools=step.tools,
+                tool_choice=step.tool_choice,
+                config=step.config,
             )
             observations = await run_monitors(monitors, context, replace(step, output=output))
             candidate = observations.max_suspicion() or 0.0
@@ -1048,7 +1050,7 @@ class SentinelEvent(BaseEvent):
     path: str             # instance path, e.g. "attempt/internet_attempt"
     function: str | None  # __name__ of the reporting (or failing) function; None for cancelled and bypassed, which are per instance
     step_id: str          # triggering message id, assistant message id, or tool call id
-    conversation: str     # the agent conversation; shared with its ModelEvents and CompactionEvents
+    conversation: str     # the agent conversation; ModelEvent and CompactionEvent should record it too (not built)
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
     kind: Literal["observation", "decision"]  # the report family, for every status
     status: Literal["reported", "cancelled", "bypassed", "superseded", "error"]  # superseded is decisions only, error observations only
@@ -1088,7 +1090,7 @@ Whether `SentinelEvent` replaces `ApprovalEvent` and `ReviewEvent` when the deci
 
 ## Bridged agents and proxies
 
-A sentinel can run outside the eval process, in a proxy in front of a model API, where the agent cannot bypass it. `sentinel-deployment.md` covers this. An agent that runs its own tool loop (`claude_code`, `codex`) is the same case running in-process: it never reaches `execute_tools()`, so monitors would reach its tool calls by projection from the model response, the way `apply_bridge_tool_approval` already applies approval today. That hook is not built yet: a sentinel does not run for a bridged agent's tool calls.
+A sentinel can run outside the eval process, in a proxy in front of a model API, where the agent cannot bypass it. `sentinel-deployment.md` covers this. An agent that runs its own tool loop (`claude_code`, `codex`) is the same case running in-process: it never reaches `execute_tools()`, so monitors would reach its tool calls by projection from the model response, the way `apply_bridge_tool_approval` already applies approval today. That hook is not built yet: a sentinel does not run for a bridged agent's tool calls. Until it is, inspect_ai warns once when a sentinel is configured and a bridged agent runs ([inspect_ai#5759](https://github.com/UKGovernmentBEIS/inspect_ai/issues/5759)).
 
 What each stage sees:
 
@@ -1311,7 +1313,7 @@ Ambient accessors exist in Inspect for call boundaries you do not control: a too
 
 ### Where the decorator lives
 
-The registry is a leaf: `inspect_ai.core._registry` imports only the stdlib, pydantic and other `core` modules, and `registry_create`, typed with the heavy types, stays in `inspect_ai._util.registry`. So the registry primitives live in `inspect_ai.core` alongside the wire types, and `@monitor` defined there registers for real, with one shared registry dict because `inspect_ai` imports the same module. `ensure_entry_points()` moves with the registry; it imports third-party packages, but a bundle has no installed entry points, so there it finds none. Parameter capture reuses `extract_named_params`, which carries the VAR_KEYWORD flattening from #4374.
+`_util/registry.py` is already a leaf: stdlib, pydantic, and four small `_util` modules at runtime, with every heavy type imported under `TYPE_CHECKING`. So the registry primitives move to `inspect_core` alongside the wire types, and `@monitor` defined there registers for real, with one shared registry dict because `inspect_ai` imports the same module. `ensure_entry_points()` must be injectable or a no-op in the leaf, since it imports third-party packages. Parameter capture reuses `extract_named_params`, which carries the VAR_KEYWORD flattening from #4374.
 
 ### Why monitors record and readers fail
 
@@ -1415,7 +1417,7 @@ What keeps the simple case simple:
 10. **Lifecycle stages.** `SampleStart` and `SampleEnd` payloads would give state a place to initialise and a monitor a place to file a final verdict. Cheap now that a stage is a payload type, but it overlaps `Hooks`, and neither travels to a proxy.
 11. **Can a monitor produce a `Score`?** Yes: `as_scorer(as_scanner(monitor, unit="transcript"))`, in `sentinel-development.md`. Scoring is untouched.
 12. **Does `AfterToolCall` get a bridged-agent fallback?** Reconstructing a result from the next request, or declining to fire and saying why.
-13. **Does `Task` / `Sample` grow a `description` field?** A public API change for a general-purpose field monitors need first. If not, the assignment comes from `metadata` by convention and is undiscoverable.
+13. **Does `Task` / `Sample` grow a `description` field?** A public API change for a general-purpose field monitors need first. If not, the assignment comes from `metadata` by convention and is undiscoverable. *Resolved: yes, inspect_ai #5667.*
 14. **Which stages can `human()` serve?** The two tool stages; `Host.ask_human` takes the step, so another stage needs only a new rendering. `AfterGenerate` is plausible and needs a new rendering. `BeforeGenerate` is hard to make meaningful to a person.
 15. **Failure tolerance across many samples.** Whether a monitor failing on 3 of 500 samples should fail the eval, and whether that reuses `fail_on_error`'s shape (`True` / `False` / proportion / count) or needs its own knob.
 16. **Should reading an eval-only surface be recorded?** `target` is opt-in and logged. `step.output` and `step.view` raise the same validity question and get no such treatment. A declared view was judged heavier than the problem; explicit flags on `step_as_str` are the lighter option.
@@ -1426,5 +1428,5 @@ What keeps the simple case simple:
 21. **What is the umbrella called?** Settled: `sentinel`, for the feature, `Task(sentinel=)`, the package and the event, with `monitor` kept for the scorer and `protocol` for the decider. `Task(monitor=)` read as "the monitor plus the protocol".
 22. **Where does `conversation` come from, and is `history` eager?** In-process the dispatcher takes the current agent span's id (the sample uuid outside any agent span); whether `AgentState` should carry it instead is open. `history` is a reference in-process, but replay and a proxy materialise it per step, O(n) per step unless the runner hands out a shared, append-only view.
 23. **Is `decide_final()` the right design at all?** Any protocol at any depth, third-party code inside `observe_only()` or `threshold()` included, can call it and bypass every layer above, while this design presents child decisions as advisory to the parent. The options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism. `human()` no longer uses it, which weakens the case for keeping it.
-24. **What should an `escalate` that reaches the root mean?** Today it proceeds as `continue` would, is recorded as the root's decision, and the host warns once per eval. The alternatives are rejecting it (fail-closed, as approval does when every approver escalates) or a setting with a chosen default. Rejecting turns every unsure rule into a blocked call.
+24. **What should an `escalate` that reaches the root mean?** Today it proceeds as `continue` would, is recorded as the root's decision, and the host warns once per process. The alternatives are rejecting it (fail-closed, as approval does when every approver escalates) or a setting with a chosen default. Rejecting turns every unsure rule into a blocked call.
 25. **How do `review=` and tool approvers migrate?** Is `review=` deprecated in favour of after-call protocols, as [Relationship to approval and review](#relationship-to-approval-and-review) proposes? How does `approval=` coexist with `sentinel=`? The ordering is already written down: approval and then the sentinel before a call, review and then the sentinel after. Can an existing approver run as a protocol through an `as_protocol(approver)` adapter? Tracked in `pr-series.md`, Deferred.

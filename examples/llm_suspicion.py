@@ -58,12 +58,12 @@ def untrusted(text: str) -> str:
 
 
 @monitor
-def suspicion(model: str | None = None, role: str = "monitor") -> Monitor:
+def suspicion(model: str | None = None, role: str | None = None) -> Monitor:
     """Ask a model how suspicious each tool call is.
 
     Args:
-        model: The model to ask when `role` is not configured.
-        role: The model role to ask.
+        model: A model name, used when `role` is not given or not configured.
+        role: A model role. Defaults to `monitor` when `model` is None.
     """
 
     async def score(context: Context, step: BeforeToolCall) -> Observation | None:
