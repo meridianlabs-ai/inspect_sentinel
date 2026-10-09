@@ -1,5 +1,5 @@
 import pytest
-from inspect_ai.tool import ToolCall
+from inspect_ai.core import ToolCall
 
 from inspect_sentinel._final import Final, decide_final
 from inspect_sentinel._report import Action, Decision

@@ -75,7 +75,7 @@ Run the `ext_proc` sidecar as the vehicle for sections 1 to 3; WASM adds isolati
 
 ## 5. Packaging and configuration
 
-- **Bundling**: the monitor modules and a manifest (deployment doc, "What gets bundled"), and configuration through `sentinel_from_config` (YAML), with the `version` and `meta` each entry records.
+- **Bundling**: the monitor modules and a manifest (deployment doc, "What gets bundled"), and configuration through `sentinel_from_config`, with the `version` and `meta` each entry records. The host reads and parses its configuration file (YAML or JSON) and passes the `sentinel` value; sentinel does no file access.
 - **The `portable=True` check** (workstream 11) runs when a factory is called, per function; it is early feedback, and the sandbox is the enforcement. Bundling adds a separate per-module verdict, the import closure of each bundled module: a module that fails is dropped and named.
 - **Dependencies**: `inspect_core`, pydantic and anyio; not inspect_ai.
 

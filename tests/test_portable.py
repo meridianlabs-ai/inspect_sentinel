@@ -14,7 +14,7 @@ from types import ModuleType
 from typing import Any, NamedTuple, cast
 
 import pytest
-from inspect_ai._util.registry import is_registry_object, registry_info
+from inspect_ai.core._registry import is_registry_object, registry_info
 
 from inspect_sentinel import (
     BeforeToolCall,
@@ -143,7 +143,7 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             "from inspect_ai.util import store",
             "store()",
             "store",
-            "function `store` from `inspect_ai.util._store`",
+            "function `store` from `inspect_ai.core._store`",
         ),
     ],
 )
@@ -592,6 +592,7 @@ def watched() -> Monitor:
             "from inspect_ai.model import get_model",
             "from inspect_ai.model import get_model",
         ),
+        ("import inspect_ai.core._store", "import inspect_ai.core._store"),
         ("import xmlrpc.client", "import xmlrpc.client"),
     ],
 )
@@ -890,17 +891,13 @@ def test_a_jupyter_cell_is_checked() -> None:
         interactiveshell.InteractiveShell.clear_instance()
 
 
-def test_a_config_file_entry_raises_portability_error(
-    load: Load, tmp_path: Path
-) -> None:
+def test_a_config_entry_raises_portability_error(load: Load) -> None:
     name = f"cfg_portable_{uuid.uuid4().hex}"
     load(monitor_source("os.getenv('A')", "import os", decorator=f"(name={name!r})"))
-    config = tmp_path / "sentinel.yaml"
-    config.write_text(f"sentinel:\n  name: {name}\n")
     with pytest.raises(
         PortabilityError, match=rf"sentinel: monitor {name} is portable"
     ):
-        sentinel_from_config(str(config))
+        sentinel_from_config({"name": name})
 
 
 # Realistic monitors, shipped protocols and examples

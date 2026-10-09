@@ -244,7 +244,7 @@ What is open is the *backing*. In-process, `store_as()` is backed by the sample 
 
 `Store` records itself to the transcript as a *diff stream*: `store_changes()` runs at span boundaries to emit a `StoreEvent`, and `jsonpatch.apply_patch` replays those events in `store_from_events()`. The diff is not an implementation whim — `store.get("items", [])` hands back a mutable container that callers mutate in place, so no write hook on `Store` could be complete, and snapshot-before/compare-after at a boundary is the only reliable way to learn what changed (full snapshots per span would also be O(spans × store size) in the log).
 
-That machinery is therefore coupled to the transcript, and a proxy has no transcript. So the cut is a natural one rather than a nicety: typing the store the host puts in `HostContext` as a Protocol lets a proxy back it with its keyed store and carry none of the diffing. `Store` is thin enough (a dict wrapper; writes are plain dict operations) that a proxy *could* simply use it, in which case the only cost is closure weight — `jsonpatch` and `jsonpointer` are imported at module level in `util/_store.py` but used only on the transcript path, so a lazy import inside those two functions would keep them out of a constrained build.
+That machinery is therefore coupled to the transcript, and a proxy has no transcript. So the cut is a natural one rather than a nicety: typing the store the host puts in `HostContext` as a Protocol lets a proxy back it with its keyed store and carry none of the diffing. `Store` is thin enough (a dict wrapper; writes are plain dict operations) that a proxy *could* simply use it. `Store`, `StoreModel` and the active store are in `inspect_ai.core`; the diffing (`store_changes()`, `store_from_events()` and `jsonpatch`) is in `inspect_ai.util`, so a constrained build does not carry it.
 
 ### Operational consequences
 
@@ -450,7 +450,7 @@ Expect two tiers regardless, and design for them: portable monitors that run any
 7.  **Are `fetch` results part of a recorded decision?** Replaying a monitor from a transcript requires its external calls to be recorded, which means deciding what is safe to record (an allowlist response is fine; a credentialed payload may not be).
 8.  **Fail open or closed** when the processor is down. A safety monitor wants closed, which makes it a hard dependency on the request path.
 9.  **Does the `portable=True` check run per module or per function?** Decided 2026-10-05: per function, by what its code references. The per-module verdict (a module's import closure) belongs to the bundler.
-10. **Should the store behind `store_as()` be a Protocol** rather than the concrete `Store`? The concrete class carries transcript diffing a proxy never uses; an interface lets a proxy back it with the keyed store directly. The cost is one more abstraction on a type authors already know.
+10. **Should the store behind `store_as()` be a Protocol** rather than the concrete `Store`? `Store` is in `inspect_ai.core` and holds only a dict; the transcript diffing is in `inspect_ai.util`. An interface would let a proxy back it with the keyed store directly. The cost is one more abstraction on a type authors already know.
 
 From spike #58 (2026-10-06):
 

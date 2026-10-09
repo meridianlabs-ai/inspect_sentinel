@@ -11,11 +11,11 @@ from inspect_ai.core import (
     ChatMessage,
     GenerateConfig,
     ModelOutput,
+    Store,
     ToolCall,
     ToolChoice,
     ToolInfo,
 )
-from inspect_ai.util import Store
 
 from ._report import Decision, Failed, Report, Reported
 from ._step import Step

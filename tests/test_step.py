@@ -1,14 +1,16 @@
 from typing import get_args
 
-from inspect_ai.model import (
+from inspect_ai.core import (
     ChatMessage,
     ChatMessageAssistant,
     ChatMessageSystem,
     ChatMessageTool,
     ChatMessageUser,
     ContentText,
+    ToolCall,
+    ToolCallView,
+    ToolResult,
 )
-from inspect_ai.tool import ToolCall, ToolCallView, ToolResult
 
 from inspect_sentinel._report import Decision, Reported
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step

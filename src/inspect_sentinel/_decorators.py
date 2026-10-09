@@ -15,7 +15,7 @@ from typing import (
 )
 from typing import Protocol as TypingProtocol
 
-from inspect_ai._util.registry import (
+from inspect_ai.core._registry import (
     RegistryInfo,
     RegistryType,
     is_registry_object,

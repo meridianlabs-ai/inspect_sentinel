@@ -195,7 +195,7 @@ The goal is to enable two deployment modes for proxy servers:
 1.  Sidecar (a Python service beside the proxy); or
 2.  Embedded (CPython compiled to WASM inside the proxy)
 
-Both modes depend on sentinels being lightweight. `inspect_sentinel` is to depend only on `inspect_ai.core`, a subpackage of inspect_ai holding the wire types (`ChatMessage`, `ModelOutput`, `ToolCall`, `ToolInfo`) and, later, the registry primitives, so that a monitor author, a proxy, or a WASM build never pulls in the full Inspect framework. Today it imports the wire types from `inspect_ai.core` and the registry, store and configuration from the rest of `inspect_ai`.
+Both modes depend on sentinels being lightweight. `inspect_sentinel` is to depend only on `inspect_ai.core`, a subpackage of inspect_ai holding the wire types (`ChatMessage`, `ModelOutput`, `ToolCall`, `ToolInfo`) and the registry primitives, so that a monitor author, a proxy, or a WASM build never pulls in the full Inspect framework. Today it imports from inspect_ai only through `inspect_ai.core`, which also holds `Store`, `StoreModel` and the configuration types; importing `inspect_ai.core` still runs `inspect_ai/__init__.py`.
 
 Even if you are deploying sentinels inside Inspect AI to start with, sentinel will check that your code travels well to a proxy without Inspect dependencies. Monitors and protocols are portable by default, and `@monitor(portable=False)` opts out. Calling the factory checks its code for common mistakes that would fail in a proxy, such as calling `get_model()` or reading environment variables; there is no check while it runs.
 

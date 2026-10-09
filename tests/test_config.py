@@ -1,13 +1,10 @@
-import json
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
-import yaml
-from inspect_ai._util import registry
-from inspect_ai._util.registry import registry_info, registry_params
-from inspect_ai.log import SentinelConfig
+from inspect_ai.core import SentinelConfig
+from inspect_ai.core import _registry as registry
+from inspect_ai.core._registry import registry_info, registry_params
 from pydantic import ValidationError
 
 from inspect_sentinel._context import Context
@@ -169,15 +166,6 @@ def test_a_parsed_config_model_is_accepted() -> None:
     assert registry_info(built).name == "inspect_sentinel/threshold"
 
 
-@pytest.mark.parametrize("suffix", [".yaml", ".json"])
-def test_a_file_holds_the_config_under_sentinel(tmp_path: Path, suffix: str) -> None:
-    content = {"sentinel": {"escape": {"name": "cfg_rule"}}}
-    file = tmp_path / f"sentinel{suffix}"
-    file.write_text(json.dumps(content) if suffix == ".json" else yaml.dump(content))
-    built = _mapped(sentinel_from_config(str(file)))
-    assert registry_info(built["escape"]).name == "cfg_rule"
-
-
 def test_a_bare_registered_name_is_a_lone_instance() -> None:
     built = sentinel_from_config("cfg_suspicion")
     assert registry_info(built).name == "cfg_suspicion"
@@ -331,16 +319,6 @@ def test_invalid_config_names_the_entry(
         sentinel_from_config(config)
 
 
-@pytest.mark.parametrize(
-    "content", [{"approvers": []}, {"sentinel": [], "extra": 1}, [{"name": "cfg_rule"}]]
-)
-def test_a_file_must_hold_only_a_sentinel_key(tmp_path: Path, content: Any) -> None:
-    file = tmp_path / "sentinel.yaml"
-    file.write_text(yaml.dump(content))
-    with pytest.raises(ValueError, match="sentinel"):
-        sentinel_from_config(str(file))
-
-
 ROUND_TRIPS: list[Any] = [
     {"name": "cfg_rule", "params": {"reason": "stop"}},
     {
@@ -483,52 +461,6 @@ async def test_a_lone_protocol_records_the_same_paths_once_rebuilt() -> None:
 def test_a_non_sentinel_is_not_recorded() -> None:
     with pytest.raises(TypeError, match="monitor or protocol"):
         config_from_sentinel(cast(Any, [cfg_rule]))
-
-
-@pytest.mark.parametrize(
-    "text, where, key",
-    [
-        (
-            "sentinel:\n  attempt:\n    name: cfg_rule\n  attempt:\n    name: cfg_rule\n",
-            "sentinel",
-            "attempt",
-        ),
-        (
-            "sentinel:\n  - name: cfg_rule\n    params:\n      reason: a\n      reason: b\n",
-            r"sentinel\[0\]\.params",
-            "reason",
-        ),
-        ("sentinel: []\nsentinel: []\n", "the top level", "sentinel"),
-        (
-            '{"sentinel": {"a": {"name": "cfg_rule", "name": "cfg_suspicion"}}}',
-            r"sentinel\.a",
-            "name",
-        ),
-    ],
-)
-def test_a_repeated_key_in_a_file_is_an_error(
-    tmp_path: Path, text: str, where: str, key: str
-) -> None:
-    file = tmp_path / "sentinel.yaml"
-    file.write_text(text)
-    with pytest.raises(
-        ValueError, match=rf"sentinel\.yaml: {where}: duplicate key '{key}'"
-    ):
-        sentinel_from_config(str(file))
-
-
-def test_tab_indented_json_is_read(tmp_path: Path) -> None:
-    file = tmp_path / "sentinel.json"
-    file.write_text('{\n\t"sentinel": [\n\t\t{"name": "cfg_rule"}\n\t]\n}\n')
-    built = _only(sentinel_from_config(str(file)))
-    assert registry_info(built).name == "cfg_rule"
-
-
-def test_a_malformed_file_names_the_file(tmp_path: Path) -> None:
-    file = tmp_path / "broken.yaml"
-    file.write_text("sentinel: [\n")
-    with pytest.raises(ValueError, match=r"broken\.yaml: could not parse"):
-        sentinel_from_config(str(file))
 
 
 @pytest.fixture

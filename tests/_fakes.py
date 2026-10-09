@@ -2,14 +2,18 @@ from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import Any, NamedTuple
 
-from inspect_ai.model import (
+from inspect_ai.core import (
     ChatMessage,
     ChatMessageTool,
     GenerateConfig,
     ModelOutput,
+    Store,
+    ToolCall,
+    ToolCallError,
+    ToolCallView,
+    ToolChoice,
+    ToolInfo,
 )
-from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolChoice, ToolInfo
-from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context, EvalContext
 from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step

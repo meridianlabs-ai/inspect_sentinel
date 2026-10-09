@@ -12,6 +12,17 @@ Make Inspect's core data types — `ChatMessage`, `Content`, `ToolCall`, `ToolIn
 
 This came out of the sentinel design, but nothing here is monitor-specific.
 
+## What belongs in `inspect_ai.core`
+
+Two things belong in `core`:
+
+- the data passed between a monitor and the system running it (inspect_ai in an eval, or a proxy host), and
+- the registry substrate: storing, tagging and looking up registered objects.
+
+Event types are not in `core`. `BaseEvent.working_start` defaults to `sample_working_time()`, which is eval machinery.
+
+`inspect_sentinel` imports from `inspect_ai` only through `inspect_ai.core`, and otherwise imports only the standard library, `pydantic`, `anyio` and `exceptiongroup`. `tests/test_package.py` checks this with `check_imports`, which also allows the packages `core` itself imports. `core` is a subpackage of `inspect_ai`, so importing it still runs `inspect_ai/__init__.py`. Running sentinel without inspect_ai installed would need a separate distribution, which open question 2 decided against.
+
 ## The measurement
 
 Importing a data model today:
@@ -103,17 +114,17 @@ Those are all exception classes, but the top-level import runs `openai/__init__.
 
 On weight: the `anthropic` and `openai` SDKs are pure Python whose only native dependency is `pydantic-core`, which `inspect_core` already needs — tolerable in a constrained build. `google-genai` reaches for google-auth, requests and possibly grpc, and may need to be an optional extra.
 
-### The registry is already a leaf
+### The registry is a leaf
 
-`_util/registry.py` runtime imports are `inspect`, `sys`, `typing`, `pydantic`, `pydantic_core`, `typing_extensions`, plus `_util.json`, `_util.package`, `_util.constants`, `_util.entrypoints`. Every reference to `Task`, `Agent`, `Approver`, `Hooks`, `ModelAPI`, `Metric`, `Scorer`, `Solver`, `Tool` and `SandboxEnvironment` is `TYPE_CHECKING`-only — they exist for `registry_create`'s overload signatures. `registry_tag` is two `setattr` calls; `extract_named_params` is stdlib `inspect.signature().bind()`.
+`inspect_ai.core._registry` imports only the stdlib, `pydantic`, `pydantic_core`, `typing_extensions` and other `core` modules. `registry_create`, whose overloads name `Task`, `Agent`, `Approver`, `Hooks`, `ModelAPI`, `Metric`, `Scorer`, `Solver`, `Tool` and `SandboxEnvironment`, stays in `inspect_ai._util.registry`. `registry_tag` is two `setattr` calls; `extract_named_params` is stdlib `inspect.signature().bind()`.
 
-So `RegistryInfo`, `registry_add`, `registry_tag`, `registry_info`, `registry_lookup` and `extract_named_params` can live in `inspect_core`. A decorator defined there registers for real — no marker attributes, no deferred drain, no import-ordering hazard, no dependency inversion. Module identity gives a shared singleton registry for free: `inspect_ai` imports the same module object, so there is one dict, not two to keep coherent.
+So `RegistryInfo`, `registry_add`, `registry_tag`, `registry_info`, `registry_lookup` and `extract_named_params` live in `inspect_ai.core`. A decorator defined there registers for real — no marker attributes, no deferred drain, no import-ordering hazard, no dependency inversion. Module identity gives a shared singleton registry for free: `inspect_ai` imports the same module object, so there is one dict, not two to keep coherent.
 
 Three details:
 
-- **`ensure_entry_points()` is a hazard.** It is called from `registry.py` and loads plugin entry points, so it can import arbitrary third-party packages at runtime — silently defeating the dependency discipline in a constrained build. It needs to be injectable or a no-op in `inspect_core`, with `inspect_ai` installing the real implementation.
+- **`ensure_entry_points()` moves with the registry.** It loads plugin entry points, so it can import arbitrary third-party packages at runtime. A bundle has no installed entry points, so there it finds none.
 - **`registry_create` stays up.** The leaf needs tag/add/info/lookup; the typed overloads are about constructing heavy objects.
-- **`RegistryType`** enumerates `"solver"`, `"scorer"`, … Either move the Literal down (harmless — it is strings) or type the leaf's field as `str` and keep the Literal in `inspect_ai` for checking.
+- **`RegistryType`** is a `Literal` that lists every kind (`"solver"`, `"scorer"`, …), and it is in `core`. Logs keep their validation when read.
 
 ### Annotation-driven registration needs nothing extra
 
@@ -124,8 +135,6 @@ The related static pass — enumerating `@monitor` functions in a file without i
 ## Compatibility
 
 Prefer re-export shims over relocation: `inspect_ai.model.ChatMessage` keeps working with the definition moving underneath. This matters beyond politeness — `inspect_scout` imports `inspect_ai` privates directly, so a bare move breaks a sibling package.
-
-`_util.registry` is more central than the rest of the leaf set; worth checking whether the types genuinely need it or whether that is another incidental reach.
 
 ## The wire contract
 
@@ -202,12 +211,12 @@ Measured by the WASM sidecar spike (sentinel #58, 2026-10-06), which ran the unc
 
 | Import | Used for | Why it is heavy | Proposed change |
 |---|---|---|---|
-| `inspect_ai._util.registry`: `RegistryInfo`, `RegistryType`, `RegistryDict`, `registry_add`, `registry_tag`, `registry_info`, `registry_lookup`, `registry_has`, `registry_name`, `registry_unqualified_name`, `is_registry_object`, `is_registry_dict`, `has_registry_params`, `registry_value`, `create_registry_object` | registering and naming monitors and protocols (`_decorators`, `_validate`), resolving them in the runner and from configuration (`_runner`, `_resolve`, `_config`) | entry points, package metadata, and lazily most of inspect_ai | the registry primitives into core, with entry-point loading injectable ("The registry is already a leaf"); the stand-in is about 100 lines |
+| `inspect_ai._util.registry`: `RegistryInfo`, `RegistryType`, `RegistryDict`, `registry_add`, `registry_tag`, `registry_info`, `registry_lookup`, `registry_has`, `registry_name`, `registry_unqualified_name`, `is_registry_object`, `is_registry_dict`, `has_registry_params`, `registry_value`, `create_registry_object` | registering and naming monitors and protocols (`_decorators`, `_validate`), resolving them in the runner and from configuration (`_runner`, `_resolve`, `_config`) | entry points, package metadata, and lazily most of inspect_ai | done: the registry is `inspect_ai.core._registry`, and sentinel imports it from there (sentinel #62) |
 | `inspect_ai.event`: `SentinelAction`, `SentinelSuspicion` | the `Action` and `Suspicion` aliases in `_report` | `event/_sentinel.py` imports `event._base` and so the event tree | done: both are in `inspect_ai.core`, and `_report` imports them from there (sentinel #60, 2026-10-06) |
-| `inspect_ai.util`: `Store`, `StoreModel` | `HostContext.store` (`_host`) and `context.store_as()` (`_context`) | `_store.py` imports jsonpatch and the event machinery | a store interface the host supplies (`sentinel-deployment.md`, open question 10), with `StoreModel` in core; it ran unchanged in the guest |
-| `inspect_ai.util.LimitExceededError` | the runner lets it propagate rather than record a monitor failure (`_runner`) | `_limit.py` imports the logger, transcript and samples | imported lazily, or checked by name |
+| `inspect_ai.util`: `Store`, `StoreModel` | `HostContext.store` (`_host`) and `context.store_as()` (`_context`) | `_store.py` imports jsonpatch and the event machinery | done: `Store` and `StoreModel` are in `inspect_ai.core` (sentinel #62). Whether the host supplies a store interface instead is `sentinel-deployment.md`, open question 10 |
+| `inspect_ai.util.LimitExceededError` | the runner lets it propagate rather than record a monitor failure (`_runner`) | `_limit.py` imports the logger, transcript and samples | done: `LimitExceededError` is in `inspect_ai.core` (sentinel #62) |
 | `inspect_ai.model.Model` | the `model` parameter of `Host.generate` (`_host`) | the model package | done: `Host.generate` takes `model: str | None` (a model name) and `role: str | None`, and sentinel no longer imports `Model` (2026-10-06, 2026-10-07) |
-| `inspect_ai.log`: `SentinelConfig`, `SentinelEntry`; `inspect_ai.util.resource`; `inspect_ai._util.file`: `exists`, `local_path`; `yaml` | configuration loading (`_config`) | the log package, fsspec and s3fs, PyYAML | split configuration loading off the import path of the runner and protocols, loaded lazily for evals and the CLI; PyYAML's pure-Python package works in the guest if needed |
+| `inspect_ai.log`: `SentinelConfig`, `SentinelEntry`; `inspect_ai.util.resource`; `inspect_ai._util.file`: `exists`, `local_path`; `yaml` | configuration loading (`_config`) | the log package, fsspec and s3fs, PyYAML | done: the host reads configuration files, `SentinelConfig` and `SentinelEntry` are in `inspect_ai.core`, and sentinel does not import `yaml` (sentinel #62) |
 
 **The goal: `run_sentinel` needs only `inspect_ai.core`, pydantic and anyio.** Importing the runner, the step and context types and the shipped protocols reaches nothing in inspect_ai outside core, and configuration loading is a separate import a guest never makes. The spike's guest runner (`guest/m4/runner.py`, about 80 lines: a `Host` over the WIT imports, a `Recorder` that collects records, and `run_sentinel` on a step parsed with `TypeAdapter`) is the shape a proxy's guest takes once the stand-ins are gone.
 
@@ -225,7 +234,7 @@ One consequence for the portability docs rather than the implementation: compone
 
 ## Open questions
 
-1.  **Scope of `inspect_core`.** Which types exactly? The seven analyzed here are the monitor's needs; a log reader wants `EvalLog` and the event types, which reach further. `sentinel-development.md` adds a concrete consumer for `ModelEvent` and `ToolEvent`: replaying a monitor over an eval log at full fidelity needs them, and without them in core that reconstruction lives in `inspect_ai` rather than `inspect_sentinel`.
+1.  **Scope of `inspect_core` beyond the rule above.** A log reader wants `EvalLog` and the event types, which the rule leaves out. `sentinel-development.md` adds a concrete consumer for `ModelEvent` and `ToolEvent`: replaying a monitor over an eval log at full fidelity needs them, and without them in core that reconstruction lives in `inspect_ai` rather than `inspect_sentinel`.
 2.  **Is it a separate distribution or a subpackage?** Decided: a subpackage, `inspect_ai.core`, with the moved names re-exported from their old paths so user imports do not change. Sentinel imports its wire types and `SentinelAction`/`SentinelSuspicion` from it since sentinel #59 and #60 (2026-10-06). A WASM guest needs it importable without running `inspect_ai/__init__` ("What a WASM guest imports").
 3.  **How far to chase the four-package floor.** Removing `rich`, `platformdirs`, `anyio` and `jsonlines` means the types stop using `warn_once` and friends. Worth it for a constrained build, possibly not otherwise.
 4.  **Does `inspect_api` ship the Google provider conversions** given the heavier dependency, or are they an optional extra?

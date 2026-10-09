@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal, cast
 
-from inspect_ai._util.registry import (
+from inspect_ai.core._registry import (
     RegistryInfo,
     registry_info,
     registry_unqualified_name,

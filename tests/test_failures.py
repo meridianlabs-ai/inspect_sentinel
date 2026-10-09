@@ -3,8 +3,8 @@ from collections.abc import Callable
 
 import anyio
 import pytest
-from inspect_ai._util.registry import registry_info
-from inspect_ai.util import LimitExceededError
+from inspect_ai.core import LimitExceededError
+from inspect_ai.core._registry import registry_info
 
 from inspect_sentinel import (
     Failed,

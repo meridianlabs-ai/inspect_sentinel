@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from inspect_ai._util.registry import is_registry_object, registry_info
+from inspect_ai.core._registry import is_registry_object, registry_info
 
 from ._protocols import concurrent
 from ._types import (
