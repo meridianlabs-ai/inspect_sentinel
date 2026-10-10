@@ -30,7 +30,7 @@ from ._types import (
     SentinelFunction,
     Sentinels,
 )
-from ._unhandled import EscalationRecorder, sources, unhandled
+from ._unhandled import collecting, decided, invocation, running, sources, unhandled
 from ._validate import check_child, named_children, validate_shape
 
 if sys.version_info < (3, 11):
@@ -130,8 +130,10 @@ async def run_sentinel(
             "The root is one protocol function, as resolve_sentinel returns it; a group of functions cannot be the root."
         )
     found: list[Reported[Decision]] = []
-    recorder = EscalationRecorder(host_context.recorder)
-    with running_step(recorder, host_context.store):
+    with (
+        collecting() as invocations,
+        running_step(host_context.recorder, host_context.store),
+    ):
         try:
             await _run_child(
                 protocol,
@@ -150,7 +152,7 @@ async def run_sentinel(
                 raise RuntimeError(
                     f"Runner invariant violated: Final({ex.decision.action!r}) left the root without an origin."
                 ) from ex
-            _, factory = layer(origin.context, "The runner")
+            recorder, factory = layer(origin.context, "The runner")
             recorder.record(origin.context, factory, origin.step, origin.reported)
             if ex.decision.action == "escalate":
                 return unhandled([origin.reported])
@@ -158,7 +160,7 @@ async def run_sentinel(
     if not found:
         return None
     if found[0].report.action == "escalate":
-        return unhandled(sources(recorder.escalates))
+        return unhandled(sources(invocations))
     return found[0].report
 
 
@@ -367,8 +369,10 @@ async def _run_member(
     report: Report | None = None
     finals: list[Final] = []
     failure: BaseException | None = None
+    node = invocation()
     try:
-        report = await invoke(function, child_context, step)
+        with running(node):
+            report = await invoke(function, child_context, step)
     except Final as ex:
         finals = [ex]
     except BaseExceptionGroup as ex:
@@ -420,6 +424,8 @@ async def _run_member(
         function=function.__name__,
     )
     recorder.record(child_context, factory, step, reported)
+    if isinstance(report, Decision):
+        decided(node, cast(Reported[Decision], reported))
     return reported
 
 

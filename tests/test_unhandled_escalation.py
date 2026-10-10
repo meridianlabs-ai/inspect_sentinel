@@ -2,6 +2,7 @@ from collections.abc import Callable
 
 import pytest
 from inspect_ai.scorer import Reference
+from inspect_ai.util import StoreModel
 
 from inspect_sentinel import handle_escalation, human, sequential, threshold
 from inspect_sentinel._context import Context
@@ -9,8 +10,9 @@ from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._final import decide_final
 from inspect_sentinel._integration import Sentinels, resolve_sentinel, run_sentinel
 from inspect_sentinel._report import Decision, Observation
+from inspect_sentinel._runner import run_protocols
 from inspect_sentinel._step import BeforeToolCall, Step
-from inspect_sentinel._types import Monitor, Protocol
+from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup
 from tests._fakes import ListRecorder, after_step, before_step, host_context
 
 
@@ -123,3 +125,94 @@ async def test_an_escalate_at_the_root_is_returned_as_a_terminate_naming_where_i
         if isinstance(r.reported.report, Decision)
     ]
     assert "escalate" in actions and "terminate" not in actions
+
+
+@protocol
+def ue_child(reason: str = "child reason") -> Protocol:
+    async def run(context: Context, step: Step) -> Decision | None:
+        return Decision.escalate(
+            reason, references=[Reference(type="message", id="c", cite="[child]")]
+        )
+
+    return run
+
+
+@protocol
+def ue_group(forwards: bool) -> ProtocolGroup:
+    # two functions at one path: one runs a child and handles or forwards its
+    # escalation, the other escalates on its own
+    configured = ue_child()
+
+    async def nested(context: Context, step: Step) -> Decision | None:
+        decisions = await run_protocols({"child": configured}, context, step)
+        return decisions[0].report if forwards else Decision.proceed("child handled")
+
+    async def independent(context: Context, step: Step) -> Decision | None:
+        return Decision.escalate(
+            "independent reason",
+            references=[Reference(type="message", id="o", cite="[own]")],
+        )
+
+    return ProtocolGroup(nested, independent)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("step", [before_step(), after_step()])
+@pytest.mark.parametrize(
+    ("forwards", "named", "cites"),
+    [
+        (False, "group: independent reason", ["[own]"]),
+        (
+            True,
+            "group/child: child reason; group: independent reason",
+            ["[child]", "[own]"],
+        ),
+    ],
+    ids=["handled", "forwarded"],
+)
+async def test_the_functions_of_a_group_are_told_apart(
+    forwards: bool, named: str, cites: list[str], step: Step
+) -> None:
+    decision = await run_sentinel(
+        resolve_sentinel({"group": ue_group(forwards)}), host_context(), step
+    )
+    assert decision is not None
+    assert decision.explanation == f"unhandled escalation from {named}. {GUIDANCE}"
+    assert [r.cite for r in decision.references] == cites
+
+
+class Calls(StoreModel):
+    count: int = 0
+
+
+@protocol
+def ue_counts() -> Protocol:
+    async def run(context: Context, step: Step) -> Decision | None:
+        calls = context.store_as(Calls)
+        calls.count += 1
+        return Decision.escalate(f"call {calls.count}")
+
+    return run
+
+
+@protocol
+def ue_twice() -> Protocol:
+    configured = ue_counts()
+
+    async def run(context: Context, step: Step) -> Decision | None:
+        await run_protocols({"again": configured}, context, step)
+        decisions = await run_protocols({"again": configured}, context, step)
+        return decisions[0].report
+
+    return run
+
+
+@pytest.mark.anyio
+async def test_each_invocation_at_one_path_is_named() -> None:
+    decision = await run_sentinel(
+        resolve_sentinel({"twice": ue_twice()}), host_context(), before_step()
+    )
+    assert decision is not None
+    assert decision.explanation == (
+        f"unhandled escalation from twice/again: call 1; twice/again: call 2. {GUIDANCE}"
+    )

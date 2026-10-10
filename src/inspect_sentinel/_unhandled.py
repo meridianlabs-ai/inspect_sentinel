@@ -1,67 +1,89 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, cast
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 
-from ._host import Recorder
-from ._report import Decision, Failed, Report, Reported
-from ._step import Step
-
-if TYPE_CHECKING:
-    from ._context import Context
+from ._report import Decision, Reported
 
 
-class EscalationRecorder:
-    # forwards every record, keeping the escalates of the step, so an
-    # unhandled one at the root can say where it came from
-    def __init__(self, recorder: Recorder) -> None:
-        self._recorder = recorder
-        self.escalates: list[Reported[Decision]] = []
-
-    def record(
-        self, context: Context, factory: str, step: Step, reported: Reported[Report]
-    ) -> None:
-        self._recorder.record(context, factory, step, reported)
-        if (
-            isinstance(reported.report, Decision)
-            and reported.report.action == "escalate"
-        ):
-            self.escalates.append(cast(Reported[Decision], reported))
-
-    def failed(
-        self, context: Context, factory: str, step: Step, failed: Failed
-    ) -> None:
-        self._recorder.failed(context, factory, step, failed)
-
-    def cancelled(self, context: Context, factory: str, step: Step, name: str) -> None:
-        self._recorder.cancelled(context, factory, step, name)
-
-    def bypassed(self, context: Context, factory: str, step: Step, name: str) -> None:
-        self._recorder.bypassed(context, factory, step, name)
-
-    def superseded(
-        self, context: Context, factory: str, step: Step, reported: Reported[Decision]
-    ) -> None:
-        self._recorder.superseded(context, factory, step, reported)
+@dataclass(eq=False)
+class Invocation:
+    # one call of one protocol function during a step, under the call that ran
+    # it; the functions of a group, and repeat calls at one path, are told apart
+    parent: Invocation | None
+    decided: Reported[Decision] | None = None
 
 
-def sources(escalates: Sequence[Reported[Decision]]) -> list[Reported[Decision]]:
-    # an escalate reached the root when every layer above it escalated too;
-    # of those, the innermost are where the escalation came from
-    paths = {e.path for e in escalates}
-    reached = [e for e in escalates if all(a in paths for a in _ancestors(e.path))]
-    return [
-        e
-        for e in reached
-        if not any(r.path != e.path and e.path in _ancestors(r.path) for r in reached)
+# the invocation whose function is running, which the runner's children take
+# as their parent; task groups copy it to the tasks they start
+_current: ContextVar[Invocation | None] = ContextVar(
+    "sentinel_invocation", default=None
+)
+# the invocations of the step that decided, in the order they decided
+_decided: ContextVar[list[Invocation] | None] = ContextVar(
+    "sentinel_decided", default=None
+)
+
+
+def invocation() -> Invocation:
+    return Invocation(parent=_current.get())
+
+
+@contextmanager
+def running(node: Invocation) -> Generator[None]:
+    token = _current.set(node)
+    try:
+        yield
+    finally:
+        _current.reset(token)
+
+
+def decided(node: Invocation, reported: Reported[Decision]) -> None:
+    node.decided = reported
+    found = _decided.get()
+    if found is not None:
+        found.append(node)
+
+
+@contextmanager
+def collecting() -> Generator[list[Invocation]]:
+    found: list[Invocation] = []
+    token = _decided.set(found)
+    try:
+        yield found
+    finally:
+        _decided.reset(token)
+
+
+def sources(found: Sequence[Invocation]) -> list[Reported[Decision]]:
+    # an escalate reached the root when every invocation above it escalated
+    # too; of those, the innermost are where the escalation came from
+    reached = [node for node in found if _escalated(node) and _reaches(node)]
+    inner = [
+        node
+        for node in reached
+        if not any(node in _ancestors(other) for other in reached)
     ]
+    return [node.decided for node in inner if node.decided is not None]
 
 
-def _ancestors(path: str) -> list[str]:
-    if not path:
-        return []
-    parts = path.split("/")
-    return ["", *("/".join(parts[:i]) for i in range(1, len(parts)))]
+def _escalated(node: Invocation) -> bool:
+    return node.decided is not None and node.decided.report.action == "escalate"
+
+
+def _reaches(node: Invocation) -> bool:
+    return all(_escalated(ancestor) for ancestor in _ancestors(node))
+
+
+def _ancestors(node: Invocation) -> list[Invocation]:
+    ancestors: list[Invocation] = []
+    parent = node.parent
+    while parent is not None:
+        ancestors.append(parent)
+        parent = parent.parent
+    return ancestors
 
 
 def unhandled(escalations: Sequence[Reported[Decision]]) -> Decision:
