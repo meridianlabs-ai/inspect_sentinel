@@ -14,11 +14,10 @@ The checks are deliberately simple, to keep the examples readable. Rules are che
 
 ## Running
 
-The examples need Docker running, `inspect_ai` from its `main` branch (which has `Task(sentinel=...)`, until `inspect_ai` releases it), this package, and the model provider SDKs:
+The examples need Docker running, this package (which installs `inspect-ai` 0.3.278 or later), and the model provider SDKs:
 
 ```bash
-# installs inspect_ai from main too, as this package's dependency
-pip install "inspect_sentinel @ git+https://github.com/meridianlabs-ai/inspect_sentinel"
+pip install inspect-sentinel
 pip install openai anthropic
 export OPENAI_API_KEY=...     # the agent
 export ANTHROPIC_API_KEY=...  # the monitor role
