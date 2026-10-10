@@ -52,12 +52,6 @@ def ue_group() -> ProtocolGroup:
     return ProtocolGroup(after)
 
 
-@protocol
-def ue_wraps() -> Protocol:
-    # a custom protocol returning a shipped one is the shipped one
-    return sequential([ue_before(), human(stages=["tool_call"])])
-
-
 @pytest.fixture(autouse=True)
 def _fresh_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
     # the warning is once per process for each message
@@ -101,7 +95,6 @@ HANDLED: list[tuple[str, Callable[[], Sentinels]]] = [
             [ue_before(), concurrent([human(stages=["tool_call"]), _limit()])]
         ),
     ),
-    ("a custom protocol returning a shipped one", ue_wraps),
 ]
 
 

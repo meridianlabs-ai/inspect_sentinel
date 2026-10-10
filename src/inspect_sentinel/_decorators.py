@@ -47,7 +47,7 @@ _STEP_TYPES = frozenset(get_args(Step))
 # and registry metadata would need a name<->class mapping
 STEP_TYPES_ATTR = "__sentinel_step_types__"
 # whether a shipped protocol can escalate, set on what its factory returns and
-# carried to the configured instance; see _escalation
+# carried to the configured instance, a rebuilt group included; see _escalation
 ESCALATION_ATTR = "__sentinel_escalation__"
 VERSION = "version"
 PORTABLE = "portable"
