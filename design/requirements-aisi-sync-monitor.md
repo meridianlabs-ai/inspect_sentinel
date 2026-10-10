@@ -105,7 +105,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 | R3 | tool definitions and a truncation signal at `AfterToolCall` | not met |
 | R4 | earlier decisions in the conversation | not met |
 | R5 | escalate or terminate on scores, without reject | not met |
-| R6 | a root escalate does not proceed | not met; conflicts with a recorded decision |
+| R6 | a root escalate does not proceed | decided 2026-10-10 (terminates); not built |
 | R7 | replay over existing logs | not met; designed in part |
 | R8 | monitor-safe message rendering | partly met, in Scout; the move to inspect_ai is not started |
 | 8.1 | agent text cannot forge structure | partly met |
@@ -130,7 +130,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 
 **R5** (narrowed: the log is covered; the scores must reach the reviewer). `threshold(monitors, reject_at, terminate_at=None)` requires `reject_at`, returns only `reject`, `terminate` or `continue`, and requires every monitor to watch `BeforeToolCall` (`_protocols/threshold.py`). Its explanation names the one highest-scoring crossing monitor ([pr-series.md](pr-series.md), "Threshold explanations"). Today this needs a custom protocol. Gap: a built-in protocol with `escalate_at` and `terminate_at`, no required `reject_at`, at `AfterGenerate` and both tool stages, combining monitors across stages, with every contributing score and explanation reaching `human()`, through the explanation, `step.escalations` or metadata.
 
-**R6** (narrowed: an opt-in is enough). A root `escalate` proceeds, stays recorded as the root's decision, and warns once per process (`_dispatch.py`, `_run`; [pr-series.md](pr-series.md), "Root and escalate"). Gap: a task- or root-level setting that makes an unhandled `escalate` terminate, at every stage, with the default unchanged.
+**R6** (narrowed: an opt-in is enough; decided 2026-10-10 as the default). A root `escalate` proceeds, stays recorded as the root's decision, and warns once per process (`_dispatch.py`, `_run`; [pr-series.md](pr-series.md), "Root and escalate"). Decided 2026-10-10 ([pr-series.md](pr-series.md), "Unhandled escalate"): an escalate that reaches the root is a configuration bug and terminates at every stage, recorded as unhandled; `handle_escalation("terminate" | "continue")` states a policy explicitly, and building the sentinel warns when the root can escalate unhandled. This meets R6 by default, without the opt-in setting. Gap: building it.
 
 **R7.** [sentinel-development.md](sentinel-development.md) designs replay: steps from messages and from events (`ModelEvent.input` and `tools`, `ToolEvent.truncated`), live step ids, a per-transcript store, compaction segments run concurrently and walked in order, and a read mode whose agreement with replay is "a test worth shipping". Built: `SentinelEvent.step_id` at the tool stages (the tool call id), so a live observation can be matched by step. Not built: any replay. Not in the design: logs from before Sentinel, whose approvals are `ApprovalEvent`s, and scoring a chosen subset of steps ("only run these steps"). The `store_as()` state across concurrent segments drops out for AISI if R10 lands, since their only cross-step state is the opening prompts. Gap: workstream 10, plus those two.
 
@@ -159,7 +159,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 | R3 | none | Deferred, tool-stage completeness: tools and a truncation signal at the tool stages | the same record as R2 |
 | R4 | none | Deferred, design decisions: earlier protocol decisions (`human()` approvals) visible to a monitor | `conversation` on `ModelEvent` and `CompactionEvent`; step ids at the generate stages (#42); R1; R7 for replay |
 | R5 | none | Deferred, design decisions: escalate and terminate on scores without reject, with every contributing score reaching `human()`; workstream 7 bullet | R1 for `AfterGenerate`; R6's decision for an unpaired escalate |
-| R6 | Deferred, "Revisit an `escalate` that reaches the top"; sentinel.md open question 24 | on that entry: an opt-in setting that terminates, default unchanged | the setting's name and scope |
+| R6 | pr-series.md, "Unhandled escalate" (decided 2026-10-10); Deferred, "Build the unhandled-escalate decision" | the decision | inspect_ai dispatcher change; `handle_escalation()` in sentinel |
 | R7 | Workstream 10; [sentinel-development.md](sentinel-development.md) | workstream 10 note: pre-Sentinel logs, step subsets | R2 and R3 recorded in the log; `conversation` on events; inspect_core if replay moves into sentinel |
 | R8 | Deferred, "Shared message rendering"; workstream 3 (views) | the uncovered sub-needs on that entry; workstream 3 note | the inspect_ai and Scout PRs in that entry; R3 for 8.4; R4 for 8.5 |
 | R9 | Workstream 13 (remote human surfaces); `Host.ask_human` | workstream 13 note; Deferred, Later: routing `human()` | R1 for `AfterGenerate` |
@@ -167,9 +167,9 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 
 ## Conflicts with recorded decisions
 
-AISI's follow-up resolves or narrows each conflict listed on 2026-10-08. What remains is a smaller choice for the maintainer in each case; no recorded decision has to change.
+AISI's follow-up resolves or narrows each conflict listed on 2026-10-08. R6 was then decided on 2026-10-10, replacing the recorded root-escalate default; for the others what remains is a smaller choice, and no recorded decision has to change.
 
-1. **R6 and "Root and escalate".** Resolved by an opt-in. The recorded default (a root `escalate` proceeds, is recorded, and warns once per process; [pr-series.md](pr-series.md), "Root and escalate", 2026-09-30) stays. Add a task- or root-level setting under which an unhandled `escalate` terminates at every stage, which also sidesteps `reject` being illegal after a call and at the generate stages. To decide: the setting's name, where it lives (`Task`, the sentinel root, or both) and how the log records it.
+1. **R6 and "Root and escalate".** Decided 2026-10-10, going further than AISI's opt-in: an escalate that reaches the root is treated as a configuration bug and terminates at every stage, recorded as unhandled, replacing the recorded proceed-with-warning default. `handle_escalation("terminate" | "continue")` states a policy explicitly, and building the sentinel warns when the root can escalate unhandled ([pr-series.md](pr-series.md), "Unhandled escalate").
 2. **R2 and the fallback to history.** Resolved: the fallback may stay if the step says it fell back. To decide: the form of the signal (`input` of `None`, a flag on the step, or an exception), which also decides `input`'s type.
 3. **R5 and "Threshold explanations".** Resolved without changing the 2026-09-29 decision: the explanation can keep naming the highest-scoring monitor, as long as every contributing monitor's score and reasoning reaches the person reviewing an escalation. To decide: which carrier, `step.escalations` (already what `human()` shows) or metadata. `threshold` stays `BeforeToolCall`-only for `reject`; the new protocol's escalate and terminate need no reject.
 4. **R4 and monitor independence.** Resolved: only earlier protocol decisions (in practice `human()` approvals) at earlier steps, never monitor observations, so [sentinel.md](sentinel.md) "The surfaces" stands. To decide: how a monitor reads them (a `Context` or `Host` read keyed by step id) and whether every protocol decision or only `human()`'s is exposed.
@@ -181,7 +181,7 @@ AISI's follow-up resolves or narrows each conflict listed on 2026-10-08. What re
 
 A suggestion for the maintainer, not a decision. Updated after AISI's follow-up, which makes R6 and R2 smaller and adds R10.
 
-1. **R6.** Now an opt-in setting that terminates; small once its name and scope are decided.
+1. **R6.** Decided 2026-10-10; small to build (the dispatcher change, `handle_escalation()` and a build-time warning).
 2. **R2 and R3.** One mechanism: record each generate's input and tools when it finishes, keyed by the assistant message, plus an explicit unavailable signal and a truncation field. R7 and R10 build on it.
 3. **R5.** Unblocks their tool-stage configurations without a custom protocol; the scores reach `human()` through `step.escalations`. The `AfterGenerate` part follows R1.
 4. **R1.** Rides on the generate-stages workstream, already high priority; adds `escalate` there and a turn rendering for `human()`.
