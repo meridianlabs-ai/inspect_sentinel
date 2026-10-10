@@ -19,13 +19,13 @@ Inspect Sentinel is under active development, and its API may change. The design
 
 ## Installation
 
-Install Inspect Sentinel from GitHub:
+Install Inspect Sentinel from PyPI:
 
 ```{.bash filename="Terminal"}
-pip install git+https://github.com/meridianlabs-ai/inspect_sentinel
+pip install inspect-sentinel
 ```
 
-This also installs `inspect_ai` from its `main` branch, which has `Task(sentinel=...)` and the transcript events and viewer support that sentinels use, until `inspect_ai` releases them.
+It requires `inspect-ai` 0.3.278 or later, the first release with `Task(sentinel=...)` and the transcript events and viewer support that sentinels use.
 
 The example below uses an OpenAI model for the agent and an Anthropic model for the monitor, so install those providers' packages and set their API keys:
 
