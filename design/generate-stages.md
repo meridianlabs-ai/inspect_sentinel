@@ -9,9 +9,9 @@ Status: prototyped. Monitors observe both generate stages and protocols may retu
 | # | Decision | Recommendation |
 |---|---|---|
 | 1 | How an agent generate is identified | A call on the sample's active model, made while the sample runs its solvers, outside a sentinel run, a compaction and a tool's own body ([a](#a-which-calls)). Prototyped. |
-| 2 | Sub-agents and role models that are not the active model | Not checked for now. Add a declared opt-in (model roles whose calls count as the agent's) when a control setup needs one. |
+| 2 | Sub-agents and role models that are not the active model | **Decided 2026-10-10:** not checked in v1, as v1 scope rather than a permanent rule. The planned direction is coverage of the whole agent tree with helper calls marked out ([sub-agents.md](sub-agents.md), on the design branch of #66), which is additive for monitors. Decided with it, so monitors written now do not break: `step.conversation` identifies one agent instance; `store_as()` stays per sample; helper calls on the active model are checked for now. |
 | 3 | Compaction summary calls | Not checked. The summary reaches the next `BeforeGenerate` as part of `input`. Prototyped. |
-| 4 | Where the hook sits | In `Model.generate`, once per call, outside the connection slot; the input preparation moves ahead of the slot so the step sees what is sent ([b](#b-where-the-hook-sits)). Prototyped. |
+| 4 | Where the hook sits | **Decided 2026-10-10.** In `Model.generate`, once per call, outside the connection slot; the input preparation moves ahead of the slot so the step sees what is sent ([b](#b-where-the-hook-sits)). Prototyped. |
 | 5 | Cache hits | Both stages run on a cache hit. Prototyped. |
 | 6 | A generate that raises | No `AfterGenerate` (provider error, `fail_on_refusal`, a limit). Prototyped. |
 | 7 | Dispatching a stage nothing watches | Skip it, at every stage, so a tool-only sentinel opens no span per generate. Prototyped. |
@@ -23,7 +23,7 @@ Status: prototyped. Monitors observe both generate stages and protocols may retu
 | 13 | `SentinelEvent.modified` at the generate stages | `ChatMessageAssistant` joins the union for `AfterGenerate`; a `BeforeGenerate` modify records no copy, since the `ModelEvent` holds the request sent. A log contract change, for when `modify` lands. |
 | 14 | `Host.generate` and `tool_choice` | Add `tool_choice=`, so `resample` regenerates exactly. |
 | 15 | `history` at the generate stages | The caller's messages for now; the agent loops declare their full history later ([e](#e-what-the-step-carries)). |
-| 16 | `escalate` at the generate stages | Enable with the next step, with the same root behaviour as the tool stages. |
+| 16 | `escalate` at the generate stages | **Decided 2026-10-10:** enable, under pr-series.md "Unhandled escalate" (sentinel's `run_sentinel` turns an unhandled root escalate into a terminate). Lands after that change (sentinel #74, inspect_ai #5812). |
 | 17 | Recording `step.input` at generate time | Follow-up: the after-generate hook records each input by its assistant message id, replacing the transcript scan the tool stages use. |
 
 ## a. Which calls are checked {#a-which-calls}
