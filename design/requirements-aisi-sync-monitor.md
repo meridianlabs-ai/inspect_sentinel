@@ -2,7 +2,7 @@
 
 External requirements from AISI (UK AI Security Institute), 2026-10-08, for moving their internal sync monitor onto Inspect Sentinel. The first section reproduces the document as received, lightly formatted. The rest is ours: what is met today, where each requirement sits in the plan, where a requirement conflicts with a recorded decision, and a suggested order.
 
-Status: received 2026-10-08; statuses checked against inspect_sentinel `main` and inspect_ai `feature/sentinel` on that date. Conflicts and priorities are for the maintainer to decide; nothing here changes a recorded decision.
+Status: received 2026-10-08; statuses checked against inspect_sentinel `main` and inspect_ai `feature/sentinel` on that date. AISI's follow-up the same day ([PR #66](https://github.com/meridianlabs-ai/inspect_sentinel/pull/66#issuecomment-6064370831) comment, reproduced below) narrows R2, R4, R5, R6 and R7 and adds R10; the sections after it reflect the narrowed requirements. Priorities and the remaining choices are for the maintainer to decide; nothing here changes a recorded decision.
 
 ## The document
 
@@ -76,6 +76,26 @@ Lower priority than the rest.
 
 **Why:** We may want to use our own approver UI. Currently some teams do and may want to continue using their implementation, and escalated actions need to reach it.
 
+## AISI follow-up (2026-10-08)
+
+Received as a comment on PR #66, lightly formatted. It answers the conflicts listed below and adds one request.
+
+**R6 (root `escalate`).** An opt-in is enough: a task-level or root-level setting that makes an unhandled `escalate` fail closed. The default can stay as recorded. `terminate` is fine as the fail-closed action at every stage; `reject` is never needed here.
+
+**R2 (fallback to history).** Any explicit signal works: `input` being `None`, a flag on the step, or an exception. Keeping a fallback is fine too, as long as the step says it fell back. What must be avoided is a monitor silently judging context the model was never sent.
+
+**R5 (`threshold` explanations).** Each monitor's observation is already a `SentinelEvent`, so the log is covered. This only matters for what the person reviewing an escalation sees: every contributing monitor's score and reasoning should reach `human()`, whether through the explanation, `step.escalations` or metadata.
+
+**R4 (earlier decisions vs monitor independence).** Narrowed: only earlier decisions by protocols, in practice `human()` approvals of escalations, and only at steps before the current one. Other monitors' observations, at the same step or earlier, are not needed, so the independence property can stay as it is.
+
+**R7 (concurrent segments vs `store_as` state).** The only state across steps is the agent's opening prompts as they were sent to the model, recorded at a conversation's first monitored step so they survive a compaction that drops them from later inputs. With R10, monitors would keep no state across steps, the conflict goes away, and step selection is just "only run these steps".
+
+### R10: the history as sent to the model
+
+**What we need:** A second field beside `step.history` holding every message this agent instance has sent to the model, in the order sent. It is scoped to one agent instance, so sub-agents and parallel agents in the same sample are not mixed in. `history` stays as it is. It works live and in replay. Open question: how to show a message the scaffold edits after it was sent; keeping each version in the order it was sent seems right, but any consistent answer works.
+
+**Why:** `step.history` is the scaffold's list, which can differ from what the model was sent, for example when a scaffold edits messages before sending them. The only as-sent view is `step.input`, which covers only the current call. This gives the opening prompts and the pre-compaction context as the model actually saw them, without monitors keeping state, live and in replay, and resolves the R7 conflict. It depends on the same `conversation` id on events that R4 and R7 need; [sentinel-development.md](sentinel-development.md), "From events", already sketches rebuilding history per agent from `ModelEvent`s and `CompactionEvent`s sharing that id.
+
 ## Status today
 
 | | Requirement | Status |
@@ -98,20 +118,21 @@ Lower priority than the rest.
 | 8.8 | tool definitions | not met |
 | 8.9 | withheld messages | partly met |
 | R9 | `human()` routed to a team's review tool | not met |
+| R10 | the history as sent to the model, per agent instance | not met; designed in part for replay |
 
 **R1.** Only the tool stages are wired ([pr-series.md](pr-series.md), Decisions, "Tool stages only, for now"). The generate-stages prototype, sentinel #42 (draft), allows only `continue` and `terminate` at `BeforeGenerate` and `AfterGenerate`; its decision 16 enables `escalate` next, with the tool stages' root behaviour. `human(stages=)` accepts only `tool_call` and `tool_result` (`_protocols/human.py`; [sentinel.md](sentinel.md), "Humans in the loop", open question 14). inspect_ai's `Host.ask_human` passes one `step.call` to `human_approver` (`_sentinel/_dispatch.py`), so there is no rendering of a whole turn. Gap: `escalate` at `AfterGenerate`, `human(stages=["model_output"])`, and a host rendering of a turn's tool calls with `step.escalations`.
 
-**R2.** inspect_ai rebuilds `step.input` at both tool stages by scanning resident transcript events for the `ModelEvent` whose output carries the assistant message (`_dispatch.py`, `_model_input`). When none is found, for example once the event is no longer resident, it uses the conversation before the assistant message and logs a warning once per sample; nothing on the step says which happened. That fallback is `history`, which after a compaction holds turns the model was not sent. Gap: record the input when the generate finishes ([pr-series.md](pr-series.md), Deferred, "Record `step.input` instead of rebuilding it"; #42 decision 17), and define what a step carries when the exact input is unavailable. Replay: none yet (R7).
+**R2** (narrowed: any explicit signal; a flagged fallback is acceptable). inspect_ai rebuilds `step.input` at both tool stages by scanning resident transcript events for the `ModelEvent` whose output carries the assistant message (`_dispatch.py`, `_model_input`). When none is found, for example once the event is no longer resident, it uses the conversation before the assistant message and logs a warning once per sample; nothing on the step says which happened. That fallback is `history`, which after a compaction holds turns the model was not sent. Gap: record the input when the generate finishes ([pr-series.md](pr-series.md), Deferred, "Record `step.input` instead of rebuilding it"; #42 decision 17), and add an explicit signal when the exact input is unavailable (`input` of `None`, a flag on the step, or an exception), keeping the fallback only if the step marks it. Replay: none yet (R7).
 
 **R3.** `BeforeToolCall` and `AfterToolCall` have no `tools` field (`_step.py`); only the generate stages carry `tools` in the design ([sentinel.md](sentinel.md), "The payloads"). Truncation: `step.result` is what the model sees and `step.output` the untruncated value, live only. The log records the truncated byte range on `ToolEvent.truncated`, not on the step. The in-band notice inspect_ai writes into a truncated result ("The output of your call to … was too long to be displayed", `<START_TOOL_OUTPUT>`) is text a tool's output can imitate. Gap: `tools` at the tool stages and one truncation field set the same way live and in replay.
 
-**R4.** A monitor reads its own `store_as()` namespace, keyed by its path, and `step.escalations`, which holds only earlier links' escalations at the current step inside a `sequential` ([sentinel.md](sentinel.md), "The payloads"). `SentinelEvent`s are in the transcript with `step_id` and `conversation`, but nothing on `Context` or `Host` exposes them. [sentinel.md](sentinel.md), "The surfaces", lists sibling reports at the same step among what a monitor never sees; earlier steps are not addressed. Gap: a read of earlier decisions in the conversation, keyed by step id, at every stage and in replay.
+**R4** (narrowed: earlier protocol decisions only, in practice `human()` approvals, at steps before the current one). A monitor reads its own `store_as()` namespace, keyed by its path, and `step.escalations`, which holds only earlier links' escalations at the current step inside a `sequential` ([sentinel.md](sentinel.md), "The payloads"). `SentinelEvent`s are in the transcript with `step_id` and `conversation`, but nothing on `Context` or `Host` exposes them. [sentinel.md](sentinel.md), "The surfaces", lists sibling reports at the same step among what a monitor never sees; earlier steps are not addressed. Gap: a read of earlier protocol decisions in the conversation, keyed by step id, at every stage and in replay. Monitor observations stay out of it, so the independence property is untouched.
 
-**R5.** `threshold(monitors, reject_at, terminate_at=None)` requires `reject_at`, returns only `reject`, `terminate` or `continue`, and requires every monitor to watch `BeforeToolCall` (`_protocols/threshold.py`). Its explanation names the one highest-scoring crossing monitor ([pr-series.md](pr-series.md), "Threshold explanations"). Today this needs a custom protocol. Gap: a built-in protocol with `escalate_at` and `terminate_at`, no required `reject_at`, at `AfterGenerate` and both tool stages, combining monitors across stages, with every contributing score and explanation in the decision.
+**R5** (narrowed: the log is covered; the scores must reach the reviewer). `threshold(monitors, reject_at, terminate_at=None)` requires `reject_at`, returns only `reject`, `terminate` or `continue`, and requires every monitor to watch `BeforeToolCall` (`_protocols/threshold.py`). Its explanation names the one highest-scoring crossing monitor ([pr-series.md](pr-series.md), "Threshold explanations"). Today this needs a custom protocol. Gap: a built-in protocol with `escalate_at` and `terminate_at`, no required `reject_at`, at `AfterGenerate` and both tool stages, combining monitors across stages, with every contributing score and explanation reaching `human()`, through the explanation, `step.escalations` or metadata.
 
-**R6.** A root `escalate` proceeds, stays recorded as the root's decision, and warns once per process (`_dispatch.py`, `_run`; [pr-series.md](pr-series.md), "Root and escalate"). See [Conflicts](#conflicts-with-recorded-decisions).
+**R6** (narrowed: an opt-in is enough). A root `escalate` proceeds, stays recorded as the root's decision, and warns once per process (`_dispatch.py`, `_run`; [pr-series.md](pr-series.md), "Root and escalate"). Gap: a task- or root-level setting that makes an unhandled `escalate` terminate, at every stage, with the default unchanged.
 
-**R7.** [sentinel-development.md](sentinel-development.md) designs replay: steps from messages and from events (`ModelEvent.input` and `tools`, `ToolEvent.truncated`), live step ids, a per-transcript store, compaction segments run concurrently and walked in order, and a read mode whose agreement with replay is "a test worth shipping". Built: `SentinelEvent.step_id` at the tool stages (the tool call id), so a live observation can be matched by step. Not built: any replay. Not in the design: logs from before Sentinel, whose approvals are `ApprovalEvent`s; scoring a chosen subset of steps; and `store_as()` state across concurrent segments (the design gives each transcript one store, and a split sub-section a fresh store, its open question 8). Gap: workstream 10, plus those three.
+**R7.** [sentinel-development.md](sentinel-development.md) designs replay: steps from messages and from events (`ModelEvent.input` and `tools`, `ToolEvent.truncated`), live step ids, a per-transcript store, compaction segments run concurrently and walked in order, and a read mode whose agreement with replay is "a test worth shipping". Built: `SentinelEvent.step_id` at the tool stages (the tool call id), so a live observation can be matched by step. Not built: any replay. Not in the design: logs from before Sentinel, whose approvals are `ApprovalEvent`s, and scoring a chosen subset of steps ("only run these steps"). The `store_as()` state across concurrent segments drops out for AISI if R10 lands, since their only cross-step state is the opening prompts. Gap: workstream 10, plus those two.
 
 **R8.** The shared renderer is planned, not started ([pr-series.md](pr-series.md), Deferred, "Shared message rendering, then the prompt helpers"): Scout's `messages_as_str`, `message_as_str` and `MessageFormatOptions` move into inspect_ai with output exactly Scout's. What Scout does today (`inspect_scout/_scanner/extract.py`):
 
@@ -127,40 +148,45 @@ Lower priority than the rest.
 
 **R9.** `Host.ask_human` in inspect_ai always calls `human_approver` (`_dispatch.py`), so the approval panel, ACP or the console. Nothing routes `human()` to another surface. Workstream 13 decided remote surfaces go through a message queue that other tools consume ([workstreams.md](workstreams.md)); [proxy-host.md](proxy-host.md) maps `ask_human` to an audit queue.
 
+**R10.** `step.history` is the scaffold's message list (`_step.py`), and `step.input` is the as-sent input of the current call only. Nothing live accumulates what one agent instance has sent across calls. [sentinel-development.md](sentinel-development.md), "From events", designs the same reconstruction for replay from `ModelEvent`s and `CompactionEvent`s sharing a `conversation` id, which core does not record yet. Gap: a step field (for example `sent`) built per agent instance from each generate's recorded input (the R2 record), the `conversation` id on events, the same field in replay, and a rule for messages edited after they were sent.
+
 ## Where each requirement sits in the plan
 
 | | Covered by | Added | Depends on |
 |---|---|---|---|
 | R1 | Workstream 2 (generate stages); sentinel #42 decision 16 | Deferred, Later: `human()` at `AfterGenerate` | generate stages; R6's decision for the root behaviour |
-| R2 | Deferred, "Record `step.input` instead of rebuilding it"; #42 decision 17 | the explicit-unavailable requirement on that entry | generate-stage hook (#42) for recording at generate time |
+| R2 | Deferred, "Record `step.input` instead of rebuilding it"; #42 decision 17 | on that entry: an explicit signal when the input is unavailable; a flagged fallback is allowed | generate-stage hook (#42) for recording at generate time |
 | R3 | none | Deferred, tool-stage completeness: tools and a truncation signal at the tool stages | the same record as R2 |
-| R4 | none | Deferred, design decisions: earlier decisions visible to a monitor | `conversation` on `ModelEvent` and `CompactionEvent`; step ids at the generate stages (#42); R1; R7 for replay |
-| R5 | none | Deferred, design decisions: escalate and terminate on scores without reject; workstream 7 bullet | R1 for `AfterGenerate`; R6's decision for an unpaired escalate |
-| R6 | Deferred, "Revisit an `escalate` that reaches the top"; sentinel.md open question 24 | link only | maintainer decision |
-| R7 | Workstream 10; [sentinel-development.md](sentinel-development.md) | workstream 10 note: pre-Sentinel logs, step subsets, store fidelity | R2 and R3 recorded in the log; `conversation` on events; inspect_core if replay moves into sentinel |
+| R4 | none | Deferred, design decisions: earlier protocol decisions (`human()` approvals) visible to a monitor | `conversation` on `ModelEvent` and `CompactionEvent`; step ids at the generate stages (#42); R1; R7 for replay |
+| R5 | none | Deferred, design decisions: escalate and terminate on scores without reject, with every contributing score reaching `human()`; workstream 7 bullet | R1 for `AfterGenerate`; R6's decision for an unpaired escalate |
+| R6 | Deferred, "Revisit an `escalate` that reaches the top"; sentinel.md open question 24 | on that entry: an opt-in setting that terminates, default unchanged | the setting's name and scope |
+| R7 | Workstream 10; [sentinel-development.md](sentinel-development.md) | workstream 10 note: pre-Sentinel logs, step subsets | R2 and R3 recorded in the log; `conversation` on events; inspect_core if replay moves into sentinel |
 | R8 | Deferred, "Shared message rendering"; workstream 3 (views) | the uncovered sub-needs on that entry; workstream 3 note | the inspect_ai and Scout PRs in that entry; R3 for 8.4; R4 for 8.5 |
 | R9 | Workstream 13 (remote human surfaces); `Host.ask_human` | workstream 13 note; Deferred, Later: routing `human()` | R1 for `AfterGenerate` |
+| R10 | [sentinel-development.md](sentinel-development.md), "From events" (replay only) | Deferred, tool-stage completeness: the history as sent; workstream 2 and 10 notes | the R2 record of each generate's input; `conversation` on `ModelEvent` and `CompactionEvent` |
 
 ## Conflicts with recorded decisions
 
-For the maintainer to decide. Each states the recorded position and the requirement.
+AISI's follow-up resolves or narrows each conflict listed on 2026-10-08. What remains is a smaller choice for the maintainer in each case; no recorded decision has to change.
 
-1. **R6 and "Root and escalate".** Recorded ([pr-series.md](pr-series.md), "Root and escalate", 2026-09-30): a root `escalate` proceeds, is recorded, and the host warns once per process; the alternative (reject, as approval does when every approver escalates, or a setting with a default) is already listed under Deferred, "Revisit an `escalate` that reaches the top", with the trade-off that rejecting turns every unsure rule into a blocked call. #42 decision 16 extends the same behaviour to the generate stages. R6: the action must not proceed, at any stage, and the log must show what happened. Note that "does not proceed" is not yet defined per stage: `reject` is not legal after a tool call or, in #42, at the generate stages, so the fail-closed form there would be `terminate`.
-2. **R2 and the fallback to history.** Current behaviour (inspect_ai `_model_input`, not a pr-series decision record): when no `ModelEvent` is found, `step.input` is the conversation before the call, with a warning once per sample, and the step does not say so. The planned replacement (Deferred, "Record `step.input`") still falls back to a scan for a message no inspect generate produced. R2: never substitute history; make unavailability visible to the monitor. Deciding this also decides what a step's `input` type is when the input is unknown.
-3. **R5 and "Threshold explanations".** Recorded (2026-09-29): a reject or terminate names the highest-scoring monitor and carries its explanation. R5: every contributing monitor's score and explanation. Related: `threshold` is `BeforeToolCall`-only "as designed", because `reject` is not legal after a call; R5 asks for the tool-result stage and `AfterGenerate` with no reject.
-4. **R4 and monitor independence.** [sentinel.md](sentinel.md), "The surfaces", says a monitor never sees sibling monitors' reports at the same step, as a safety property, and `step.escalations` is per step by design ("The payloads"). R4 asks for other layers' decisions at earlier steps, which neither statement covers. Whether earlier decisions are visible, to which instances, and whether that includes other monitors' observations, needs a decision.
-5. **R7 and concurrent compaction segments.** [sentinel-development.md](sentinel-development.md), "Cost and parallelism", runs compaction segments concurrently by default and gives a split sub-section a fresh store (open question 8), while a transcript has one store. R7 asks for parallel segments and, at each step, the `store_as()` state it had live. A stateful monitor cannot have both unless state is reconstructed at each segment start, for example from recorded events. A sketch, not a decision.
+1. **R6 and "Root and escalate".** Resolved by an opt-in. The recorded default (a root `escalate` proceeds, is recorded, and warns once per process; [pr-series.md](pr-series.md), "Root and escalate", 2026-09-30) stays. Add a task- or root-level setting under which an unhandled `escalate` terminates at every stage, which also sidesteps `reject` being illegal after a call and at the generate stages. To decide: the setting's name, where it lives (`Task`, the sentinel root, or both) and how the log records it.
+2. **R2 and the fallback to history.** Resolved: the fallback may stay if the step says it fell back. To decide: the form of the signal (`input` of `None`, a flag on the step, or an exception), which also decides `input`'s type.
+3. **R5 and "Threshold explanations".** Resolved without changing the 2026-09-29 decision: the explanation can keep naming the highest-scoring monitor, as long as every contributing monitor's score and reasoning reaches the person reviewing an escalation. To decide: which carrier, `step.escalations` (already what `human()` shows) or metadata. `threshold` stays `BeforeToolCall`-only for `reject`; the new protocol's escalate and terminate need no reject.
+4. **R4 and monitor independence.** Resolved: only earlier protocol decisions (in practice `human()` approvals) at earlier steps, never monitor observations, so [sentinel.md](sentinel.md) "The surfaces" stands. To decide: how a monitor reads them (a `Context` or `Host` read keyed by step id) and whether every protocol decision or only `human()`'s is exposed.
+5. **R7 and concurrent compaction segments.** Dissolves for AISI with R10: their only cross-step state is the opening prompts as sent, which R10 provides. The general question, open question 8 of [sentinel-development.md](sentinel-development.md), stays open for other stateful monitors.
 6. **R1 and `human()` asking without escalation.** Not a conflict: `human()` asks whenever reached (pr-series, "human()"), and inside a `sequential` that means after an escalation, which is what R1 needs.
+7. **R10 and edited messages.** New, not a conflict: how the as-sent history shows a message the scaffold edits after sending it. AISI suggests keeping each version in the order sent.
 
 ## Suggested priority
 
-A suggestion for the maintainer, not a decision.
+A suggestion for the maintainer, not a decision. Updated after AISI's follow-up, which makes R6 and R2 smaller and adds R10.
 
-1. **R6.** A small change once decided, and the requirement that keeps a misconfiguration from letting a flagged action run.
-2. **R2 and R3.** One mechanism: record each generate's input and tools when it finishes, keyed by the assistant message, plus a truncation field. Correctness of what tool-result monitors see; R7 depends on it.
-3. **R5.** Unblocks their tool-stage configurations without a custom protocol; the `AfterGenerate` part follows R1.
+1. **R6.** Now an opt-in setting that terminates; small once its name and scope are decided.
+2. **R2 and R3.** One mechanism: record each generate's input and tools when it finishes, keyed by the assistant message, plus an explicit unavailable signal and a truncation field. R7 and R10 build on it.
+3. **R5.** Unblocks their tool-stage configurations without a custom protocol; the scores reach `human()` through `step.escalations`. The `AfterGenerate` part follows R1.
 4. **R1.** Rides on the generate-stages workstream, already high priority; adds `escalate` there and a turn rendering for `human()`.
-5. **R8, security sub-needs first (8.1, 8.4, 8.7), then the rest.** Large and shared with Scout; the security items protect every LLM monitor, the others are configuration.
-6. **R7.** Depends on R2 and R3 being recorded; workstream 10.
-7. **R4.** Needs a design and depends on R1, R7 and the `conversation` id on events.
-8. **R9.** Lowest, as stated by AISI; follows workstream 13.
+5. **R10**, with the `conversation` id on `ModelEvent` and `CompactionEvent` that R4 and R7 also need. Built on R2's record; removes the cross-step state that made R7 hard.
+6. **R8, security sub-needs first (8.1, 8.4, 8.7), then the rest.** Large and shared with Scout; the security items protect every LLM monitor, the others are configuration.
+7. **R7.** Depends on R2, R3 and R10 being recorded; workstream 10.
+8. **R4.** Narrowed to earlier protocol decisions; needs the `conversation` id and R7 for replay.
+9. **R9.** Lowest, as stated by AISI; follows workstream 13.

@@ -1,6 +1,6 @@
 # Workstreams
 
-Areas of sentinel that can be owned separately, as of 2026-10-06. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 6), next (7 to 11), lower priority (12 to 14), then done; 5 and 6 were added on 2026-10-05. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred". AISI's sync-monitor requirements (R1 to R9, 2026-10-08) are mapped onto these workstreams in [requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md).
+Areas of sentinel that can be owned separately, as of 2026-10-06. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 6), next (7 to 11), lower priority (12 to 14), then done; 5 and 6 were added on 2026-10-05. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred". AISI's sync-monitor requirements (R1 to R10, 2026-10-08) are mapped onto these workstreams in [requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md).
 
 Work on your own branches and open PRs into `feature/sentinel`, in inspect_ai and in ts-mono alike. Pushing directly to the shared branch collides.
 
@@ -28,7 +28,7 @@ Touches modules that sentinel, Scout and inspect_ai all import. Agree up front w
 
 Lives in inspect_ai's model path and sentinel's step types. Best after inspect_core, or at least not overlapping its moves in `model/`.
 
-AISI requirements that depend on it ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)): R1, `escalate` and `human()` at `AfterGenerate`; R5 at `AfterGenerate`; R2 and R3, recording each generate's input and tools when it finishes.
+AISI requirements that depend on it ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)): R1, `escalate` and `human()` at `AfterGenerate`; R5 at `AfterGenerate`; R2 and R3, recording each generate's input and tools when it finishes; R10, the history as each agent instance sent it, built from that record and the `conversation` id on events.
 
 ## 3. LLM affordances for monitors
 
@@ -133,7 +133,7 @@ The development loop: build a monitor, measure it over transcripts, calibrate it
 - `calibrate()`, producing per-dimension thresholds in the key format `threshold` accepts (`"instance.dimension"`, `"dimension"`, `"*"`).
 - `Result.subject` and row expansion in Scout.
 
-AISI requirement R7 ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)) adds: replay of logs from before Sentinel, whose approvals are `ApprovalEvent`s; scoring a chosen subset of steps; each step seeing the `store_as()` state it had live while compaction segments run concurrently; and live and replay kept identical as sentinel changes. R2 and R3 (exact input, tools and truncation) are what replay reads.
+AISI requirement R7 ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)) adds: replay of logs from before Sentinel, whose approvals are `ApprovalEvent`s; scoring a chosen subset of steps; and live and replay kept identical as sentinel changes. R2, R3 and R10 (exact input, tools, truncation and the history as sent) are what replay reads; with R10, AISI's monitors keep no `store_as()` state across steps, so concurrent compaction segments no longer conflict with it.
 
 Lives mostly in inspect_sentinel, with inspect_scout where Scout does the scanning, and consumes the sentinel API without changing it, so it rarely collides with core work. Uses `references` on reports (inspect_ai's `scorer.Reference`, as Scout's `Result` does) and the decorators' `version=`, which calibration records.
 
