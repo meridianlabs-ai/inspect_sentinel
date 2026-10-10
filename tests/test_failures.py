@@ -372,10 +372,11 @@ async def test_a_protocol_can_decide_from_the_monitors_that_did_not_fail(
     monitors: dict[str, Monitor], expected: Action
 ) -> None:
     recorder = ListRecorder()
-    decision = await run_sentinel(
+    await run_sentinel(
         tolerant(monitors, reject_at=0.5),
         host_context(recorder=recorder),
         before_step(),
     )
-    assert decision is not None and decision.action == expected
+    [decided] = [r.reported.report for r in recorder.records if not r.reported.path]
+    assert isinstance(decided, Decision) and decided.action == expected
     assert [f.name for f in recorder.failures] == ["broken"]
