@@ -1,5 +1,6 @@
 from collections.abc import Callable
 
+import anyio
 import pytest
 from inspect_ai.scorer import Reference
 from inspect_ai.util import StoreModel
@@ -215,4 +216,59 @@ async def test_each_invocation_at_one_path_is_named() -> None:
     assert decision is not None
     assert decision.explanation == (
         f"unhandled escalation from twice/again: call 1; twice/again: call 2. {GUIDANCE}"
+    )
+
+
+@protocol
+def ue_inner() -> Protocol:
+    async def run(context: Context, step: Step) -> Decision | None:
+        return Decision.escalate(
+            "inner reason",
+            references=[Reference(type="message", id="i", cite="[inner]")],
+        )
+
+    return run
+
+
+@protocol
+def ue_outer(results: list[Decision | None], spawn: bool) -> Protocol:
+    # runs another sentinel for its step, awaited or from a task it starts,
+    # then escalates on its own
+    async def run(context: Context, step: Step) -> Decision | None:
+        async def inner() -> None:
+            results.append(
+                await run_sentinel(
+                    resolve_sentinel({"inner": ue_inner()}), host_context(), step
+                )
+            )
+
+        if spawn:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(inner)
+        else:
+            await inner()
+        return Decision.escalate("outer reason")
+
+    return run
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("step", [before_step(), after_step()])
+@pytest.mark.parametrize("spawn", [False, True], ids=["awaited", "spawned"])
+async def test_a_nested_step_names_its_own_escalations(spawn: bool, step: Step) -> None:
+    results: list[Decision | None] = []
+    outer = await run_sentinel(
+        resolve_sentinel({"outer": ue_outer(results, spawn)}), host_context(), step
+    )
+    [inner] = results
+    assert inner is not None
+    assert (
+        inner.explanation
+        == f"unhandled escalation from inner: inner reason. {GUIDANCE}"
+    )
+    assert [r.cite for r in inner.references] == ["[inner]"]
+    assert outer is not None
+    assert (
+        outer.explanation
+        == f"unhandled escalation from outer: outer reason. {GUIDANCE}"
     )

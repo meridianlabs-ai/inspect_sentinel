@@ -49,12 +49,16 @@ def decided(node: Invocation, reported: Reported[Decision]) -> None:
 
 @contextmanager
 def collecting() -> Generator[list[Invocation]]:
+    # a step starts with no invocation above it, so one run from inside
+    # another step's protocol is not taken for part of that step
     found: list[Invocation] = []
-    token = _decided.set(found)
+    decided_token = _decided.set(found)
+    current_token = _current.set(None)
     try:
         yield found
     finally:
-        _decided.reset(token)
+        _current.reset(current_token)
+        _decided.reset(decided_token)
 
 
 def sources(found: Sequence[Invocation]) -> list[Reported[Decision]]:
