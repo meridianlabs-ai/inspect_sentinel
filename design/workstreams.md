@@ -1,6 +1,6 @@
 # Workstreams
 
-Areas of sentinel that can be owned separately, as of 2026-10-06. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 6), next (7 to 11), lower priority (12 to 14), then done; 5 and 6 were added on 2026-10-05. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred".
+Areas of sentinel that can be owned separately, as of 2026-10-06. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 6), next (7 to 11), lower priority (12 to 14), then done; 5 and 6 were added on 2026-10-05. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred". AISI's sync-monitor requirements (R1 to R10, 2026-10-08) are mapped onto these workstreams in [requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md).
 
 inspect_ai #5514 and ts-mono #716 merged on 2026-10-08, so open inspect_ai and ts-mono PRs against `main`.
 
@@ -28,6 +28,8 @@ Touches modules that sentinel, Scout and inspect_ai all import. Agree up front w
 
 Lives in inspect_ai's model path and sentinel's step types. Best after inspect_core, or at least not overlapping its moves in `model/`.
 
+AISI requirements that depend on it ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)): R1, `escalate` and `human()` at `AfterGenerate`; R5 at `AfterGenerate`; R2 and R3, recording each generate's input and tools when it finishes; R10, the history as each agent instance sent it, built from that record and the `conversation` id on events.
+
 ## 3. LLM affordances for monitors
 
 **Priority:** high. **Owner:** epatey. **Design:** [sentinel.md](sentinel.md), "Views" and "Inference, budget, and injection".
@@ -40,6 +42,8 @@ Raised by the maintainer on 2026-10-02, as a peer to workstream 7: what a monito
 - Helpers that build views for the model, turning the conversation and the call into a prompt.
 
 Prior art: Kai's structured-approval approver in Petri, built on the LLM scanner. Lives in inspect_sentinel over `Host.generate`; shares the view helpers with workstream 7.
+
+AISI requirement R8 ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)) sets needs for the shared message renderer the view helpers build on: structure agent text cannot forge, an actions-only view, compaction summaries, tool result status, tool call ids, per-message output, a signal for content it cannot show, `ToolInfo` rendering, and withheld messages.
 
 ## 4. Host in a proxy
 
@@ -101,6 +105,7 @@ Many small, independent tasks, good for onboarding:
 - Views: helpers that give a monitor author views of the messages and the step, such as the last six messages (maintainer, 2026-10-02).
 - A helper that renders a call's arguments as text, and similar conveniences that make rules shorter (maintainer, 2026-10-02). The first set is done (`call_text`, `tool_matches`, `find_words` and `result_text`; [pr-series.md](pr-series.md), "Helpers for rules"); `urls_in`, `host_matches` and `secrets_in` follow. The path helpers are workstream 14.
 - The prompt helpers, such as `monitor_prompt`, unless they move to workstream 3.
+- A protocol that escalates or terminates on scores without a reject threshold, at every stage that allows it, explaining every contributing score (AISI R5, [requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md); pr-series.md, Deferred).
 
 ## 8. Auto-mode approvers
 
@@ -127,6 +132,8 @@ The development loop: build a monitor, measure it over transcripts, calibrate it
 - A read-mode scanner over recorded `SentinelEvent`s.
 - `calibrate()`, producing per-dimension thresholds in the key format `threshold` accepts (`"instance.dimension"`, `"dimension"`, `"*"`).
 - `Result.subject` and row expansion in Scout.
+
+AISI requirement R7 ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)) adds: replay of logs from before Sentinel, whose approvals are `ApprovalEvent`s; scoring a chosen subset of steps; and live and replay kept identical as sentinel changes. R2, R3 and R10 (exact input, tools, truncation and the history as sent) are what replay reads; with R10, AISI's monitors keep no `store_as()` state across steps, so concurrent compaction segments no longer conflict with it.
 
 Lives mostly in inspect_sentinel, with inspect_scout where Scout does the scanning, and consumes the sentinel API without changing it, so it rarely collides with core work. Uses `references` on reports (inspect_ai's `scorer.Reference`, as Scout's `Result` does) and the decorators' `version=`, which calibration records.
 
@@ -195,6 +202,8 @@ Reads `SentinelEvent`s and the recorded configuration, so it overlaps the read-m
 **Priority:** lower.
 
 Let a person decide from outside the eval process: a request with the call, the escalations and the choices, and the answer flowing back to the waiting sample. Decided by the maintainer on 2026-10-02: put human requests on a message queue that other tools consume (Slack, a review app) rather than building the interface ourselves. Inspect's human surfaces today (the panel, ACP and the console) all assume someone at the eval's terminal or client; long-running and remote evals have nobody there. `notify()` already covers telling someone a decision is waiting (see `sequential()` and `human()`, under "Done"); this is answering it.
+
+AISI requirement R9 ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)), their lowest: a task routes `human()` to its own review surface instead of inspect_ai's `human_approver`, at the tool stages and at `AfterGenerate`.
 
 Open questions: how the reply reaches the sample (a callback endpoint, polling, a relay service); how long a sample waits and what happens when nobody answers (proceed, reject, or the escalate default from pr-series.md "Deferred"); who may answer and how that is authenticated and recorded in the log; and whether the same surface serves inspect's existing human approver as well as `human()`.
 
