@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -15,13 +15,20 @@ from inspect_sentinel._decorators import (
     monitor,
     protocol,
 )
+from inspect_sentinel._host import HumanAnswer
 from inspect_sentinel._integration import (
     config_from_sentinel,
     resolve_sentinel,
     run_sentinel,
     sentinel_from_config,
 )
-from inspect_sentinel._protocols import concurrent, threshold
+from inspect_sentinel._protocols import (
+    concurrent,
+    human,
+    observe_only,
+    sequential,
+    threshold,
+)
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import (
@@ -29,10 +36,11 @@ from inspect_sentinel._types import (
     MonitorGroup,
     Monitors,
     Protocol,
+    ProtocolGroup,
     Sentinel,
     Sentinels,
 )
-from tests._fakes import ListRecorder, after_step, before_step, host_context
+from tests._fakes import FakeHost, ListRecorder, after_step, before_step, host_context
 
 
 def _listed(built: Sentinels) -> list[Sentinel]:
@@ -670,3 +678,111 @@ def test_nested_entries_carry_their_own_versions() -> None:
         },
     }
     assert config_from_sentinel(sentinel_from_config(config)) == config
+
+
+@protocol
+def cfg_chain(reason: str = "no") -> Protocol:
+    return sequential([cfg_suspicion(), cfg_rule(reason)])
+
+
+@protocol
+def cfg_asks() -> Protocol | ProtocolGroup:
+    return human(stages=["tool_call", "tool_result"])
+
+
+@monitor
+def cfg_watch(model: str | None = None) -> Monitor:
+    return cfg_suspicion(model)
+
+
+@monitor
+def cfg_pair_again() -> MonitorGroup:
+    return cfg_pair()
+
+
+async def _records(sentinels: Sentinels) -> list[tuple[str, str, str]]:
+    recorder = ListRecorder()
+    host = FakeHost(HumanAnswer("approve"), HumanAnswer("approve"))
+    context = host_context(recorder=recorder, host=host)
+    await run_sentinel(resolve_sentinel(sentinels), context, before_step())
+    await run_sentinel(resolve_sentinel(sentinels), context, after_step())
+    return sorted(
+        (r.reported.path, r.factory, r.reported.function) for r in recorder.records
+    )
+
+
+COMPOSED: list[
+    tuple[Callable[[], Sentinel], dict[str, Any], list[tuple[str, str, str]]]
+] = [
+    (
+        lambda: cfg_chain("stop"),
+        {"name": "cfg_chain", "params": {"reason": "stop"}},
+        [
+            ("", "cfg_chain", "run"),
+            ("cfg_rule", "cfg_rule", "decide"),
+            ("cfg_suspicion", "cfg_suspicion", "check"),
+        ],
+    ),
+    (
+        lambda: cfg_asks(),
+        {"name": "cfg_asks", "params": {}},
+        [
+            ("", "inspect_sentinel/concurrent", "run"),
+            ("", "inspect_sentinel/concurrent", "run"),
+            ("cfg_asks", "cfg_asks", "tool_call"),
+            ("cfg_asks", "cfg_asks", "tool_result"),
+        ],
+    ),
+    (
+        lambda: threshold([cfg_watch("m")], reject_at=0.95),
+        {
+            "name": "threshold",
+            "params": {"reject_at": 0.95},
+            "monitors": [{"name": "cfg_watch", "params": {"model": "m"}}],
+        },
+        [
+            ("", "inspect_sentinel/threshold", "decide"),
+            ("cfg_watch", "cfg_watch", "check"),
+        ],
+    ),
+    (
+        lambda: observe_only([cfg_pair_again()]),
+        {
+            "name": "observe_only",
+            "params": {},
+            "monitors": [{"name": "cfg_pair_again", "params": {}}],
+        },
+        [
+            ("cfg_pair_again", "cfg_pair_again", "after"),
+            ("cfg_pair_again", "cfg_pair_again", "before"),
+        ],
+    ),
+]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("build, entry, records", COMPOSED)
+async def test_a_factory_returning_a_configured_instance_runs_and_round_trips(
+    build: Callable[[], Sentinel],
+    entry: dict[str, Any],
+    records: list[tuple[str, str, str]],
+) -> None:
+    original = build()
+    config = config_from_sentinel(original)
+    assert config == SentinelConfig.model_validate(entry)
+    rebuilt = sentinel_from_config(config)
+    assert config_from_sentinel(rebuilt) == config
+    assert await _records(rebuilt) == await _records(original) == records
+
+
+def test_a_factory_returning_a_configured_instance_leaves_that_instance_alone() -> None:
+    inner = sequential([cfg_rule()])
+
+    @protocol
+    def cfg_reuses() -> Protocol:
+        return inner
+
+    outer = cfg_reuses()
+    assert outer is not inner
+    assert registry_info(inner).name == "inspect_sentinel/sequential"
+    assert registry_info(outer).name == "cfg_reuses"
