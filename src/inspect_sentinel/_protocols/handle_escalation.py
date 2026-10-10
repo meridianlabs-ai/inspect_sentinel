@@ -18,7 +18,7 @@ def handle_escalation(action: Literal["terminate", "continue"]) -> ProtocolGroup
 
     Put it last in a `sequential()`, after the links that escalate what they are unsure about, as in `sequential([threshold(...), handle_escalation("terminate")])`, or after a `human()` for when the person cannot be reached. It decides only when `step.escalations` is non-empty and abstains otherwise, so at the root, or anywhere nothing escalated, it does nothing. Its explanation names each escalation it handled, `escalated by triage: call deletes files (rm)`, and it carries their references.
 
-    An escalate that reaches the root with nothing to handle it ends the sample as an unhandled escalation; `handle_escalation()` is how a configuration states a fixed policy instead. `"continue"` lets an unsure escalation through, recorded in the configuration and the log. It runs before and after tool calls.
+    An escalate that reaches the root with nothing to handle it ends the sample, `run_sentinel` returning a `terminate` explained as an unhandled escalation; `handle_escalation()` is how a configuration states a fixed policy instead. `"continue"` lets an unsure escalation through, recorded in the configuration and the log. It runs before and after tool calls.
 
     Args:
         action: What to do when the step was escalated: `"terminate"` to end the sample, or `"continue"` to let the step proceed. Required, so every configuration states its policy.

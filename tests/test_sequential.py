@@ -1,4 +1,4 @@
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 import pytest
 from inspect_ai._util.registry import registry_info
@@ -121,6 +121,16 @@ async def _root(
     return _Rooted(decision, recorder, store)
 
 
+def _decided(rooted: _Rooted) -> Decision | None:
+    # the chain's own decision, as recorded at the root; run_sentinel returns a
+    # terminate in place of an escalate there
+    recorded = [
+        r.reported.report for r in rooted.recorder.records if not r.reported.path
+    ]
+    assert len(recorded) <= 1
+    return cast(Decision, recorded[0]) if recorded else None
+
+
 def _paths(recorder: ListRecorder) -> list[str]:
     return [r.reported.path for r in recorder.records]
 
@@ -217,7 +227,7 @@ async def test_a_link_at_its_own_stage_decides() -> None:
 async def test_what_a_chain_returns_when_no_link_decides(
     children: Sentinels, expected: tuple[Action, str | None] | None
 ) -> None:
-    decision, _, _ = await _root(sequential(children))
+    decision = _decided(await _root(sequential(children)))
     if expected is None:
         assert decision is None
     else:
@@ -252,7 +262,7 @@ async def test_a_group_link_runs_in_one_call_and_sees_the_step_before_its_escala
 async def test_a_group_link_decides_by_its_strongest_decision(
     first: Action, second: Action, expected: tuple[Action, str]
 ) -> None:
-    decision, _, _ = await _root(sequential({"pair": seq_mixed(first, second)}))
+    decision = _decided(await _root(sequential({"pair": seq_mixed(first, second)})))
     assert decision is not None
     assert (decision.action, decision.explanation) == expected
 

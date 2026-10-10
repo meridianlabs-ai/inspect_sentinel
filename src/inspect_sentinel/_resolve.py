@@ -20,7 +20,7 @@ def resolve_sentinel(spec: Sentinels) -> Protocol:
 
     A lone protocol is the root itself, so `threshold(suspicion(), ...)` records `threshold` at the empty path and its monitor at `suspicion`. A lone `ProtocolGroup`, or a sequence or mapping containing a protocol, resolves to `concurrent()`: the root returns the step's one outcome, and combining the decisions of several functions is `concurrent`'s job; monitors beside the protocols are recorded and nothing acts on them. The host invokes the result as the root, so the root's children's paths are bare.
 
-    Logs a warning, once per process for each configuration it describes, when the root can return `escalate` with nothing to handle it, which the host treats as an unhandled escalation and ends the sample. Shipped protocols declare whether they can escalate and which escalations they handle: `human()` and `handle_escalation()` handle the escalations before them in a `sequential()`, and `threshold()` and `observe_only()` never escalate. A protocol that is not shipped is assumed to be able to escalate at every stage it watches.
+    Logs a warning, once per process for each configuration it describes, when the root can return `escalate` with nothing to handle it, which `run_sentinel` turns into a `terminate` that ends the sample. Shipped protocols declare whether they can escalate and which escalations they handle: `human()` and `handle_escalation()` handle the escalations before them in a `sequential()`, and `threshold()` and `observe_only()` never escalate. A protocol that is not shipped is assumed to be able to escalate at every stage it watches.
 
     Args:
         spec: One protocol, or a sequence or mapping of instance names to monitors and protocols, at least one of them a protocol.

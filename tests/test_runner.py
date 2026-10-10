@@ -1322,18 +1322,6 @@ async def test_run_sentinel_records_the_roots_own_decision_at_the_empty_path() -
 
 
 @pytest.mark.anyio
-async def test_run_sentinel_returns_an_escalate_with_nobody_to_hand_it_to() -> None:
-    recorder = ListRecorder()
-    decision = await run_sentinel(
-        decides("escalate"), host_context(recorder=recorder), before_step()
-    )
-    assert decision == Decision(action="escalate")
-    assert [(r.reported.name, r.reported.path) for r in recorder.records] == [
-        ("decides", "")
-    ]
-
-
-@pytest.mark.anyio
 async def test_run_sentinel_checks_the_roots_decision_shape() -> None:
     @protocol
     def illegal() -> Protocol:

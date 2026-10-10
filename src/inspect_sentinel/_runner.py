@@ -13,6 +13,7 @@ from inspect_ai.util import LimitExceededError
 
 from ._context import Context, validate_instance_name
 from ._decorators import invoke, members
+from ._escalation import EscalationRecorder, sources, unhandled
 from ._final import Final, Origin
 from ._host import HostContext, enter_layer, layer, running_step
 from ._report import Decision, Failed, Observation, Report, Reported
@@ -117,7 +118,7 @@ async def run_sentinel(
 
     The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its full registry name is the `factory` its records carry. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 
-    An `escalate` is returned like any other decision, though at the root there is nobody to hand it to; the host decides what an unhandled escalate means, and inspect_ai's host ends the sample and records the step as an unhandled escalation.
+    An `escalate` from the root, nobody being left to hand it to, is an unhandled escalation: it is recorded as the root's decision, and `run_sentinel` returns a `terminate` in its place, explained as `unhandled escalation from attempt/triage: <reason>` for each escalation that reached the root, with how to handle it, and carrying their references. The host never receives an `escalate`, and applies the `terminate` as it would a protocol's own; the root's recorded `escalate` is what tells the two apart in the log.
 
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.
@@ -129,7 +130,8 @@ async def run_sentinel(
             "The root is one protocol function, as resolve_sentinel returns it; a group of functions cannot be the root."
         )
     found: list[Reported[Decision]] = []
-    with running_step(host_context.recorder, host_context.store):
+    recorder = EscalationRecorder(host_context.recorder)
+    with running_step(recorder, host_context.store):
         try:
             await _run_child(
                 protocol,
@@ -148,10 +150,16 @@ async def run_sentinel(
                 raise RuntimeError(
                     f"Runner invariant violated: Final({ex.decision.action!r}) left the root without an origin."
                 ) from ex
-            recorder, factory = layer(origin.context, "The runner")
+            _, factory = layer(origin.context, "The runner")
             recorder.record(origin.context, factory, origin.step, origin.reported)
+            if ex.decision.action == "escalate":
+                return unhandled([origin.reported])
             return ex.decision
-    return found[0].report if found else None
+    if not found:
+        return None
+    if found[0].report.action == "escalate":
+        return unhandled(sources(recorder.escalates))
+    return found[0].report
 
 
 async def run_monitors(

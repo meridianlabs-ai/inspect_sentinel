@@ -52,7 +52,7 @@ An eval with a `human()` waits for an answer, so run it where someone can answer
 
 ## Unhandled Escalations
 
-An `escalate` that reaches the top of a sentinel has nobody left to hand it to. That is a configuration bug, and it fails closed: the host ends the sample, before or after a call alike, and records the step as an unhandled escalation, distinct from a protocol's own `terminate`. A rule that escalates on its own reaches the top this way, and so does a `sequential()` with nothing at the end to answer its escalations, since when every child that decided escalated it returns the last escalate.
+An `escalate` that reaches the top of a sentinel has nobody left to hand it to. That is a configuration bug, and it fails closed: the sentinel returns a `terminate` in its place, so the sample ends, before or after a call alike. The `terminate` is explained as an unhandled escalation, naming where each escalation came from and why, for example `unhandled escalation from attempt/triage: call deletes files (rm)`, followed by how to handle it, and it carries their references. In the log the step's recorded decision stays the `escalate`, which tells it apart from a protocol's own `terminate`. Ending the sample this way is a decision, not an error, so the sample is not recorded as one. A rule that escalates on its own reaches the top this way, and so does a `sequential()` with nothing at the end to answer its escalations, since when every child that decided escalated it returns the last escalate.
 
 Every intended outcome has a protocol: `human()` asks a person, and `handle_escalation()` applies a fixed policy:
 
@@ -71,5 +71,3 @@ sequential([rule(), human(stages=["tool_call"]), handle_escalation("terminate")]
 ```
 
 Building a sentinel logs a warning when its top can escalate with nothing to handle it, naming each protocol that can and the stages. Shipped protocols declare whether they can escalate: `threshold()` and `observe_only()` never do, `human()` and `handle_escalation()` answer the escalations before them in a `sequential()`, and `sequential()` and `concurrent()` follow from their children. A protocol you write is assumed to be able to escalate at every stage it watches, so a rule of your own at the top warns even when it never escalates.
-
-Ending the sample is the host's part, in inspect_ai 0.3.279 or later; earlier versions let the step proceed with a warning.
