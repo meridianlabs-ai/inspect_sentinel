@@ -2,13 +2,13 @@
 
 Monitors and control protocols that watch agents and intervene in their execution.
 
-A **monitor** observes a step of an agent's execution and reports a suspicion score; it never acts. A **protocol** decides what happens at that step, optionally after consulting monitors, and a protocol with no monitors is a rule. Both run at one of four stages, the points in the agent loop before or after a model generate and before or after a tool call. The same monitor runs inside an Inspect eval, in a network proxy in front of a model API, and offline over recorded transcripts for validation and calibration.
+A **monitor** observes a step of an agent's execution and reports a suspicion score; it never acts. A **protocol** decides what happens at that step, optionally after consulting monitors, and a protocol with no monitors is a rule. Both run before a tool call executes or after its result comes back; stages around model generation are planned. The same monitor runs inside an Inspect eval and offline over recorded transcripts with Inspect Scout for validation and calibration; running it in a network proxy in front of a model API is planned.
 
 ```bash
-pip install git+https://github.com/meridianlabs-ai/inspect_sentinel
+pip install inspect-sentinel
 ```
 
-This also installs the development version of `inspect_ai` from its `main` branch, which Sentinel tracks until `inspect_ai` releases the sentinel hooks.
+It requires `inspect-ai` 0.3.278 or later.
 
 The package is under active design. The design documents are in [`design/`](design/); start with [`sentinel-overview.md`](design/sentinel-overview.md).
 
