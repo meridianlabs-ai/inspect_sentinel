@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from .._context import Context
 from .._decorators import protocol
-from .._escalation import at_once, declare
 from .._report import Decision, Reported
 from .._results import warn_failed
 from .._runner import run_children
@@ -64,4 +63,4 @@ def concurrent(
         update["explanation"] = f"{own} ({summary})" if own else summary
         return strongest.report.model_copy(update=update)
 
-    return declare(run, at_once(named))
+    return run

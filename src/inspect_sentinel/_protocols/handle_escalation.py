@@ -4,7 +4,6 @@ from typing import Literal
 
 from .._context import Context
 from .._decorators import protocol
-from .._escalation import STAGES, declare, handles
 from .._report import Decision
 from .._step import AfterToolCall, BeforeToolCall, Step
 from .._types import ProtocolGroup
@@ -34,7 +33,7 @@ def handle_escalation(action: Literal["terminate", "continue"]) -> ProtocolGroup
     async def tool_result(context: Context, step: AfterToolCall) -> Decision | None:
         return _handle(action, step)
 
-    return declare(ProtocolGroup(tool_call, tool_result), handles(STAGES.values()))
+    return ProtocolGroup(tool_call, tool_result)
 
 
 def _handle(action: Literal["terminate", "continue"], step: Step) -> Decision | None:

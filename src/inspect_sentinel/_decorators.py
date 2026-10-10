@@ -46,9 +46,6 @@ _STEP_TYPES = frozenset(get_args(Step))
 # an attribute rather than registry metadata: per-member stages live in groups,
 # and registry metadata would need a name<->class mapping
 STEP_TYPES_ATTR = "__sentinel_step_types__"
-# whether a shipped protocol can escalate, set on what its factory returns and
-# carried to the configured instance, a rebuilt group included; see _escalation
-ESCALATION_ATTR = "__sentinel_escalation__"
 VERSION = "version"
 PORTABLE = "portable"
 ENTRY_FIELDS = ("name", "params", VERSION, "meta")
@@ -300,8 +297,6 @@ def _register(
             instance = _configure(returned, kind, report_type)
             accepted = step_types(cast(Sentinel, instance))
         setattr(instance, STEP_TYPES_ATTR, accepted)
-        if hasattr(returned, ESCALATION_ATTR):
-            setattr(instance, ESCALATION_ATTR, getattr(returned, ESCALATION_ATTR))
         registry_tag(factory, instance, info.model_copy(deep=True), *args, **kwargs)
         return instance
 

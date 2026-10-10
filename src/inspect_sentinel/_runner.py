@@ -13,7 +13,6 @@ from inspect_ai.util import LimitExceededError
 
 from ._context import Context, validate_instance_name
 from ._decorators import invoke, members
-from ._escalation import EscalationRecorder, sources, unhandled
 from ._final import Final, Origin
 from ._host import HostContext, enter_layer, layer, running_step
 from ._report import Decision, Failed, Observation, Report, Reported
@@ -31,6 +30,7 @@ from ._types import (
     SentinelFunction,
     Sentinels,
 )
+from ._unhandled import EscalationRecorder, sources, unhandled
 from ._validate import check_child, named_children, validate_shape
 
 if sys.version_info < (3, 11):

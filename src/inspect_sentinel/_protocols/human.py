@@ -4,7 +4,6 @@ from collections.abc import Sequence
 
 from .._context import Context
 from .._decorators import protocol
-from .._escalation import STAGES, declare, handles
 from .._host import HumanAnswer
 from .._report import Decision
 from .._step import AfterToolCall, BeforeToolCall, Step
@@ -61,11 +60,9 @@ def human(
         "tool_call": tool_call,
         "tool_result": tool_result,
     }
-    # a person always answers, and escalate is never one of the choices
-    answers = handles(STAGES[stage] for stage in stages)
     if len(stages) == 1:
-        return declare(functions[stages[0]], answers)
-    return declare(ProtocolGroup(*(functions[stage] for stage in stages)), answers)
+        return functions[stages[0]]
+    return ProtocolGroup(*(functions[stage] for stage in stages))
 
 
 def _choices(stage: str, choices: Sequence[str] | None) -> tuple[str, ...]:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from .._context import Context
 from .._decorators import protocol
-from .._escalation import NEVER, declare
 from .._report import Decision
 from .._results import warn_failed
 from .._runner import run_monitors
@@ -31,4 +30,4 @@ def observe_only(monitors: Monitor | MonitorGroup | Monitors) -> Protocol:
         warn_failed(observations.failed)
         return None
 
-    return declare(run, NEVER)
+    return run
