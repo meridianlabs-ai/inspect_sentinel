@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from functools import wraps
 from typing import (
     Any,
     NamedTuple,
     ParamSpec,
+    TypeVar,
     cast,
     get_args,
     get_type_hints,
@@ -41,11 +42,17 @@ from ._types import (
 )
 
 P = ParamSpec("P")
+F = TypeVar("F", bound=Callable[..., Any])
 
 _STEP_TYPES = frozenset(get_args(Step))
 # an attribute rather than registry metadata: per-member stages live in groups,
 # and registry metadata would need a name<->class mapping
 STEP_TYPES_ATTR = "__sentinel_step_types__"
+# the stages an instance or any instance passed to its factory watches, so the
+# host can skip a stage nothing in the tree watches
+WATCHED_ATTR = "__sentinel_watched__"
+# set on a composition's function, which only forwards the step to its children
+_FORWARDS_ATTR = "__sentinel_forwards__"
 VERSION = "version"
 PORTABLE = "portable"
 ENTRY_FIELDS = ("name", "params", VERSION, "meta")
@@ -226,6 +233,59 @@ def step_types(sentinel: Sentinel) -> frozenset[type[Any]]:
     return frozenset(found)
 
 
+def watched_stages(sentinel: Sentinel) -> frozenset[type[Any]]:
+    """The step payload types a configured monitor or protocol, or any monitor or protocol given to its factory, watches.
+
+    A composition that only forwards the step to its children, such as `concurrent`, `sequential` or `observe_only`, watches what its children watch. Any other function watches the stages it accepts, so a protocol annotated `Step` watches every stage.
+
+    Args:
+        sentinel: An instance returned by a `@monitor` or `@protocol` factory.
+    """
+    found = getattr(sentinel, WATCHED_ATTR, None)
+    if found is None:
+        return step_types(sentinel)
+    return frozenset(found)
+
+
+def forwards(function: F) -> F:
+    setattr(function, _FORWARDS_ATTR, True)
+    return function
+
+
+def _given(values: Sequence[object] | Mapping[str, object]) -> Iterator[object]:
+    for value in values.values() if isinstance(values, Mapping) else values:
+        if hasattr(value, STEP_TYPES_ATTR):
+            yield value
+        elif isinstance(value, Mapping):
+            yield from _given(cast(Mapping[str, object], value))
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            yield from _given(cast(Sequence[object], value))
+
+
+def _watched(
+    instance: object, args: Sequence[object], kwargs: Mapping[str, object]
+) -> frozenset[type[Any]]:
+    functions: tuple[object, ...] = (
+        instance.functions if isinstance(instance, Group) else (instance,)
+    )
+    given = [*_given(args), *_given(kwargs)]
+    return frozenset[type[Any]]().union(
+        *(_own_stages(function, bool(given)) for function in functions),
+        *(watched_stages(cast(Sentinel, child)) for child in given),
+    )
+
+
+def _own_stages(function: object, has_children: bool) -> frozenset[type[Any]]:
+    # a configured instance returned by another factory keeps what its tree watches
+    inherited = getattr(function, WATCHED_ATTR, None)
+    if inherited is not None:
+        return frozenset(inherited)
+    # a composition whose children were not found watches every stage it accepts
+    if has_children and getattr(function, _FORWARDS_ATTR, False):
+        return frozenset()
+    return step_types(cast(Any, function))
+
+
 def _register(
     kind: RegistryType,
     factory: Callable[P, object],
@@ -297,6 +357,7 @@ def _register(
             instance = _configure(returned, kind, report_type)
             accepted = step_types(cast(Sentinel, instance))
         setattr(instance, STEP_TYPES_ATTR, accepted)
+        setattr(instance, WATCHED_ATTR, _watched(instance, args, kwargs))
         registry_tag(factory, instance, info.model_copy(deep=True), *args, **kwargs)
         return instance
 

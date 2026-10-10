@@ -8,6 +8,8 @@ reference: inspect_sentinel
 
 A `Step` here is the payload a monitor or protocol receives, and `Context` is what it knows about the sample; both are unrelated to inspect_ai's `StepEvent` and `step()`.
 
+### BeforeGenerate
+### AfterGenerate
 ### BeforeToolCall
 ### AfterToolCall
 ### Step

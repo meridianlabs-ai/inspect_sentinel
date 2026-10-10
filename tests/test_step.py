@@ -11,7 +11,13 @@ from inspect_ai.model import (
 from inspect_ai.tool import ToolCall, ToolCallView, ToolResult
 
 from inspect_sentinel._report import Decision, Reported
-from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
+from inspect_sentinel._step import (
+    AfterGenerate,
+    AfterToolCall,
+    BeforeGenerate,
+    BeforeToolCall,
+    Step,
+)
 
 
 def _call() -> ToolCall:
@@ -97,5 +103,10 @@ def test_after_tool_call_output_may_be_structured_content() -> None:
     assert step.output == output
 
 
-def test_step_union_covers_tool_stages() -> None:
-    assert set(get_args(Step)) == {BeforeToolCall, AfterToolCall}
+def test_step_union_covers_every_stage() -> None:
+    assert set(get_args(Step)) == {
+        BeforeGenerate,
+        AfterGenerate,
+        BeforeToolCall,
+        AfterToolCall,
+    }

@@ -95,6 +95,7 @@ def test_integration_module_exports_the_host_surface() -> None:
         "validate_instance_name",
         "resolve_sentinel",
         "step_types",
+        "watched_stages",
         "run_sentinel",
     }
 

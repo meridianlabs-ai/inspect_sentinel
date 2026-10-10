@@ -25,7 +25,13 @@ from inspect_sentinel._runner import (
     run_monitors,
     run_sentinel,
 )
-from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
+from inspect_sentinel._step import (
+    AfterGenerate,
+    AfterToolCall,
+    BeforeGenerate,
+    BeforeToolCall,
+    Step,
+)
 from inspect_sentinel._types import (
     Monitor,
     MonitorGroup,
@@ -299,7 +305,8 @@ def test_protocol_annotating_every_stage_explicitly_is_step() -> None:
     @protocol
     def explicit() -> Protocol:
         async def decide(
-            context: Context, step: BeforeToolCall | AfterToolCall
+            context: Context,
+            step: BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall,
         ) -> Decision | None:
             return None
 
@@ -312,7 +319,7 @@ def test_step_types_are_recorded_on_the_instance() -> None:
     assert step_types(before_monitor()) == frozenset({BeforeToolCall})
     assert step_types(after_monitor()) == frozenset({AfterToolCall})
     assert step_types(any_stage_protocol()) == frozenset(
-        {BeforeToolCall, AfterToolCall}
+        {BeforeGenerate, AfterGenerate, BeforeToolCall, AfterToolCall}
     )
 
 

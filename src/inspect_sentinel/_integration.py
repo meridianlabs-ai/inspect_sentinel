@@ -7,7 +7,7 @@ The host builds the top layer's `Context`, wraps it with its `Recorder` and the 
 
 from ._config import config_from_sentinel, sentinel_from_config
 from ._context import validate_instance_name
-from ._decorators import step_types
+from ._decorators import step_types, watched_stages
 from ._host import HostContext, Recorder
 from ._resolve import resolve_sentinel
 from ._runner import run_sentinel
@@ -23,4 +23,5 @@ __all__ = [
     "resolve_sentinel",
     "run_sentinel",
     "step_types",
+    "watched_stages",
 ]
