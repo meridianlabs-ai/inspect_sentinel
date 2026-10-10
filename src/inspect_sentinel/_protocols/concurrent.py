@@ -7,6 +7,7 @@ from .._results import warn_failed
 from .._runner import run_children
 from .._step import Step
 from .._types import Group, Protocol, Sentinels
+from .._unhandled import composed
 from .._validate import named_children
 
 
@@ -61,6 +62,10 @@ def concurrent(
                 update = {"action": "reject", "modified": None}
         summary = "; ".join(f"{label(d)}: {d.report.action}" for d in voters)
         update["explanation"] = f"{own} ({summary})" if own else summary
-        return strongest.report.model_copy(update=update)
+        decided = strongest.report.model_copy(update=update)
+        if decided.action != strongest.report.action:
+            # a rewritten action is built as that action's class
+            return Decision.model_validate(decided.model_dump())
+        return decided
 
-    return run
+    return composed(run, "at_once", named)

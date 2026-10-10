@@ -62,10 +62,12 @@ from inspect_sentinel import handle_escalation, sequential
 Task(..., sentinel=sequential([triage(), handle_escalation("terminate")]))
 ```
 
-`action` is required, so every configuration states its policy: `"terminate"` ends the sample, and `"continue"` lets the step proceed, the explicit way to let an unsure escalation through, recorded in the configuration and the log. There is no `"reject"`, which is not legal after a call. `handle_escalation()` decides only when the step was escalated and abstains otherwise, so it never decides about a call nothing escalated. Its explanation names each escalation it handled and why, for example `escalated by triage: call deletes files (rm)`.
+`action` is required, so every configuration states its policy: `"terminate"` ends the sample, and `"continue"` lets the step proceed, the explicit way to let an unsure escalation through, recorded in the configuration and the log. There is no `"reject"`, which is not legal after a call. `handle_escalation()` acts only when the step was escalated, and otherwise lets the step proceed, so it changes nothing about a call nothing escalated. Its explanation names each escalation it handled and why, for example `escalated by triage: call deletes files (rm)`.
 
 After a `human()`, it covers the stages the person is not asked at. Here `rule()` stands for a protocol that may escalate before or after a call; the person is asked before one, and an escalation after one ends the sample:
 
 ```python
 sequential([rule(), human(stages=["tool_call"]), handle_escalation("terminate")])
 ```
+
+A protocol whose return annotation includes `Escalate`, with nothing after it that always decides, is a configuration error when the sentinel is built, so the mistake shows before the eval runs rather than as ended samples. One annotated `-> Decision` may decide anything and is not checked; for it, the `terminate` above is the safety net. See [Declaring What a Protocol Decides](protocols.qmd#declaring-what-a-protocol-decides).

@@ -4,7 +4,7 @@ from typing import Literal
 
 from .._context import Context
 from .._decorators import protocol
-from .._report import Decision
+from .._report import Decision, Proceed, Terminate
 from .._step import AfterToolCall, BeforeToolCall, Step
 from .._types import ProtocolGroup
 
@@ -15,7 +15,7 @@ _ACTIONS = ("terminate", "continue")
 def handle_escalation(action: Literal["terminate", "continue"]) -> ProtocolGroup:
     """Answer the escalations handed to it with a fixed policy: end the sample, or let the step proceed.
 
-    Put it last in a `sequential()`, after the links that escalate what they are unsure about, as in `sequential([threshold(...), handle_escalation("terminate")])`, or after a `human()` for when the person cannot be reached. It decides only when `step.escalations` is non-empty and abstains otherwise, so at the root, or anywhere nothing escalated, it does nothing. Its explanation names each escalation it handled, `escalated by triage: call deletes files (rm)`, and it carries their references.
+    Put it last in a `sequential()`, after the links that escalate what they are unsure about, as in `sequential([threshold(...), handle_escalation("terminate")])`, or after a `human()` for when the person cannot be reached. It acts only when `step.escalations` is non-empty; otherwise it lets the step proceed, so at the root, or anywhere nothing escalated, it changes nothing. It always decides, never abstaining or escalating, so a configuration that ends with it handles every escalation that reaches it. Its explanation names each escalation it handled, `escalated by triage: call deletes files (rm)`, and it carries their references.
 
     An escalate that reaches the root with nothing to handle it ends the sample, `run_sentinel` returning a `terminate` explained as an unhandled escalation; `handle_escalation()` is how a configuration states a fixed policy instead. `"continue"` lets an unsure escalation through, recorded in the configuration and the log. It runs before and after tool calls.
 
@@ -27,18 +27,20 @@ def handle_escalation(action: Literal["terminate", "continue"]) -> ProtocolGroup
             f"handle_escalation's action must be {' or '.join(repr(a) for a in _ACTIONS)}; got {action!r}."
         )
 
-    async def tool_call(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def tool_call(context: Context, step: BeforeToolCall) -> Terminate | Proceed:
         return _handle(action, step)
 
-    async def tool_result(context: Context, step: AfterToolCall) -> Decision | None:
+    async def tool_result(context: Context, step: AfterToolCall) -> Terminate | Proceed:
         return _handle(action, step)
 
     return ProtocolGroup(tool_call, tool_result)
 
 
-def _handle(action: Literal["terminate", "continue"], step: Step) -> Decision | None:
+def _handle(
+    action: Literal["terminate", "continue"], step: Step
+) -> Terminate | Proceed:
     if not step.escalations:
-        return None
+        return Decision.proceed()
     explanation = "escalated by " + "; ".join(
         f"{e.name}: {e.report.explanation}" if e.report.explanation else e.name
         for e in step.escalations

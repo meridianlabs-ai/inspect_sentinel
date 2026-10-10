@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
 from .._context import Context
 from .._decorators import protocol
 from .._host import HumanAnswer
-from .._report import Decision
+from .._report import Decision, Modify, Proceed, Reject, Terminate
 from .._step import AfterToolCall, BeforeToolCall, Step
 from .._types import Protocol, ProtocolGroup
 
@@ -46,15 +47,20 @@ def human(
         raise ValueError(f"human was given a stage twice: {list(stages)!r}.")
     offered = {stage: _choices(stage, choices) for stage in stages}
 
-    async def ask(context: Context, step: Step, stage: str) -> Decision:
+    async def ask(
+        context: Context, step: Step, stage: str
+    ) -> Proceed | Reject | Terminate | Modify:
         answer = await context.host.ask_human(step, offered[stage])
         return _decision(answer, offered[stage])
 
-    async def tool_call(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def tool_call(
+        context: Context, step: BeforeToolCall
+    ) -> Proceed | Reject | Terminate | Modify:
         return await ask(context, step, "tool_call")
 
-    async def tool_result(context: Context, step: AfterToolCall) -> Decision | None:
-        return await ask(context, step, "tool_result")
+    async def tool_result(context: Context, step: AfterToolCall) -> Proceed | Terminate:
+        # _decision accepts only the choices offered after a call, and terminate
+        return cast(Proceed | Terminate, await ask(context, step, "tool_result"))
 
     functions: dict[str, Protocol] = {
         "tool_call": tool_call,
@@ -84,7 +90,9 @@ def _choices(stage: str, choices: Sequence[str] | None) -> tuple[str, ...]:
     return tuple(choices)
 
 
-def _decision(answer: HumanAnswer, choices: tuple[str, ...]) -> Decision:
+def _decision(
+    answer: HumanAnswer, choices: tuple[str, ...]
+) -> Proceed | Reject | Terminate | Modify:
     if answer.decision not in choices and answer.decision != "terminate":
         raise ValueError(
             f"The host answered {answer.decision!r}, which is not one of the choices offered: {list(choices)!r}."
@@ -102,4 +110,4 @@ def _decision(answer: HumanAnswer, choices: tuple[str, ...]) -> Decision:
         case "terminate":
             return Decision.terminate(reason)
         case _:
-            return Decision(action="modify", modified=answer.modified)
+            return Modify(modified=answer.modified)

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Generic, TypeAlias, TypeVar
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast
 
 from inspect_ai.core import Reference, SentinelAction, SentinelSuspicion, ToolCall
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ModelWrapValidatorHandler, model_validator
 
 Suspicion: TypeAlias = SentinelSuspicion
 """How suspicious a step is: one finite score, or a non-empty dict scoring several dimensions independently."""
@@ -58,8 +58,14 @@ class Observation(BaseModel):
         return cls(suspicion=1.0, explanation=explanation, references=list(references))
 
 
+D = TypeVar("D", bound="Decision")
+
+
 class Decision(BaseModel):
-    """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to `decide_final()`."""
+    """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to `decide_final()`.
+
+    Each action has its own class, `Proceed`, `Reject`, `Terminate`, `Modify` and `Escalate`, which the constructors (`Decision.reject(...)` and the others) return, so a protocol function can declare what it decides with a union such as `-> Reject | None`. `Decision(action=...)`, and validating a `Decision` from a dict or JSON, builds the class of the given action. Annotating a function `-> Decision` means it may decide anything.
+    """
 
     action: Action
     """What should happen at this step. Required."""
@@ -82,14 +88,32 @@ class Decision(BaseModel):
     metadata: dict[str, Any] | None = Field(default=None)
     """Author-supplied structured context, recorded verbatim."""
 
+    def __new__(cls: type[D], /, *args: Any, **data: Any) -> D:
+        # Decision(action=...) builds the class of its action
+        target: type[Decision] = cls
+        action = data.get("action")
+        if cls is Decision and isinstance(action, str) and action in DECISION_CLASSES:
+            target = DECISION_CLASSES[action]
+        return cast(D, super().__new__(target))  # pyright: ignore[reportArgumentType]
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _as_action_class(
+        cls, data: Any, handler: ModelWrapValidatorHandler[Decision]
+    ) -> Decision:
+        # validating a Decision from a dict or JSON builds the class of its action
+        if cls is Decision and isinstance(data, dict):
+            action = cast(dict[str, Any], data).get("action")
+            if isinstance(action, str) and action in DECISION_CLASSES:
+                return DECISION_CLASSES[action].model_validate(data)
+        return handler(data)
+
     @classmethod
     def proceed(
         cls, explanation: str | None = None, *, references: Sequence[Reference] = ()
-    ) -> Decision:
-        """Let the step proceed unchanged: a decision with action `continue`."""
-        return cls(
-            action="continue", explanation=explanation, references=list(references)
-        )
+    ) -> Proceed:
+        """Let the step proceed unchanged: a `Proceed`, whose action is `continue`."""
+        return Proceed(explanation=explanation, references=list(references))
 
     @classmethod
     def reject(
@@ -98,32 +122,69 @@ class Decision(BaseModel):
         *,
         message: str | None = None,
         references: Sequence[Reference] = (),
-    ) -> Decision:
+    ) -> Reject:
         """Reject the step, telling the agent it was rejected: with `message` if given, else with the host's default text."""
-        return cls(
-            action="reject",
-            explanation=explanation,
-            message=message,
-            references=list(references),
+        return Reject(
+            explanation=explanation, message=message, references=list(references)
         )
 
     @classmethod
     def terminate(
         cls, explanation: str | None = None, *, references: Sequence[Reference] = ()
-    ) -> Decision:
+    ) -> Terminate:
         """End the sample."""
-        return cls(
-            action="terminate", explanation=explanation, references=list(references)
-        )
+        return Terminate(explanation=explanation, references=list(references))
 
     @classmethod
     def escalate(
         cls, explanation: str | None = None, *, references: Sequence[Reference] = ()
-    ) -> Decision:
+    ) -> Escalate:
         """Decline to decide and pass the step to the next decider."""
-        return cls(
-            action="escalate", explanation=explanation, references=list(references)
-        )
+        return Escalate(explanation=explanation, references=list(references))
+
+
+class Proceed(Decision):
+    """A decision to let the step proceed unchanged, action `continue`. Build one with `Decision.proceed()`."""
+
+    action: Literal["continue"] = "continue"  # pyright: ignore[reportIncompatibleVariableOverride]
+    """Always `continue`."""
+
+
+class Reject(Decision):
+    """A decision to reject the step, telling the agent with `message`. Build one with `Decision.reject()`. Legal only before a tool call."""
+
+    action: Literal["reject"] = "reject"  # pyright: ignore[reportIncompatibleVariableOverride]
+    """Always `reject`."""
+
+
+class Terminate(Decision):
+    """A decision to end the sample. Build one with `Decision.terminate()`."""
+
+    action: Literal["terminate"] = "terminate"  # pyright: ignore[reportIncompatibleVariableOverride]
+    """Always `terminate`."""
+
+
+class Modify(Decision):
+    """A decision to replace the step's subject with `modified`, which a `modify` must set. Legal only before a tool call, where it may change only the call's arguments."""
+
+    action: Literal["modify"] = "modify"  # pyright: ignore[reportIncompatibleVariableOverride]
+    """Always `modify`."""
+
+
+class Escalate(Decision):
+    """A decision not to decide, passing the step to the next decider in a `sequential()`. Build one with `Decision.escalate()`. One that reaches the root with nothing to handle it ends the sample as an unhandled escalation."""
+
+    action: Literal["escalate"] = "escalate"  # pyright: ignore[reportIncompatibleVariableOverride]
+    """Always `escalate`."""
+
+
+DECISION_CLASSES: dict[Action, type[Decision]] = {
+    "continue": Proceed,
+    "reject": Reject,
+    "terminate": Terminate,
+    "modify": Modify,
+    "escalate": Escalate,
+}
 
 
 Report: TypeAlias = Observation | Decision
