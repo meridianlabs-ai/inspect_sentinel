@@ -690,6 +690,13 @@ def cfg_asks() -> Protocol | ProtocolGroup:
     return human(stages=["tool_call", "tool_result"])
 
 
+@protocol
+def cfg_mixed() -> ProtocolGroup:
+    return ProtocolGroup(
+        cfg_rule("stop"), cast(Protocol, human(stages=["tool_result"]))
+    )
+
+
 @monitor
 def cfg_watch(model: str | None = None) -> Monitor:
     return cfg_suspicion(model)
@@ -731,6 +738,16 @@ COMPOSED: list[
             ("", "inspect_sentinel/concurrent", "run"),
             ("cfg_asks", "cfg_asks", "tool_call"),
             ("cfg_asks", "cfg_asks", "tool_result"),
+        ],
+    ),
+    (
+        lambda: cfg_mixed(),
+        {"name": "cfg_mixed", "params": {}},
+        [
+            ("", "inspect_sentinel/concurrent", "run"),
+            ("", "inspect_sentinel/concurrent", "run"),
+            ("cfg_mixed", "cfg_mixed", "decide"),
+            ("cfg_mixed", "cfg_mixed", "tool_result"),
         ],
     ),
     (
