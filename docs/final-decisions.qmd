@@ -1,6 +1,6 @@
 ---
 title: "Final Decisions and Humans"
-description: "decide_final() for decisions nothing above may weaken, and human() for people in the loop."
+description: "decide_final() for decisions nothing above may weaken, human() for people in the loop, and handle_escalation() for a fixed policy on escalations."
 ---
 
 ::: {.callout-warning}
@@ -10,7 +10,7 @@ This page is an outline: a summary and the sections planned for it, not yet the 
 
 ## Overview
 
-How a protocol makes a decision that no layer above it may weaken, and how a person takes part in a sentinel. Covers `decide_final()`, what it cancels and bypasses and how that is recorded, and when to use it. `human()` asks a person, and `sequential()` hands it the escalations that led to it.
+How a protocol makes a decision that no layer above it may weaken, and how a person takes part in a sentinel. Covers `decide_final()`, what it cancels and bypasses and how that is recorded, and when to use it. `human()` asks a person, and `sequential()` hands it the escalations that led to it. An escalation that nothing handles ends the sample; `handle_escalation()` states a fixed policy instead.
 
 ## Planned Sections
 
@@ -19,7 +19,6 @@ How a protocol makes a decision that no layer above it may weaken, and how a per
 - When to use it, and when returning a decision is enough
 - `examples/nested.py`, walked through
 - Two final decisions at once (superseded)
-- `escalate`, and what happens when it reaches the top
 - Notifications and remote decisions, e.g. Slack (planned)
 
 ## Humans
@@ -50,3 +49,27 @@ In Inspect, the person is asked through the human approval surfaces: an attached
 - `"modify"` is not supported: offering it raises an error when the person would be asked.
 
 An eval with a `human()` waits for an answer, so run it where someone can answer.
+
+## Unhandled Escalations
+
+An `escalate` that reaches the top of a sentinel has nobody left to hand it to. That is a configuration bug, and it fails closed: the host ends the sample, before or after a call alike, and records the step as an unhandled escalation, distinct from a protocol's own `terminate`. A rule that escalates on its own reaches the top this way, and so does a `sequential()` with nothing at the end to answer its escalations, since when every child that decided escalated it returns the last escalate.
+
+Every intended outcome has a protocol: `human()` asks a person, and `handle_escalation()` applies a fixed policy:
+
+```python
+from inspect_sentinel import handle_escalation, sequential
+
+Task(..., sentinel=sequential([triage(), handle_escalation("terminate")]))
+```
+
+`action` is required, so every configuration states its policy: `"terminate"` ends the sample, and `"continue"` lets the step proceed, the explicit way to let an unsure escalation through, recorded in the configuration and the log. There is no `"reject"`, which is not legal after a call. `handle_escalation()` decides only when the step was escalated and abstains otherwise, so it never decides about a call nothing escalated. Its explanation names each escalation it handled and why, for example `escalated by triage: call deletes files (rm)`.
+
+After a `human()`, it covers the stages the person is not asked at. Here `rule()` stands for a protocol that may escalate before or after a call; the person is asked before one, and an escalation after one ends the sample:
+
+```python
+sequential([rule(), human(stages=["tool_call"]), handle_escalation("terminate")])
+```
+
+Building a sentinel logs a warning when its top can escalate with nothing to handle it, naming each protocol that can and the stages. Shipped protocols declare whether they can escalate: `threshold()` and `observe_only()` never do, `human()` and `handle_escalation()` answer the escalations before them in a `sequential()`, and `sequential()` and `concurrent()` follow from their children. A protocol you write is assumed to be able to escalate at every stage it watches, so a rule of your own at the top warns even when it never escalates.
+
+Ending the sample is the host's part, in inspect_ai 0.3.279 or later; earlier versions let the step proceed with a warning.

@@ -49,6 +49,7 @@ def test_author_facing_names_are_exported() -> None:
         "concurrent",
         "sequential",
         "human",
+        "handle_escalation",
         "threshold",
         "decide_final",
         "PortabilityError",

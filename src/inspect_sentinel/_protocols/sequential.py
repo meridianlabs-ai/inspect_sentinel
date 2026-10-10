@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from .._context import Context
 from .._decorators import protocol
+from .._escalation import declare, in_order
 from .._report import Decision, Reported
 from .._results import warn_failed
 from .._runner import run_children
@@ -53,4 +54,4 @@ def sequential(
             return escalations[-1].report
         return Decision.proceed() if participated else None
 
-    return run
+    return declare(run, in_order(named))

@@ -117,7 +117,7 @@ async def run_sentinel(
 
     The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its full registry name is the `factory` its records carry. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 
-    An `escalate` is returned like any other decision, though at the root there is nobody to hand it to; the host decides what an unresolved escalate means.
+    An `escalate` is returned like any other decision, though at the root there is nobody to hand it to; the host decides what an unhandled escalate means, and inspect_ai's host ends the sample and records the step as an unhandled escalation.
 
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.

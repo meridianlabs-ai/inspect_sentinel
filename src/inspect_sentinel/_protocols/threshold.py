@@ -6,6 +6,7 @@ from typing import NamedTuple, cast
 
 from .._context import Context
 from .._decorators import members, protocol
+from .._escalation import NEVER, declare
 from .._report import Decision, Observation, Reported
 from .._results import Observations
 from .._runner import describe, run_monitors
@@ -80,7 +81,7 @@ def threshold(
             )
         return Decision.proceed()
 
-    return decide
+    return declare(decide, NEVER)
 
 
 _DEFAULT = "*"

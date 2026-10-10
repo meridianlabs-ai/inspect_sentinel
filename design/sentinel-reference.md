@@ -2,7 +2,7 @@
 
 A sentinel is what a task runs to watch an agent: a protocol with its monitors, configured with `Task(sentinel=)`. A monitor is a function that watches an agent while it runs and reports what it sees. It attaches to one of four stages, the points in the agent loop before a model call, after a model call, before a tool call, and after a tool call. At every stage it receives the same context object and keeps its state in the same place. A monitor observes: it returns an `Observation` or nothing, and can never act. A protocol decides: it returns a `Decision`, optionally after consulting monitors and other protocols. A protocol with no children is a rule.
 
-Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe_only`, `concurrent`, `sequential`, `threshold` and `human` are implemented (`Host.ask_human` in inspect_ai follows). The [failure policy](#failures) is implemented too. The generate stages, `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
+Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe_only`, `concurrent`, `sequential`, `threshold`, `human` and `handle_escalation` are implemented (`Host.ask_human` in inspect_ai follows). The [failure policy](#failures) is implemented too. The generate stages, `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
 
 Related documents:
 
@@ -364,7 +364,7 @@ Rules:
 - **Return `None` to abstain.** A bare `return` from an early exit does this. This document says "abstain" for this case so it is not confused with a `suspicion` field that is `None`.
 - **Set only the fields you need.** Every field except the required one has a default. A monitor sets `suspicion` and nothing else.
 - **`continue` means the protocol examined the step and found nothing wrong.** An `Observation` has no `action` field, so a monitor never says it.
-- **`escalate` means the protocol is not deciding.** The next decider in the `sequential` takes over. In a `concurrent`, it outranks `continue`, so a peer's `continue` cannot override it. A layer that ends on `escalate` passes it up as its own decision, and at the root the host proceeds and warns (see [The boundary check](#the-boundary-check)).
+- **`escalate` means the protocol is not deciding.** The next decider in the `sequential` takes over. In a `concurrent`, it outranks `continue`, so a peer's `continue` cannot override it. A layer that ends on `escalate` passes it up as its own decision, and at the root it is an unhandled escalation: the host ends the sample (see [The boundary check](#the-boundary-check)). End a configuration that can escalate with `human()` or `handle_escalation()`.
 - **Prefer structured suspicion.** `{"goal_alignment": 0.1, "sabotage": 0.8}` lets a protocol threshold per dimension and lets independent monitors score separate dimensions. A scalar is accepted.
 - **A detector reports `1.0`.** `Observation.flag(explanation)` is a monitor's way of saying "this is definitely it" without holding a threshold; `threshold(detector(), reject_at=1.0)` acts on it.
 - **Set `audit=True` to request human review.** It is independent of the action: you can continue-and-audit or reject-and-audit. A parent protocol owning a budget may decline. For now it is recorded for offline analysis and shown in the viewer as a flag; nothing acts on it yet.
@@ -892,6 +892,7 @@ threshold(
 | `concurrent` | core | runs every child; strongest decision wins; what a list containing a protocol resolves to |
 | `sequential` | core | runs children in order; first non-`escalate` decides; hands escalations forward |
 | `observe_only` | core | records every observation, acts on none; how monitors run with nothing acting, since a bare monitor is an error |
+| `handle_escalation` | core | answers the escalations handed to it with a fixed `terminate` or `continue`, `action` required; abstains when nothing escalated; both tool stages |
 | `threshold` | core | `reject` at or above one threshold, `terminate` at or above another, each a number or a mapping per dimension; what calibration feeds |
 | `resample` | core | above a threshold, draws `n` further completions, executes the least suspicious; `escalate` if none clears. `AfterGenerate` only |
 | `trusted_monitoring` | extension candidate | thresholds scores and spends a human-review budget; the budget is a deployment-economics idea that eval operators tend not to want |
