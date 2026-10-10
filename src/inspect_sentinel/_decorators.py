@@ -46,6 +46,9 @@ _STEP_TYPES = frozenset(get_args(Step))
 # an attribute rather than registry metadata: per-member stages live in groups,
 # and registry metadata would need a name<->class mapping
 STEP_TYPES_ATTR = "__sentinel_step_types__"
+# the function a configured function guards, so configuring it again guards the
+# original rather than the guard
+_GUARDED_ATTR = "__sentinel_guarded__"
 VERSION = "version"
 PORTABLE = "portable"
 ENTRY_FIELDS = ("name", "params", VERSION, "meta")
@@ -127,7 +130,7 @@ def monitor(
 ) -> Callable[P, Monitor | MonitorGroup] | _MonitorDecorator:
     """Register a monitor factory.
 
-    Use as `@monitor`, or as `@monitor(name=..., version=..., portable=...)`. The factory returns a function that must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated `-> Observation`, or `-> Observation | None` if it can abstain. These are checked when the factory is called. Each function watches one stage, so `Step` or any other union is rejected; to watch several, return a `MonitorGroup` of functions, which together are one configured instance. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
+    Use as `@monitor`, or as `@monitor(name=..., version=..., portable=...)`. The factory returns a function that must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated `-> Observation`, or `-> Observation | None` if it can abstain. These are checked when the factory is called. Each function watches one stage, so `Step` or any other union is rejected; to watch several, return a `MonitorGroup` of functions, which together are one configured instance. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A factory may instead return an instance of its kind that another factory configured, such as `sequential([...])` from a `@protocol` factory, to register that composition under its own name: it runs as configured, its records and configuration entry carry this factory's name and params, and a configuration rebuilds it by calling this factory. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     A configured function runs only through the runners while a sentinel is running: a protocol that calls one directly from its body raises `RuntimeError`, and must call it through `run_monitors` or `run_children` instead. Outside a run, as in a unit test, a direct call works.
 
@@ -305,6 +308,9 @@ def _register(
 
 
 def _configure(function: object, kind: RegistryType, report_type: type[Report]) -> Any:
+    # a factory may return another factory's configured instance; a guard
+    # around a guard would reject the runner's call to the inner one
+    function = getattr(function, _GUARDED_ATTR, function)
     accepted = _validate_signature(
         cast(Callable[..., Any], function), kind, report_type
     )
@@ -329,6 +335,7 @@ def _guard(function: SentinelFunction) -> SentinelFunction:
         finally:
             _invoking.reset(token)
 
+    setattr(guarded, _GUARDED_ATTR, function)
     return guarded
 
 
