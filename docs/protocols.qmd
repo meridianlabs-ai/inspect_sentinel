@@ -5,7 +5,7 @@ description: "Writing protocols, which decide what happens at a step, and rules,
 
 ::: {.callout-warning}
 ## Outline
-This page is an outline: a summary and the sections planned for it, not yet the documentation, apart from [Helpers for Rules](#helpers-for-rules). See [Getting Started](index.qmd) for a worked example.
+This page is an outline: a summary and the sections planned for it, not yet the documentation, apart from [Declaring What a Protocol Decides](#declaring-what-a-protocol-decides) and [Helpers for Rules](#helpers-for-rules). See [Getting Started](index.qmd) for a worked example.
 :::
 
 ## Overview
@@ -27,6 +27,31 @@ How to write a protocol: a `@protocol` factory returning a function that returns
 - Running at every stage with `Step`
 - Shipping protocols in a package
 
+## Declaring What a Protocol Decides
+
+Each action has its own decision class: `Proceed` (action `continue`), `Reject`, `Terminate`, `Modify` and `Escalate`, all subclasses of `Decision`. The constructors return them, so `Decision.reject(...)` is a `Reject` and `Decision.proceed()` a `Proceed`, and `Decision(action="reject")` builds a `Reject` too. A protocol function's return annotation says what it can decide, as a union of those classes, with `None` if it can abstain:
+
+```python
+from inspect_sentinel import BeforeToolCall, Context, Proceed, Protocol, Reject, protocol
+
+
+@protocol
+def no_network() -> Protocol:
+    async def decide(
+        context: Context, step: BeforeToolCall
+    ) -> Reject | Proceed | None:
+        return None
+
+    return decide
+```
+
+- **`-> Decision`, or `-> Decision | None`, means any action.** Every protocol written before these classes existed keeps working, and a composition of your own that returns its children's decisions is annotated this way.
+- **The annotation is enforced.** A function that returns a decision outside it, or `None` when the annotation has no `None`, fails the step with an error naming the protocol and its annotation. A type checker catches most of these first. A decision passed to `decide_final()` is not held to the annotation.
+- **`None` alone** is a protocol that never decides, as `observe_only()` is annotated.
+- **It is how a configuration is checked when it is built.** A function annotated without `None` and without `Escalate` always decides, so in a `sequential()` it answers every escalation that reaches it, and the links after it never run. A protocol annotated to return `Escalate` with nothing after it that always decides is a configuration error when the sentinel is built, naming the protocol and the stage: end the configuration with `human()` or `handle_escalation()`, or take `Escalate` out of the annotation. A protocol annotated `-> Decision` is not checked; an escalation from it that reaches the top ends the sample at run time (see [Unhandled Escalations](final-decisions.qmd#unhandled-escalations)).
+
+The shipped protocols are annotated: `threshold()` returns `Terminate | Reject | Proceed | None` and `observe_only()` `None`, so neither escalates; `human()` and `handle_escalation()` always decide; `sequential()` and `concurrent()` are checked through their children.
+
 ## Helpers for Rules
 
 A rule usually reads a tool call's arguments and looks for something in them. These functions do the common parts. They are plain functions of their arguments, so a rule built on them is easy to test. Rules are cheap and run without a model call. They match a call's text and its structured arguments, and they cannot prove a call safe: a command built at run time, or a tool the rule does not know, gets past them. Anything that needs an understanding of shell or code, such as which files a command touches, goes to an LLM monitor or is escalated, typically `sequential([rule(), llm_monitor(), human()])`, where `llm_monitor()` stands for a protocol that asks a model and escalates what it is unsure of.
@@ -45,6 +70,8 @@ from inspect_sentinel import (
     BeforeToolCall,
     Context,
     Decision,
+    Escalate,
+    Proceed,
     Protocol,
     call_text,
     find_words,
@@ -57,7 +84,9 @@ INSTALL_WORDS = ["pip install", "npm install", "apt-get install"]
 
 @protocol
 def installs() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall
+    ) -> Escalate | Proceed | None:
         if not tool_matches(step.call, "bash", case_sensitive=False):
             return None
         found = find_words(call_text(step.call), INSTALL_WORDS)

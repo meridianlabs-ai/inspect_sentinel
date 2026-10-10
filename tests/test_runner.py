@@ -1852,7 +1852,7 @@ async def test_a_group_members_error_names_its_function() -> None:
 
     with pytest.raises(
         TypeError,
-        match=r"monitor 'bad_second' \(function 'wrong'\) returned a Decision",
+        match=r"monitor 'bad_second' \(function 'wrong'\) returned a Proceed",
     ):
         with in_step() as context:
             await run_monitors(bad_second(), context, before_step())

@@ -31,7 +31,7 @@ from ._types import (
     Sentinels,
 )
 from ._unhandled import EscalationRecorder, sources, unhandled
-from ._validate import check_child, named_children, validate_shape
+from ._validate import check_child, check_declared, named_children, validate_shape
 
 if sys.version_info < (3, 11):
     from exceptiongroup import BaseExceptionGroup
@@ -402,13 +402,13 @@ async def _run_member(
             return failed
         raise failure
     if finals:
-        raise _on_final(
-            finals, kind, child_context, step, child_name, function.__name__, label
-        )
+        raise _on_final(finals, kind, child_context, step, child_name, function, label)
     if report is not None and not isinstance(report, report_type):
         raise TypeError(
             f"{kind} {label} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
         )
+    if kind == "protocol":
+        check_declared(function, cast(Decision | None, report), label)
     if report is None:
         return None
     if isinstance(report, Decision):
@@ -429,7 +429,7 @@ def _on_final(
     child_context: Context,
     step: Step,
     child_name: str,
-    function: str,
+    function: SentinelFunction,
     label: str,
 ) -> Final:
     winner = finals[0]
@@ -455,7 +455,7 @@ def _on_final(
                 name=child_name,
                 path=child_context.path,
                 report=ex.decision,
-                function=function,
+                function=function.__name__,
             ),
         )
     if not own:

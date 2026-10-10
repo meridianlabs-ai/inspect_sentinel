@@ -51,7 +51,9 @@ from inspect_sentinel import (
     BeforeToolCall,
     Context,
     Decision,
+    Proceed,
     Protocol,
+    Reject,
     call_text,
     find_words,
     protocol,
@@ -60,7 +62,9 @@ from inspect_sentinel import (
 
 @protocol
 def no_network() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall
+    ) -> Reject | Proceed | None:
         if step.call.function != "bash":
             return None  # not a bash() call: abstain
         used = find_words(call_text(step.call), ["curl", "wget"])
@@ -128,7 +132,9 @@ from inspect_sentinel import (
     BeforeToolCall,
     Context,
     Decision,
+    Proceed,
     Protocol,
+    Reject,
     call_text,
     find_words,
     protocol,
@@ -139,7 +145,7 @@ NETWORK_COMMANDS = ["curl", "wget", "pip install"]
 
 @protocol
 def no_network() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None: # <1>
+    async def decide(context: Context, step: BeforeToolCall) -> Reject | Proceed | None: # <1>
         if step.call.function != "bash":
             return None # <2>
         used = find_words(call_text(step.call), NETWORK_COMMANDS) # <3>
@@ -164,7 +170,7 @@ def network_rule() -> Task:
     )
 ```
 
-1. The type of `step` says when the function runs. `BeforeToolCall` runs before each tool call executes, and `step.call` is the call the agent is about to make.
+1. The type of `step` says when the function runs. `BeforeToolCall` runs before each tool call executes, and `step.call` is the call the agent is about to make. The return annotation says what the function can decide: here it rejects, proceeds or abstains. It is enforced, and `-> Decision | None` allows any decision (see [Declaring What a Protocol Decides](protocols.qmd#declaring-what-a-protocol-decides)).
 2. Returning `None` abstains: the rule has nothing to say about calls other than `bash()`, so it does not take part.
 3. `call_text()` is every string in the call's arguments, here the command, and `find_words()` returns the listed words that appear in it as whole words, so `curl` does not match `libcurl`. See [Helpers for Rules](protocols.qmd#helpers-for-rules) for the others.
 4. The first argument is the `explanation`. It is recorded in the log for you, and the agent never sees it.

@@ -9,6 +9,7 @@ from .._results import warn_failed
 from .._runner import run_children
 from .._step import Step
 from .._types import Protocol, Sentinels
+from .._unhandled import composed
 from .._validate import named_children
 
 
@@ -53,4 +54,4 @@ def sequential(
             return escalations[-1].report
         return Decision.proceed() if participated else None
 
-    return run
+    return composed(run, "in_order", named)

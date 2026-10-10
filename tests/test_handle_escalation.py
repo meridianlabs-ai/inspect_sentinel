@@ -71,10 +71,11 @@ def test_the_action_is_terminate_or_continue(action: Any) -> None:
     ],
     ids=["at_the_root", "after_an_abstaining_link"],
 )
-async def test_it_abstains_with_nothing_to_handle(spec: Any, step: Step) -> None:
+async def test_it_proceeds_with_nothing_to_handle(spec: Any, step: Step) -> None:
     decision, records, _ = await _run(spec(), step)
-    assert decision is None
-    assert not _handled(records)
+    assert decision == Decision.proceed()
+    [handled] = _handled(records)
+    assert handled.report == Decision.proceed()
 
 
 @pytest.mark.anyio
