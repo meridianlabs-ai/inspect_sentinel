@@ -7,7 +7,6 @@ from .._results import warn_failed
 from .._runner import run_children
 from .._step import Step
 from .._types import Group, Protocol, Sentinels
-from .._unhandled import forwarding
 from .._validate import named_children
 
 
@@ -62,6 +61,6 @@ def concurrent(
                 update = {"action": "reject", "modified": None}
         summary = "; ".join(f"{label(d)}: {d.report.action}" for d in voters)
         update["explanation"] = f"{own} ({summary})" if own else summary
-        return forwarding(strongest.report.model_copy(update=update))
+        return strongest.report.model_copy(update=update)
 
     return run

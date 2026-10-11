@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Generic, TypeAlias, TypeVar
+from typing import Any, Generic, TypeAlias, TypeVar, cast
 
 from inspect_ai.core import Reference, SentinelAction, SentinelSuspicion, ToolCall
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 Suspicion: TypeAlias = SentinelSuspicion
 """How suspicious a step is: one finite score, or a non-empty dict scoring several dimensions independently."""
@@ -58,6 +58,30 @@ class Observation(BaseModel):
         return cls(suspicion=1.0, explanation=explanation, references=list(references))
 
 
+class _Origin:
+    # the step and invocation that returned a decision first. Every copy,
+    # shallow or deep, shares it, so a decision passed up, as is or rewritten
+    # with model_copy, still says who returned it. It is not part of the
+    # decision's value: every origin compares equal, and pickling drops it.
+    __slots__ = ("step", "node")
+
+    def __init__(self, step: object = None, node: object = None) -> None:
+        self.step = step
+        self.node = node
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _Origin)
+
+    def __hash__(self) -> int:
+        return 0
+
+    def __deepcopy__(self, memo: dict[int, object]) -> _Origin:
+        return self
+
+    def __reduce__(self) -> tuple[type[_Origin], tuple[()]]:
+        return (_Origin, ())
+
+
 class Decision(BaseModel):
     """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to `decide_final()`."""
 
@@ -81,6 +105,8 @@ class Decision(BaseModel):
 
     metadata: dict[str, Any] | None = Field(default=None)
     """Author-supplied structured context, recorded verbatim."""
+
+    _origin: _Origin = PrivateAttr(default_factory=_Origin)
 
     @classmethod
     def proceed(
@@ -124,6 +150,21 @@ class Decision(BaseModel):
         return cls(
             action="escalate", explanation=explanation, references=list(references)
         )
+
+
+# read by name: the attribute is private to the class, the stamp to the runner
+_ORIGIN = "_origin"
+
+
+def origin(decision: Decision) -> tuple[object, object]:
+    stamp = cast(_Origin, getattr(decision, _ORIGIN))
+    return stamp.step, stamp.node
+
+
+def with_origin(decision: Decision, step: object, node: object) -> Decision:
+    copy = decision.model_copy()
+    setattr(copy, _ORIGIN, _Origin(step, node))
+    return copy
 
 
 Report: TypeAlias = Observation | Decision

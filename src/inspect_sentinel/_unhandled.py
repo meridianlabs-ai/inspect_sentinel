@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from inspect_ai.core import Reference
 
-from ._report import Decision, Reported
+from ._report import Decision, Reported, origin, with_origin
 
 
 @dataclass(eq=False)
@@ -16,8 +16,6 @@ class Invocation:
     # it; the functions of a group, and repeat calls at one path, are told apart
     parent: Invocation | None
     decided: Reported[Decision] | None = None
-    # a decision the function marked as passing up its children's, rewritten
-    forwarded: Decision | None = None
 
 
 # the invocation whose function is running, which the runner's children take
@@ -44,13 +42,15 @@ def running(node: Invocation) -> Generator[None]:
         _current.reset(token)
 
 
-def forwarding(decision: Decision) -> Decision:
-    # for a protocol that passes up a child's decision rewritten, as concurrent
-    # adds its vote summary, so the rewrite is not taken for a reason of its own
-    node = _current.get()
-    if node is not None:
-        node.forwarded = decision
-    return decision
+def stamped(decision: Decision, node: Invocation) -> Decision:
+    # a decision returned during this step keeps the invocation that returned
+    # it first, through copies; any other is recorded as a copy stamped with
+    # this invocation, since a decision from elsewhere, such as a module-level
+    # constant, may be shared
+    step = _decided.get()
+    if step is None or origin(decision)[0] is step:
+        return decision
+    return with_origin(decision, step, node)
 
 
 def decided(node: Invocation, reported: Reported[Decision]) -> None:
@@ -82,25 +82,16 @@ def sources(found: Sequence[Invocation]) -> list[Reported[Decision]]:
     return [
         node.decided
         for node in reached
-        if node.decided is not None
-        and not _forwards(node, node.decided.report, reached)
+        if node.decided is not None and not _forwards(node, node.decided.report)
     ]
 
 
-def _forwards(
-    node: Invocation, report: Decision, reached: Sequence[Invocation]
-) -> bool:
-    # a protocol that consulted an escalating child and escalated with a reason
-    # of its own is a source too; one that returned the child's escalation, or
-    # an equal one, is not
-    if node.forwarded is report:
-        return True
-    return any(
-        other.decided is not None
-        and other.decided.report == report
-        and node in _ancestors(other)
-        for other in reached
-    )
+def _forwards(node: Invocation, report: Decision) -> bool:
+    # a protocol passed an escalation up when it returned, as is or as a copy, a
+    # decision one of its descendants returned; one it built itself is its own,
+    # even if equal to a descendant's
+    returned_by = origin(report)[1]
+    return isinstance(returned_by, Invocation) and node in _ancestors(returned_by)
 
 
 def _escalated(node: Invocation) -> bool:

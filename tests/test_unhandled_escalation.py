@@ -6,7 +6,13 @@ import pytest
 from inspect_ai.scorer import Reference
 from inspect_ai.util import StoreModel
 
-from inspect_sentinel import handle_escalation, human, sequential, threshold
+from inspect_sentinel import (
+    concurrent,
+    handle_escalation,
+    human,
+    sequential,
+    threshold,
+)
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._final import decide_final
@@ -129,12 +135,14 @@ async def test_an_escalate_at_the_root_is_returned_as_a_terminate_naming_where_i
     assert "escalate" in actions and "terminate" not in actions
 
 
+def _child_ref() -> Reference:
+    return Reference(type="message", id="c", cite="[child]")
+
+
 @protocol
 def ue_child(reason: str = "child reason") -> Protocol:
     async def run(context: Context, step: Step) -> Decision | None:
-        return Decision.escalate(
-            reason, references=[Reference(type="message", id="c", cite="[child]")]
-        )
+        return Decision.escalate(reason, references=[_child_ref()])
 
     return run
 
@@ -183,10 +191,13 @@ async def test_the_functions_of_a_group_are_told_apart(
     assert [r.cite for r in decision.references] == cites
 
 
+Returns = Literal["forwarded", "relabelled", "rewritten", "equal", "carried", "own"]
+
+
 @protocol
-def ue_consults(returns: Literal["forwarded", "copied", "carried", "own"]) -> Protocol:
-    # consults an escalating child, then passes its escalation up or escalates
-    # with a reason of its own
+def ue_consults(returns: Returns) -> Protocol:
+    # consults an escalating child, then passes its escalation up, as is or as
+    # a copy, or escalates with a decision of its own
     configured = ue_child()
 
     async def run(context: Context, step: Step) -> Decision | None:
@@ -194,8 +205,12 @@ def ue_consults(returns: Literal["forwarded", "copied", "carried", "own"]) -> Pr
         child = decisions[0].report
         if returns == "forwarded":
             return child
-        if returns == "copied":
-            return Decision.escalate(child.explanation, references=child.references)
+        if returns == "relabelled":
+            return child.model_copy(update={"metadata": {"by": "parent"}})
+        if returns == "rewritten":
+            return child.model_copy(update={"explanation": "child reason, seen"})
+        if returns == "equal":
+            return Decision.escalate("child reason", references=[_child_ref()])
         own = Reference(type="message", id="p", cite="[parent]")
         carried = child.references if returns == "carried" else []
         return Decision.escalate("parent reason", references=[*carried, own])
@@ -209,7 +224,13 @@ def ue_consults(returns: Literal["forwarded", "copied", "carried", "own"]) -> Pr
     ("returns", "named", "cites"),
     [
         ("forwarded", "parent/child: child reason", ["[child]"]),
-        ("copied", "parent/child: child reason", ["[child]"]),
+        ("relabelled", "parent/child: child reason", ["[child]"]),
+        ("rewritten", "parent/child: child reason", ["[child]"]),
+        (
+            "equal",
+            "parent/child: child reason; parent: child reason",
+            ["[child]"],
+        ),
         (
             "carried",
             "parent/child: child reason; parent: parent reason",
@@ -222,11 +243,8 @@ def ue_consults(returns: Literal["forwarded", "copied", "carried", "own"]) -> Pr
         ),
     ],
 )
-async def test_a_parent_is_named_when_it_escalates_with_its_own_reason(
-    returns: Literal["forwarded", "copied", "carried", "own"],
-    named: str,
-    cites: list[str],
-    step: Step,
+async def test_a_parent_is_named_unless_it_passed_its_childs_escalation_up(
+    returns: Returns, named: str, cites: list[str], step: Step
 ) -> None:
     decision = await run_sentinel(
         resolve_sentinel({"parent": ue_consults(returns)}), host_context(), step
@@ -234,6 +252,78 @@ async def test_a_parent_is_named_when_it_escalates_with_its_own_reason(
     assert decision is not None
     assert decision.explanation == f"unhandled escalation from {named}. {GUIDANCE}"
     assert [r.cite for r in decision.references] == cites
+
+
+@protocol
+def ue_above(forwards: bool) -> Protocol:
+    # above a protocol that escalates on its own after its child did: passes
+    # that up, or escalates with a decision equal to the grandchild's
+    configured = ue_consults("own")
+
+    async def run(context: Context, step: Step) -> Decision | None:
+        decisions = await run_protocols({"middle": configured}, context, step)
+        if forwards:
+            return decisions[0].report
+        return Decision.escalate("child reason", references=[_child_ref()])
+
+    return run
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("step", [before_step(), after_step()])
+@pytest.mark.parametrize(
+    ("forwards", "named"),
+    [
+        (True, "top/middle/child: child reason; top/middle: parent reason"),
+        (
+            False,
+            "top/middle/child: child reason; top/middle: parent reason; top: child reason",
+        ),
+    ],
+    ids=["forwarded", "equal-to-grandchild"],
+)
+async def test_an_escalation_equal_to_a_grandchilds_is_named(
+    forwards: bool, named: str, step: Step
+) -> None:
+    decision = await run_sentinel(
+        resolve_sentinel({"top": ue_above(forwards)}), host_context(), step
+    )
+    assert decision is not None
+    assert decision.explanation == f"unhandled escalation from {named}. {GUIDANCE}"
+    assert [r.cite for r in decision.references] == ["[child]", "[parent]"]
+
+
+@protocol
+def ue_over_votes(forwards: bool) -> Protocol:
+    # above a concurrent vote whose escalation it rewrites with its summary
+    votes = concurrent({"rule": ue_escalates(), "llm": _limit()})
+
+    async def run(context: Context, step: Step) -> Decision | None:
+        decisions = await run_protocols({"votes": votes}, context, step)
+        return decisions[0].report if forwards else Decision.escalate("own reason")
+
+    return run
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("forwards", "named"),
+    [
+        (True, "parent/votes/rule: unsure"),
+        (False, "parent/votes/rule: unsure; parent: own reason"),
+    ],
+    ids=["forwarded", "own"],
+)
+async def test_a_concurrent_vote_summary_is_not_named(
+    forwards: bool, named: str
+) -> None:
+    decision = await run_sentinel(
+        resolve_sentinel({"parent": ue_over_votes(forwards)}),
+        host_context(),
+        before_step(),
+    )
+    assert decision is not None
+    assert decision.explanation == f"unhandled escalation from {named}. {GUIDANCE}"
 
 
 class Calls(StoreModel):
