@@ -30,16 +30,18 @@ How several monitors and protocols combine into one sentinel. Covers what a list
 ```python
 from inspect_sentinel import human, sequential
 
-sentinel = sequential([triage(), human(stages=["tool_call"])])
+sentinel = sequential([triage()], then=human(stages=["tool_call"]))
 ```
 
 Here `triage()` rejects what is clearly bad, escalates what it is unsure about, and lets the rest proceed; the person is asked only about the escalated calls. The full task is `examples/escalate_to_human.py`.
+
+`then` is a last link that always decides and never escalates, such as `human()` or `handle_escalation()`. It runs like a child placed last, and it makes the chain's type `Protocol[NotEscalate]`, so a type checker can see that nothing escalates out of it (see [Types: When a Handler Is Needed](protocols.qmd#types-when-a-handler-is-needed)). Writing the same protocol as the last child behaves the same but leaves the chain typed as able to escalate.
 
 - **Escalations are handed forward.** A child that returns `Decision.escalate(...)` passes the step to the next child, which finds the escalation in `step.escalations`, together with every earlier one in the chain. The list starts empty each time the chain runs, so a nested `sequential` does not see the escalations of the chain around it.
 - **Abstaining passes the step on.** A child that returns `None` has not decided, so the next child runs. A rule ahead of a `human()` should return `Decision.proceed()` for the calls it is content with, or the person is asked about them too.
 - **Monitors fall through.** A monitor in the chain is recorded and the next child runs, since an observation is not a decision.
 - **Children watch their own stages.** A child that does not watch the current stage is skipped, as everywhere else.
-- **When nobody decides.** If every child that decided escalated, the chain returns the last escalate, passing it up to the layer above. If only monitors reported it returns `continue`, and if no child took part it abstains. An escalate that reaches the top of the sentinel ends the sample as an unhandled escalation, so end a chain that can escalate with `human()` or with `handle_escalation("terminate")` or `handle_escalation("continue")`; see [Unhandled Escalations](final-decisions.qmd#unhandled-escalations).
+- **When nobody decides.** If every child that decided escalated, the chain returns the last escalate, passing it up to the layer above. If only monitors reported it returns `continue`, and if no child took part it abstains. An escalate that reaches the top of the sentinel ends the sample as an unhandled escalation, so end a chain that can escalate with `then=human(...)` or `then=handle_escalation("terminate")` or `then=handle_escalation("continue")`; see [Unhandled Escalations](final-decisions.qmd#unhandled-escalations).
 - **Final decisions.** A child that calls `decide_final()` ends the step as usual; the chain and every layer above it are recorded as bypassed.
 
 Each child is recorded under its instance name below the chain's path: `attempt/network_rule` for a chain configured under the name `attempt`. In YAML the children go under `children:`:
@@ -51,5 +53,6 @@ sentinel:
     children:
       network_rule: {name: network_rule}
       judge: {name: llm_judge, params: {model: openai/gpt-4o-mini}}
+    then: {name: handle_escalation, params: {action: terminate}}
 ```
 

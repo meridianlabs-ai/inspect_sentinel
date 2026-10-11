@@ -12,7 +12,9 @@ _ACTIONS = ("terminate", "continue")
 
 
 @protocol
-def handle_escalation(action: Literal["terminate", "continue"]) -> ProtocolGroup:
+def handle_escalation(
+    action: Literal["terminate", "continue"],
+) -> ProtocolGroup[Terminate | Proceed]:
     """Answer the escalations handed to it with a fixed policy: end the sample, or let the step proceed.
 
     Put it last in a `sequential()`, after the links that escalate what they are unsure about, as in `sequential([threshold(...), handle_escalation("terminate")])`, or after a `human()` for when the person cannot be reached. It acts only when `step.escalations` is non-empty; otherwise it lets the step proceed, so at the root, or anywhere nothing escalated, it changes nothing. It always decides, never abstaining or escalating, so a configuration that ends with it handles every escalation that reaches it. Its explanation names each escalation it handled, `escalated by triage: call deletes files (rm)`, and it carries their references.

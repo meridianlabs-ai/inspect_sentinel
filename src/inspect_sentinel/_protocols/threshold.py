@@ -19,7 +19,7 @@ def threshold(
     monitors: Monitor | MonitorGroup | Monitors,
     reject_at: float | Mapping[str, float],
     terminate_at: float | Mapping[str, float] | None = None,
-) -> Protocol:
+) -> Protocol[Terminate | Reject | Proceed | None]:
     """Act on suspicion scores: `reject` when any score reaches its reject threshold, `terminate` when any reaches its terminate threshold.
 
     A threshold is one number for every score, or a mapping that sets one per dimension. In a mapping, `"<monitor>.<dimension>"` applies to one dimension of one monitor (the monitor's instance name, as in `Reported.name`), a bare `"<dimension>"` applies to that dimension from every monitor, a monitor reporting a single number is keyed by its instance name, and `"*"` applies to anything unlisted. The most specific key wins: qualified, then bare, then `"*"`. A score no key covers never triggers. A number is shorthand for `{"*": number}`. A dimension name containing `.` must be qualified.

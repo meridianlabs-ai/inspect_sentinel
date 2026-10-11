@@ -8,6 +8,7 @@ from typing import (
     Any,
     NamedTuple,
     ParamSpec,
+    TypeVar,
     cast,
     get_args,
     get_type_hints,
@@ -43,6 +44,8 @@ from ._types import (
 )
 
 P = ParamSpec("P")
+# what a factory's protocols return, carried from the factory to the decorated one
+D = TypeVar("D", bound=Decision | None)
 
 _STEP_TYPES = frozenset(get_args(Step))
 # an attribute rather than registry metadata: per-member stages live in groups,
@@ -120,15 +123,17 @@ class _MonitorDecorator(TypingProtocol):
 
 class _ProtocolDecorator(TypingProtocol):
     @overload
-    def __call__(self, factory: Callable[P, Protocol]) -> Callable[P, Protocol]: ...
+    def __call__(
+        self, factory: Callable[P, Protocol[D]]
+    ) -> Callable[P, Protocol[D]]: ...
     @overload
     def __call__(
-        self, factory: Callable[P, ProtocolGroup]
-    ) -> Callable[P, ProtocolGroup]: ...
+        self, factory: Callable[P, ProtocolGroup[D]]
+    ) -> Callable[P, ProtocolGroup[D]]: ...
     @overload
     def __call__(
-        self, factory: Callable[P, Protocol | ProtocolGroup]
-    ) -> Callable[P, Protocol | ProtocolGroup]: ...
+        self, factory: Callable[P, Protocol[D] | ProtocolGroup[D]]
+    ) -> Callable[P, Protocol[D] | ProtocolGroup[D]]: ...
 
 
 @overload
@@ -177,13 +182,15 @@ def monitor(
 
 
 @overload
-def protocol(factory: Callable[P, Protocol], /) -> Callable[P, Protocol]: ...
-@overload
-def protocol(factory: Callable[P, ProtocolGroup], /) -> Callable[P, ProtocolGroup]: ...
+def protocol(factory: Callable[P, Protocol[D]], /) -> Callable[P, Protocol[D]]: ...
 @overload
 def protocol(
-    factory: Callable[P, Protocol | ProtocolGroup], /
-) -> Callable[P, Protocol | ProtocolGroup]: ...
+    factory: Callable[P, ProtocolGroup[D]], /
+) -> Callable[P, ProtocolGroup[D]]: ...
+@overload
+def protocol(
+    factory: Callable[P, Protocol[D] | ProtocolGroup[D]], /
+) -> Callable[P, Protocol[D] | ProtocolGroup[D]]: ...
 @overload
 def protocol(
     *, name: str | None = None, version: int = 0, portable: bool = True
@@ -303,12 +310,12 @@ def _register(
                 raise TypeError(
                     f"A {kind} factory must return a {group_type.__name__}, not a {type(returned).__name__}; {registered_name} did."
                 )
+            group = cast(MonitorGroup | ProtocolGroup, returned)
             functions = tuple(
-                _configure(function, kind, report_type)
-                for function in returned.functions
+                _configure(function, kind, report_type) for function in group.functions
             )
             instance = group_type(*functions)
-            _carry_over(returned, instance, "_functions")
+            _carry_over(group, instance, "_functions")
             accepted = frozenset[type[Any]]().union(
                 *(step_types(function) for function in functions)
             )

@@ -26,7 +26,7 @@ PROTECTED_PATHS = ["/etc", "~/.aws"]
 
 
 @protocol
-def protected() -> Protocol:
+def protected() -> Protocol[Proceed | None]:
     """Reject, with `decide_final()`, any `bash()` command that mentions `/etc` or `~/.aws`."""
 
     async def decide(context: Context, step: BeforeToolCall) -> Proceed | None:

@@ -15,7 +15,18 @@ from ._context import Context, validate_instance_name
 from ._decorators import invoke, members
 from ._final import Final, Origin
 from ._host import HostContext, enter_layer, layer, running_step
-from ._report import Decision, Failed, Observation, Report, Reported
+from ._report import (
+    Decision,
+    Failed,
+    Modify,
+    NotEscalate,
+    Observation,
+    Proceed,
+    Reject,
+    Report,
+    Reported,
+    Terminate,
+)
 from ._results import Decisions, Observations, Reports
 from ._step import Step
 from ._types import (
@@ -113,12 +124,12 @@ async def _task_group() -> AsyncGenerator[TaskGroup]:
 
 async def run_sentinel(
     protocol: Protocol, host_context: HostContext, step: Step
-) -> Decision | None:
+) -> NotEscalate:
     """Run the sentinel `resolve_sentinel` returned for one step and return the step's outcome.
 
     The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its full registry name is the `factory` its records carry. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 
-    An `escalate` from the root, nobody being left to hand it to, is an unhandled escalation: it is recorded as the root's decision, and `run_sentinel` returns a `terminate` in its place, explained as `unhandled escalation from attempt/triage: <reason>` for each escalation that reached the root, with how to handle it, and carrying their references. The host never receives an `escalate`, and applies the `terminate` as it would a protocol's own; the root's recorded `escalate` is what tells the two apart in the log.
+    An `escalate` from the root, nobody being left to hand it to, is an unhandled escalation: it is recorded as the root's decision, and `run_sentinel` returns a `terminate` in its place, explained as `unhandled escalation from attempt/triage: <reason>` for each escalation that reached the root, with how to handle it, and carrying their references. The host never receives an `escalate`, and applies the `terminate` as it would a protocol's own; the root's recorded `escalate` is what tells the two apart in the log. A root that abstains returns `Proceed`, so the outcome is always a decision and never `escalate`: its type is `NotEscalate`.
 
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.
@@ -156,12 +167,23 @@ async def run_sentinel(
             recorder.record(origin.context, factory, origin.step, origin.reported)
             if ex.decision.action == "escalate":
                 return unhandled([origin.reported])
-            return ex.decision
+            return _settled(ex.decision)
     if not found:
-        return None
+        # nobody decided, so the step proceeds
+        return Decision.proceed()
     if found[0].report.action == "escalate":
         return unhandled(sources(invocations))
-    return found[0].report
+    return _settled(found[0].report)
+
+
+def _settled(decision: Decision) -> NotEscalate:
+    # an escalate was converted above, and the shape check holds every class
+    # to its action
+    if isinstance(decision, (Proceed, Reject, Terminate, Modify)):
+        return decision
+    raise RuntimeError(
+        f"Runner invariant violated: the root's decision {decision.action!r} reached the host unconverted."
+    )
 
 
 async def run_monitors(

@@ -23,12 +23,12 @@ How a protocol makes a decision that no layer above it may weaken, and how a per
 
 ## Humans
 
-`human()` asks a person to decide. Put it at the end of a `sequential()`, after a rule that escalates what it is unsure about:
+`human()` asks a person to decide. Put it at the end of a `sequential()`, as its `then`, after a rule that escalates what it is unsure about:
 
 ```python
 from inspect_sentinel import human, sequential
 
-Task(..., sentinel=sequential([triage(), human(stages=["tool_call"])]))
+Task(..., sentinel=sequential([triage()], then=human(stages=["tool_call"])))
 ```
 
 `stages` is required: `"tool_call"` asks before a call, `"tool_result"` after it, with the result the model is about to receive, and you can name both. `human()` asks whenever it is reached, so here the person is asked only about the calls `triage` escalated, and sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call, like Inspect's human approver. `examples/escalate_to_human.py` is the full task:
@@ -59,7 +59,7 @@ Every intended outcome has a protocol: `human()` asks a person, and `handle_esca
 ```python
 from inspect_sentinel import handle_escalation, sequential
 
-Task(..., sentinel=sequential([triage(), handle_escalation("terminate")]))
+Task(..., sentinel=sequential([triage()], then=handle_escalation("terminate")))
 ```
 
 `action` is required, so every configuration states its policy: `"terminate"` ends the sample, and `"continue"` lets the step proceed, the explicit way to let an unsure escalation through, recorded in the configuration and the log. There is no `"reject"`, which is not legal after a call. `handle_escalation()` acts only when the step was escalated, and otherwise lets the step proceed, so it changes nothing about a call nothing escalated. Its explanation names each escalation it handled and why, for example `escalated by triage: call deletes files (rm)`.
@@ -67,7 +67,7 @@ Task(..., sentinel=sequential([triage(), handle_escalation("terminate")]))
 After a `human()`, it covers the stages the person is not asked at. Here `rule()` stands for a protocol that may escalate before or after a call; the person is asked before one, and an escalation after one ends the sample:
 
 ```python
-sequential([rule(), human(stages=["tool_call"]), handle_escalation("terminate")])
+sequential([rule(), human(stages=["tool_call"])], then=handle_escalation("terminate"))
 ```
 
-A protocol whose return annotation includes `Escalate`, with nothing after it that always decides, is a configuration error when the sentinel is built, so the mistake shows before the eval runs rather than as ended samples. One annotated `-> Decision` may decide anything and is not checked; for it, the `terminate` above is the safety net. See [Declaring What a Protocol Decides](protocols.qmd#declaring-what-a-protocol-decides).
+Three checks find an unhandled escalation, earliest first. A type checker flags it in the editor when a sentinel is typed `RootSentinels` (see [Types: When a Handler Is Needed](protocols.qmd#types-when-a-handler-is-needed)). Building the sentinel raises a configuration error when a protocol annotated to return `Escalate` has nothing after it that always decides, which also covers configurations from YAML. And the `terminate` above catches the rest at run time, such as an escalation from a protocol annotated `-> Decision`, which may decide anything and is not checked before.

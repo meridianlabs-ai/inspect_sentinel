@@ -36,6 +36,10 @@ dependencies = [
     # _runner.py imports the ExceptionGroup backport on 3.10; anyio depends on
     # it too, but a transitive dependency is not a promise.
     "exceptiongroup>=1.0; python_version < '3.11'",
+    # TypeVar defaults, for the generic Protocol and ProtocolGroup, on 3.10 to
+    # 3.12; pydantic depends on it too, but a transitive dependency is not a
+    # promise.
+    "typing_extensions>=4.12",
 ]
 
 [project.urls]

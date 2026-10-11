@@ -166,6 +166,9 @@ class Escalate(Decision, frozen=True):
     """Always `escalate`."""
 
 
+NotEscalate: TypeAlias = Proceed | Reject | Terminate | Modify
+"""Every decision but `Escalate`: what a protocol that always decides returns, and what `run_sentinel` returns for a step."""
+
 DECISION_CLASSES: dict[Action, type[Decision]] = {
     "continue": Proceed,
     "reject": Reject,

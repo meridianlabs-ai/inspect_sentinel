@@ -280,6 +280,12 @@ HANDLED: list[tuple[str, Callable[[], Sentinels]]] = [
         lambda: sequential([td_escalates(), human(stages=["tool_call"])]),
     ),
     (
+        "a rule then handle_escalation as then",
+        lambda: sequential(
+            [td_escalates_anywhere()], then=handle_escalation("terminate")
+        ),
+    ),
+    (
         "a rule then handle_escalation",
         lambda: sequential([td_escalates_anywhere(), handle_escalation("continue")]),
     ),
@@ -451,10 +457,11 @@ async def test_a_protocol_annotated_none_never_decides() -> None:
         return decide
 
     recorder = ListRecorder()
-    assert (
-        await run_sentinel(td_silent(), host_context(recorder=recorder), after_step())
-        is None
+    # nobody decided, so the step proceeds
+    decision = await run_sentinel(
+        td_silent(), host_context(recorder=recorder), after_step()
     )
+    assert decision == Decision.proceed()
     assert not recorder.records
 
 

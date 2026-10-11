@@ -1,11 +1,12 @@
-from typing import Any, NamedTuple, cast
+from collections.abc import Callable
+from typing import Any, Literal, NamedTuple, cast
 
 import pytest
 from inspect_ai._util.registry import registry_info
 from inspect_ai.log import SentinelConfig
 from inspect_ai.util import Store, StoreModel
 
-from inspect_sentinel import sequential
+from inspect_sentinel import handle_escalation, sequential
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._final import decide_final
@@ -338,3 +339,61 @@ async def test_a_configured_chain_records_its_links_under_its_path() -> None:
         "sequential/network_review",
         "sequential/watch",
     ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("step", [before_step(), after_step()])
+@pytest.mark.parametrize("action", ["terminate", "continue"])
+async def test_then_answers_what_the_children_escalated(
+    action: Literal["terminate", "continue"], step: Step
+) -> None:
+    rooted = await _root(
+        sequential(
+            {"triage": seq_link("escalate", "unsure")}, then=handle_escalation(action)
+        ),
+        step,
+    )
+    assert rooted.decision is not None
+    assert rooted.decision.action == action
+    assert rooted.decision.explanation == "escalated by triage: unsure"
+    assert "handle_escalation" in _paths(rooted.recorder)
+
+
+@pytest.mark.anyio
+async def test_then_is_not_reached_when_a_child_decides() -> None:
+    rooted = await _root(
+        sequential([seq_link("reject")], then=handle_escalation("terminate"))
+    )
+    assert rooted.decision is not None and rooted.decision.action == "reject"
+    assert "handle_escalation" not in _paths(rooted.recorder)
+
+
+@pytest.mark.parametrize("then", [seq_link, seq_abstains], ids=["any", "abstains"])
+def test_then_must_always_decide_and_never_escalate(then: Callable[[], Any]) -> None:
+    with pytest.raises(TypeError, match="then must always decide and never escalate"):
+        sequential([seq_link("escalate")], then=then())
+
+
+def test_then_is_named_apart_from_the_children() -> None:
+    with pytest.raises(ValueError, match="then is named 'handle_escalation'"):
+        sequential([handle_escalation("continue")], then=handle_escalation("terminate"))
+
+
+THEN_RAW: Any = [
+    {
+        "name": "sequential",
+        "children": {"triage": {"name": "seq_link", "params": {"action": "escalate"}}},
+        "then": {"name": "handle_escalation", "params": {"action": "terminate"}},
+    }
+]
+
+
+@pytest.mark.anyio
+async def test_then_is_configured_nested_and_round_trips() -> None:
+    # a lone instance is recorded in params, as threshold's lone monitor is
+    recorded = config_from_sentinel(sentinel_from_config(THEN_RAW))
+    rebuilt = sentinel_from_config(recorded.model_dump(exclude_none=True))
+    assert config_from_sentinel(rebuilt) == recorded
+    for built in (sentinel_from_config(THEN_RAW), rebuilt):
+        rooted = await _root(resolve_sentinel(built))
+        assert rooted.decision is not None and rooted.decision.action == "terminate"

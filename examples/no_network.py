@@ -24,7 +24,7 @@ NETWORK_COMMANDS = ["curl", "wget", "pip install"]
 
 
 @protocol
-def no_network() -> Protocol:
+def no_network() -> Protocol[Reject | Proceed | None]:
     """Reject `bash()` commands that use `curl`, `wget` or `pip install`."""
 
     async def decide(context: Context, step: BeforeToolCall) -> Reject | Proceed | None:

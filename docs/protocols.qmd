@@ -5,7 +5,7 @@ description: "Writing protocols, which decide what happens at a step, and rules,
 
 ::: {.callout-warning}
 ## Outline
-This page is an outline: a summary and the sections planned for it, not yet the documentation, apart from [Declaring What a Protocol Decides](#declaring-what-a-protocol-decides) and [Helpers for Rules](#helpers-for-rules). See [Getting Started](index.qmd) for a worked example.
+This page is an outline: a summary and the sections planned for it, not yet the documentation, apart from [Declaring What a Protocol Decides](#declaring-what-a-protocol-decides), [Types: When a Handler Is Needed](#types-when-a-handler-is-needed) and [Helpers for Rules](#helpers-for-rules). See [Getting Started](index.qmd) for a worked example.
 :::
 
 ## Overview
@@ -29,14 +29,14 @@ How to write a protocol: a `@protocol` factory returning a function that returns
 
 ## Declaring What a Protocol Decides
 
-Each action has its own decision class: `Proceed` (action `continue`), `Reject`, `Terminate`, `Modify` and `Escalate`, all subclasses of `Decision`. Decisions are frozen, and `Decision` is their base and is not built itself: `Decision.proceed()`, `Decision.reject()`, `Decision.terminate()` and `Decision.escalate()` return a `Proceed`, `Reject`, `Terminate` and `Escalate`, and a modify is `Modify(modified=...)`. The logged `action` is the same as before. A protocol function's return annotation says what it can decide, as a union of those classes, with `None` if it can abstain:
+Each action has its own decision class: `Proceed` (action `continue`), `Reject`, `Terminate`, `Modify` and `Escalate`, all subclasses of `Decision`. Decisions are frozen, and `Decision` is their base and is not built itself: `Decision.proceed()`, `Decision.reject()`, `Decision.terminate()` and `Decision.escalate()` return a `Proceed`, `Reject`, `Terminate` and `Escalate`, and a modify is `Modify(modified=...)`. The logged `action` is the same as before. A protocol function's return annotation says what it can decide, as a union of those classes, with `None` if it can abstain, and its factory is annotated `-> Protocol[...]` with the same union, so the instances it returns carry that type:
 
 ```python
 from inspect_sentinel import BeforeToolCall, Context, Proceed, Protocol, Reject, protocol
 
 
 @protocol
-def no_network() -> Protocol:
+def no_network() -> Protocol[Reject | Proceed | None]:
     async def decide(
         context: Context, step: BeforeToolCall
     ) -> Reject | Proceed | None:
@@ -45,16 +45,58 @@ def no_network() -> Protocol:
     return decide
 ```
 
-- **`-> Decision`, or `-> Decision | None`, means any action.** A composition of your own that returns its children's decisions is annotated this way.
+- **`-> Decision`, or `-> Decision | None`, means any action.** A composition of your own that returns its children's decisions is annotated this way, and a factory annotated with a bare `-> Protocol` makes instances typed `Protocol[Decision | None]`, which may escalate. A type checker checks that the function a factory returns matches its `-> Protocol[...]`.
 - **The annotation is enforced.** A function that returns a decision outside it, or `None` when the annotation has no `None`, fails the step with an error naming the protocol and its annotation. A type checker catches most of these first. A decision passed to `decide_final()` is not held to the annotation.
 - **`None` alone** is a protocol that never decides, as `observe_only()` is annotated.
 - **It is how a configuration is checked when it is built.** A function annotated without `None` and without `Escalate` always decides, so in a `sequential()` it answers every escalation that reaches it, and the links after it never run. A protocol annotated to return `Escalate` with nothing after it that always decides is a configuration error when the sentinel is built, naming the protocol and the stage: end the configuration with `human()` or `handle_escalation()`, or take `Escalate` out of the annotation. A protocol annotated `-> Decision` is not checked, while one that names the classes is, even if it names all five. The check follows `sequential()` and `concurrent()` through their children, including where one is a function of a group. It does not see a decision passed to `decide_final()`. An escalation it does not catch that reaches the top ends the sample at run time (see [Unhandled Escalations](final-decisions.qmd#unhandled-escalations)).
 
 The shipped protocols are annotated: `threshold()` returns `Terminate | Reject | Proceed | None` and `observe_only()` `None`, so neither escalates; `human()` and `handle_escalation()` always decide; `sequential()` and `concurrent()` are checked through their children.
 
+## Types: When a Handler Is Needed
+
+Since every protocol's type says what it can return, a type checker can tell, in the editor, whether an escalation can reach the top of a sentinel with nothing to handle it, and stays quiet when nothing can escalate.
+
+- **Shipped protocols are typed precisely.** `threshold(...)` is a `Protocol[Terminate | Reject | Proceed | None]`, `observe_only(...)` a `Protocol[None]`, `handle_escalation(...)` a `ProtocolGroup[Terminate | Proceed]`, and `human(...)` a `Protocol[NotEscalate]` or `ProtocolGroup[NotEscalate]`, where `NotEscalate` is `Proceed | Reject | Terminate | Modify`.
+- **Compositions take the union of their children.** `concurrent([no_network(), triage()])` is a `Protocol[Reject | Proceed | Escalate | None]` when `triage()` can escalate, and `sequential(...)` is the union of its children with `Proceed` and `None`. Monitors add nothing.
+- **`then=` ends a chain with a handler.** `sequential([triage()], then=human(stages=["tool_call"]))` is a `Protocol[NotEscalate]`: `then` takes a protocol that always decides and never escalates, and the type checker rejects one that could abstain or escalate.
+- **`RootSentinels` is a configuration that cannot escalate.** Annotate the function that builds a task's sentinel with it, and an escalation that could reach the top is a type error at the line that builds it:
+
+```python
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Decision,
+    Escalate,
+    Proceed,
+    Protocol,
+    RootSentinels,
+    human,
+    protocol,
+    sequential,
+)
+
+
+@protocol
+def triage() -> Protocol[Escalate | Proceed]:
+    async def decide(context: Context, step: BeforeToolCall) -> Escalate | Proceed:
+        if "rm " in str(step.call.arguments):
+            return Decision.escalate("call deletes files")
+        return Decision.proceed()
+
+    return decide
+
+
+def guarded() -> RootSentinels:
+    return sequential([triage()], then=human(stages=["tool_call"]))
+```
+
+Without `then=`, the same function is a type error, since `triage()` can escalate. `Task(sentinel=)` does not take `RootSentinels` yet, so the editor shows this only where you use the type. Configurations the type checker cannot see, such as YAML, plain lists and mappings of protocols annotated `-> Decision`, are still checked when the sentinel is built and, failing that, when an escalation reaches the top (see [Unhandled Escalations](final-decisions.qmd#unhandled-escalations)).
+
+`run_sentinel` returns a `NotEscalate` for every step: an escalation from the root is returned as a `Terminate`, and a root that abstains as a `Proceed`.
+
 ## Helpers for Rules
 
-A rule usually reads a tool call's arguments and looks for something in them. These functions do the common parts. They are plain functions of their arguments, so a rule built on them is easy to test. Rules are cheap and run without a model call. They match a call's text and its structured arguments, and they cannot prove a call safe: a command built at run time, or a tool the rule does not know, gets past them. Anything that needs an understanding of shell or code, such as which files a command touches, goes to an LLM monitor or is escalated, typically `sequential([rule(), llm_monitor(), human()])`, where `llm_monitor()` stands for a protocol that asks a model and escalates what it is unsure of.
+A rule usually reads a tool call's arguments and looks for something in them. These functions do the common parts. They are plain functions of their arguments, so a rule built on them is easy to test. Rules are cheap and run without a model call. They match a call's text and its structured arguments, and they cannot prove a call safe: a command built at run time, or a tool the rule does not know, gets past them. Anything that needs an understanding of shell or code, such as which files a command touches, goes to an LLM monitor or is escalated, typically `sequential([rule(), llm_monitor()], then=human(...))`, where `llm_monitor()` stands for a protocol that asks a model and escalates what it is unsure of.
 
 | Function | Returns |
 |---|---|
@@ -83,7 +125,7 @@ INSTALL_WORDS = ["pip install", "npm install", "apt-get install"]
 
 
 @protocol
-def installs() -> Protocol:
+def installs() -> Protocol[Escalate | Proceed | None]:
     async def decide(
         context: Context, step: BeforeToolCall
     ) -> Escalate | Proceed | None:

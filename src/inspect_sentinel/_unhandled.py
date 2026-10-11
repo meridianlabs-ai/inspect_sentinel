@@ -9,7 +9,7 @@ from typing import Any, Literal, NamedTuple, TypeVar, cast, get_args
 from inspect_ai._util.registry import registry_info, registry_unqualified_name
 
 from ._decorators import Outcome, declared, members
-from ._report import Decision, Reported
+from ._report import Decision, Reported, Terminate
 from ._step import AfterToolCall, BeforeToolCall, Step
 from ._types import Protocol, Sentinel
 
@@ -96,7 +96,7 @@ def _ancestors(node: Invocation) -> list[Invocation]:
     return ancestors
 
 
-def unhandled(escalations: Sequence[Reported[Decision]]) -> Decision:
+def unhandled(escalations: Sequence[Reported[Decision]]) -> Terminate:
     # what run_sentinel returns for an escalate at the root: a terminate, since
     # nothing was configured to answer it
     named = "; ".join(

@@ -1,6 +1,6 @@
 """Escalation: a rule settles the clear cases and hands the rest to a person.
 
-The rule rejects `bash()` and `python()` calls that mention `/etc`, escalates calls that delete files, and lets everything else proceed. `human()` at the end of the `sequential()` is asked only about the escalated calls.
+The rule rejects `bash()` and `python()` calls that mention `/etc`, escalates calls that delete files, and lets everything else proceed. `human()`, the `sequential()`'s `then`, is asked only about the escalated calls.
 """
 
 from example_samples import ADD_HOST, CLEANUP, COUNT_ROWS
@@ -28,7 +28,7 @@ DELETE_WORDS = ["rm", "rmdir", "-delete", "shutil.rmtree", "os.remove"]
 
 
 @protocol
-def triage() -> Protocol:
+def triage() -> Protocol[Reject | Escalate | Proceed]:
     """Reject calls that mention `/etc`, escalate ones that delete files, and let the rest proceed."""
 
     async def decide(
@@ -57,5 +57,5 @@ def escalate_to_human() -> Task:
         solver=react(tools=[bash(timeout=60), python(timeout=60)]),
         sandbox=("docker", "compose.yaml"),
         message_limit=20,
-        sentinel=sequential([triage(), human(stages=["tool_call"])]),
+        sentinel=sequential([triage()], then=human(stages=["tool_call"])),
     )

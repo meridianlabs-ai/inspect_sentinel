@@ -21,6 +21,7 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 ### Terminate
 ### Modify
 ### Escalate
+### NotEscalate
 ### Suspicion
 ### Action
 ### Report
@@ -41,6 +42,7 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 ### Protocols
 ### Sentinel
 ### Sentinels
+### RootSentinels
 ### PortabilityError
 
 ## Shipped protocols

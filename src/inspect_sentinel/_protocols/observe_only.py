@@ -10,7 +10,7 @@ from .._validate import named_children
 
 
 @protocol
-def observe_only(monitors: Monitor | MonitorGroup | Monitors) -> Protocol:
+def observe_only(monitors: Monitor | MonitorGroup | Monitors) -> Protocol[None]:
     """Record every monitor's observation and never act.
 
     A monitor that raises is recorded as failed and logged as a warning, once per instance and exception type, and the step continues.

@@ -268,7 +268,7 @@ async def test_observe_only_records_a_failure_warns_once_and_continues(
             decision = await run_sentinel(
                 root, host_context(recorder=recorder), before_step()
             )
-            assert decision is None
+            assert decision == Decision.proceed()
     assert [f.path for f in recorder.failures] == ["observe_flaky", "observe_flaky"]
     assert [r.reported.name for r in recorder.records] == ["steady", "steady"]
     [warning] = _warnings(caplog, "observe_flaky")

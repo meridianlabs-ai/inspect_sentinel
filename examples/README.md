@@ -10,7 +10,7 @@ Runnable sentinel configurations, each watching a short `react()` agent that has
 | `nested.py` | Composition: a mapping of named children with a `concurrent()` of rules inside it, and a rule that ends the step with `decide_final()` | `inspect eval examples/nested.py --model openai/gpt-5-mini --model-role monitor=anthropic/claude-haiku-4-5` |
 | `escalate_to_human.py` | A person in the loop: a rule that rejects, escalates or proceeds, ahead of `human()` in a `sequential()`, so the person is asked only about escalated calls | `inspect eval examples/escalate_to_human.py --model openai/gpt-5-mini` |
 
-The checks are deliberately simple, to keep the examples readable. Rules are cheap and run without a model call. They match a call's text and structured arguments, and they cannot prove a call safe: a different tool, or a string built at run time, can get past one. Anything that needs an understanding of shell or code goes to an LLM monitor, or is escalated to a person, typically `sequential([rule(), llm_monitor(), human()])`. In these examples the container's `network_mode: none` is what keeps the agent off the network.
+The checks are deliberately simple, to keep the examples readable. Rules are cheap and run without a model call. They match a call's text and structured arguments, and they cannot prove a call safe: a different tool, or a string built at run time, can get past one. Anything that needs an understanding of shell or code goes to an LLM monitor, or is escalated to a person, typically `sequential([rule(), llm_monitor()], then=human(...))`. In these examples the container's `network_mode: none` is what keeps the agent off the network.
 
 ## Running
 
