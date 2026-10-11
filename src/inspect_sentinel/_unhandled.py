@@ -5,7 +5,9 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 
-from ._report import Decision, Reported
+from inspect_ai.core import Reference
+
+from ._report import Decision, Reported, origin, with_origin
 
 
 @dataclass(eq=False)
@@ -40,6 +42,17 @@ def running(node: Invocation) -> Generator[None]:
         _current.reset(token)
 
 
+def stamped(decision: Decision, node: Invocation) -> Decision:
+    # a decision returned during this step keeps the invocation that returned
+    # it first, through copies; any other is recorded as a copy stamped with
+    # this invocation, since a decision from elsewhere, such as a module-level
+    # constant, may be shared
+    step = _decided.get()
+    if step is None or origin(decision)[0] is step:
+        return decision
+    return with_origin(decision, step, node)
+
+
 def decided(node: Invocation, reported: Reported[Decision]) -> None:
     node.decided = reported
     found = _decided.get()
@@ -63,14 +76,22 @@ def collecting() -> Generator[list[Invocation]]:
 
 def sources(found: Sequence[Invocation]) -> list[Reported[Decision]]:
     # an escalate reached the root when every invocation above it escalated
-    # too; of those, the innermost are where the escalation came from
+    # too; of those, each that did not pass up one from below it is where an
+    # escalation came from
     reached = [node for node in found if _escalated(node) and _reaches(node)]
-    inner = [
-        node
+    return [
+        node.decided
         for node in reached
-        if not any(node in _ancestors(other) for other in reached)
+        if node.decided is not None and not _forwards(node, node.decided.report)
     ]
-    return [node.decided for node in inner if node.decided is not None]
+
+
+def _forwards(node: Invocation, report: Decision) -> bool:
+    # a protocol passed an escalation up when it returned, as is or as a copy, a
+    # decision one of its descendants returned; one it built itself is its own,
+    # even if equal to a descendant's
+    returned_by = origin(report)[1]
+    return isinstance(returned_by, Invocation) and node in _ancestors(returned_by)
 
 
 def _escalated(node: Invocation) -> bool:
@@ -99,7 +120,11 @@ def unhandled(escalations: Sequence[Reported[Decision]]) -> Decision:
         else e.path or e.name
         for e in escalations
     )
+    # a parent that escalates on its own may carry its child's references up
+    references: list[Reference] = []
+    for e in escalations:
+        references.extend(r for r in e.report.references if r not in references)
     return Decision.terminate(
         f"unhandled escalation from {named}. To say what an escalation means, end the configuration with human() or handle_escalation('terminate' | 'continue') in a sequential().",
-        references=[r for e in escalations for r in e.report.references],
+        references=references,
     )
