@@ -131,6 +131,12 @@ def td_forwards(child: Protocol) -> Protocol:
     return decide
 
 
+@protocol
+def td_named_chain() -> Protocol:
+    # a composition registered under its own name, checked through its children
+    return sequential({"triage": td_escalates(), "llm": _limit()})
+
+
 def _limit() -> Protocol:
     return threshold(td_score(), reject_at=0.5)
 
@@ -158,6 +164,7 @@ UNHANDLED: list[tuple[str, Callable[[], Sentinels], str]] = [
         "td_escalates (tool_call)",
     ),
     ("a function of a group", lambda: [td_group(), _limit()], "td_group (tool_call)"),
+    ("a chain a factory of one's own returns", td_named_chain, "triage (tool_call)"),
 ]
 
 
