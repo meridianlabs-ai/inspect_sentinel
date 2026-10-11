@@ -364,7 +364,7 @@ Rules:
 - **Return `None` to abstain.** A bare `return` from an early exit does this. This document says "abstain" for this case so it is not confused with a `suspicion` field that is `None`.
 - **Set only the fields you need.** Every field except the required one has a default. A monitor sets `suspicion` and nothing else.
 - **`continue` means the protocol examined the step and found nothing wrong.** An `Observation` has no `action` field, so a monitor never says it.
-- **Each action has a class, and a function declares what it returns.** `Proceed`, `Reject`, `Terminate`, `Modify` and `Escalate` subclass `Decision`; the constructors return them and `Decision(action=...)` builds the matching one, so logs and `action` are unchanged. A protocol function's return annotation is a union of them, with `None` if it can abstain (`-> Decision` for any action, `-> None` for never deciding); the runner raises when a function returns outside it, and `resolve_sentinel` raises when a function annotated with `Escalate` has nothing after it that always decides.
+- **Each action has a class, and a function declares what it returns.** `Proceed`, `Reject`, `Terminate`, `Modify` and `Escalate` subclass `Decision`; `Decision` is their base and is not built itself; the constructors return them and a modify is `Modify(modified=...)`, so the logged `action` is unchanged. Decided 2026-10-11 with no compatibility kept for `Decision(action=...)`, since sentinel has almost no users yet. A protocol function's return annotation is a union of them, with `None` if it can abstain (`-> Decision` for any action, `-> None` for never deciding); the runner raises when a function returns outside it, and `resolve_sentinel` raises when a function annotated with `Escalate` has nothing after it that always decides.
 - **`escalate` means the protocol is not deciding.** The next decider in the `sequential` takes over. In a `concurrent`, it outranks `continue`, so a peer's `continue` cannot override it. A layer that ends on `escalate` passes it up as its own decision, and at the root it is an unhandled escalation: `run_sentinel` records it as the root's decision and returns a `terminate` in its place, explained as `unhandled escalation from <path>: <reason>`, so the host never receives an `escalate` (see [The boundary check](#the-boundary-check)). End a configuration that can escalate with `human()` or `handle_escalation()`.
 - **Prefer structured suspicion.** `{"goal_alignment": 0.1, "sabotage": 0.8}` lets a protocol threshold per dimension and lets independent monitors score separate dimensions. A scalar is accepted.
 - **A detector reports `1.0`.** `Observation.flag(explanation)` is a monitor's way of saying "this is definitely it" without holding a threshold; `threshold(detector(), reject_at=1.0)` acts on it.
@@ -441,7 +441,7 @@ What `modified` carries:
 Rules:
 
 - **Return a replacement. Never mutate `step`.** The payloads are frozen but their list fields are not. Mutating them works in-process and is invisible to a proxy. Use `dataclasses.replace()`.
-- **Modify a call with `replace`.** `ToolCall` is a dataclass, so `Decision(action="modify", modified=replace(step.call, arguments={...}))` keeps everything but the arguments. The shape check rejects a replacement with a changed `id` or `function`. A `Decision.modify(...)` constructor is deferred until the generate stages settle what a generate-stage `modify` replaces.
+- **Modify a call with `replace`.** `ToolCall` is a dataclass, so `Modify(modified=replace(step.call, arguments={...}))` keeps everything but the arguments. The shape check rejects a replacement with a changed `id` or `function`. A `Decision.modify(...)` constructor is deferred until the generate stages settle what a generate-stage `modify` replaces.
 - **An illegal action is a bug.** The dispatcher validates the decision against the stage and raises. It does not coerce `reject` into `continue`.
 - **`reject` and an error response are different things.** `reject` is conversational: the model sees a synthetic result and regenerates. An error response is transport-level: the SDK raises and the loop breaks. A proxy can do both. See [Bridged agents and proxies](#bridged-agents-and-proxies).
 
@@ -925,7 +925,7 @@ def resample(monitors: Monitor | MonitorGroup | Monitors, threshold: float, n: i
                 best_score, best_message = candidate, output.message
         if best_score >= threshold:
             return Decision.escalate("no resample cleared the threshold")
-        return Decision(action="modify", modified=best_message)
+        return Modify(modified=best_message)
 
     return decide
 ```

@@ -110,4 +110,6 @@ def _decision(
         case "terminate":
             return Decision.terminate(reason)
         case _:
+            if answer.modified is None:
+                raise ValueError("The host answered 'modify' without a modified call.")
             return Modify(modified=answer.modified)

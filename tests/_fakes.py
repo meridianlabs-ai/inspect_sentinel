@@ -13,7 +13,14 @@ from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context, EvalContext
 from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step
-from inspect_sentinel._report import Decision, Failed, Report, Reported
+from inspect_sentinel._report import (
+    DECISION_CLASSES,
+    Action,
+    Decision,
+    Failed,
+    Report,
+    Reported,
+)
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 
 
@@ -177,3 +184,16 @@ def after_tool_call(
         input=before.input,
         history=before.history,
     )
+
+
+REPLACEMENT = ToolCall(id="call_1", function="bash", arguments={"cmd": "echo hi"})
+
+
+def decision(action: Action, **fields: Any) -> Decision:
+    # a decision whose action a test chooses at run time; a modify replaces
+    # the step's call with REPLACEMENT unless it is given one
+    if fields.get("modified") is None:
+        fields.pop("modified", None)
+        if action == "modify":
+            fields["modified"] = REPLACEMENT
+    return DECISION_CLASSES[action](**fields)

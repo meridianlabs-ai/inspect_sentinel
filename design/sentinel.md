@@ -744,8 +744,8 @@ def resample(monitors: Monitor | MonitorGroup | Monitors, threshold: float, n: i
             if candidate < best_score:
                 best_score, best_message = candidate, output.message
         if best_score >= threshold:
-            return Decision(action="escalate", explanation="no resample cleared the threshold")
-        return Decision(action="modify", modified=best_message)
+            return Decision.escalate("no resample cleared the threshold")
+        return Modify(modified=best_message)
 
     return decide
 ```

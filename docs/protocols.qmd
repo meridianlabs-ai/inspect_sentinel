@@ -29,7 +29,7 @@ How to write a protocol: a `@protocol` factory returning a function that returns
 
 ## Declaring What a Protocol Decides
 
-Each action has its own decision class: `Proceed` (action `continue`), `Reject`, `Terminate`, `Modify` and `Escalate`, all subclasses of `Decision`. The constructors return them, so `Decision.reject(...)` is a `Reject` and `Decision.proceed()` a `Proceed`, and `Decision(action="reject")` builds a `Reject` too. A protocol function's return annotation says what it can decide, as a union of those classes, with `None` if it can abstain:
+Each action has its own decision class: `Proceed` (action `continue`), `Reject`, `Terminate`, `Modify` and `Escalate`, all subclasses of `Decision`. `Decision` is their base and is not built itself: `Decision.proceed()`, `Decision.reject()`, `Decision.terminate()` and `Decision.escalate()` return a `Proceed`, `Reject`, `Terminate` and `Escalate`, and a modify is `Modify(modified=...)`. The logged `action` is the same as before. A protocol function's return annotation says what it can decide, as a union of those classes, with `None` if it can abstain:
 
 ```python
 from inspect_sentinel import BeforeToolCall, Context, Proceed, Protocol, Reject, protocol
@@ -45,7 +45,7 @@ def no_network() -> Protocol:
     return decide
 ```
 
-- **`-> Decision`, or `-> Decision | None`, means any action.** Every protocol written before these classes existed keeps working, and a composition of your own that returns its children's decisions is annotated this way.
+- **`-> Decision`, or `-> Decision | None`, means any action.** A composition of your own that returns its children's decisions is annotated this way.
 - **The annotation is enforced.** A function that returns a decision outside it, or `None` when the annotation has no `None`, fails the step with an error naming the protocol and its annotation. A type checker catches most of these first. A decision passed to `decide_final()` is not held to the annotation.
 - **`None` alone** is a protocol that never decides, as `observe_only()` is annotated.
 - **It is how a configuration is checked when it is built.** A function annotated without `None` and without `Escalate` always decides, so in a `sequential()` it answers every escalation that reaches it, and the links after it never run. A protocol annotated to return `Escalate` with nothing after it that always decides is a configuration error when the sentinel is built, naming the protocol and the stage: end the configuration with `human()` or `handle_escalation()`, or take `Escalate` out of the annotation. A protocol annotated `-> Decision` is not checked; an escalation from it that reaches the top ends the sample at run time (see [Unhandled Escalations](final-decisions.qmd#unhandled-escalations)).

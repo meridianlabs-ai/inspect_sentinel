@@ -19,7 +19,7 @@ from inspect_sentinel._report import Action, Decision, Observation
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup, Sentinels
-from tests._fakes import ListRecorder, after_step, before_step, host_context
+from tests._fakes import ListRecorder, after_step, before_step, decision, host_context
 
 
 class Seen(StoreModel):
@@ -44,7 +44,7 @@ def seq_link(action: Action = "continue", explanation: str | None = None) -> Pro
             *seen.escalations,
             tuple(e.name for e in step.escalations),
         ]
-        return Decision(action=action, explanation=explanation)
+        return decision(action, explanation=explanation)
 
     return decide
 
@@ -81,10 +81,10 @@ def seq_pair() -> ProtocolGroup:
 @protocol
 def seq_mixed(first_action: Action, second_action: Action) -> ProtocolGroup:
     async def first(context: Context, step: BeforeToolCall) -> Decision | None:
-        return Decision(action=first_action, explanation="first")
+        return decision(first_action, explanation="first")
 
     async def second(context: Context, step: BeforeToolCall) -> Decision | None:
-        return Decision(action=second_action, explanation="second")
+        return decision(second_action, explanation="second")
 
     return ProtocolGroup(first, second)
 

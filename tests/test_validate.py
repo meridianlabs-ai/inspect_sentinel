@@ -2,9 +2,9 @@ import pytest
 from inspect_ai.tool import ToolCall
 
 from inspect_sentinel._final import Final, decide_final
-from inspect_sentinel._report import Action, Decision
+from inspect_sentinel._report import Action, Decision, Modify, Proceed
 from inspect_sentinel._validate import validate_decision_shape
-from tests._fakes import after_step, before_step
+from tests._fakes import after_step, before_step, decision
 
 
 def _call() -> ToolCall:
@@ -12,7 +12,7 @@ def _call() -> ToolCall:
 
 
 def _decision(action: Action) -> Decision:
-    return Decision(action=action, modified=_call() if action == "modify" else None)
+    return decision(action, modified=_call() if action == "modify" else None)
 
 
 @pytest.mark.parametrize(
@@ -33,16 +33,9 @@ def test_the_other_actions_are_legal_after_a_tool_call(action: Action) -> None:
     validate_decision_shape(_decision(action), after_step())
 
 
-def test_a_modify_must_carry_the_replacement() -> None:
-    with pytest.raises(ValueError, match="modified"):
-        validate_decision_shape(Decision(action="modify"), before_step())
-
-
 def test_only_a_modify_may_carry_a_replacement() -> None:
     with pytest.raises(ValueError, match="modified"):
-        validate_decision_shape(
-            Decision(action="continue", modified=_call()), before_step()
-        )
+        validate_decision_shape(Proceed(modified=_call()), before_step())
 
 
 @pytest.mark.parametrize(
@@ -54,16 +47,12 @@ def test_only_a_modify_may_carry_a_replacement() -> None:
 )
 def test_a_modify_may_change_only_the_arguments(replacement: ToolCall) -> None:
     with pytest.raises(ValueError, match="arguments"):
-        validate_decision_shape(
-            Decision(action="modify", modified=replacement), before_step()
-        )
+        validate_decision_shape(Modify(modified=replacement), before_step())
 
 
 def test_a_modify_may_rewrite_the_arguments() -> None:
     replacement = ToolCall(id="call_1", function="bash", arguments={"cmd": "pwd"})
-    validate_decision_shape(
-        Decision(action="modify", modified=replacement), before_step()
-    )
+    validate_decision_shape(Modify(modified=replacement), before_step())
 
 
 def test_a_reject_may_carry_a_message_for_the_agent() -> None:

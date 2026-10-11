@@ -12,7 +12,14 @@ from inspect_sentinel._report import Action, Decision, Observation, Report, Repo
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol
-from tests._fakes import FakeHost, ListRecorder, after_step, before_step, host_context
+from tests._fakes import (
+    FakeHost,
+    ListRecorder,
+    after_step,
+    before_step,
+    decision,
+    host_context,
+)
 
 
 @protocol
@@ -23,8 +30,8 @@ def he_rule(
         if action is None:
             return None
         cite = f"[{explanation}]"
-        return Decision(
-            action=action,
+        return decision(
+            action,
             explanation=explanation,
             references=[Reference(type="message", id=cite, cite=cite)],
         )

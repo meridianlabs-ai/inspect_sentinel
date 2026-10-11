@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast
 
 from inspect_ai.core import Reference, SentinelAction, SentinelSuspicion, ToolCall
-from pydantic import BaseModel, Field, ModelWrapValidatorHandler, model_validator
+from pydantic import BaseModel, Field
 
 Suspicion: TypeAlias = SentinelSuspicion
 """How suspicious a step is: one finite score, or a non-empty dict scoring several dimensions independently."""
@@ -64,7 +64,7 @@ D = TypeVar("D", bound="Decision")
 class Decision(BaseModel):
     """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to `decide_final()`.
 
-    Each action has its own class, `Proceed`, `Reject`, `Terminate`, `Modify` and `Escalate`, which the constructors (`Decision.reject(...)` and the others) return, so a protocol function can declare what it decides with a union such as `-> Reject | None`. `Decision(action=...)`, and validating a `Decision` from a dict or JSON, builds the class of the given action. Annotating a function `-> Decision` means it may decide anything.
+    The base of one class per action, `Proceed`, `Reject`, `Terminate`, `Modify` and `Escalate`, and not built itself: build a decision with one of those classes, or with `Decision.proceed()`, `Decision.reject()`, `Decision.terminate()` or `Decision.escalate()`, which return them (a modify is built as `Modify(modified=...)`). A protocol function declares what it decides with a union of the classes, such as `-> Reject | Proceed | None`; annotating it `-> Decision` means it may decide anything.
     """
 
     action: Action
@@ -89,24 +89,11 @@ class Decision(BaseModel):
     """Author-supplied structured context, recorded verbatim."""
 
     def __new__(cls: type[D], /, *args: Any, **data: Any) -> D:
-        # Decision(action=...) builds the class of its action
-        target: type[Decision] = cls
-        action = data.get("action")
-        if cls is Decision and isinstance(action, str) and action in DECISION_CLASSES:
-            target = DECISION_CLASSES[action]
-        return cast(D, super().__new__(target))  # pyright: ignore[reportArgumentType]
-
-    @model_validator(mode="wrap")
-    @classmethod
-    def _as_action_class(
-        cls, data: Any, handler: ModelWrapValidatorHandler[Decision]
-    ) -> Decision:
-        # validating a Decision from a dict or JSON builds the class of its action
-        if cls is Decision and isinstance(data, dict):
-            action = cast(dict[str, Any], data).get("action")
-            if isinstance(action, str) and action in DECISION_CLASSES:
-                return DECISION_CLASSES[action].model_validate(data)
-        return handler(data)
+        if cls is Decision:
+            raise TypeError(
+                "Decision is the base of the decision classes and is not built itself; build a Proceed, Reject, Terminate, Modify or Escalate, for example with Decision.reject()."
+            )
+        return cast(D, super().__new__(cls))  # pyright: ignore[reportArgumentType]
 
     @classmethod
     def proceed(
@@ -165,10 +152,13 @@ class Terminate(Decision):
 
 
 class Modify(Decision):
-    """A decision to replace the step's subject with `modified`, which a `modify` must set. Legal only before a tool call, where it may change only the call's arguments."""
+    """A decision to replace the step's subject with `modified`, as in `Modify(modified=replace(step.call, arguments={...}))`. Legal only before a tool call, where it may change only the call's arguments."""
 
     action: Literal["modify"] = "modify"  # pyright: ignore[reportIncompatibleVariableOverride]
     """Always `modify`."""
+
+    modified: ToolCall  # pyright: ignore[reportIncompatibleVariableOverride, reportGeneralTypeIssues]
+    """The replacement for the step's subject. Required."""
 
 
 class Escalate(Decision):

@@ -22,7 +22,7 @@ from inspect_sentinel._report import Action, Decision, Observation
 from inspect_sentinel._runner import run_monitors, run_sentinel
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
-from tests._fakes import ListRecorder, before_step, host_context, in_step
+from tests._fakes import ListRecorder, before_step, decision, host_context, in_step
 
 _ERRORS: dict[str, type[Exception]] = {"value": ValueError, "os": OSError}
 
@@ -46,7 +46,7 @@ def scores(value: float = 0.5) -> Monitor:
 @protocol
 def says(action: Action = "continue") -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(action=action)
+        return decision(action)
 
     return decide
 

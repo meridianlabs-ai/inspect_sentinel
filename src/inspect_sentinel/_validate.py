@@ -19,7 +19,7 @@ from ._types import Group, Sentinel
 def validate_decision_shape(decision: Decision, step: Step) -> None:
     """Check a decision for the deterministic protocol bugs no type can express, raising `ValueError` on one.
 
-    The action must be legal for the stage (`reject` and `modify` are not legal after a tool call), `modified` must be set exactly when the action is `modify`, a `modify` may rewrite only the call's arguments (its `id` and `function` must match the step's call), and `message` may be set only on a `reject`.
+    The action must be legal for the stage (`reject` and `modify` are not legal after a tool call), `modified` may be set only on a `modify`, a `modify` may rewrite only the call's arguments (its `id` and `function` must match the step's call), and `message` may be set only on a `reject`.
 
     Args:
         decision: The decision a layer returned.
@@ -29,9 +29,9 @@ def validate_decision_shape(decision: Decision, step: Step) -> None:
         raise ValueError(
             f"A decision after a tool call cannot {decision.action}; the call has already run."
         )
-    if (decision.action == "modify") != (decision.modified is not None):
+    if decision.action != "modify" and decision.modified is not None:
         raise ValueError(
-            "`modified` must be set exactly when the action is `modify`; "
+            "`modified` may be set only on a `modify`; "
             f"got action {decision.action!r} with modified={decision.modified!r}."
         )
     modified = decision.modified

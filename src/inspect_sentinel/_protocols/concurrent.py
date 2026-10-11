@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .._context import Context
 from .._decorators import protocol
-from .._report import Decision, Reported
+from .._report import Decision, Reject, Reported
 from .._results import warn_failed
 from .._runner import run_children
 from .._step import Step
@@ -63,9 +63,9 @@ def concurrent(
         summary = "; ".join(f"{label(d)}: {d.report.action}" for d in voters)
         update["explanation"] = f"{own} ({summary})" if own else summary
         decided = strongest.report.model_copy(update=update)
-        if decided.action != strongest.report.action:
-            # a rewritten action is built as that action's class
-            return Decision.model_validate(decided.model_dump())
+        if decided.action == "reject":
+            # the contested modify, rewritten, is a Reject
+            return Reject.model_validate(decided.model_dump())
         return decided
 
     return composed(run, "at_once", named)

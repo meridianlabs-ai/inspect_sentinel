@@ -25,43 +25,45 @@ from inspect_sentinel._integration import Sentinels, resolve_sentinel, run_senti
 from inspect_sentinel._report import Action, Decision, Observation
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup
-from tests._fakes import ListRecorder, after_step, before_step, host_context
+from tests._fakes import ListRecorder, after_step, before_step, decision, host_context
 
 CALL = ToolCall(id="call_1", function="bash", arguments={"cmd": "ls"})
 
-CLASSES: list[tuple[Action, type[Decision], dict[str, Any]]] = [
-    ("continue", Proceed, {}),
-    ("reject", Reject, {}),
-    ("terminate", Terminate, {}),
-    ("modify", Modify, {"modified": CALL}),
-    ("escalate", Escalate, {}),
+CLASSES: list[tuple[Action, type[Decision], Decision]] = [
+    ("continue", Proceed, Decision.proceed("why")),
+    ("reject", Reject, Decision.reject("why")),
+    ("terminate", Terminate, Decision.terminate("why")),
+    ("modify", Modify, Modify(modified=CALL, explanation="why")),
+    ("escalate", Escalate, Decision.escalate("why")),
 ]
 
 
 @pytest.mark.parametrize(
-    ("action", "cls", "fields"), CLASSES, ids=[a for a, _, _ in CLASSES]
+    ("action", "cls", "built"), CLASSES, ids=[a for a, _, _ in CLASSES]
 )
-def test_a_decision_is_built_as_its_actions_class(
-    action: Action, cls: type[Decision], fields: dict[str, Any]
+def test_each_action_has_a_class_that_logs_its_action(
+    action: Action, cls: type[Decision], built: Decision
 ) -> None:
     class Holder(BaseModel):
-        decision: Decision
+        decision: Proceed | Reject | Terminate | Modify | Escalate
 
-    built = Decision(action=action, explanation="why", **fields)
     dumped = built.model_dump()
     assert type(built) is cls
     assert dumped["action"] == action
-    assert type(Decision.model_validate(dumped)) is cls
-    assert type(Decision.model_validate_json(built.model_dump_json())) is cls
+    assert cls.model_validate_json(built.model_dump_json()) == built
     assert type(Holder.model_validate({"decision": dumped}).decision) is cls
-    assert built == cls(explanation="why", **fields)
 
 
-def test_the_constructors_return_their_classes() -> None:
-    assert type(Decision.proceed()) is Proceed
-    assert type(Decision.reject()) is Reject
-    assert type(Decision.terminate()) is Terminate
-    assert type(Decision.escalate()) is Escalate
+def test_the_base_class_is_not_built() -> None:
+    with pytest.raises(
+        TypeError, match="Proceed, Reject, Terminate, Modify or Escalate"
+    ):
+        Decision(action="reject")
+
+
+def test_a_modify_needs_its_replacement() -> None:
+    with pytest.raises(ValueError, match="modified"):
+        Modify()  # pyright: ignore[reportCallIssue]
 
 
 def test_a_class_holds_only_its_action() -> None:
@@ -219,7 +221,7 @@ def test_a_configuration_that_handles_its_annotated_escalates_builds(
 @protocol
 def td_returns(action: Action | None) -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Reject | Proceed:
-        return None if action is None else Decision(action=action)  # pyright: ignore[reportReturnType]
+        return None if action is None else decision(action)  # pyright: ignore[reportReturnType]
 
     return decide
 
