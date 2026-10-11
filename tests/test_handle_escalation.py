@@ -12,7 +12,14 @@ from inspect_sentinel._report import Action, Decision, Observation, Report, Repo
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol
-from tests._fakes import FakeHost, ListRecorder, after_step, before_step, host_context
+from tests._fakes import (
+    FakeHost,
+    ListRecorder,
+    after_step,
+    before_step,
+    decision,
+    host_context,
+)
 
 
 @protocol
@@ -23,8 +30,8 @@ def he_rule(
         if action is None:
             return None
         cite = f"[{explanation}]"
-        return Decision(
-            action=action,
+        return decision(
+            action,
             explanation=explanation,
             references=[Reference(type="message", id=cite, cite=cite)],
         )
@@ -71,10 +78,11 @@ def test_the_action_is_terminate_or_continue(action: Any) -> None:
     ],
     ids=["at_the_root", "after_an_abstaining_link"],
 )
-async def test_it_abstains_with_nothing_to_handle(spec: Any, step: Step) -> None:
+async def test_it_proceeds_with_nothing_to_handle(spec: Any, step: Step) -> None:
     decision, records, _ = await _run(spec(), step)
-    assert decision is None
-    assert not _handled(records)
+    assert decision == Decision.proceed()
+    [handled] = _handled(records)
+    assert handled.report == Decision.proceed()
 
 
 @pytest.mark.anyio

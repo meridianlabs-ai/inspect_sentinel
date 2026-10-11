@@ -6,7 +6,7 @@ from typing import NamedTuple, cast
 
 from .._context import Context
 from .._decorators import members, protocol
-from .._report import Decision, Observation, Reported
+from .._report import Decision, Observation, Proceed, Reject, Reported, Terminate
 from .._results import Observations
 from .._runner import describe, run_monitors
 from .._step import BeforeToolCall
@@ -63,7 +63,9 @@ def threshold(
                     f"threshold acts before tool calls; monitor {label} never watches that stage"
                 )
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall
+    ) -> Terminate | Reject | Proceed | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None

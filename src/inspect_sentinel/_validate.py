@@ -10,8 +10,8 @@ from inspect_ai._util.registry import (
 )
 
 from ._context import validate_instance_name
-from ._decorators import step_types
-from ._report import Decision
+from ._decorators import Outcome, outcomes, step_types
+from ._report import DECISION_CLASSES, Decision
 from ._step import AfterToolCall, Step
 from ._types import Group, Sentinel
 
@@ -19,7 +19,7 @@ from ._types import Group, Sentinel
 def validate_decision_shape(decision: Decision, step: Step) -> None:
     """Check a decision for the deterministic protocol bugs no type can express, raising `ValueError` on one.
 
-    The action must be legal for the stage (`reject` and `modify` are not legal after a tool call), `modified` must be set exactly when the action is `modify`, a `modify` may rewrite only the call's arguments (its `id` and `function` must match the step's call), and `message` may be set only on a `reject`.
+    The action must be legal for the stage (`reject` and `modify` are not legal after a tool call), `modified` may be set only on a `modify`, a `modify` may rewrite only the call's arguments (its `id` and `function` must match the step's call), and `message` may be set only on a `reject`.
 
     Args:
         decision: The decision a layer returned.
@@ -29,9 +29,9 @@ def validate_decision_shape(decision: Decision, step: Step) -> None:
         raise ValueError(
             f"A decision after a tool call cannot {decision.action}; the call has already run."
         )
-    if (decision.action == "modify") != (decision.modified is not None):
+    if decision.action != "modify" and decision.modified is not None:
         raise ValueError(
-            "`modified` must be set exactly when the action is `modify`; "
+            "`modified` may be set only on a `modify`; "
             f"got action {decision.action!r} with modified={decision.modified!r}."
         )
     modified = decision.modified
@@ -48,6 +48,34 @@ def validate_decision_shape(decision: Decision, step: Step) -> None:
             f"`message` may be set only on a `reject`; got action {decision.action!r}. "
             "Telling the agent something while the step proceeds needs a way to deliver it, which does not exist yet."
         )
+
+
+def check_declared(function: object, decision: Decision | None, label: str) -> None:
+    allowed = outcomes(function)
+    got: Outcome = None if decision is None else decision.action
+    if got not in allowed:
+        returned = (
+            "None, abstaining"
+            if got is None
+            else f"a {DECISION_CLASSES[got].__name__} ({got!r})"
+        )
+        raise TypeError(
+            f"protocol {label} returned {returned}, which its return annotation does not allow; it is annotated to return {describe_outcomes(allowed)}."
+        )
+
+
+def describe_outcomes(allowed: frozenset[Outcome]) -> str:
+    if set(DECISION_CLASSES) <= allowed:
+        names = ["Decision"]
+    else:
+        names = [
+            cls.__name__
+            for action, cls in DECISION_CLASSES.items()
+            if action in allowed
+        ]
+    if None in allowed:
+        names.append("None")
+    return " | ".join(names)
 
 
 def validate_shape(decision: Decision, step: Step, label: str) -> None:

@@ -368,8 +368,9 @@ class Observation(BaseModel):
     metadata: dict[str, Any] | None = Field(default=None)
 
 
-class Decision(BaseModel):
-    """What should happen. What a protocol returns; advisory to any protocol wrapping it unless passed to decide_final()."""
+class Decision(BaseModel, frozen=True):
+    """What should happen. What a protocol returns; advisory to any protocol wrapping it unless passed to decide_final().
+    The base of one class per action, and not built itself."""
 
     action: Action
     """Required."""
@@ -391,6 +392,10 @@ class Decision(BaseModel):
     """Text the agent reads when the step is rejected. The agent sees nothing else from a decision."""
 
     metadata: dict[str, Any] | None = Field(default=None)
+
+
+class Proceed(Decision, frozen=True):  # and Reject, Terminate, Modify, Escalate
+    action: Literal["continue"] = "continue"
 
 
 Report: TypeAlias = Observation | Decision
@@ -597,11 +602,13 @@ This keeps per-stage legality statically checked and is the better answer in the
 - No serialized Pydantic model in `inspect_ai` is generic today. The only `Generic[...]` uses are a `list[T]` subclass in the eval recorder and the provider batching dataclasses, none of which reach the log schema.
 - Parameterised generics get Pydantic's mangled names in `components/schemas` — `Decision_ObserveAction_` — which flow to `generated.ts` and the barrel. `design/type-generation-pipeline.md` documents the machinery that exists precisely to keep unstable auto-generated names out of the schema.
 
-A subclass that widens the `action` Literal is also out: widening a field type in a Pydantic subclass is an unsound override, mypy flags it, and the suppression gate means it could not be papered over.
+#### Adopted: one frozen subclass per action
+
+A subclass per action was first rejected here as an unsound override: narrowing `action` on a mutable Pydantic field breaks substitutability, the type checker flags it, and a suppression would only hide it. It shipped on 2026-10-11 in a form that is sound. `Decision` and its subclasses are frozen, so their fields are read-only, and a read-only field may narrow in a subclass; `Proceed`, `Reject`, `Terminate`, `Modify` and `Escalate` each fix `action` to one literal with no suppression. `Decision` is their base and is not built itself. A protocol function declares what it returns as a union of the classes (`-> Reject | Proceed | None`), the runner enforces the annotation, and `resolve_sentinel` uses it to reject a configuration whose annotated escalation nothing handles. The objections to the generic do not apply: the classes are not generic, and inspect_ai records a decision's fields flat on `SentinelEvent`, with `action` as the discriminator, so no subclass name reaches the log schema and logs read as before. `Decision(action=...)` was dropped rather than kept for compatibility, since the package has almost no users yet. One override remains suppressed: `Modify.modified` is required while the base's is optional, because hosts read `modified` from any decision.
 
 #### Enforcing the restrictions
 
-With a flat type the type checker cannot stop an `AfterToolCall` protocol deciding `reject`. The dispatcher knows which stage it dispatched, so it validates there and raises — an illegal decision is a bug in the protocol, not agent-controlled input, so failing loudly is right. This follows AGENTS.md's "invalid state" rule: define the unsupported behavior explicitly and cover it with a test rather than silently coercing `reject` into `continue`.
+The annotation says which actions a function returns, not which are legal at its stage, so the type checker still cannot stop an `AfterToolCall` protocol annotated `-> Reject` from deciding `reject`. The dispatcher knows which stage it dispatched, so it validates there and raises — an illegal decision is a bug in the protocol, not agent-controlled input, so failing loudly is right. This follows AGENTS.md's "invalid state" rule: define the unsupported behavior explicitly and cover it with a test rather than silently coercing `reject` into `continue`.
 
 ## Protocols {#protocols}
 
@@ -744,8 +751,8 @@ def resample(monitors: Monitor | MonitorGroup | Monitors, threshold: float, n: i
             if candidate < best_score:
                 best_score, best_message = candidate, output.message
         if best_score >= threshold:
-            return Decision(action="escalate", explanation="no resample cleared the threshold")
-        return Decision(action="modify", modified=best_message)
+            return Decision.escalate("no resample cleared the threshold")
+        return Modify(modified=best_message)
 
     return decide
 ```
@@ -1062,8 +1069,8 @@ Two registry types make the contract mostly explicit, and the residue is small:
 
 - The structural claims — returns a decision, annotates a stage, takes typed children — are [statically checked](#static-checking).
 - Nothing above a [`decide_final()`](#authoritative-reports) decision runs, so nothing above it can weaken it, and each layer it passed is recorded as `bypassed`.
-- **Going through the runner is enforced at run time, not statically.** The factory holds the children and could call them as plain callables, bypassing naming, recording and the concurrency guarantee. The decorator wraps each configured function in a guard, and the runner marks the function it is invoking in a context variable, so a configured function called any other way while a sentinel is running raises `RuntimeError` naming `run_monitors`/`run_protocols`/`run_children`. Outside a run the guard is inert, so a unit test can still call a function directly. A factory that returns an instance another factory configured, to name a composition, gets a fresh guard around the original function rather than a guard around the guard, which would reject the runner's call. The fresh guard, and for a group the fresh group, carries over the configured instance's attributes, such as dispatch metadata, except its registry info and params, which the outer factory replaces, and its step types, which are recomputed. The returned instance itself is left as it was and is not cloned, so its closure and children are shared with it. A group has no `__call__` at all.
-- "No `escalate` at the outermost layer" is not expressible in the type. When one reaches the root, `run_sentinel` records it and returns a `terminate` explained as an unhandled escalation, naming each escalation that reached the root (a decision rather than an exception, so the sample is not marked as an error and retried, and every host already applies `terminate` at every stage).
+- **Going through the runner is enforced at run time, not statically.** The factory holds the children and could call them as plain callables, bypassing naming, recording and the concurrency guarantee. The decorator wraps each configured function in a guard, and the runner marks the function it is invoking in a context variable, so a configured function called any other way while a sentinel is running raises `RuntimeError` naming `run_monitors`/`run_protocols`/`run_children`. Outside a run the guard is inert, so a unit test can still call a function directly. A factory that returns an instance another factory configured, to name a composition, gets a fresh guard around the original function rather than a guard around the guard, which would reject the runner's call. The fresh guard, and for a group the fresh group, carries over the configured instance's attributes, such as dispatch metadata, except its registry info and params, which the outer factory replaces, and its step types and declared outcomes, which are recomputed. The returned instance itself is left as it was and is not cloned, so its closure and children are shared with it. A group has no `__call__` at all.
+- "No `escalate` at the outermost layer" is checked from return annotations where they say enough. Each action has a `Decision` subclass (`Proceed`, `Reject`, `Terminate`, `Modify`, `Escalate`), a protocol function declares the ones it returns as a union (`-> Reject | Proceed | None`), and the runner enforces it. `resolve_sentinel` raises when a function annotated with `Escalate` has nothing after it that always decides, following `sequential` in order and `concurrent` by its children; a function annotated `-> Decision` may decide anything and is not checked. When an escalate still reaches the root, `run_sentinel` records it and returns a `terminate` explained as an unhandled escalation, naming each escalation that reached the root (a decision rather than an exception, so the sample is not marked as an error and retried, and every host already applies `terminate` at every stage).
 
 The type system still cannot tell a direct call from a runner call, so the guard is a run-time check, the same under one registry type or two.
 

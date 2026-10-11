@@ -11,6 +11,7 @@ from ._types import (
     Sentinel,
     Sentinels,
 )
+from ._unhandled import check_handled
 from ._validate import named_children
 
 
@@ -37,10 +38,13 @@ def resolve_sentinel(spec: Sentinels) -> Protocol:
         and not isinstance(spec, Group)
         and registry_info(spec).type == "protocol"
     ):
-        return cast(Protocol, spec)
-    if any(registry_info(child).type == "protocol" for _, child in named):
-        return concurrent(children)
-    raise ValueError(
-        f"A sentinel needs a protocol to decide each step, but it was given only monitors: {', '.join(name for name, _ in named)}. "
-        "Wrap them in threshold() to act on their scores, or in observe_only() to record them without acting."
-    )
+        root = cast(Protocol, spec)
+    elif any(registry_info(child).type == "protocol" for _, child in named):
+        root = concurrent(children)
+    else:
+        raise ValueError(
+            f"A sentinel needs a protocol to decide each step, but it was given only monitors: {', '.join(name for name, _ in named)}. "
+            "Wrap them in threshold() to act on their scores, or in observe_only() to record them without acting."
+        )
+    check_handled(root)
+    return root

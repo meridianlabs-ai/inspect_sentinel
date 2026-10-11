@@ -16,11 +16,18 @@ from inspect_sentinel._integration import (
     sentinel_from_config,
 )
 from inspect_sentinel._protocols import concurrent
-from inspect_sentinel._report import Action, Decision, Observation
+from inspect_sentinel._report import Action, Decision, Modify, Observation
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup
-from tests._fakes import FakeHost, ListRecorder, after_step, before_step, host_context
+from tests._fakes import (
+    FakeHost,
+    ListRecorder,
+    after_step,
+    before_step,
+    decision,
+    host_context,
+)
 
 
 @monitor
@@ -34,7 +41,7 @@ def hum_score() -> Monitor:
 @protocol
 def hum_rule(action: Action = "escalate") -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
-        return Decision(action=action, explanation=f"rule says {action}")
+        return decision(action, explanation=f"rule says {action}")
 
     return decide
 
@@ -133,7 +140,7 @@ MODIFIED = ToolCall(id="call_1", function="bash", arguments={"cmd": "ls -a"})
         ),
         (
             HumanAnswer("modify", modified=MODIFIED),
-            Decision(action="modify", modified=MODIFIED),
+            Modify(modified=MODIFIED),
         ),
     ],
 )
@@ -159,6 +166,15 @@ async def test_an_answer_the_person_was_not_offered_is_an_error(
 ) -> None:
     with pytest.raises(ValueError, match=match):
         await _root(human(stages=["tool_call"]), answer)
+
+
+@pytest.mark.anyio
+async def test_a_modify_answer_needs_the_modified_call() -> None:
+    with pytest.raises(ValueError, match="without a modified call"):
+        await _root(
+            human(stages=["tool_call"], choices=["approve", "modify"]),
+            HumanAnswer("modify"),
+        )
 
 
 @pytest.mark.anyio

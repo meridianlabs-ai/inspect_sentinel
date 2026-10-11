@@ -30,7 +30,7 @@ from inspect_ai._util.registry import (
 
 from ._context import Context
 from ._portable import check_portable
-from ._report import Decision, Observation, Report
+from ._report import DECISION_CLASSES, Action, Decision, Observation, Report
 from ._step import Step
 from ._types import (
     Group,
@@ -48,13 +48,17 @@ _STEP_TYPES = frozenset(get_args(Step))
 # an attribute rather than registry metadata: per-member stages live in groups,
 # and registry metadata would need a name<->class mapping
 STEP_TYPES_ATTR = "__sentinel_step_types__"
+# what a protocol function's return annotation says it can return: actions, and
+# None when it can abstain
+OUTCOMES_ATTR = "__sentinel_outcomes__"
+Outcome = Action | None
 # the function a configured function guards, so configuring it again guards the
 # original rather than the guard
 _GUARDED_ATTR = "__sentinel_guarded__"
 # what configuring an instance again replaces: the outer factory's registry
-# identity and params, and the step types it recomputes; any other attribute of
-# the configured instance, such as dispatch metadata, carries over
-_REPLACED = frozenset({REGISTRY_INFO, REGISTRY_PARAMS, STEP_TYPES_ATTR})
+# identity and params, and the step types and outcomes it recomputes; any other
+# attribute of the configured instance, such as dispatch metadata, carries over
+_REPLACED = frozenset({REGISTRY_INFO, REGISTRY_PARAMS, STEP_TYPES_ATTR, OUTCOMES_ATTR})
 VERSION = "version"
 PORTABLE = "portable"
 ENTRY_FIELDS = ("name", "params", VERSION, "meta")
@@ -319,14 +323,20 @@ def _configure(function: object, kind: RegistryType, report_type: type[Report]) 
     # around a guard would reject the runner's call to the inner one
     configured = function
     function = getattr(configured, _GUARDED_ATTR, configured)
-    accepted = _validate_signature(
+    accepted, declared = _validate_signature(
         cast(Callable[..., Any], function), kind, report_type
     )
     guarded = _guard(cast(SentinelFunction, function))
     if configured is not function:
         _carry_over(configured, guarded, "__wrapped__", _GUARDED_ATTR)
     setattr(guarded, STEP_TYPES_ATTR, accepted)
+    if kind == "protocol":
+        setattr(guarded, OUTCOMES_ATTR, declared)
     return guarded
+
+
+def outcomes(function: object) -> frozenset[Outcome]:
+    return cast(frozenset[Outcome], getattr(function, OUTCOMES_ATTR))
 
 
 def _carry_over(configured: object, fresh: object, *own: str) -> None:
@@ -380,7 +390,7 @@ def _validate_signature(
     instance: Callable[..., Any],
     kind: RegistryType,
     report_type: type[Report],
-) -> frozenset[type[Any]]:
+) -> tuple[frozenset[type[Any]], frozenset[Outcome]]:
     name = getattr(instance, "__name__", repr(instance))
     if not inspect.isfunction(instance) or not inspect.iscoroutinefunction(instance):
         raise TypeError(
@@ -423,14 +433,40 @@ def _validate_signature(
     returned = hints.get("return")
     if returned is None:
         raise TypeError(
-            f"A {kind} must annotate its return as {report_type.__name__}, or {report_type.__name__} | None if it can abstain; {name} has no return annotation."
+            f"A {kind} must annotate its return as {_RETURNS[kind]}; {name} has no return annotation."
         )
     return_members = set(get_args(returned) or (returned,))
-    if report_type not in return_members or not return_members <= {
-        report_type,
-        type(None),
-    }:
-        raise TypeError(
-            f"A {kind} must be annotated to return {report_type.__name__}, or {report_type.__name__} | None if it can abstain; {name} returns {returned!r}."
-        )
-    return frozenset(members)
+    if kind == "monitor":
+        if report_type not in return_members or not return_members <= {
+            report_type,
+            type(None),
+        }:
+            raise TypeError(
+                f"A monitor must be annotated to return {_RETURNS[kind]}; {name} returns {returned!r}."
+            )
+        return frozenset(members), frozenset()
+    found: set[Outcome] = set()
+    for member in return_members:
+        if member is type(None):
+            found.add(None)
+        elif isinstance(member, type) and issubclass(member, Decision):
+            found |= _actions(member)
+        else:
+            raise TypeError(
+                f"A protocol must be annotated to return {_RETURNS[kind]}; {name} returns {returned!r}."
+            )
+    return frozenset(members), frozenset(found)
+
+
+_RETURNS: dict[RegistryType, str] = {
+    "monitor": "Observation, or Observation | None if it can abstain",
+    "protocol": "the decisions it can make: Decision for any action, or a union of Proceed, Reject, Terminate, Modify and Escalate, with | None if it can abstain (None alone for one that never decides)",
+}
+
+
+def _actions(decision: type[Decision]) -> set[Outcome]:
+    for action, cls in DECISION_CLASSES.items():
+        if issubclass(decision, cls):
+            return {action}
+    # Decision itself, or a subclass of it that is not one action's
+    return set(DECISION_CLASSES)

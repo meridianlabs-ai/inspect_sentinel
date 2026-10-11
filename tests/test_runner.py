@@ -5,7 +5,6 @@ from typing import Any, cast
 import anyio
 import pytest
 from inspect_ai._util.registry import registry_info
-from inspect_ai.tool import ToolCall
 from inspect_ai.util import Store, StoreModel
 
 from inspect_sentinel._context import Context
@@ -15,7 +14,15 @@ from inspect_sentinel._decorators import (
 )
 from inspect_sentinel._final import Final, decide_final
 from inspect_sentinel._protocols import concurrent
-from inspect_sentinel._report import Action, Decision, Observation, Reported
+from inspect_sentinel._report import (
+    Action,
+    Decision,
+    Observation,
+    Proceed,
+    Reject,
+    Reported,
+    Terminate,
+)
 from inspect_sentinel._resolve import resolve_sentinel
 from inspect_sentinel._results import (
     Decisions,
@@ -42,6 +49,7 @@ from tests._fakes import (
     ListRecorder,
     after_step,
     before_step,
+    decision,
     host_context,
     in_step,
 )
@@ -54,9 +62,7 @@ def _obs(name: str, suspicion: float | dict[str, float]) -> Reported[Observation
 
 
 def _dec(name: str, action: Action) -> Reported[Decision]:
-    return Reported(
-        name=name, path=name, report=Decision(action=action), function="decide"
-    )
+    return Reported(name=name, path=name, report=decision(action), function="decide")
 
 
 def test_observations_is_a_sequence() -> None:
@@ -155,14 +161,7 @@ def raises() -> Protocol:
 @protocol
 def decides(action: Action = "continue") -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(
-            action=action,
-            modified=ToolCall(
-                id="call_1", function="bash", arguments={"cmd": "echo hi"}
-            )
-            if action == "modify"
-            else None,
-        )
+        return decision(action)
 
     return decide
 
@@ -170,7 +169,7 @@ def decides(action: Action = "continue") -> Protocol:
 @protocol
 def finalizes(action: Action = "reject") -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        decide_final(Decision(action=action))
+        decide_final(decision(action))
 
     return decide
 
@@ -187,7 +186,7 @@ def wrapper(child: Protocol) -> Protocol:
 @protocol
 def records_path() -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(action="continue", explanation=context.path)
+        return Proceed(explanation=context.path)
 
     return decide
 
@@ -435,7 +434,7 @@ def per_sample(label: str, mine: anyio.Event, other: anyio.Event) -> Protocol:
         mine.set()
         await other.wait()
         await run_monitors({"m": scores()}, context, step)
-        return Decision(action="continue", explanation=context.store_as(Sample).seen)
+        return Proceed(explanation=context.store_as(Sample).seen)
 
     return decide
 
@@ -549,7 +548,7 @@ async def test_terminate_cancels_siblings() -> None:
             started.set()
             await anyio.sleep_forever()
             finished.set()
-            return Decision(action="continue")
+            return Proceed()
 
         return decide
 
@@ -557,7 +556,7 @@ async def test_terminate_cancels_siblings() -> None:
     def terminates() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
-            return Decision(action="terminate")
+            return Terminate()
 
         return decide
 
@@ -608,7 +607,7 @@ async def test_run_children_unpacks_into_observations_and_decisions() -> None:
 @pytest.mark.anyio
 async def test_wrong_report_type_at_runtime_is_an_error() -> None:
     async def lies(context: Context, step: BeforeToolCall) -> Observation | None:
-        return cast(Any, Decision(action="continue"))
+        return cast(Any, Proceed())
 
     def factory() -> Any:
         return lies
@@ -770,7 +769,7 @@ async def test_terminate_keeps_results_collected_before_it() -> None:
     @protocol
     def quick() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
-            return Decision(action="continue")
+            return Proceed()
 
         return decide
 
@@ -787,7 +786,7 @@ async def test_terminate_keeps_results_collected_before_it() -> None:
     def terminates() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
-            return Decision(action="terminate")
+            return Terminate()
 
         return decide
 
@@ -858,7 +857,7 @@ async def test_a_recorder_failure_during_cancellation_fails_loud() -> None:
     def terminates() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
-            return Decision(action="terminate")
+            return Terminate()
 
         return decide
 
@@ -895,7 +894,7 @@ async def test_terminate_cancels_monitors_at_their_next_await() -> None:
     def terminates() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
             await started.wait()
-            return Decision(action="terminate")
+            return Terminate()
 
         return decide
 
@@ -1299,7 +1298,7 @@ async def test_run_sentinel_returns_a_final_decision_and_records_the_root_bypass
         host_context(recorder=recorder),
         before_step(),
     )
-    assert decision == Decision(action="reject")
+    assert decision == Reject()
     assert [(r.reported.path, r.reported.report) for r in recorder.records] == [
         ("finalizes", decision)
     ]
@@ -1314,7 +1313,7 @@ async def test_run_sentinel_records_the_roots_own_decision_at_the_empty_path() -
         host_context(recorder=recorder),
         before_step(),
     )
-    assert decision == Decision(action="reject")
+    assert decision == Reject()
     assert [(r.reported.name, r.reported.path) for r in recorder.records] == [
         ("decides", "decides"),
         ("concurrent", ""),
@@ -1326,7 +1325,7 @@ async def test_run_sentinel_checks_the_roots_decision_shape() -> None:
     @protocol
     def illegal() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
-            return Decision(action="modify")
+            return Proceed(message="told")
 
         return decide
 
@@ -1429,7 +1428,7 @@ async def test_an_illegal_own_final_supersedes_the_claimed_finals_beside_it() ->
     async def illegal() -> None:
         waiting.set()
         await gate.wait()
-        decide_final(Decision(action="modify"))
+        decide_final(Proceed(message="told"))
 
     @protocol
     def custom() -> Protocol:
@@ -1500,7 +1499,7 @@ async def test_a_terminate_outrun_by_a_siblings_final_is_superseded(
     decision = await run_sentinel(
         concurrent(children), host_context(recorder=recorder), before_step()
     )
-    assert decision == Decision(action="continue")
+    assert decision == Proceed()
     recorded = sorted(r.reported.path for r in recorder.records)
     superseded = [r.reported.path for r in recorder.supersessions]
     cancelled = [path for path, _ in recorder.cancellations]
@@ -1522,7 +1521,7 @@ async def test_an_ill_shaped_own_final_supersedes_nothing_it_made_itself(
                 decide_final(Decision.terminate())
 
             async def invalid() -> None:
-                decide_final(Decision(action="reject"))
+                decide_final(Reject())
 
             async with anyio.create_task_group() as tg:
                 first, second = (valid, invalid) if valid_first else (invalid, valid)
@@ -1852,7 +1851,7 @@ async def test_a_group_members_error_names_its_function() -> None:
 
     with pytest.raises(
         TypeError,
-        match=r"monitor 'bad_second' \(function 'wrong'\) returned a Decision",
+        match=r"monitor 'bad_second' \(function 'wrong'\) returned a Proceed",
     ):
         with in_step() as context:
             await run_monitors(bad_second(), context, before_step())

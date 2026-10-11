@@ -16,6 +16,11 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 
 ### Observation
 ### Decision
+### Proceed
+### Reject
+### Terminate
+### Modify
+### Escalate
 ### Suspicion
 ### Action
 ### Report

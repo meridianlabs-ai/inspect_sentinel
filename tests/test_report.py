@@ -6,7 +6,7 @@ from inspect_ai.scorer import Reference
 from inspect_ai.tool import ToolCall, ToolCallContent
 from pydantic import ValidationError
 
-from inspect_sentinel._report import Decision, Observation, Report, Reported
+from inspect_sentinel._report import Decision, Modify, Observation, Report, Reported
 
 if TYPE_CHECKING:
     _observed: Reported[Observation] = Reported("n", "p", Observation.score(0.0), "f")
@@ -66,11 +66,11 @@ def test_reports_round_trip_through_json() -> None:
         view=ToolCallContent(title="bash", format="markdown", content="`ls`"),
         type="custom",
     )
-    decision = Decision(action="modify", modified=call, audit=True)
-    restored = Decision.model_validate_json(decision.model_dump_json())
+    decision = Modify(modified=call, audit=True)
+    restored = Modify.model_validate_json(decision.model_dump_json())
     assert restored == decision
     assert restored.modified == call
-    assert Decision.model_validate(decision.model_dump()) == decision
+    assert Modify.model_validate(decision.model_dump()) == decision
 
 
 @pytest.mark.parametrize("bad", ["high", {"a": "high"}, [0.1], None])

@@ -15,7 +15,7 @@ from inspect_sentinel._decorators import (
 )
 from inspect_sentinel._final import decide_final
 from inspect_sentinel._protocols import concurrent, observe_only, threshold
-from inspect_sentinel._report import Action, Decision, Observation, Suspicion
+from inspect_sentinel._report import Action, Decision, Modify, Observation, Suspicion
 from inspect_sentinel._runner import (
     run_protocols,
     run_sentinel,
@@ -32,6 +32,7 @@ from tests._fakes import (
     ListRecorder,
     after_step,
     before_step,
+    decision,
     host_context,
     in_step,
 )
@@ -64,7 +65,7 @@ def afterwards() -> Monitor:
 @protocol
 def says(action: Action = "continue", explanation: str | None = None) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(action=action, explanation=explanation)
+        return decision(action, explanation=explanation)
 
     return decide
 
@@ -72,8 +73,7 @@ def says(action: Action = "continue", explanation: str | None = None) -> Protoco
 @protocol
 def rewrites(explanation: str | None = None) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(
-            action="modify",
+        return Modify(
             modified=ToolCall(
                 id="call_1", function="bash", arguments={"cmd": "echo hi"}
             ),
@@ -805,14 +805,10 @@ def _edits(first: Action, second: Action) -> ProtocolGroup:
     @protocol
     def edits() -> ProtocolGroup:
         async def rewrite(context: Context, step: BeforeToolCall) -> Decision | None:
-            return Decision(
-                action=first, modified=modified if first == "modify" else None
-            )
+            return decision(first, modified=modified if first == "modify" else None)
 
         async def audit(context: Context, step: BeforeToolCall) -> Decision | None:
-            return Decision(
-                action=second, modified=modified if second == "modify" else None
-            )
+            return decision(second, modified=modified if second == "modify" else None)
 
         return ProtocolGroup(rewrite, audit)
 

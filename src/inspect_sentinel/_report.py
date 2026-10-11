@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Generic, TypeAlias, TypeVar
+from typing import Any, Generic, Literal, TypeAlias, TypeVar
 
 from inspect_ai.core import Reference, SentinelAction, SentinelSuspicion, ToolCall
 from pydantic import BaseModel, Field
@@ -58,8 +58,11 @@ class Observation(BaseModel):
         return cls(suspicion=1.0, explanation=explanation, references=list(references))
 
 
-class Decision(BaseModel):
-    """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to `decide_final()`."""
+class Decision(BaseModel, frozen=True):
+    """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to `decide_final()`.
+
+    The base of one class per action, `Proceed`, `Reject`, `Terminate`, `Modify` and `Escalate`, and not built itself: build a decision with one of those classes, or with `Decision.proceed()`, `Decision.reject()`, `Decision.terminate()` or `Decision.escalate()`, which return them (a modify is built as `Modify(modified=...)`). A protocol function declares what it decides with a union of the classes, such as `-> Reject | Proceed | None`; annotating it `-> Decision` means it may decide anything. Decisions are frozen; derive one from another with `model_copy(update=...)`.
+    """
 
     action: Action
     """What should happen at this step. Required."""
@@ -82,14 +85,18 @@ class Decision(BaseModel):
     metadata: dict[str, Any] | None = Field(default=None)
     """Author-supplied structured context, recorded verbatim."""
 
+    def model_post_init(self, context: Any, /) -> None:
+        if type(self) is Decision:
+            raise TypeError(
+                "Decision is the base of the decision classes and is not built itself; build a Proceed, Reject, Terminate, Modify or Escalate, for example with Decision.reject()."
+            )
+
     @classmethod
     def proceed(
         cls, explanation: str | None = None, *, references: Sequence[Reference] = ()
-    ) -> Decision:
-        """Let the step proceed unchanged: a decision with action `continue`."""
-        return cls(
-            action="continue", explanation=explanation, references=list(references)
-        )
+    ) -> Proceed:
+        """Let the step proceed unchanged: a `Proceed`, whose action is `continue`."""
+        return Proceed(explanation=explanation, references=list(references))
 
     @classmethod
     def reject(
@@ -98,32 +105,74 @@ class Decision(BaseModel):
         *,
         message: str | None = None,
         references: Sequence[Reference] = (),
-    ) -> Decision:
+    ) -> Reject:
         """Reject the step, telling the agent it was rejected: with `message` if given, else with the host's default text."""
-        return cls(
-            action="reject",
-            explanation=explanation,
-            message=message,
-            references=list(references),
+        return Reject(
+            explanation=explanation, message=message, references=list(references)
         )
 
     @classmethod
     def terminate(
         cls, explanation: str | None = None, *, references: Sequence[Reference] = ()
-    ) -> Decision:
+    ) -> Terminate:
         """End the sample."""
-        return cls(
-            action="terminate", explanation=explanation, references=list(references)
-        )
+        return Terminate(explanation=explanation, references=list(references))
 
     @classmethod
     def escalate(
         cls, explanation: str | None = None, *, references: Sequence[Reference] = ()
-    ) -> Decision:
+    ) -> Escalate:
         """Decline to decide and pass the step to the next decider."""
-        return cls(
-            action="escalate", explanation=explanation, references=list(references)
-        )
+        return Escalate(explanation=explanation, references=list(references))
+
+
+class Proceed(Decision, frozen=True):
+    """A decision to let the step proceed unchanged, action `continue`. Build one with `Decision.proceed()`."""
+
+    action: Literal["continue"] = "continue"
+    """Always `continue`."""
+
+
+class Reject(Decision, frozen=True):
+    """A decision to reject the step, telling the agent with `message`. Build one with `Decision.reject()`. Legal only before a tool call."""
+
+    action: Literal["reject"] = "reject"
+    """Always `reject`."""
+
+
+class Terminate(Decision, frozen=True):
+    """A decision to end the sample. Build one with `Decision.terminate()`."""
+
+    action: Literal["terminate"] = "terminate"
+    """Always `terminate`."""
+
+
+class Modify(Decision, frozen=True):
+    """A decision to replace the step's subject with `modified`, as in `Modify(modified=replace(step.call, arguments={...}))`. Legal only before a tool call, where it may change only the call's arguments."""
+
+    action: Literal["modify"] = "modify"
+    """Always `modify`."""
+
+    # required here though optional on the base, which every decision carries
+    # since hosts read it from any decision
+    modified: ToolCall  # pyright: ignore[reportGeneralTypeIssues]
+    """The replacement for the step's subject. Required."""
+
+
+class Escalate(Decision, frozen=True):
+    """A decision not to decide, passing the step to the next decider in a `sequential()`. Build one with `Decision.escalate()`. One that reaches the root with nothing to handle it ends the sample as an unhandled escalation."""
+
+    action: Literal["escalate"] = "escalate"
+    """Always `escalate`."""
+
+
+DECISION_CLASSES: dict[Action, type[Decision]] = {
+    "continue": Proceed,
+    "reject": Reject,
+    "terminate": Terminate,
+    "modify": Modify,
+    "escalate": Escalate,
+}
 
 
 Report: TypeAlias = Observation | Decision

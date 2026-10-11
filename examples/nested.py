@@ -14,6 +14,7 @@ from inspect_sentinel import (
     BeforeToolCall,
     Context,
     Decision,
+    Proceed,
     Protocol,
     call_text,
     concurrent,
@@ -28,7 +29,7 @@ PROTECTED_PATHS = ["/etc", "~/.aws"]
 def protected() -> Protocol:
     """Reject, with `decide_final()`, any `bash()` command that mentions `/etc` or `~/.aws`."""
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(context: Context, step: BeforeToolCall) -> Proceed | None:
         if step.call.function != "bash":
             return None
         command = call_text(step.call)
