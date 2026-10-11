@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Sequence
+from collections.abc import Generator, Iterable, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -167,6 +167,13 @@ def check_handled(root: Protocol) -> None:
             "End the configuration with human() or handle_escalation('terminate' | 'continue') in a sequential(), "
             "or take Escalate out of the annotation of a protocol that never escalates."
         )
+
+
+def undecided_stages(sentinel: Sentinel, stages: Iterable[type[Any]]) -> list[str]:
+    # the stages, by name, at which the sentinel may abstain or escalate
+    return [
+        _STAGE_NAMES[stage] for stage in stages if not _flow(sentinel, stage).decides
+    ]
 
 
 def _flow(sentinel: Sentinel, stage: type[Any]) -> _Flow:

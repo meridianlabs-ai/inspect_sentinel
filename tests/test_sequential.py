@@ -6,7 +6,7 @@ from inspect_ai._util.registry import registry_info
 from inspect_ai.log import SentinelConfig
 from inspect_ai.util import Store, StoreModel
 
-from inspect_sentinel import handle_escalation, sequential
+from inspect_sentinel import handle_escalation, human, sequential
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._final import decide_final
@@ -54,6 +54,14 @@ def seq_link(action: Action = "continue", explanation: str | None = None) -> Pro
 def seq_abstains() -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return None
+
+    return decide
+
+
+@protocol
+def seq_before_only() -> Protocol:
+    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+        return Decision.escalate("before")
 
     return decide
 
@@ -368,10 +376,27 @@ async def test_then_is_not_reached_when_a_child_decides() -> None:
     assert "handle_escalation" not in _paths(rooted.recorder)
 
 
-@pytest.mark.parametrize("then", [seq_link, seq_abstains], ids=["any", "abstains"])
-def test_then_must_always_decide_and_never_escalate(then: Callable[[], Any]) -> None:
-    with pytest.raises(TypeError, match="then must always decide and never escalate"):
+@pytest.mark.parametrize(
+    ("then", "stages"),
+    [
+        (seq_link, "tool_call, tool_result"),
+        (seq_abstains, "tool_call, tool_result"),
+        (lambda: human(stages=["tool_call"]), "tool_result"),
+    ],
+    ids=["any", "abstains", "a_stage_the_person_is_not_asked_at"],
+)
+def test_then_must_decide_wherever_the_children_run(
+    then: Callable[[], Any], stages: str
+) -> None:
+    with pytest.raises(
+        TypeError,
+        match=f"then must always decide .* may abstain or escalate at {stages}\\.",
+    ):
         sequential([seq_link("escalate")], then=then())
+
+
+def test_then_may_watch_only_the_stages_the_children_run() -> None:
+    sequential([seq_before_only()], then=human(stages=["tool_call"]))
 
 
 def test_then_is_named_apart_from_the_children() -> None:

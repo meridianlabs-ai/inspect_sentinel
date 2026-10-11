@@ -90,14 +90,17 @@ assert_type(
 assert_type(sequential([triage()]), Protocol[Reject | Escalate | Proceed | None])
 assert_type(concurrent([score()]), Protocol[None])
 
-# then= ends a chain with a protocol that always decides
+# then= ends a chain with a protocol that always decides; a chain ending in one
+# can abstain where nothing in it runs, so it is not a then itself
 assert_type(
     sequential([triage()], then=handle_escalation("terminate")),
-    Protocol[NotEscalate],
+    Protocol[NotEscalate | None],
 )
 assert_type(
-    sequential([triage()], then=human(stages=["tool_call"])), Protocol[NotEscalate]
+    sequential([triage()], then=human(stages=["tool_call"])),
+    Protocol[NotEscalate | None],
 )
+sequential([rule()], then=sequential([triage()], then=handle_escalation("continue")))  # pyright: ignore[reportArgumentType]
 sequential([triage()], then=rule())  # pyright: ignore[reportArgumentType]
 sequential([triage()], then=anything())  # pyright: ignore[reportArgumentType]
 
