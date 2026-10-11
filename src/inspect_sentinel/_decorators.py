@@ -16,6 +16,8 @@ from typing import (
 from typing import Protocol as TypingProtocol
 
 from inspect_ai._util.registry import (
+    REGISTRY_INFO,
+    REGISTRY_PARAMS,
     RegistryInfo,
     RegistryType,
     is_registry_object,
@@ -49,6 +51,10 @@ STEP_TYPES_ATTR = "__sentinel_step_types__"
 # the function a configured function guards, so configuring it again guards the
 # original rather than the guard
 _GUARDED_ATTR = "__sentinel_guarded__"
+# what configuring an instance again replaces: the outer factory's registry
+# identity and params, and the step types it recomputes; any other attribute of
+# the configured instance, such as dispatch metadata, carries over
+_REPLACED = frozenset({REGISTRY_INFO, REGISTRY_PARAMS, STEP_TYPES_ATTR})
 VERSION = "version"
 PORTABLE = "portable"
 ENTRY_FIELDS = ("name", "params", VERSION, "meta")
@@ -130,7 +136,7 @@ def monitor(
 ) -> Callable[P, Monitor | MonitorGroup] | _MonitorDecorator:
     """Register a monitor factory.
 
-    Use as `@monitor`, or as `@monitor(name=..., version=..., portable=...)`. The factory returns a function that must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated `-> Observation`, or `-> Observation | None` if it can abstain. These are checked when the factory is called. Each function watches one stage, so `Step` or any other union is rejected; to watch several, return a `MonitorGroup` of functions, which together are one configured instance. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A factory may instead return an instance of its kind that another factory configured, such as `sequential([...])` from a `@protocol` factory, to register that composition under its own name: it runs as configured, its records and configuration entry carry this factory's name and params, and a configuration rebuilds it by calling this factory. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
+    Use as `@monitor`, or as `@monitor(name=..., version=..., portable=...)`. The factory returns a function that must be `async`, take `(context, step)`, annotate `step` with exactly one stage payload, and be annotated `-> Observation`, or `-> Observation | None` if it can abstain. These are checked when the factory is called. Each function watches one stage, so `Step` or any other union is rejected; to watch several, return a `MonitorGroup` of functions, which together are one configured instance. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A factory may instead return an instance of its kind that another factory configured, such as `sequential([...])` from a `@protocol` factory, to register that composition under its own name: it runs as configured, its records and configuration entry carry this factory's name and params, and a configuration rebuilds it by calling this factory. The returned instance is guarded afresh, not cloned: it keeps its attributes other than its registry name and params and its step types, which this factory replaces, and it shares its closure and children with the instance returned, so a factory that returns one shared instance shares that state across its configurations. Since the configuration records only this factory, bump this factory's `version` when the composition it returns changes behaviour. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     A configured function runs only through the runners while a sentinel is running: a protocol that calls one directly from its body raises `RuntimeError`, and must call it through `run_monitors` or `run_children` instead. Outside a run, as in a unit test, a direct call works.
 
@@ -289,6 +295,7 @@ def _register(
                 for function in returned.functions
             )
             instance = group_type(*functions)
+            _carry_over(returned, instance, "_functions")
             accepted = frozenset[type[Any]]().union(
                 *(step_types(function) for function in functions)
             )
@@ -310,13 +317,22 @@ def _register(
 def _configure(function: object, kind: RegistryType, report_type: type[Report]) -> Any:
     # a factory may return another factory's configured instance; a guard
     # around a guard would reject the runner's call to the inner one
-    function = getattr(function, _GUARDED_ATTR, function)
+    configured = function
+    function = getattr(configured, _GUARDED_ATTR, configured)
     accepted = _validate_signature(
         cast(Callable[..., Any], function), kind, report_type
     )
     guarded = _guard(cast(SentinelFunction, function))
+    if configured is not function:
+        _carry_over(configured, guarded, "__wrapped__", _GUARDED_ATTR)
     setattr(guarded, STEP_TYPES_ATTR, accepted)
     return guarded
+
+
+def _carry_over(configured: object, fresh: object, *own: str) -> None:
+    for key, value in vars(configured).items():
+        if key not in _REPLACED and key not in own:
+            setattr(fresh, key, value)
 
 
 def _guard(function: SentinelFunction) -> SentinelFunction:

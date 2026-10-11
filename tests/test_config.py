@@ -14,6 +14,7 @@ from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import (
     monitor,
     protocol,
+    step_types,
 )
 from inspect_sentinel._host import HumanAnswer
 from inspect_sentinel._integration import (
@@ -792,14 +793,47 @@ async def test_a_factory_returning_a_configured_instance_runs_and_round_trips(
     assert await _records(rebuilt) == await _records(original) == records
 
 
-def test_a_factory_returning_a_configured_instance_leaves_that_instance_alone() -> None:
+# an attribute some other part of the package sets on a configured instance
+MARK = "__sentinel_mark__"
+
+
+@pytest.mark.usefixtures("scratch_registry")
+def test_a_returned_instance_keeps_its_metadata_under_the_outer_identity() -> None:
     inner = sequential([cfg_rule()])
+    setattr(inner, MARK, "inner")
 
     @protocol
-    def cfg_reuses() -> Protocol:
+    def cfg_reuses(label: str) -> Protocol:
         return inner
 
-    outer = cfg_reuses()
+    outer = cfg_reuses("x")
     assert outer is not inner
+    assert getattr(outer, MARK) == "inner"
+    assert step_types(outer) == step_types(inner)
+    assert (registry_info(outer).name, registry_params(outer)) == (
+        "cfg_reuses",
+        {"label": "x"},
+    )
     assert registry_info(inner).name == "inspect_sentinel/sequential"
-    assert registry_info(outer).name == "cfg_reuses"
+
+
+@pytest.mark.usefixtures("scratch_registry")
+def test_a_returned_group_keeps_its_own_and_its_members_metadata() -> None:
+    inner = cfg_pair()
+    setattr(inner, MARK, "group")
+    for function in inner.functions:
+        setattr(function, MARK, function.__name__)
+
+    @monitor
+    def cfg_pair_reused() -> MonitorGroup:
+        return inner
+
+    outer = cfg_pair_reused()
+    assert isinstance(outer, MonitorGroup) and outer is not inner
+    assert getattr(outer, MARK) == "group"
+    assert [getattr(function, MARK) for function in outer.functions] == [
+        "before",
+        "after",
+    ]
+    assert registry_info(outer).name == "cfg_pair_reused"
+    assert registry_info(inner).name == "cfg_pair"
