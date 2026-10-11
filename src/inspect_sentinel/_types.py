@@ -6,7 +6,7 @@ from typing import Generic, TypeAlias, cast, final
 from typing_extensions import TypeVar
 
 from ._context import Context
-from ._report import Decision, Observation, Report, Verdict
+from ._report import Decision, Observation, Report
 from ._step import AfterToolCall, BeforeToolCall, Step
 
 Monitor: TypeAlias = (
@@ -117,8 +117,3 @@ Sentinel: TypeAlias = Monitor | MonitorGroup | Protocol[R] | ProtocolGroup[R]
 
 Sentinels: TypeAlias = Sentinel[R] | Mapping[str, Sentinel[R]] | Sequence[Sentinel[R]]
 """What `Task(sentinel=)` and the compositions accept: one sentinel, or a sequence or mapping of them, named by mapping key or by registry name without its package prefix. Generic in what their protocols can return, which a composition's own type is built from."""
-
-RootSentinels: TypeAlias = Sentinels[Verdict | None]
-"""A sentinel configuration none of whose protocols can escalate, so no escalation can reach the top unhandled.
-
-Annotate a function that builds a task's sentinel `-> RootSentinels` and the type checker flags a configuration that can escalate with nothing to handle it, such as a rule annotated to return `Escalate` with no `human()` or `handle_escalation()` after it. Protocols annotated `-> Decision` count as able to escalate. `Task(sentinel=)` itself does not take this type yet."""

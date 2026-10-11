@@ -42,7 +42,6 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 ### Protocols
 ### Sentinel
 ### Sentinels
-### RootSentinels
 ### PortabilityError
 
 ## Shipped protocols

@@ -47,7 +47,6 @@ from ._types import (
     Protocol,
     ProtocolGroup,
     Protocols,
-    RootSentinels,
     Sentinel,
     Sentinels,
 )
@@ -86,7 +85,6 @@ __all__ = [
     "Report",
     "Reported",
     "Reports",
-    "RootSentinels",
     "Sentinel",
     "Sentinels",
     "Step",

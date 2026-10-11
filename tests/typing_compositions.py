@@ -15,7 +15,7 @@ from inspect_sentinel import (
     Protocol,
     ProtocolGroup,
     Reject,
-    RootSentinels,
+    Sentinels,
     Terminate,
     Verdict,
     concurrent,
@@ -104,17 +104,40 @@ sequential([rule()], then=sequential([triage()], then=handle_escalation("continu
 sequential([triage()], then=rule())  # pyright: ignore[reportArgumentType]
 sequential([triage()], then=anything())  # pyright: ignore[reportArgumentType]
 
-# a root that cannot escalate is a RootSentinels; one that can is flagged
-handled: RootSentinels = sequential([triage()], then=human(stages=["tool_call"]))
-quiet: RootSentinels = {"rule": rule(), "llm": threshold(score(), reject_at=0.5)}
-watched: RootSentinels = observe_only(score())
-lone: RootSentinels = triage()  # pyright: ignore[reportAssignmentType]
-chained: RootSentinels = sequential([triage()])  # pyright: ignore[reportAssignmentType]
-beside: RootSentinels = [rule(), triage()]  # pyright: ignore[reportAssignmentType]
-untyped: RootSentinels = anything()  # pyright: ignore[reportAssignmentType]
+# a configuration that cannot escalate is a Sentinels[Verdict | None]; one that
+# can is flagged, whether built by a factory or by a plain helper
+handled: Sentinels[Verdict | None] = sequential(
+    [triage()], then=human(stages=["tool_call"])
+)
+quiet: Sentinels[Verdict | None] = {
+    "rule": rule(),
+    "llm": threshold(score(), reject_at=0.5),
+}
+watched: Sentinels[Verdict | None] = observe_only(score())
+lone: Sentinels[Verdict | None] = triage()  # pyright: ignore[reportAssignmentType]
+chained: Sentinels[Verdict | None] = sequential([triage()])  # pyright: ignore[reportAssignmentType]
+beside: Sentinels[Verdict | None] = [rule(), triage()]  # pyright: ignore[reportAssignmentType]
+untyped: Sentinels[Verdict | None] = anything()  # pyright: ignore[reportAssignmentType]
 
 
-def build() -> RootSentinels:
+@protocol
+def guarded() -> Protocol[Verdict | None]:
+    return sequential([triage()], then=handle_escalation("continue"))
+
+
+@protocol
+def unguarded() -> Protocol[Verdict | None]:
+    return sequential([triage()])  # pyright: ignore[reportReturnType]
+
+
+assert_type(guarded(), Protocol[Verdict | None])
+
+
+def build() -> Sentinels[Verdict | None]:
     return concurrent(
         [rule(), sequential([triage()], then=handle_escalation("continue"))]
     )
+
+
+def build_unhandled() -> Sentinels[Verdict | None]:
+    return [rule(), triage()]  # pyright: ignore[reportReturnType]
