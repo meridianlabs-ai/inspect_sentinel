@@ -22,7 +22,6 @@ from ._report import (
     Escalate,
     Failed,
     Modify,
-    NotEscalate,
     Observation,
     Proceed,
     Reject,
@@ -30,6 +29,7 @@ from ._report import (
     Reported,
     Suspicion,
     Terminate,
+    Verdict,
 )
 from ._results import Decisions, MonitorFailedError, Observations, Reports
 from ._rules import (
@@ -74,7 +74,6 @@ __all__ = [
     "MonitorFailedError",
     "MonitorGroup",
     "Modify",
-    "NotEscalate",
     "Monitors",
     "Observation",
     "Observations",
@@ -93,6 +92,7 @@ __all__ = [
     "Step",
     "Suspicion",
     "Terminate",
+    "Verdict",
     "call_text",
     "concurrent",
     "decide_final",

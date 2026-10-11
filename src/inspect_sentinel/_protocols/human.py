@@ -6,7 +6,7 @@ from typing import cast
 from .._context import Context
 from .._decorators import protocol
 from .._host import HumanAnswer
-from .._report import Decision, Modify, NotEscalate, Proceed, Reject, Terminate
+from .._report import Decision, Modify, Proceed, Reject, Terminate, Verdict
 from .._step import AfterToolCall, BeforeToolCall, Step
 from .._types import Protocol, ProtocolGroup
 
@@ -24,7 +24,7 @@ _DEFAULTS = {
 def human(
     stages: Sequence[str],
     choices: Sequence[str] | None = None,
-) -> Protocol[NotEscalate] | ProtocolGroup[NotEscalate]:
+) -> Protocol[Verdict] | ProtocolGroup[Verdict]:
     """Ask a person to decide, every time the step reaches this protocol.
 
     The person is asked through `Host.ask_human`, which is handed the step and shows it with `step.escalations`, so at the end of a `sequential()` the person sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call. The answer maps to a decision: `approve` to `continue`, `reject` to `reject` with the person's reason as both the `message` the agent reads and the `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
@@ -62,7 +62,7 @@ def human(
         # _decision accepts only the choices offered after a call, and terminate
         return cast(Proceed | Terminate, await ask(context, step, "tool_result"))
 
-    functions: dict[str, Protocol[NotEscalate]] = {
+    functions: dict[str, Protocol[Verdict]] = {
         "tool_call": tool_call,
         "tool_result": tool_result,
     }

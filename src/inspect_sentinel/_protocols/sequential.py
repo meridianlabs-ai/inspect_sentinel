@@ -7,7 +7,7 @@ from inspect_ai._util.registry import registry_unqualified_name
 
 from .._context import Context
 from .._decorators import protocol
-from .._report import Decision, NotEscalate, Proceed, Reported
+from .._report import Decision, Proceed, Reported, Verdict
 from .._results import warn_failed
 from .._runner import run_children
 from .._step import Step
@@ -20,13 +20,13 @@ from .._validate import check_child, named_children
 def sequential(children: Sentinels[D]) -> Protocol[D | Proceed | None]: ...
 @overload
 def sequential(
-    children: Sentinels, *, then: Protocol[NotEscalate] | ProtocolGroup[NotEscalate]
-) -> Protocol[NotEscalate | None]: ...
+    children: Sentinels, *, then: Protocol[Verdict] | ProtocolGroup[Verdict]
+) -> Protocol[Verdict | None]: ...
 @protocol
 def sequential(
     children: Sentinels,
     *,
-    then: Protocol[NotEscalate] | ProtocolGroup[NotEscalate] | None = None,
+    then: Protocol[Verdict] | ProtocolGroup[Verdict] | None = None,
 ) -> Protocol:
     """Run children one at a time, in order; the first that decides anything but `escalate` decides, and later children do not run.
 
@@ -34,7 +34,7 @@ def sequential(
 
     A monitor is recorded and falls through, since an observation is not a decision; one that raises is recorded as failed, logged as a warning, and falls through the same way. When every child that decided escalated, the chain returns the last escalate, passing it up as `concurrent` does; when only monitors reported, it returns `continue`; when no child took part, `None`. A child that calls `decide_final()` ends the step as usual.
 
-    `then` is a last link that decides wherever an escalation can leave the children, and never escalates, such as `handle_escalation()`, or `human()` asking at those stages, so the chain never escalates: its type is `Protocol[NotEscalate | None]`, `None` where neither a child nor `then` runs, and a type checker can see that the chain needs nothing after it. Without `then`, the chain's type is the union of what its children return, with `Proceed` and `None`, so a chain whose children can escalate is typed as able to.
+    `then` is a last link that decides wherever an escalation can leave the children, and never escalates, such as `handle_escalation()`, or `human()` asking at those stages, so the chain never escalates: its type is `Protocol[Verdict | None]`, `None` where neither a child nor `then` runs, and a type checker can see that the chain needs nothing after it. Without `then`, the chain's type is the union of what its children return, with `Proceed` and `None`, so a chain whose children can escalate is typed as able to.
 
     Args:
         children: A monitor, protocol or group, or several, to run in order.

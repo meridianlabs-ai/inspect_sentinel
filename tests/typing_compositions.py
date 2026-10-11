@@ -10,7 +10,6 @@ from inspect_sentinel import (
     Decision,
     Escalate,
     Monitor,
-    NotEscalate,
     Observation,
     Proceed,
     Protocol,
@@ -18,6 +17,7 @@ from inspect_sentinel import (
     Reject,
     RootSentinels,
     Terminate,
+    Verdict,
     concurrent,
     handle_escalation,
     human,
@@ -75,7 +75,7 @@ assert_type(observe_only(score()), Protocol[None])
 assert_type(handle_escalation("terminate"), ProtocolGroup[Terminate | Proceed])
 assert_type(
     human(stages=["tool_call"]),
-    Protocol[NotEscalate] | ProtocolGroup[NotEscalate],
+    Protocol[Verdict] | ProtocolGroup[Verdict],
 )
 
 # compositions take the union of their children
@@ -94,11 +94,11 @@ assert_type(concurrent([score()]), Protocol[None])
 # can abstain where nothing in it runs, so it is not a then itself
 assert_type(
     sequential([triage()], then=handle_escalation("terminate")),
-    Protocol[NotEscalate | None],
+    Protocol[Verdict | None],
 )
 assert_type(
     sequential([triage()], then=human(stages=["tool_call"])),
-    Protocol[NotEscalate | None],
+    Protocol[Verdict | None],
 )
 sequential([rule()], then=sequential([triage()], then=handle_escalation("continue")))  # pyright: ignore[reportArgumentType]
 sequential([triage()], then=rule())  # pyright: ignore[reportArgumentType]
