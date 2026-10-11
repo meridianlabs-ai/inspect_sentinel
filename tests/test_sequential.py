@@ -385,18 +385,29 @@ async def test_then_is_not_reached_when_a_child_decides() -> None:
     ],
     ids=["any", "abstains", "a_stage_the_person_is_not_asked_at"],
 )
-def test_then_must_decide_wherever_the_children_run(
+def test_then_must_decide_wherever_an_escalation_can_leave_the_children(
     then: Callable[[], Any], stages: str
 ) -> None:
     with pytest.raises(
         TypeError,
-        match=f"then must always decide .* may abstain or escalate at {stages}\\.",
+        match=f"then must decide wherever .* may abstain or escalate at {stages}\\.",
     ):
         sequential([seq_link("escalate")], then=then())
 
 
-def test_then_may_watch_only_the_stages_the_children_run() -> None:
-    sequential([seq_before_only()], then=human(stages=["tool_call"]))
+@pytest.mark.parametrize(
+    "children",
+    [
+        lambda: [seq_before_only()],
+        lambda: [concurrent([seq_before_only()])],
+        lambda: [sequential([seq_before_only()])],
+    ],
+    ids=["a_rule", "in_a_concurrent", "in_a_sequential"],
+)
+def test_then_may_watch_only_the_stages_the_children_escalate_at(
+    children: Callable[[], Sentinels],
+) -> None:
+    sequential(children(), then=human(stages=["tool_call"]))
 
 
 def test_then_is_named_apart_from_the_children() -> None:

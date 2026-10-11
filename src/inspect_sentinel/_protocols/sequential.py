@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, cast, get_args, overload
+from typing import cast, overload
 
-from inspect_ai._util.registry import registry_info, registry_unqualified_name
+from inspect_ai._util.registry import registry_unqualified_name
 
 from .._context import Context
-from .._decorators import protocol, step_types
+from .._decorators import protocol
 from .._report import Decision, NotEscalate, Proceed, Reported
 from .._results import warn_failed
 from .._runner import run_children
 from .._step import Step
 from .._types import D, Protocol, ProtocolGroup, Sentinel, Sentinels
-from .._unhandled import composed, undecided_stages
+from .._unhandled import composed, unanswered
 from .._validate import check_child, named_children
 
 
@@ -34,15 +34,15 @@ def sequential(
 
     A monitor is recorded and falls through, since an observation is not a decision; one that raises is recorded as failed, logged as a warning, and falls through the same way. When every child that decided escalated, the chain returns the last escalate, passing it up as `concurrent` does; when only monitors reported, it returns `continue`; when no child took part, `None`. A child that calls `decide_final()` ends the step as usual.
 
-    `then` is a last link that always decides and never escalates wherever the children run, such as `handle_escalation()`, or `human()` asking at those stages, so the chain never escalates: its type is `Protocol[NotEscalate | None]`, `None` where neither a child nor `then` runs, and a type checker can see that the chain needs nothing after it. Without `then`, the chain's type is the union of what its children return, with `Proceed` and `None`, so a chain whose children can escalate is typed as able to.
+    `then` is a last link that decides wherever an escalation can leave the children, and never escalates, such as `handle_escalation()`, or `human()` asking at those stages, so the chain never escalates: its type is `Protocol[NotEscalate | None]`, `None` where neither a child nor `then` runs, and a type checker can see that the chain needs nothing after it. Without `then`, the chain's type is the union of what its children return, with `Proceed` and `None`, so a chain whose children can escalate is typed as able to.
 
     Args:
         children: A monitor, protocol or group, or several, to run in order.
-        then: A protocol or group run after the children, which must always decide and never escalate at every stage a protocol among the children runs, recorded under its registry name like a child.
+        then: A protocol or group run after the children, which must decide wherever an escalation can leave the children and never escalate, recorded under its registry name like a child.
 
     Raises:
         ValueError: If there are no children, or `then` is named like one of them.
-        TypeError: If `then` may abstain or escalate at a stage a protocol among the children runs.
+        TypeError: If `then` may escalate, or may abstain at a stage an escalation can leave the children.
     """
     # so a misconfiguration fails here rather than at the first step
     named = named_children(children, None)
@@ -81,18 +81,10 @@ def sequential(
 def _last(then: Sentinel, named: list[tuple[str, Sentinel]]) -> tuple[str, Sentinel]:
     info, _ = check_child(then, "protocol")
     name = registry_unqualified_name(info)
-    # wherever a child can escalate, then must answer it
-    stages = frozenset[type[Any]]().union(
-        *(
-            step_types(child)
-            for _, child in named
-            if registry_info(child).type == "protocol"
-        )
-    )
-    undecided = undecided_stages(then, [s for s in get_args(Step) if s in stages])
+    undecided = unanswered(named, then)
     if undecided:
         raise TypeError(
-            f"sequential's then must always decide and never escalate wherever its children run, as handle_escalation() does; {name} may abstain or escalate at {', '.join(undecided)}."
+            f"sequential's then must decide wherever an escalation can leave its children, and never escalate, as handle_escalation() does; {name} may abstain or escalate at {', '.join(undecided)}."
         )
     if name in {child for child, _ in named}:
         raise ValueError(

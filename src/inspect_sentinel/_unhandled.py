@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Iterable, Sequence
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -169,11 +169,17 @@ def check_handled(root: Protocol) -> None:
         )
 
 
-def undecided_stages(sentinel: Sentinel, stages: Iterable[type[Any]]) -> list[str]:
-    # the stages, by name, at which the sentinel may abstain or escalate
-    return [
-        _STAGE_NAMES[stage] for stage in stages if not _flow(sentinel, stage).decides
-    ]
+def unanswered(children: Sequence[tuple[str, Sentinel]], then: Sentinel) -> list[str]:
+    # the stages, by name, at which a chain ending in then could escalate: an
+    # escalate can leave the children and then may not decide, or then itself
+    # may escalate
+    gaps: list[str] = []
+    for stage in get_args(Step):
+        passed = "escalate" in _in_order(children, stage).outcomes
+        flow = _flow(then, stage)
+        if "escalate" in flow.outcomes or (passed and not flow.decides):
+            gaps.append(_STAGE_NAMES[stage])
+    return gaps
 
 
 def _flow(sentinel: Sentinel, stage: type[Any]) -> _Flow:
