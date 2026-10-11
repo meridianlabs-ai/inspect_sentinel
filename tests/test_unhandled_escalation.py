@@ -182,6 +182,52 @@ async def test_the_functions_of_a_group_are_told_apart(
     assert [r.cite for r in decision.references] == cites
 
 
+@protocol
+def ue_consults(returns: str) -> Protocol:
+    # consults an escalating child, then passes its escalation up or escalates
+    # with a reason of its own
+    configured = ue_child()
+
+    async def run(context: Context, step: Step) -> Decision | None:
+        decisions = await run_protocols({"child": configured}, context, step)
+        child = decisions[0].report
+        if returns == "forwarded":
+            return child
+        if returns == "copied":
+            return Decision.escalate(child.explanation, references=child.references)
+        return Decision.escalate(
+            "parent reason",
+            references=[Reference(type="message", id="p", cite="[parent]")],
+        )
+
+    return run
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("step", [before_step(), after_step()])
+@pytest.mark.parametrize(
+    ("returns", "named", "cites"),
+    [
+        ("forwarded", "parent/child: child reason", ["[child]"]),
+        ("copied", "parent/child: child reason", ["[child]"]),
+        (
+            "own",
+            "parent/child: child reason; parent: parent reason",
+            ["[child]", "[parent]"],
+        ),
+    ],
+)
+async def test_a_parent_is_named_when_it_escalates_with_its_own_reason(
+    returns: str, named: str, cites: list[str], step: Step
+) -> None:
+    decision = await run_sentinel(
+        resolve_sentinel({"parent": ue_consults(returns)}), host_context(), step
+    )
+    assert decision is not None
+    assert decision.explanation == f"unhandled escalation from {named}. {GUIDANCE}"
+    assert [r.cite for r in decision.references] == cites
+
+
 class Calls(StoreModel):
     count: int = 0
 

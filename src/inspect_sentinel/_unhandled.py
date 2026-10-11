@@ -14,6 +14,8 @@ class Invocation:
     # it; the functions of a group, and repeat calls at one path, are told apart
     parent: Invocation | None
     decided: Reported[Decision] | None = None
+    # a decision the function marked as passing up its children's, rewritten
+    forwarded: Decision | None = None
 
 
 # the invocation whose function is running, which the runner's children take
@@ -40,6 +42,15 @@ def running(node: Invocation) -> Generator[None]:
         _current.reset(token)
 
 
+def forwarding(decision: Decision) -> Decision:
+    # for a protocol that passes up a child's decision rewritten, as concurrent
+    # adds its vote summary, so the rewrite is not taken for a reason of its own
+    node = _current.get()
+    if node is not None:
+        node.forwarded = decision
+    return decision
+
+
 def decided(node: Invocation, reported: Reported[Decision]) -> None:
     node.decided = reported
     found = _decided.get()
@@ -63,14 +74,31 @@ def collecting() -> Generator[list[Invocation]]:
 
 def sources(found: Sequence[Invocation]) -> list[Reported[Decision]]:
     # an escalate reached the root when every invocation above it escalated
-    # too; of those, the innermost are where the escalation came from
+    # too; of those, each that did not pass up one from below it is where an
+    # escalation came from
     reached = [node for node in found if _escalated(node) and _reaches(node)]
-    inner = [
-        node
+    return [
+        node.decided
         for node in reached
-        if not any(node in _ancestors(other) for other in reached)
+        if node.decided is not None
+        and not _forwards(node, node.decided.report, reached)
     ]
-    return [node.decided for node in inner if node.decided is not None]
+
+
+def _forwards(
+    node: Invocation, report: Decision, reached: Sequence[Invocation]
+) -> bool:
+    # a protocol that consulted an escalating child and escalated with a reason
+    # of its own is a source too; one that returned the child's escalation, or
+    # an equal one, is not
+    if node.forwarded is report:
+        return True
+    return any(
+        other.decided is not None
+        and other.decided.report == report
+        and node in _ancestors(other)
+        for other in reached
+    )
 
 
 def _escalated(node: Invocation) -> bool:
