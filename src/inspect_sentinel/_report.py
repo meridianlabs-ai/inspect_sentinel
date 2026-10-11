@@ -155,7 +155,7 @@ class Modify(Decision, frozen=True):
 
     # required here though optional on the base, which every decision carries
     # since hosts read it from any decision
-    modified: ToolCall  # pyright: ignore[reportGeneralTypeIssues]
+    modified: ToolCall = Field()
     """The replacement for the step's subject. Required."""
 
 

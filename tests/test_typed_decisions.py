@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from inspect_ai.tool import ToolCall
@@ -139,6 +139,57 @@ def td_forwards(child: Protocol) -> Protocol:
 
 
 @protocol
+def td_any_action() -> Protocol:
+    async def decide(
+        context: Context, step: BeforeToolCall
+    ) -> Proceed | Reject | Terminate | Modify | Escalate:
+        return Decision.escalate("unsure")
+
+    return decide
+
+
+@protocol
+def td_any_action_or_none() -> Protocol:
+    async def decide(
+        context: Context, step: BeforeToolCall
+    ) -> Proceed | Reject | Terminate | Modify | Escalate | None:
+        return Decision.escalate("unsure")
+
+    return decide
+
+
+@protocol
+def td_rejects() -> Protocol:
+    async def decide(context: Context, step: BeforeToolCall) -> Reject:
+        return Decision.reject("no")
+
+    return decide
+
+
+@protocol
+def td_maybe_proceeds() -> Protocol:
+    async def decide(context: Context, step: BeforeToolCall) -> Proceed | None:
+        return Decision.proceed()
+
+    return decide
+
+
+@protocol
+def td_grouped(mode: str) -> ProtocolGroup:
+    # a group whose one function is a composition another factory configured
+    inner = {"inner": td_escalates()}
+    return ProtocolGroup(
+        sequential(inner) if mode == "sequential" else concurrent(inner)
+    )
+
+
+@protocol
+def td_regrouped() -> ProtocolGroup:
+    # a factory of one's own returning another factory's group
+    return td_grouped("sequential")
+
+
+@protocol
 def td_named_chain() -> Protocol:
     # a composition registered under its own name, checked through its children
     return sequential({"triage": td_escalates(), "llm": _limit()})
@@ -172,6 +223,35 @@ UNHANDLED: list[tuple[str, Callable[[], Sentinels], str]] = [
     ),
     ("a function of a group", lambda: [td_group(), _limit()], "td_group (tool_call)"),
     ("a chain a factory of one's own returns", td_named_chain, "triage (tool_call)"),
+    (
+        "a chain that is a function of a group",
+        lambda: td_grouped("sequential"),
+        "td_grouped/inner (tool_call)",
+    ),
+    (
+        "a concurrent that is a function of a group",
+        lambda: td_grouped("concurrent"),
+        "td_grouped/inner (tool_call)",
+    ),
+    (
+        "a group a factory of one's own returns",
+        td_regrouped,
+        "td_regrouped/inner (tool_call)",
+    ),
+    ("every decision class named", td_any_action, "td_any_action (tool_call)"),
+    (
+        "every decision class named, with None",
+        td_any_action_or_none,
+        "td_any_action_or_none (tool_call)",
+    ),
+    (
+        "beside a chain that may proceed before it rejects",
+        lambda: {
+            "e": td_escalates(),
+            "r": sequential([td_maybe_proceeds(), td_rejects()]),
+        },
+        "e (tool_call)",
+    ),
 ]
 
 
@@ -210,6 +290,14 @@ HANDLED: list[tuple[str, Callable[[], Sentinels]]] = [
     (
         "beside a peer that always outranks it",
         lambda: [td_escalates(), td_terminates()],
+    ),
+    (
+        "beside a chain that always rejects",
+        lambda: {"e": td_escalates(), "r": sequential([td_rejects()])},
+    ),
+    (
+        "a grouped chain before handle_escalation",
+        lambda: sequential([td_grouped("sequential"), handle_escalation("continue")]),
     ),
     (
         "a rule then a concurrent that always decides",
@@ -277,6 +365,49 @@ async def test_a_final_decision_is_not_held_to_the_return_annotation() -> None:
         td_finalizes(), host_context(recorder=recorder), before_step()
     )
     assert decision == Decision.reject("final")
+
+
+@protocol
+def td_copies(route: str) -> Protocol:
+    # decisions derived with model_copy, whose updates are not validated
+    async def decide(context: Context, step: BeforeToolCall) -> Modify | Reject:
+        if route == "drop_replacement":
+            return Modify(modified=step.call).model_copy(update={"modified": None})
+        if route == "change_action":
+            return cast(
+                Reject, Decision.proceed().model_copy(update={"action": "reject"})
+            )
+        return Modify(modified=step.call).model_copy(update={"explanation": "same"})
+
+    return decide
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("route", "match"),
+    [
+        (
+            "drop_replacement",
+            "`modified` must be set exactly when the action is `modify`",
+        ),
+        (
+            "change_action",
+            "A Proceed cannot have action 'reject'; build a Reject instead",
+        ),
+    ],
+)
+async def test_a_copied_decision_is_checked_at_the_boundary(
+    route: str, match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        await run_sentinel(td_copies(route), host_context(), before_step())
+
+
+@pytest.mark.anyio
+async def test_a_valid_copy_decides() -> None:
+    decision = await run_sentinel(td_copies("keep"), host_context(), before_step())
+    assert type(decision) is Modify
+    assert decision.explanation == "same"
 
 
 def test_postponed_annotations_are_resolved() -> None:

@@ -10,7 +10,7 @@ from inspect_ai._util.registry import (
 )
 
 from ._context import validate_instance_name
-from ._decorators import Outcome, outcomes, step_types
+from ._decorators import Declared, Outcome, declared, step_types
 from ._report import DECISION_CLASSES, Decision
 from ._step import AfterToolCall, Step
 from ._types import Group, Sentinel
@@ -19,7 +19,7 @@ from ._types import Group, Sentinel
 def validate_decision_shape(decision: Decision, step: Step) -> None:
     """Check a decision for the deterministic protocol bugs no type can express, raising `ValueError` on one.
 
-    The action must be legal for the stage (`reject` and `modify` are not legal after a tool call), `modified` may be set only on a `modify`, a `modify` may rewrite only the call's arguments (its `id` and `function` must match the step's call), and `message` may be set only on a `reject`.
+    The decision's class must be its action's (`model_copy(update=...)` can change the action without the class), the action must be legal for the stage (`reject` and `modify` are not legal after a tool call), `modified` must be set exactly when the action is `modify`, a `modify` may rewrite only the call's arguments (its `id` and `function` must match the step's call), and `message` may be set only on a `reject`.
 
     Args:
         decision: The decision a layer returned.
@@ -29,9 +29,14 @@ def validate_decision_shape(decision: Decision, step: Step) -> None:
         raise ValueError(
             f"A decision after a tool call cannot {decision.action}; the call has already run."
         )
-    if decision.action != "modify" and decision.modified is not None:
+    if not isinstance(decision, DECISION_CLASSES[decision.action]):
         raise ValueError(
-            "`modified` may be set only on a `modify`; "
+            f"A {type(decision).__name__} cannot have action {decision.action!r}; build a {DECISION_CLASSES[decision.action].__name__} instead. "
+            "`model_copy(update=...)` does not change a decision's class."
+        )
+    if (decision.action == "modify") != (decision.modified is not None):
+        raise ValueError(
+            "`modified` must be set exactly when the action is `modify`; "
             f"got action {decision.action!r} with modified={decision.modified!r}."
         )
     modified = decision.modified
@@ -51,9 +56,9 @@ def validate_decision_shape(decision: Decision, step: Step) -> None:
 
 
 def check_declared(function: object, decision: Decision | None, label: str) -> None:
-    allowed = outcomes(function)
+    allowed = declared(function)
     got: Outcome = None if decision is None else decision.action
-    if got not in allowed:
+    if got not in allowed.outcomes:
         returned = (
             "None, abstaining"
             if got is None
@@ -64,16 +69,16 @@ def check_declared(function: object, decision: Decision | None, label: str) -> N
         )
 
 
-def describe_outcomes(allowed: frozenset[Outcome]) -> str:
-    if set(DECISION_CLASSES) <= allowed:
+def describe_outcomes(allowed: Declared) -> str:
+    if allowed.broad:
         names = ["Decision"]
     else:
         names = [
             cls.__name__
             for action, cls in DECISION_CLASSES.items()
-            if action in allowed
+            if action in allowed.outcomes
         ]
-    if None in allowed:
+    if None in allowed.outcomes:
         names.append("None")
     return " | ".join(names)
 

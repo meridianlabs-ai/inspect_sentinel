@@ -8,8 +8,8 @@ from typing import Any, Literal, NamedTuple, TypeVar, cast, get_args
 
 from inspect_ai._util.registry import registry_info, registry_unqualified_name
 
-from ._decorators import Outcome, members, outcomes
-from ._report import DECISION_CLASSES, Decision, Reported
+from ._decorators import Outcome, declared, members
+from ._report import Decision, Reported
 from ._step import AfterToolCall, BeforeToolCall, Step
 from ._types import Protocol, Sentinel
 
@@ -127,14 +127,23 @@ class _Flow(NamedTuple):
     # (path below the instance, whether its annotation names Escalate) for
     # each escalate that can leave the instance
     escalates: frozenset[tuple[str, bool]]
-    # always returns a decision other than escalate
-    decides: bool
-    # always returns a decision that outranks escalate
-    outranks: bool
+    # what the instance can return at the stage: actions, and None when it
+    # can abstain; it includes escalate exactly when escalates is not empty
+    outcomes: frozenset[Outcome]
+
+    @property
+    def decides(self) -> bool:
+        # always returns a decision other than escalate
+        return None not in self.outcomes and "escalate" not in self.outcomes
+
+    @property
+    def outranks(self) -> bool:
+        # always returns a decision that outranks escalate
+        return self.decides and self.outcomes <= _OUTRANK
 
 
-_NOTHING = _Flow(frozenset(), False, False)
 _OUTRANK: frozenset[Outcome] = frozenset({"terminate", "reject", "modify"})
+_ABSTAINS = _Flow(frozenset(), frozenset({None}))
 _STAGE_NAMES: dict[type[Any], str] = {
     BeforeToolCall: "tool_call",
     AfterToolCall: "tool_result",
@@ -161,59 +170,68 @@ def check_handled(root: Protocol) -> None:
 
 
 def _flow(sentinel: Sentinel, stage: type[Any]) -> _Flow:
-    composition = getattr(sentinel, COMPOSITION_ATTR, None)
+    if registry_info(sentinel).type == "monitor":
+        return _ABSTAINS
+    running = [m for m in members(sentinel) if stage in m.accepted]
+    flows = [("", _function(m.function, stage)) for m in running]
+    # a group's functions combine by the strongest, at the group's own path
+    return flows[0][1] if len(flows) == 1 else _together(flows)
+
+
+def _function(function: object, stage: type[Any]) -> _Flow:
+    composition = getattr(function, COMPOSITION_ATTR, None)
     if composition is not None:
         mode, children = cast(
             tuple[Mode, tuple[tuple[str, Sentinel], ...]], composition
         )
-        return (
-            _in_order(children, stage)
-            if mode == "in_order"
-            else _at_once(children, stage)
-        )
-    if registry_info(sentinel).type == "monitor":
-        return _NOTHING
-    running = [m for m in members(sentinel) if stage in m.accepted]
-    # a group's functions combine as concurrent's children do, at one path
-    return _together([("", _declared(outcomes(m.function))) for m in running])
-
-
-def _declared(declared: frozenset[Outcome]) -> _Flow:
+        if mode == "in_order":
+            return _in_order(children, stage)
+        return _together([(name, _flow(child, stage)) for name, child in children])
+    found = declared(function)
     escalates = (
-        frozenset({("", not set(DECISION_CLASSES) <= declared)})
-        if "escalate" in declared
+        frozenset({("", not found.broad)})
+        if "escalate" in found.outcomes
         else frozenset[tuple[str, bool]]()
     )
-    decides = None not in declared and "escalate" not in declared
-    return _Flow(escalates, decides, decides and declared <= _OUTRANK)
+    return _Flow(escalates, found.outcomes)
 
 
 def _in_order(children: Sequence[tuple[str, Sentinel]], stage: type[Any]) -> _Flow:
-    # the first link that always decides ends the chain, so the links after it
-    # never run and the escalates before it are answered
+    # a link's decision other than escalate ends the chain, so the first link
+    # that always decides answers the escalates before it and the links after
+    # it never run
     escalates: set[tuple[str, bool]] = set()
+    outcomes: set[Outcome] = set()
     for name, child in children:
         flow = _flow(child, stage)
+        outcomes |= flow.outcomes - {"escalate", None}
         if flow.decides:
-            return _Flow(frozenset(), True, False)
+            return _Flow(frozenset(), frozenset(outcomes))
         escalates |= _below(name, flow)
-    return _Flow(frozenset(escalates), False, False)
-
-
-def _at_once(children: Sequence[tuple[str, Sentinel]], stage: type[Any]) -> _Flow:
-    return _together([(name, _flow(child, stage)) for name, child in children])
+    # reaching the end, the chain returns the last escalate, continue when only
+    # monitors took part, or abstains
+    outcomes |= {"continue", None}
+    if escalates:
+        outcomes.add("escalate")
+    return _Flow(frozenset(escalates), frozenset(outcomes))
 
 
 def _together(flows: Sequence[tuple[str, _Flow]]) -> _Flow:
-    # an escalate outranks continue, so it leaves unless a peer always decides
-    # something stronger
+    # the strongest decision wins, so an escalate leaves unless a peer always
+    # decides something stronger; a contested modify becomes a reject
+    if not flows:
+        return _ABSTAINS
+    decided = set[Outcome]().union(*(flow.outcomes for _, flow in flows)) - {None}
+    if "modify" in decided and len(flows) > 1:
+        decided.add("reject")
     if any(flow.outranks for _, flow in flows):
-        return _Flow(frozenset(), True, True)
-    escalates = frozenset[tuple[str, bool]]().union(
+        return _Flow(frozenset(), frozenset(decided & _OUTRANK))
+    escalates = set[tuple[str, bool]]().union(
         *(_below(name, flow) for name, flow in flows)
     )
-    decides = any(flow.decides for _, flow in flows) and not escalates
-    return _Flow(escalates, decides, False)
+    if all(None in flow.outcomes for _, flow in flows):
+        decided.add(None)
+    return _Flow(frozenset(escalates), frozenset(decided))
 
 
 def _below(name: str, flow: _Flow) -> set[tuple[str, bool]]:

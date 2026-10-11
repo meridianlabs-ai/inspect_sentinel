@@ -52,6 +52,15 @@ STEP_TYPES_ATTR = "__sentinel_step_types__"
 # None when it can abstain
 OUTCOMES_ATTR = "__sentinel_outcomes__"
 Outcome = Action | None
+
+
+class Declared(NamedTuple):
+    outcomes: frozenset[Outcome]
+    # the annotation names Decision itself, which may decide anything, rather
+    # than decision classes
+    broad: bool
+
+
 # the function a configured function guards, so configuring it again guards the
 # original rather than the guard
 _GUARDED_ATTR = "__sentinel_guarded__"
@@ -335,8 +344,8 @@ def _configure(function: object, kind: RegistryType, report_type: type[Report]) 
     return guarded
 
 
-def outcomes(function: object) -> frozenset[Outcome]:
-    return cast(frozenset[Outcome], getattr(function, OUTCOMES_ATTR))
+def declared(function: object) -> Declared:
+    return cast(Declared, getattr(function, OUTCOMES_ATTR))
 
 
 def _carry_over(configured: object, fresh: object, *own: str) -> None:
@@ -390,7 +399,7 @@ def _validate_signature(
     instance: Callable[..., Any],
     kind: RegistryType,
     report_type: type[Report],
-) -> tuple[frozenset[type[Any]], frozenset[Outcome]]:
+) -> tuple[frozenset[type[Any]], Declared]:
     name = getattr(instance, "__name__", repr(instance))
     if not inspect.isfunction(instance) or not inspect.iscoroutinefunction(instance):
         raise TypeError(
@@ -444,18 +453,21 @@ def _validate_signature(
             raise TypeError(
                 f"A monitor must be annotated to return {_RETURNS[kind]}; {name} returns {returned!r}."
             )
-        return frozenset(members), frozenset()
+        return frozenset(members), Declared(frozenset(), False)
     found: set[Outcome] = set()
+    broad = False
     for member in return_members:
         if member is type(None):
             found.add(None)
         elif isinstance(member, type) and issubclass(member, Decision):
-            found |= _actions(member)
+            actions = _actions(member)
+            broad = broad or actions is None
+            found |= set(DECISION_CLASSES) if actions is None else actions
         else:
             raise TypeError(
                 f"A protocol must be annotated to return {_RETURNS[kind]}; {name} returns {returned!r}."
             )
-    return frozenset(members), frozenset(found)
+    return frozenset(members), Declared(frozenset(found), broad)
 
 
 _RETURNS: dict[RegistryType, str] = {
@@ -464,9 +476,9 @@ _RETURNS: dict[RegistryType, str] = {
 }
 
 
-def _actions(decision: type[Decision]) -> set[Outcome]:
+def _actions(decision: type[Decision]) -> set[Outcome] | None:
     for action, cls in DECISION_CLASSES.items():
         if issubclass(decision, cls):
             return {action}
-    # Decision itself, or a subclass of it that is not one action's
-    return set(DECISION_CLASSES)
+    # Decision itself, or a subclass of it that is not one action's: any action
+    return None
