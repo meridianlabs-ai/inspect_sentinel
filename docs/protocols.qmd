@@ -29,6 +29,8 @@ How to write a protocol: a `@protocol` factory returning a function that returns
 
 ## Declaring What a Protocol Decides
 
+A monitor makes an `Observation`; a protocol makes a `Decision`. A `Decision` is either a `Verdict`, one of `Proceed`, `Reject`, `Terminate` and `Modify`, or an `Escalate`: `Decision = Verdict | Escalate`. `Verdict` is a type alias, for annotations and `isinstance()`, not a class to build. Build a decision with `Decision.proceed()`, `Decision.reject()`, `Decision.terminate()` or `Decision.escalate()`, or with `Modify(modified=...)`.
+
 Each action has its own decision class: `Proceed` (action `continue`), `Reject`, `Terminate`, `Modify` and `Escalate`, all subclasses of `Decision`. Decisions are frozen, and `Decision` is their base and is not built itself: `Decision.proceed()`, `Decision.reject()`, `Decision.terminate()` and `Decision.escalate()` return a `Proceed`, `Reject`, `Terminate` and `Escalate`, and a modify is `Modify(modified=...)`. The logged `action` is the same as before. A protocol function's return annotation says what it can decide, as a union of those classes, with `None` if it can abstain, and its factory is annotated `-> Protocol[...]` with the same union, so the instances it returns carry that type:
 
 ```python

@@ -85,6 +85,8 @@ class _Origin:
 class Decision(BaseModel, frozen=True):
     """What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to `decide_final()`.
 
+    A monitor makes an `Observation`; a protocol makes a `Decision`. A `Decision` is either a `Verdict`, one of `Proceed`, `Reject`, `Terminate` and `Modify`, or an `Escalate`: `Decision = Verdict | Escalate`. `Verdict` is a type alias, for annotations and `isinstance()`, not a class to build.
+
     The base of one class per action, `Proceed`, `Reject`, `Terminate`, `Modify` and `Escalate`, and not built itself: build a decision with one of those classes, or with `Decision.proceed()`, `Decision.reject()`, `Decision.terminate()` or `Decision.escalate()`, which return them (a modify is built as `Modify(modified=...)`). A protocol function declares what it decides with a union of the classes, such as `-> Reject | Proceed | None`; annotating it `-> Decision` means it may decide anything. Decisions are frozen; derive one from another with `model_copy(update=...)`.
     """
 
@@ -193,7 +195,7 @@ class Escalate(Decision, frozen=True):
 
 
 Verdict: TypeAlias = Proceed | Reject | Terminate | Modify
-"""Every decision but `Escalate`: what a protocol that always decides returns, and what `run_sentinel` returns for a step."""
+"""Every decision but `Escalate`: what a protocol that always decides returns, and what `run_sentinel` returns for a step. `Decision = Verdict | Escalate`. A type alias, for annotations and `isinstance()`, not a class to build."""
 
 DECISION_CLASSES: dict[Action, type[Decision]] = {
     "continue": Proceed,

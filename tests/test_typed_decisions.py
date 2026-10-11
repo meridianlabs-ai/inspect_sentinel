@@ -1,4 +1,5 @@
-from collections.abc import Callable
+from collections import OrderedDict, UserList
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 import pytest
@@ -11,6 +12,7 @@ from inspect_sentinel import (
     Proceed,
     Reject,
     Terminate,
+    Verdict,
     concurrent,
     handle_escalation,
     human,
@@ -57,6 +59,17 @@ def test_each_action_has_a_class_that_logs_its_action(
     assert dumped["action"] == action
     assert cls.model_validate_json(built.model_dump_json()) == built
     assert type(Holder.model_validate({"decision": dumped}).decision) is cls
+
+
+def test_a_verdict_is_every_decision_but_escalate() -> None:
+    verdicts = [
+        Decision.proceed(),
+        Decision.reject(),
+        Decision.terminate(),
+        Modify(modified=CALL),
+    ]
+    assert all(isinstance(d, Verdict) for d in verdicts)
+    assert not isinstance(Decision.escalate(), Verdict)
 
 
 def test_the_base_class_is_not_built() -> None:
@@ -503,24 +516,77 @@ def td_escalates_everywhere() -> Protocol:
     return decide
 
 
+@protocol
+def td_group_before() -> ProtocolGroup:
+    async def first(context: Context, step: BeforeToolCall) -> Proceed | None:
+        return Decision.proceed()
+
+    return ProtocolGroup(first)
+
+
+def _container(kind: str, first: object) -> Any:
+    if kind == "list":
+        return [first]
+    if kind == "user_list":
+        return UserList[object]([first])
+    if kind == "dict":
+        return {"a": first}
+    return OrderedDict[str, object](a=first)
+
+
+def _add(container: Any, late: object) -> None:
+    if isinstance(container, Mapping):
+        cast(dict[str, object], container)["late"] = late
+    else:
+        cast(list[object], container).append(late)
+
+
 @pytest.mark.anyio
+@pytest.mark.parametrize("first", [td_maybe_proceeds, td_group_before])
 @pytest.mark.parametrize("compose", [concurrent, sequential])
-@pytest.mark.parametrize("container", ["list", "mapping"])
+@pytest.mark.parametrize("kind", ["list", "user_list", "dict", "ordered_dict"])
 async def test_a_composition_keeps_the_children_it_was_built_with(
-    container: str, compose: Callable[[Any], Protocol]
+    kind: str, compose: Callable[[Any], Protocol], first: Callable[[], Any]
 ) -> None:
-    # a caller changing its own list or mapping afterwards changes neither what
-    # runs nor what was checked and recorded
-    children: Any = (
-        [td_maybe_proceeds()] if container == "list" else {"a": td_maybe_proceeds()}
-    )
+    # a caller changing its own container afterwards changes neither what runs
+    # nor what was checked and recorded
+    children = _container(kind, first())
     root = sequential([compose(children)], then=human(stages=["tool_call"]))
     recorded = config_from_sentinel(root)
-    if container == "list":
-        children.append(td_escalates_everywhere())
-    else:
-        children["late"] = td_escalates_everywhere()
-    built = resolve_sentinel(root)
-    decision = await run_sentinel(built, host_context(), after_step())
+    _add(children, td_escalates_everywhere())
+    decision = await run_sentinel(resolve_sentinel(root), host_context(), after_step())
     assert decision == Decision.proceed()
     assert config_from_sentinel(root) == recorded
+
+
+@monitor
+def td_alarm() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(0.99)
+
+    return check
+
+
+def _thresholded(monitors: Any) -> Protocol:
+    return threshold(monitors, reject_at=0.5)
+
+
+def _observed(monitors: Any) -> Protocol:
+    return observe_only(monitors)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("build", [_thresholded, _observed])
+@pytest.mark.parametrize("kind", ["list", "user_list", "dict", "ordered_dict"])
+async def test_a_monitor_added_later_is_not_run(
+    kind: str, build: Callable[[Any], Protocol]
+) -> None:
+    monitors = _container(kind, td_score(0.1))
+    recorder = ListRecorder()
+    built = build(monitors)
+    _add(monitors, td_alarm())
+    decision = await run_sentinel(built, host_context(recorder=recorder), before_step())
+    assert decision == Decision.proceed()
+    assert [r.reported.name for r in recorder.records if r.reported.path] == [
+        "a" if kind in ("dict", "ordered_dict") else "td_score"
+    ]

@@ -36,6 +36,8 @@ def threshold(
         terminate_at: Suspicion at or above which the sample is ended, in the same form; `None` never terminates. Where it and `reject_at` both cover a score, it must be above `reject_at`.
     """
     named = named_children(monitors, "monitor")
+    # run what was checked and recorded, not the caller's container as it is later
+    snapshot = cast(dict[str, Monitor | MonitorGroup], dict(named))
     if not named:
         raise ValueError("threshold needs at least one child.")
     names = {name for name, _ in named}
@@ -66,7 +68,7 @@ def threshold(
     async def decide(
         context: Context, step: BeforeToolCall
     ) -> Terminate | Reject | Proceed | None:
-        observations = await run_monitors(monitors, context, step)
+        observations = await run_monitors(snapshot, context, step)
         if not observations:
             return None
         if terminates is not None:
