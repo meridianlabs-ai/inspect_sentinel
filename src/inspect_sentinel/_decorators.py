@@ -303,7 +303,12 @@ def _register(
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> object:
         if portable:
             check_portable(factory, kind, registered_name)
-        returned = factory(*args, **kwargs)
+        # an instance keeps its own copy of a list or dict of sentinels, so a
+        # caller changing theirs later changes neither what runs nor what was
+        # checked and recorded
+        owned_args = tuple(_owned(arg) for arg in args)
+        owned_kwargs = {key: _owned(value) for key, value in kwargs.items()}
+        returned = cast(Callable[..., object], factory)(*owned_args, **owned_kwargs)
         instance: object
         if isinstance(returned, Group):
             if not isinstance(returned, group_type):
@@ -327,11 +332,32 @@ def _register(
             instance = _configure(returned, kind, report_type)
             accepted = step_types(cast(Sentinel, instance))
         setattr(instance, STEP_TYPES_ATTR, accepted)
-        registry_tag(factory, instance, info.model_copy(deep=True), *args, **kwargs)
+        registry_tag(
+            factory, instance, info.model_copy(deep=True), *owned_args, **owned_kwargs
+        )
         return instance
 
     registry_add(wrapper, info)
     return wrapper
+
+
+def _owned(value: object) -> object:
+    # only a list or dict of configured monitors and protocols, which is what a
+    # composition checks and records; any other argument is the caller's
+    kind = type(value)
+    if kind is list:
+        items = cast(list[object], value)
+        if items and all(_configured(item) for item in items):
+            return list(items)
+    elif kind is dict:
+        mapping = cast(dict[object, object], value)
+        if mapping and all(_configured(item) for item in mapping.values()):
+            return dict(mapping)
+    return value
+
+
+def _configured(value: object) -> bool:
+    return hasattr(value, STEP_TYPES_ATTR)
 
 
 def _configure(function: object, kind: RegistryType, report_type: type[Report]) -> Any:

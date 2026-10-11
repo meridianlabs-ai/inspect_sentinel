@@ -21,7 +21,12 @@ from inspect_sentinel import (
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._final import decide_final
-from inspect_sentinel._integration import Sentinels, resolve_sentinel, run_sentinel
+from inspect_sentinel._integration import (
+    Sentinels,
+    config_from_sentinel,
+    resolve_sentinel,
+    run_sentinel,
+)
 from inspect_sentinel._report import Action, Decision, Observation
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup
@@ -488,3 +493,34 @@ async def test_a_contested_modify_becomes_a_reject() -> None:
     )
     assert type(decision) is Reject
     assert decision.modified is None
+
+
+@protocol
+def td_escalates_everywhere() -> Protocol:
+    async def decide(context: Context, step: Step) -> Escalate:
+        return Decision.escalate("late")
+
+    return decide
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("compose", [concurrent, sequential])
+@pytest.mark.parametrize("container", ["list", "mapping"])
+async def test_a_composition_keeps_the_children_it_was_built_with(
+    container: str, compose: Callable[[Any], Protocol]
+) -> None:
+    # a caller changing its own list or mapping afterwards changes neither what
+    # runs nor what was checked and recorded
+    children: Any = (
+        [td_maybe_proceeds()] if container == "list" else {"a": td_maybe_proceeds()}
+    )
+    root = sequential([compose(children)], then=human(stages=["tool_call"]))
+    recorded = config_from_sentinel(root)
+    if container == "list":
+        children.append(td_escalates_everywhere())
+    else:
+        children["late"] = td_escalates_everywhere()
+    built = resolve_sentinel(root)
+    decision = await run_sentinel(built, host_context(), after_step())
+    assert decision == Decision.proceed()
+    assert config_from_sentinel(root) == recorded

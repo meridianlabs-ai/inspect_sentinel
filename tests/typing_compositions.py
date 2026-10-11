@@ -9,6 +9,7 @@ from inspect_sentinel import (
     Context,
     Decision,
     Escalate,
+    Modify,
     Monitor,
     Observation,
     Proceed,
@@ -89,6 +90,20 @@ assert_type(
 )
 assert_type(sequential([triage()]), Protocol[Reject | Escalate | Proceed | None])
 assert_type(concurrent([score()]), Protocol[None])
+
+
+@protocol
+def edits() -> Protocol[Modify | Proceed]:
+    async def decide(context: Context, step: BeforeToolCall) -> Modify | Proceed:
+        return Decision.proceed()
+
+    return decide
+
+
+# a contested modify becomes a reject, and a concurrent abstains where none of
+# its protocols decides, so both are in its type
+assert_type(concurrent([edits()]), Protocol[Modify | Proceed | Reject | None])
+contested: Protocol[Modify | Proceed] = concurrent([edits(), edits()])  # pyright: ignore[reportAssignmentType]
 
 # then= ends a chain with a protocol that always decides; a chain ending in one
 # can abstain where nothing in it runs, so it is not a then itself
