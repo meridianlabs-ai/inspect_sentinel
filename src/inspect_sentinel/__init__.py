@@ -8,7 +8,14 @@ from ._decorators import monitor, protocol
 from ._final import decide_final
 from ._host import Host, HumanAnswer
 from ._portable import PortabilityError
-from ._protocols import concurrent, human, observe_only, sequential, threshold
+from ._protocols import (
+    concurrent,
+    handle_escalation,
+    human,
+    observe_only,
+    sequential,
+    threshold,
+)
 from ._report import (
     Action,
     Decision,
@@ -76,6 +83,7 @@ __all__ = [
     "concurrent",
     "decide_final",
     "find_words",
+    "handle_escalation",
     "human",
     "monitor",
     "observe_only",

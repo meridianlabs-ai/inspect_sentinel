@@ -30,6 +30,7 @@ from ._types import (
     SentinelFunction,
     Sentinels,
 )
+from ._unhandled import collecting, decided, invocation, running, sources, unhandled
 from ._validate import check_child, named_children, validate_shape
 
 if sys.version_info < (3, 11):
@@ -117,7 +118,7 @@ async def run_sentinel(
 
     The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its full registry name is the `factory` its records carry. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 
-    An `escalate` is returned like any other decision, though at the root there is nobody to hand it to; the host decides what an unresolved escalate means.
+    An `escalate` from the root, nobody being left to hand it to, is an unhandled escalation: it is recorded as the root's decision, and `run_sentinel` returns a `terminate` in its place, explained as `unhandled escalation from attempt/triage: <reason>` for each escalation that reached the root, with how to handle it, and carrying their references. The host never receives an `escalate`, and applies the `terminate` as it would a protocol's own; the root's recorded `escalate` is what tells the two apart in the log.
 
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.
@@ -129,7 +130,10 @@ async def run_sentinel(
             "The root is one protocol function, as resolve_sentinel returns it; a group of functions cannot be the root."
         )
     found: list[Reported[Decision]] = []
-    with running_step(host_context.recorder, host_context.store):
+    with (
+        collecting() as invocations,
+        running_step(host_context.recorder, host_context.store),
+    ):
         try:
             await _run_child(
                 protocol,
@@ -150,8 +154,14 @@ async def run_sentinel(
                 ) from ex
             recorder, factory = layer(origin.context, "The runner")
             recorder.record(origin.context, factory, origin.step, origin.reported)
+            if ex.decision.action == "escalate":
+                return unhandled([origin.reported])
             return ex.decision
-    return found[0].report if found else None
+    if not found:
+        return None
+    if found[0].report.action == "escalate":
+        return unhandled(sources(invocations))
+    return found[0].report
 
 
 async def run_monitors(
@@ -359,8 +369,10 @@ async def _run_member(
     report: Report | None = None
     finals: list[Final] = []
     failure: BaseException | None = None
+    node = invocation()
     try:
-        report = await invoke(function, child_context, step)
+        with running(node):
+            report = await invoke(function, child_context, step)
     except Final as ex:
         finals = [ex]
     except BaseExceptionGroup as ex:
@@ -412,6 +424,8 @@ async def _run_member(
         function=function.__name__,
     )
     recorder.record(child_context, factory, step, reported)
+    if isinstance(report, Decision):
+        decided(node, cast(Reported[Decision], reported))
     return reported
 
 

@@ -39,7 +39,7 @@ Here `triage()` rejects what is clearly bad, escalates what it is unsure about, 
 - **Abstaining passes the step on.** A child that returns `None` has not decided, so the next child runs. A rule ahead of a `human()` should return `Decision.proceed()` for the calls it is content with, or the person is asked about them too.
 - **Monitors fall through.** A monitor in the chain is recorded and the next child runs, since an observation is not a decision.
 - **Children watch their own stages.** A child that does not watch the current stage is skipped, as everywhere else.
-- **When nobody decides.** If every child that decided escalated, the chain returns the last escalate, passing it up to the layer above. If only monitors reported it returns `continue`, and if no child took part it abstains.
+- **When nobody decides.** If every child that decided escalated, the chain returns the last escalate, passing it up to the layer above. If only monitors reported it returns `continue`, and if no child took part it abstains. An escalate that reaches the top of the sentinel ends the sample as an unhandled escalation, so end a chain that can escalate with `human()` or with `handle_escalation("terminate")` or `handle_escalation("continue")`; see [Unhandled Escalations](final-decisions.qmd#unhandled-escalations).
 - **Final decisions.** A child that calls `decide_final()` ends the step as usual; the chain and every layer above it are recorded as bypassed.
 
 Each child is recorded under its instance name below the chain's path: `attempt/network_rule` for a chain configured under the name `attempt`. In YAML the children go under `children:`:
