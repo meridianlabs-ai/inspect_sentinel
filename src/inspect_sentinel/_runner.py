@@ -41,7 +41,15 @@ from ._types import (
     SentinelFunction,
     Sentinels,
 )
-from ._unhandled import collecting, decided, invocation, running, sources, unhandled
+from ._unhandled import (
+    collecting,
+    decided,
+    invocation,
+    running,
+    sources,
+    stamped,
+    unhandled,
+)
 from ._validate import check_child, check_declared, named_children, validate_shape
 
 if sys.version_info < (3, 11):
@@ -129,7 +137,7 @@ async def run_sentinel(
 
     The root is recorded at the empty path under its registry name without the package prefix, so its children's paths are bare, and its full registry name is the `factory` its records carry. Its decision is shape-checked and recorded like any layer's; a `decide_final()` from below records the root as bypassed, and its decision is recorded here, the one time it is recorded, and returned, so the caller need not catch `Final`.
 
-    An `escalate` from the root, nobody being left to hand it to, is an unhandled escalation: it is recorded as the root's decision, and `run_sentinel` returns a `terminate` in its place, explained as `unhandled escalation from attempt/triage: <reason>` for each escalation that reached the root, with how to handle it, and carrying their references. The host never receives an `escalate`, and applies the `terminate` as it would a protocol's own; the root's recorded `escalate` is what tells the two apart in the log. A root that abstains returns `Proceed`, so the outcome is always a decision and never `escalate`: its type is `NotEscalate`.
+    An `escalate` from the root, nobody being left to hand it to, is an unhandled escalation: it is recorded as the root's decision, and `run_sentinel` returns a `terminate` in its place, explained as `unhandled escalation from attempt/triage: <reason>` for each escalation that reached the root, with how to handle it, and carrying their references. A protocol that returned a decision one of its children returned, as is or changed with `model_copy()` as `concurrent` adds its vote summary, passed it up and is not named again; one that returned a decision it built itself, even one equal to a child's, is named after the child, with its own references, and a reference carried by more than one escalation is listed once. The host never receives an `escalate`, and applies the `terminate` as it would a protocol's own; the root's recorded `escalate` is what tells the two apart in the log. A root that abstains returns `Proceed`, so the outcome is always a decision and never `escalate`: its type is `NotEscalate`.
 
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.
@@ -439,6 +447,7 @@ async def _run_member(
         return None
     if isinstance(report, Decision):
         validate_shape(report, step, label)
+        report = cast(R, stamped(report, node))
     reported = Reported(
         name=child_name,
         path=child_context.path,
