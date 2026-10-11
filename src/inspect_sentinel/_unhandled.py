@@ -5,6 +5,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 
+from inspect_ai.core import Reference
+
 from ._report import Decision, Reported
 
 
@@ -127,7 +129,11 @@ def unhandled(escalations: Sequence[Reported[Decision]]) -> Decision:
         else e.path or e.name
         for e in escalations
     )
+    # a parent that escalates on its own may carry its child's references up
+    references: list[Reference] = []
+    for e in escalations:
+        references.extend(r for r in e.report.references if r not in references)
     return Decision.terminate(
         f"unhandled escalation from {named}. To say what an escalation means, end the configuration with human() or handle_escalation('terminate' | 'continue') in a sequential().",
-        references=[r for e in escalations for r in e.report.references],
+        references=references,
     )

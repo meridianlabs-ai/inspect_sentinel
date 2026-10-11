@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from typing import Literal
 
 import anyio
 import pytest
@@ -183,7 +184,7 @@ async def test_the_functions_of_a_group_are_told_apart(
 
 
 @protocol
-def ue_consults(returns: str) -> Protocol:
+def ue_consults(returns: Literal["forwarded", "copied", "carried", "own"]) -> Protocol:
     # consults an escalating child, then passes its escalation up or escalates
     # with a reason of its own
     configured = ue_child()
@@ -195,10 +196,9 @@ def ue_consults(returns: str) -> Protocol:
             return child
         if returns == "copied":
             return Decision.escalate(child.explanation, references=child.references)
-        return Decision.escalate(
-            "parent reason",
-            references=[Reference(type="message", id="p", cite="[parent]")],
-        )
+        own = Reference(type="message", id="p", cite="[parent]")
+        carried = child.references if returns == "carried" else []
+        return Decision.escalate("parent reason", references=[*carried, own])
 
     return run
 
@@ -211,6 +211,11 @@ def ue_consults(returns: str) -> Protocol:
         ("forwarded", "parent/child: child reason", ["[child]"]),
         ("copied", "parent/child: child reason", ["[child]"]),
         (
+            "carried",
+            "parent/child: child reason; parent: parent reason",
+            ["[child]", "[parent]"],
+        ),
+        (
             "own",
             "parent/child: child reason; parent: parent reason",
             ["[child]", "[parent]"],
@@ -218,7 +223,10 @@ def ue_consults(returns: str) -> Protocol:
     ],
 )
 async def test_a_parent_is_named_when_it_escalates_with_its_own_reason(
-    returns: str, named: str, cites: list[str], step: Step
+    returns: Literal["forwarded", "copied", "carried", "own"],
+    named: str,
+    cites: list[str],
+    step: Step,
 ) -> None:
     decision = await run_sentinel(
         resolve_sentinel({"parent": ue_consults(returns)}), host_context(), step
