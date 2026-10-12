@@ -8,7 +8,7 @@ Status: landing (inspect_ai #5811, sentinel #42). Monitors observe both generate
 
 | # | Decision | Recommendation |
 |---|---|---|
-| 1 | How an agent generate is identified | **Revised 2026-10-12:** a call made by an agent loop: inside an agent span (`react`, `handoff()`, `as_tool()`, `deepagent`, the bridges), or on the sample's active model during the solver phase (the `generate()` solver and custom solvers), and in either case not inside a tool's own body, a sentinel run, a compaction or a scorer. Coverage then matches the tool stages, which already check every agent's tool calls. Requires every agent loop to open an agent span consistently (tested per loop). |
+| 1 | How an agent generate is identified | **Revised 2026-10-12 (phase fence plus deny list):** any model call while the sample runs its solvers, except inside a tool's own body (unless an agent the tool runs opens its own span), a sentinel run, a compaction summary or `score()` from a solver. Sample init and scoring are outside the fence. Coverage then matches the tool stages, which already check every agent's tool calls. A solver's direct helper call to another model is now checked. |
 | 2 | Sub-agents and role models that are not the active model | **Revised 2026-10-12:** checked, by decision 1's agent-loop rule, whatever model they use. Reason: their tool calls are already checked at the tool stages, so leaving their turns unchecked was inconsistent and let an agent hand risky work to a sub-agent on another model. Helper calls stay out through the tool-body rule. The agent instance record (`step.agent`) and per-instance store remain later work ([sub-agents.md](sub-agents.md), #66). |
 | 3 | Compaction summary calls | **Decided 2026-10-12:** not checked. The summary reaches the next `BeforeGenerate` as part of `input`. |
 | 4 | Where the hook sits | **Decided 2026-10-10.** In `Model.generate`, once per call, outside the connection slot; the input preparation moves ahead of the slot so the step sees what is sent ([b](#b-where-the-hook-sits)). Built. |
@@ -36,43 +36,46 @@ Decided before this design: the generate stages check the agent's own model call
 - **B. Agent loops opt in.** `react`, `generate()`, `generate_loop` and `bridge_generate` call a sentinel-aware generate. Exact about turns, but a custom agent or solver calling `model.generate` is never checked unless it adopts a new public API, and every loop must remember to.
 - **C. Any generate in an agent context.** Hook `Model.generate` and check every call made in the solver phase outside a tool body, whatever the model. Covers sub-agents and role models, but also a solver's helper calls to a classifier or a critique model, which are not agent actions.
 
-**Decided (decisions 1 and 2, revised 2026-10-12): A and C combined.** A call inside an agent span is an agent's turn whatever its model, since a sub-agent's tool calls are already checked and its model calls should be too; outside any agent span, A's active-model rule applies, so custom solvers stay covered. A was the earlier recommendation, with other-model sub-agents and role models left unchecked; that scope is superseded.
+**Decided (decisions 1 and 2, revised 2026-10-12): C, fenced to the solvers.** A model call during the solvers is an agent's turn whatever its model, since a sub-agent's tool calls are already checked and its model calls should be too; the exclusions are a deny list of scopes (tool bodies, sentinel runs, compaction, `score()`). The earlier rules, A (active model only) and then agent spans on any model plus the active model elsewhere, are superseded; the second was replaced after a review found it checked an `on_sample_init` agent's helper.
 
 ### The rule
 
-A generate is the agent's when all of these hold:
+Decided 2026-10-12 ("phase fence plus deny list"), after a review found that an `on_sample_init` agent's `as_tool()` helper was checked under the earlier scope rule. A generate is the agent's when all of these hold:
 
 1. a sentinel is configured for the task and some function in it watches a generate stage;
-2. the sample is running its solvers: inspect_ai sets a context variable around `plan(state, generate)`, so init and scoring (the `scorers` span, and `inspect score`) are outside. A task's `setup` solvers are part of the plan and are inside; `score()` called from a solver runs its scorers outside;
-3. the call is inside an agent span (`react` as a solver, `run()`, `handoff()`, `as_tool()`, deepagent sub-agents, the bridges), on any model; or, outside every agent span, the model is the active model;
-4. the call is not made inside a sentinel run: the dispatcher sets a context variable around `run_sentinel`, which covers `Host.generate` and a monitor that calls `get_model()` itself;
-5. the call is not a compaction summary: the summary strategy sets the same variable;
-6. the call is not made from a tool's own body: `call_tool`, and the sandbox bridge service for a host tool, record the current agent span when a tool starts, and a generate in that same agent span is the tool's. An agent started inside the tool (`as_tool()`) opens its own agent span, so its calls are the agent's again.
+2. the sample is running its solvers (the phase fence): inspect_ai sets it around `plan(state, generate)`, and nothing nested can change it, so sample init (including `on_sample_init` hooks) and scoring (the scoring phase and `inspect score`) are outside. A task's `setup` solvers are part of the plan and are inside;
+3. the call is not in a denied scope, innermost first:
+   - a tool's own body (`call_tool`, and the sandbox bridge service for a host tool) denies; an agent started inside the tool (`as_tool()`) opens an agent span, which allows again;
+   - a sentinel run (`Host.generate` and a monitor calling `get_model()` itself), a compaction summary and `score()` called from a solver deny finally: nothing inside them, an agent span included, allows again.
 
-**Mechanism.** inspect_ai keeps the rule in one context, `sentinel_scope(AgentScope, final=)`, read by `Model.generate`. The solvers set `ACTIVE_MODEL`; an agent span sets `ANY_MODEL` (only inside a scope, so an agent run during sample init or scoring stays unchecked); a tool body sets `OFF`, which a nested agent span turns back on; a sentinel run, a compaction summary and a scorer set `OFF` as final, which nothing inside can turn back on, so an agent a monitor or scorer runs is not checked. Innermost wins otherwise. The scope is internal for now; a public marker for helper calls is a later decision.
+Any model counts: inside the solvers, outside a denied scope, a call is the agent's whatever model it uses.
+
+**Mechanism.** inspect_ai keeps two context variables, read by `Model.generate`: the fence (true only around the solvers), and `sentinel_scope(AgentScope.ON | OFF, final=)`, which defaults to `ON`. A tool body sets `OFF`; an agent span sets `ON` where `span(type="agent")` opens, so no adapter can forget it; a sentinel run, a compaction summary and `score()` from a solver set `OFF` as final. The innermost scope wins, except that nothing inside a final scope changes it. Both are internal for now; a public marker for helper calls is a later decision.
+
+**Behaviour change (accepted 2026-10-12).** A custom solver's direct call to another model, outside a tool (a critique or classifier helper), is now checked. Before, outside an agent span only the active model's calls were.
 
 ### What is in and out
 
 | Caller | Checked | Why |
 |---|---|---|
-| `generate()` solver, `generate_loop` | yes | active model, outside any agent span |
-| `react()` as the solver, `basic_agent()` | yes | `react` runs in its agent span; `basic_agent` on the active model |
+| `generate()` solver, `generate_loop` | yes | inside the solvers |
+| `react()` as the solver, `basic_agent()` | yes | inside the solvers |
 | `handoff()`, `run()`, deepagent sub-agents, on any model | yes | each opens an agent span; its steps carry the sub-agent's conversation id |
-| an agent whose model is a role (`get_model(role="untrusted")`) | yes | inside its agent span (rule 3) |
-| `as_tool()` agent | yes | its agent span differs from the tool's |
+| an agent whose model is a role (`get_model(role="untrusted")`) | yes | any model counts |
+| `as_tool()` agent | yes | its agent span allows again inside the tool body |
 | bridged agents (`agent_bridge()`, `sandbox_agent_bridge()`) | yes | the bridge's model calls run inside the solver's agent span; tested in process, and the sandbox host-tool exclusion is tested through the service's `call_tool` handler; the sandbox transport itself is untested |
-| a custom solver calling `get_model().generate()` outside any agent span | yes | active model; includes helper calls such as `self_critique()` with no critique model |
-| a custom solver's call to another model outside any agent span | no | rule 3 |
-| a model-graded tool calling `get_model()`, natively or as a sandbox bridge host tool | no | rule 6 |
-| scorers, `model_graded_qa()`, including `score()` called from a solver | no | rule 2; `score()` from a solver also runs in a `scorer` span |
+| a custom solver calling `get_model().generate()` | yes | inside the solvers; includes helper calls such as `self_critique()` |
+| a custom solver's call to another model, outside a tool | yes | any model counts (behaviour change, above) |
+| a model-graded tool calling `get_model()`, natively or as a sandbox bridge host tool | no | a tool body denies |
+| scorers, `model_graded_qa()`, including `score()` called from a solver | no | the scoring phase is outside the fence; `score()` from a solver denies finally (and runs in a `scorer` span) |
 | a task's `setup` solvers calling the active model | yes | they are part of the plan |
-| `Host.generate`, monitor model calls | no | rule 4 |
-| compaction summaries | no | rule 5 (in a `compaction` span); decision 3 |
+| `Host.generate`, monitor model calls, an agent a monitor runs | no | a sentinel run denies finally |
+| compaction summaries | no | denied finally (in a `compaction` span); decision 3 |
 | a bridge filter that returns a `ModelOutput` itself | no | no `Model.generate` call; a gap to close with the bridge hook (workstream 5) |
 | a tool an in-process bridged scaffold runs itself, calling inspect's model | yes | inspect never sees the tool start, so its calls look like the agent's |
 | MCP sampling (`get_model().generate()` from an MCP server callback) | depends | runs in the MCP session's context; unverified |
 
-Identity has one fragility, outside agent spans only: a solver given the agent model's *name* rather than `None` is checked only if `get_model()` returns the memoized active instance, which depends on the name, role, config, base URL and model args matching how the eval created it. Comparing by qualified name and an unset role would be more predictable; the dispatcher keeps identity, the existing precedent.
+An agent run during sample init, such as from an `on_sample_init` hook, is not checked, however it is built: the fence is closed there.
 
 ## b. Where the hook sits {#b-where-the-hook-sits}
 
