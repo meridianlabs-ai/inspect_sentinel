@@ -200,7 +200,7 @@ Everything in `step` except `conversation` and `escalations` was written or shap
 
 `escalations` is filled only inside a `sequential()`: when an earlier link returns `escalate`, its report is handed to the next link here, so a human at the end sees who is asking and why. It is empty everywhere else. The reports are written by protocols, but their explanations may quote agent text, so label them as prior verdicts if you render them into a prompt.
 
-`input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
+`input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. At the tool stages `input` is `None` when no model call produced the call or the event that recorded it is no longer available (inspect_ai finds it through the transcript's bounded-memory history); it is never approximated from `history`. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
 
 `BeforeToolCall` and `AfterToolCall` are the `Approver` and `Reviewer` payloads with the same fields. `view` and `output` are optional under a proxy, which has no registered tool definitions to render a view from.
 
@@ -511,7 +511,7 @@ Which surfaces exist where:
 | Exact model input (`step.input`) | yes | yes, the request | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
 | Full history, pre-compaction turns included (`step.history`) | yes | keyed store; else equals `input` | yes | evidence |
 | Reasoning | provider-dependent | whatever the wire carries | as logged | evidence |
-| System prompt, as the model saw it (`step.input[0]`) | yes | yes, but written by the scaffold under observation | from events only | evidence |
+| System prompt, as the model saw it (`step.input[0]` when present) | yes | yes, but written by the scaffold under observation | from events only | evidence |
 | Tool definitions, config | yes | yes | from events only | evidence |
 | Media | yes | yes | yes | evidence |
 | `target` | yes | never | yes | instruction |
