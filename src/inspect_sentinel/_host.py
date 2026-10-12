@@ -7,14 +7,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
-from inspect_ai.core import (
-    ChatMessage,
-    GenerateConfig,
-    ModelOutput,
-    ToolCall,
-    ToolChoice,
-    ToolInfo,
-)
+from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
+from inspect_ai.tool import ToolCall, ToolChoice, ToolInfo
 from inspect_ai.util import Store
 
 from ._report import Decision, Failed, Report, Reported

@@ -1272,8 +1272,8 @@ wheels = [
 
 [[package]]
 name = "inspect-ai"
-version = "0.3.279.dev3+gf851f3343"
-source = { git = "https://github.com/UKGovernmentBEIS/inspect_ai?rev=dragonstyle%2Fsentinel-generate-stages#f851f33436e3dcf9afad4cca94dec5f3c753e47b" }
+version = "0.3.279.dev4+g6b3dadd0c"
+source = { git = "https://github.com/UKGovernmentBEIS/inspect_ai?rev=dragonstyle%2Fsentinel-generate-stages#6b3dadd0cf4327c8394ada174145e14d8207f8ba" }
 dependencies = [
     { name = "agent-client-protocol" },
     { name = "aiobotocore" },
@@ -1330,7 +1330,7 @@ dependencies = [
     { name = "pydantic" },
 ]
 
-[package.dev-dependencies]
+[package.optional-dependencies]
 dev = [
     { name = "exceptiongroup" },
     { name = "griffe" },
@@ -1363,46 +1363,47 @@ doc = [
     { name = "types-pyyaml" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "inspect-sentinel", extra = ["dev"] },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
+    { name = "build", marker = "extra == 'dist'" },
     { name = "exceptiongroup", marker = "python_full_version < '3.11'", specifier = ">=1.0" },
+    { name = "exceptiongroup", marker = "extra == 'dev'", specifier = ">=1.0" },
+    { name = "griffe", marker = "extra == 'dev'", specifier = ">=2" },
+    { name = "griffe", marker = "extra == 'doc'", specifier = ">=2" },
     { name = "inspect-ai", git = "https://github.com/UKGovernmentBEIS/inspect_ai?rev=dragonstyle%2Fsentinel-generate-stages" },
+    { name = "jupyter", marker = "extra == 'dev'" },
+    { name = "jupyter", marker = "extra == 'doc'" },
+    { name = "markdown", marker = "extra == 'dev'" },
+    { name = "markdown", marker = "extra == 'doc'" },
+    { name = "panflute", marker = "extra == 'dev'" },
+    { name = "panflute", marker = "extra == 'doc'" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyright", marker = "extra == 'dev'" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
+    { name = "pytest-xdist", marker = "extra == 'dev'" },
+    { name = "pyyaml", marker = "extra == 'dev'" },
+    { name = "pyyaml", marker = "extra == 'doc'" },
+    { name = "quarto-cli", marker = "extra == 'dev'", specifier = ">=1.9.36" },
+    { name = "quarto-cli", marker = "extra == 'doc'", specifier = ">=1.9.36" },
+    { name = "rich", marker = "extra == 'dev'" },
+    { name = "rich", marker = "extra == 'doc'" },
+    { name = "ruff", marker = "extra == 'dev'" },
+    { name = "trio", marker = "extra == 'dev'" },
+    { name = "twine", marker = "extra == 'dist'" },
+    { name = "types-pyyaml", marker = "extra == 'dev'" },
+    { name = "types-pyyaml", marker = "extra == 'doc'" },
 ]
+provides-extras = ["dev", "dist", "doc"]
 
 [package.metadata.requires-dev]
-dev = [
-    { name = "exceptiongroup", specifier = ">=1.0" },
-    { name = "griffe", specifier = ">=2" },
-    { name = "jupyter" },
-    { name = "markdown" },
-    { name = "panflute" },
-    { name = "pyright" },
-    { name = "pytest" },
-    { name = "pytest-timeout", specifier = ">=2.4.0" },
-    { name = "pytest-xdist" },
-    { name = "pyyaml" },
-    { name = "quarto-cli", specifier = ">=1.9.36" },
-    { name = "rich" },
-    { name = "ruff" },
-    { name = "trio" },
-    { name = "types-pyyaml" },
-]
-dist = [
-    { name = "build" },
-    { name = "twine" },
-]
-doc = [
-    { name = "griffe", specifier = ">=2" },
-    { name = "jupyter" },
-    { name = "markdown" },
-    { name = "panflute" },
-    { name = "pyyaml" },
-    { name = "quarto-cli", specifier = ">=1.9.36" },
-    { name = "rich" },
-    { name = "types-pyyaml" },
-]
+dev = [{ name = "inspect-sentinel", extras = ["dev"] }]
 
 [[package]]
 name = "ipykernel"

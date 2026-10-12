@@ -770,28 +770,40 @@ The shipped `threshold` protocol, in outline, with configuration-time validation
 @protocol
 def threshold(
     monitors: Monitor | MonitorGroup | Monitors,
-    reject_at: float | Mapping[str, float],
+    *,
+    escalate_at: float | Mapping[str, float] | None = None,
+    reject_at: float | Mapping[str, float] | None = None,
     terminate_at: float | Mapping[str, float] | None = None,
-) -> Protocol:
-    rejects = thresholds(reject_at)  # a float is {"*": float}
-    terminates = thresholds(terminate_at)
+) -> Protocol | ProtocolGroup:
+    # strongest first; a float is {"*": float}; the ones not given are left out
+    levels = [
+        ("terminate", thresholds(terminate_at)),
+        ("reject", thresholds(reject_at)),
+        ("escalate", thresholds(escalate_at)),
+    ]
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(context: Context, step: Step) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None
-        if crossed := crossing(observations, terminates):
-            return Decision.terminate(crossed.explain(), references=crossed.references)
-        if crossed := crossing(observations, rejects):
-            return Decision.reject(crossed.explain(), references=crossed.references)
+        for action, limits in levels:
+            if crossed := crossing(observations, limits):
+                return Decision(
+                    action=action,
+                    explanation=crossed.explain(),
+                    references=references(observations),
+                    metadata={"observations": scores(observations)},
+                )
         return Decision.proceed()
 
-    return decide
+    # one function per stage its monitors watch; before tool calls only, with
+    # reject_at
+    return per_stage(decide, monitors)
 ```
 
-It holds the constants a monitor cannot, reads its children's scores through the runner, and returns a decision. Nothing else. A reject or terminate is explained for the log, with the highest crossing score, its monitor's name, and that monitor's explanation and references. Neither sets `message`, so the agent learns only that the call was refused.
+It holds the constants a monitor cannot, reads its children's scores through the runner, and returns a decision. Nothing else. Each of `escalate_at`, `reject_at` and `terminate_at` is a floor: at or above it the step gets at least that action, and the decision is the strongest action any score reaches. At least one is required; `observe_only()` is how to record scores with nothing acting on them. A decision is explained for the log with the highest score that reached its threshold, that monitor's name and its explanation; it carries every reporting monitor's references, and `metadata["observations"]` lists every monitor's score and explanation, so a `human()` after it receives all of them through `step.escalations`, and inspect_ai's approval card shows them once it renders that metadata ([pr-series.md](pr-series.md), Deferred, "inspect_ai's human view shows every score"). None sets `message`, so the agent learns only that the call was refused. It runs at each stage its monitors watch, monitors of different stages each thresholded at their own; `reject_at` limits it to `BeforeToolCall`, where a reject is legal. An escalation is answered by what follows it in a `sequential()`: `sequential([threshold(monitors, escalate_at=0.6, terminate_at=0.9), human(stages=["tool_call"])])`.
 
-Each threshold is one number or a mapping per dimension. A key `"<monitor>.<dimension>"` applies to one monitor's dimension (the monitor's instance name, as in `Reported.name`), a bare `"<dimension>"` to that dimension from every monitor, a monitor's instance name to its single-number score, and `"*"` to anything unlisted; the most specific key wins, and a score no key covers never triggers. A number is shorthand for `{"*": number}`, so a float threshold behaves and explains itself as it always has. A step is rejected (terminated) when any score reaches its threshold, terminate checked first. Configuration validates the keys, requires finite values, and requires terminate above reject wherever both cover a score. This is what thresholding [structured suspicion](#suspicion-is-structured) per dimension means: calibration produces one percentile per dimension, and the mapping holds them.
+Each threshold is one number or a mapping per dimension. A key `"<monitor>.<dimension>"` applies to one monitor's dimension (the monitor's instance name, as in `Reported.name`), a bare `"<dimension>"` to that dimension from every monitor, a monitor's instance name to its single-number score, and `"*"` to anything unlisted; the most specific key wins, and a score no key covers never triggers. A number is shorthand for `{"*": number}`, so a float threshold behaves and explains itself as it always has. The strongest action any score reaches decides: terminate, then reject, then escalate. A key containing `.` is always qualified, by the longest instance name that prefixes it, never a bare dimension. Configuration validates the keys, requires finite values, and rejects a threshold that can never apply because a stronger action's threshold is at or below it for every score it covers (`escalate_at=0.9` beside `terminate_at=0.8`); a key one mapping lists and another does not is not such a conflict. This is what thresholding [structured suspicion](#suspicion-is-structured) per dimension means: calibration produces one percentile per dimension, and the mapping holds them.
 
 And `no_curl` from [Shape](#shape), which is the same thing with the middle removed: no monitors, no runner call, a decision straight from the step. Both are protocols. **Deciding is what makes something a protocol, not having children.** An earlier draft defined a protocol as "a monitor that takes monitors", which made the combinator the essence and left rules and `human()` as a special kind of monitor — the kind that decides — with a decorator whose only job was to distinguish the two. That was the wrong seam. The seam the literature draws, and the one the report types already encode, is between observing and deciding; whether a decider consults anything is a detail of its implementation.
 
@@ -989,7 +1001,7 @@ def sequential(children: Sentinels) -> Protocol:
 
 The functions of one [`ProtocolGroup`](#one-function-one-stage) run in one call and the link decides by the strongest of their decisions, as `concurrent` does, so one function's `continue` cannot hide another's `terminate`; each sees the step as it was before any of their escalations is appended; they share state through the store, not through `step.escalations`.
 
-Three properties fall out of writing it as ordinary code. A monitor in a `sequential` is recorded and falls through, since an observation cannot be "the first decision" — ordered composition is Decision-shaped in substance. A `sequential` whose every deciding link escalated returns the last escalate, so it passes up to the layer above as concurrent's does, and the host [proceeds and warns](#composition) if it reaches the root; one where only monitors participated returns `continue`. The [approval adapter](#a-protocol-layer-for-approval-too) keeps approval's fail-closed `reject` on its own path, so existing approval users see no change, and a `sequential` that wants fail-closed ends with a rejecting monitor, as approval lists end with `auto` today. And sequential dispatch stops being a violation of the independence rule, because the loop is a named, shipped protocol whose mode the transcript shows.
+Three properties fall out of writing it as ordinary code. A monitor in a `sequential` is recorded and falls through, since an observation cannot be "the first decision" — ordered composition is Decision-shaped in substance. A `sequential` whose every deciding link escalated returns the last escalate, so it passes up to the layer above as concurrent's does, and if it reaches the root `run_sentinel` returns a `terminate` explained as an unhandled escalation in its place, which `human()` or `handle_escalation()` at the end of the chain prevents; one where only monitors participated returns `continue`. The [approval adapter](#a-protocol-layer-for-approval-too) keeps approval's fail-closed `reject` on its own path, so existing approval users see no change, and a `sequential` that wants fail-closed ends with a rejecting monitor, as approval lists end with `auto` today. And sequential dispatch stops being a violation of the independence rule, because the loop is a named, shipped protocol whose mode the transcript shows.
 
 **`concurrent()`** is the concurrent composition, and it is also what a top-level list or mapping containing a protocol resolves to (see [Configuration](#configuration)). In outline, leaving out per-instance vote counting and group labels:
 
@@ -1064,8 +1076,8 @@ Two registry types make the contract mostly explicit, and the residue is small:
 
 - The structural claims — returns a decision, annotates a stage, takes typed children — are [statically checked](#static-checking).
 - Nothing above a [`decide_final()`](#authoritative-reports) decision runs, so nothing above it can weaken it, and each layer it passed is recorded as `bypassed`.
-- **Going through the runner is enforced at run time, not statically.** The factory holds the children and could call them as plain callables, bypassing naming, recording and the concurrency guarantee. The decorator wraps each configured function in a guard, and the runner marks the function it is invoking in a context variable, so a configured function called any other way while a sentinel is running raises `RuntimeError` naming `run_monitors`/`run_protocols`/`run_children`. Outside a run the guard is inert, so a unit test can still call a function directly. A group has no `__call__` at all.
-- "No `escalate` at the outermost layer" is not expressible in the type. The host [proceeds and warns](#composition) when one reaches the root.
+- **Going through the runner is enforced at run time, not statically.** The factory holds the children and could call them as plain callables, bypassing naming, recording and the concurrency guarantee. The decorator wraps each configured function in a guard, and the runner marks the function it is invoking in a context variable, so a configured function called any other way while a sentinel is running raises `RuntimeError` naming `run_monitors`/`run_protocols`/`run_children`. Outside a run the guard is inert, so a unit test can still call a function directly. A factory that returns an instance another factory configured, to name a composition, gets a fresh guard around the original function rather than a guard around the guard, which would reject the runner's call. The fresh guard, and for a group the fresh group, carries over the configured instance's attributes, such as dispatch metadata, except its registry info and params, which the outer factory replaces, and its step types, which are recomputed. The returned instance itself is left as it was and is not cloned, so its closure and children are shared with it. A group has no `__call__` at all.
+- "No `escalate` at the outermost layer" is not expressible in the type. When one reaches the root, `run_sentinel` records it and returns a `terminate` explained as an unhandled escalation, naming each escalation that reached the root (a decision rather than an exception, so the sample is not marked as an error and retried, and every host already applies `terminate` at every stage).
 
 The type system still cannot tell a direct call from a runner call, so the guard is a run-time check, the same under one registry type or two.
 
@@ -1187,7 +1199,7 @@ A monitor author should be able to depend on the wire types and nothing else. Th
 
 So the registry primitives move into `inspect_core` alongside the types (`inspect-core.md`), and `@monitor` defined there registers for real — no marker attributes, no deferred drain, no import-ordering hazard. Module identity gives a shared singleton registry: `inspect_ai` imports the same module object, so there is one dict rather than two to keep coherent.
 
-Two details. `ensure_entry_points()`, called from `registry.py`, loads plugin entry points and can therefore import arbitrary third-party packages at runtime — it has to be injectable or a no-op in the leaf. And because `@monitor` decorates a factory, parameter capture is the ordinary `registry_tag(factory, monitor, info, *args, **kwargs)` call that `@scorer` already makes; route it through the existing `extract_named_params` rather than reimplementing it, since that carries the VAR_KEYWORD flattening from #4374 which makes capture-then-replay idempotent.
+Two details. `ensure_entry_points()`, called from `registry.py`, loads plugin entry points and can therefore import arbitrary third-party packages at runtime — it has to be injectable or a no-op in the leaf. And because `@monitor` decorates a factory, parameter capture is the ordinary `registry_tag(factory, monitor, info, *args, **kwargs)` call that `@scorer` already makes; route it through the existing `extract_named_params` rather than reimplementing it, since that carries the VAR_KEYWORD flattening from #4374 which makes capture-then-replay idempotent. The registry records only lists, tuples and dicts, so the decorator hands the factory, and records, a container of configured monitors and protocols of any other kind (a `UserList`, a `UserDict`) as the list or dict that keeps its names and order; other arguments are passed as given. A composition runs the named snapshot of its children it records, so changing the caller's container later changes neither.
 
 ## State {#state}
 

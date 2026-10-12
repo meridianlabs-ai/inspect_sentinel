@@ -2,7 +2,7 @@
 
 A sentinel is what a task runs to watch an agent: a protocol with its monitors, configured with `Task(sentinel=)`. A monitor is a function that watches an agent while it runs and reports what it sees. It attaches to one of four stages, the points in the agent loop before a model call, after a model call, before a tool call, and after a tool call. At every stage it receives the same context object and keeps its state in the same place. A monitor observes: it returns an `Observation` or nothing, and can never act. A protocol decides: it returns a `Decision`, optionally after consulting monitors and other protocols. A protocol with no children is a rule.
 
-Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe_only`, `concurrent`, `sequential`, `threshold` and `human` are implemented (`Host.ask_human` in inspect_ai follows). The [failure policy](#failures) is implemented too. The generate stages are prototyped, observing and with `continue` and `terminate` only (`generate-stages.md`). `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
+Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe_only`, `concurrent`, `sequential`, `threshold`, `human` and `handle_escalation` are implemented (`Host.ask_human` in inspect_ai follows). The [failure policy](#failures) is implemented too. The generate stages are built with `continue`, `escalate` and `terminate`; `reject` and `modify` there are deferred to a follow-up (`generate-stages.md`). `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
 
 Related documents:
 
@@ -112,6 +112,7 @@ Rules:
 - **Annotate `-> Observation`, or `-> Observation | None` if it can abstain.** A monitor observes. If you find yourself wanting to return an action, you are writing a protocol; see [Monitor or protocol?](#monitor-or-protocol).
 - **One function, one stage.** If a concern spans two stages, write two functions. Independent ones are two monitors, listed both. When they share state, return both from one factory as `return MonitorGroup(before, after)` (a `ProtocolGroup` for protocols): the functions form one instance, with one name, one path and one `store_as` namespace, and each runs, in the order returned, at the stage it watches, until one returns `terminate` or calls `decide_final()`; the functions after it do not run and are not recorded. Give them distinct `__name__`s; that is how their reports are told apart, and the group's constructor rejects a duplicate. A group is not callable, so it cannot be invoked by mistake, and a factory that returns a plain list or tuple is an error that says to return the group.
 - **Name and version it in the decorator when you need to.** `@monitor(name="suspicion", version=2)` registers under `name` in place of the factory's `__name__`, as `@solver(name=)` does, and records `version` (a non-negative `int`, default 0) in the registry metadata, and in the log's configuration entry when not 0, so a calibration can record which version it measured; bump it when a change alters the scores. Bare `@monitor` is the same with the defaults. `portable=` (default `True`) says whether it can run outside an eval, and is checked when the factory is called ([Portable Monitors](../docs/portability.qmd)); there is no `fail=` (see [Failures](#failures)).
+- **Name a composition by returning it.** A factory may return an instance of its kind that another factory configured, as in `return sequential([suspicion(), human(stages=["tool_call"])])` from a `@protocol` factory. The composition runs as configured, its records and its configuration entry carry this factory's name and params, and `sentinel_from_config` rebuilds it by calling this factory, so the log records the one name rather than the tree. The returned instance is not cloned: returning one shared instance shares its closure and children across every configuration of this factory, so build it inside the factory unless that sharing is intended. Bump this factory's `version` when the composition it returns changes behaviour, since the entry names only this factory and a change inside the composition is otherwise invisible to the version check.
 - **Never take a threshold as a factory parameter.** If your monitor compares a score to a constant, return the score as an `Observation` and let a protocol hold the constant. See [Monitor or protocol?](#monitor-or-protocol).
 - **Do not keep per-sample state in the closure.** The factory runs once per configuration and the returned function is shared by every sample. Use `context.store_as()`. See [State](#state).
 
@@ -364,7 +365,7 @@ Rules:
 - **Return `None` to abstain.** A bare `return` from an early exit does this. This document says "abstain" for this case so it is not confused with a `suspicion` field that is `None`.
 - **Set only the fields you need.** Every field except the required one has a default. A monitor sets `suspicion` and nothing else.
 - **`continue` means the protocol examined the step and found nothing wrong.** An `Observation` has no `action` field, so a monitor never says it.
-- **`escalate` means the protocol is not deciding.** The next decider in the `sequential` takes over. In a `concurrent`, it outranks `continue`, so a peer's `continue` cannot override it. A layer that ends on `escalate` passes it up as its own decision, and at the root the host proceeds and warns (see [The boundary check](#the-boundary-check)).
+- **`escalate` means the protocol is not deciding.** The next decider in the `sequential` takes over. In a `concurrent`, it outranks `continue`, so a peer's `continue` cannot override it. A layer that ends on `escalate` passes it up as its own decision, and at the root it is an unhandled escalation: `run_sentinel` records it as the root's decision and returns a `terminate` in its place, explained as `unhandled escalation from <path>: <reason>`, so the host never receives an `escalate` (see [The boundary check](#the-boundary-check)). End a configuration that can escalate with `human()` or `handle_escalation()`.
 - **Prefer structured suspicion.** `{"goal_alignment": 0.1, "sabotage": 0.8}` lets a protocol threshold per dimension and lets independent monitors score separate dimensions. A scalar is accepted.
 - **A detector reports `1.0`.** `Observation.flag(explanation)` is a monitor's way of saying "this is definitely it" without holding a threshold; `threshold(detector(), reject_at=1.0)` acts on it.
 - **Set `audit=True` to request human review.** It is independent of the action: you can continue-and-audit or reject-and-audit. A parent protocol owning a budget may decline. For now it is recorded for offline analysis and shown in the viewer as a flag; nothing acts on it yet.
@@ -585,26 +586,38 @@ The shipped `threshold` protocol, in outline, with configuration-time validation
 @protocol
 def threshold(
     monitors: Monitor | MonitorGroup | Monitors,
-    reject_at: float | Mapping[str, float],
+    *,
+    escalate_at: float | Mapping[str, float] | None = None,
+    reject_at: float | Mapping[str, float] | None = None,
     terminate_at: float | Mapping[str, float] | None = None,
-) -> Protocol:
-    rejects = thresholds(reject_at)  # a float is {"*": float}
-    terminates = thresholds(terminate_at)
+) -> Protocol | ProtocolGroup:
+    # strongest first; a float is {"*": float}; the ones not given are left out
+    levels = [
+        ("terminate", thresholds(terminate_at)),
+        ("reject", thresholds(reject_at)),
+        ("escalate", thresholds(escalate_at)),
+    ]
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(context: Context, step: Step) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None
-        if crossed := crossing(observations, terminates):
-            return Decision.terminate(crossed.explain(), references=crossed.references)
-        if crossed := crossing(observations, rejects):
-            return Decision.reject(crossed.explain(), references=crossed.references)
+        for action, limits in levels:
+            if crossed := crossing(observations, limits):
+                return Decision(
+                    action=action,
+                    explanation=crossed.explain(),
+                    references=references(observations),
+                    metadata={"observations": scores(observations)},
+                )
         return Decision.proceed()
 
-    return decide
+    # one function per stage its monitors watch; before tool calls only, with
+    # reject_at
+    return per_stage(decide, monitors)
 ```
 
-It holds the constants a monitor must not, validates them and its children when it is configured, reads its children's scores through the runner, and returns a decision. A reject or terminate is explained for the log: `explain` names the highest crossing score and carries its monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`, and the decision carries that monitor's references. Neither sets `message`, so the agent gets the host's default "not approved" text and learns nothing about what the monitors saw, which matters where the agent is the adversary.
+It holds the constants a monitor must not, validates them and its children when it is configured, reads its children's scores through the runner, and returns a decision. Each threshold is a floor, at or above which the step gets at least that action, and the strongest action reached decides. A decision is explained for the log: `explain` names the highest score that reached its threshold and carries its monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`; the decision carries every reporting monitor's references, and `metadata["observations"]` lists each monitor's score and explanation, so they reach a person reviewing an escalation through `step.escalations`; inspect_ai's approval card shows them once its renderer lists them ([pr-series.md](pr-series.md), Deferred, "inspect_ai's human view shows every score"). None sets `message`, so the agent gets the host's default "not approved" text and learns nothing about what the monitors saw, which matters where the agent is the adversary.
 
 ```python
 Protocol: TypeAlias = (
@@ -872,7 +885,7 @@ Task(sentinel=resample(network_suspicion(), threshold=0.8, n=3))
 
 Use one of these rather than writing threshold logic by hand. The control papers explain why each exists. `observe_only`, `threshold` and `sequential` are built; `resample` is not yet.
 
-`threshold` takes one number or a mapping per dimension for each of `reject_at` and `terminate_at`:
+`threshold` takes one number or a mapping per dimension for each of `escalate_at`, `reject_at` and `terminate_at`, all keyword-only and optional, at least one required:
 
 ```python
 threshold(
@@ -882,17 +895,22 @@ threshold(
 )
 ```
 
-- **Key by `"<monitor>.<dimension>"`, `"<dimension>"`, the monitor's instance name, or `"*"`.** A qualified key applies to one monitor's dimension (the instance name, as in `Reported.name`), a bare key to that dimension from every monitor, an instance name to a monitor reporting a single number, and `"*"` to anything unlisted. The most specific key wins: qualified, then bare, then `"*"`. A score no key covers never triggers. A dimension name containing `.` must be qualified.
+- **Key by `"<monitor>.<dimension>"`, `"<dimension>"`, the monitor's instance name, or `"*"`.** A qualified key applies to one monitor's dimension (the instance name, as in `Reported.name`), a bare key to that dimension from every monitor, an instance name to a monitor reporting a single number, and `"*"` to anything unlisted. The most specific key wins: qualified, then bare, then `"*"`. A score no key covers never triggers. A key containing `.` is always qualified, by the longest instance name that prefixes it, and is an error if none does; it never also matches a bare dimension, so a dimension containing `.` is keyed through its monitor.
 - **A number is shorthand for `{"*": number}`.** A float threshold behaves exactly as it did before mappings existed.
-- **Any score reaching its threshold acts.** Terminate is checked first. Where `terminate_at` and `reject_at` both cover a score, terminate must be above reject, or reject would never fire; configuration checks this, along with well-formed keys, qualified keys naming a configured monitor, and finite values.
-- **The explanation names the highest crossing score**, the first in configuration order on a tie, with its monitor's explanation: `sabotage 0.72 ≥ 0.60 from audit: <reason>` when the threshold came from the dimension's own key, and `suspicion 0.95 from audit: <reason>` when it came from `"*"` or the monitor reports a single number. It is log-only; the agent gets the default text.
+- **Each threshold is a floor.** At or above `escalate_at` the step is at least escalated, at or above `reject_at` at least rejected, at or above `terminate_at` the sample ends; the strongest action any score reaches decides, else `continue`.
+- **A threshold that can never apply is a configuration error.** It is dead when a stronger action's threshold is at or below it for every score it covers, as `escalate_at=0.9` beside `terminate_at=0.8`; the error names both. A key one mapping lists and another does not is not dead. Configuration also checks well-formed keys, qualified keys naming a configured monitor, and finite values.
+- **Stages.** It runs at each stage its monitors watch, monitors of different stages each thresholded at their own, so a proposed-action monitor and a tool-result monitor combine in one `threshold`. With `reject_at` every monitor must watch only `BeforeToolCall`, since a reject is not legal after a call.
+- **An escalation is answered by what follows it** in a `sequential()`, a `human()` or `handle_escalation()`: `sequential([threshold(monitors, escalate_at=0.6, terminate_at=0.9), human(stages=["tool_call"])])`. One that reaches the root unanswered ends the sample.
+- **Every score reaches the reviewer.** A decision's `metadata["observations"]` lists `{"monitor", "suspicion", "explanation"}` for every monitor that reported at the step, and its references are every reporting monitor's; a `human()` after it finds both in `step.escalations`. inspect_ai's approval card shows them once it renders `metadata["observations"]` ([pr-series.md](pr-series.md), Deferred, "inspect_ai's human view shows every score"); until then it shows the explanation.
+- **The explanation names the highest score that reached the decision's threshold**, the first in configuration order on a tie, with its monitor's explanation: `sabotage 0.72 ≥ 0.60 from audit: <reason>` when the threshold came from the dimension's own key, and `suspicion 0.95 from audit: <reason>` when it came from `"*"` or the monitor reports a single number. It is log-only; the agent gets the default text.
 
 | Protocol | Where | What it does |
 |---|---|---|
 | `concurrent` | core | runs every child; strongest decision wins; what a list containing a protocol resolves to |
 | `sequential` | core | runs children in order; first non-`escalate` decides; hands escalations forward |
 | `observe_only` | core | records every observation, acts on none; how monitors run with nothing acting, since a bare monitor is an error |
-| `threshold` | core | `reject` at or above one threshold, `terminate` at or above another, each a number or a mapping per dimension; what calibration feeds |
+| `handle_escalation` | core | answers the escalations handed to it with a fixed `terminate` or `continue`, `action` required; abstains when nothing escalated; both tool stages |
+| `threshold` | core | `escalate_at`, `reject_at` and `terminate_at` are floors, at least one given, and the strongest action reached decides; each a number or a mapping per dimension; `reject_at` before tool calls only, otherwise both tool stages; what calibration feeds |
 | `resample` | core | above a threshold, draws `n` further completions, executes the least suspicious; `escalate` if none clears. `AfterGenerate` only |
 | `trusted_monitoring` | extension candidate | thresholds scores and spends a human-review budget; the budget is a deployment-economics idea that eval operators tend not to want |
 | `trusted_editing` | extension candidate | has a trusted model rewrite the untrusted output; returns `modify` |

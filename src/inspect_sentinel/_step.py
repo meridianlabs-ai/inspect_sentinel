@@ -3,17 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TypeAlias
 
-from inspect_ai.core import (
-    ChatMessage,
-    ChatMessageTool,
-    GenerateConfig,
-    ModelOutput,
-    ToolCall,
-    ToolCallView,
-    ToolChoice,
-    ToolInfo,
-    ToolResult,
-)
+from inspect_ai.model import ChatMessage, ChatMessageTool, GenerateConfig, ModelOutput
+from inspect_ai.tool import ToolCall, ToolCallView, ToolChoice, ToolInfo, ToolResult
 
 from ._report import Decision, Reported
 

@@ -25,6 +25,8 @@ def concurrent(
     named = named_children(children, None)
     if not named:
         raise ValueError("concurrent needs at least one child.")
+    # run the children as configured, not the caller's container as it is later
+    snapshot = dict(named)
     grouped = {name for name, child in named if isinstance(child, Group)}
 
     def label(reported: Reported[Decision]) -> str:
@@ -33,7 +35,7 @@ def concurrent(
         return reported.name
 
     async def run(context: Context, step: Step) -> Decision | None:
-        reports = await run_children(children, context, step)
+        reports = await run_children(snapshot, context, step)
         warn_failed(reports.observations.failed)
         voters = reports.decisions
         strongest = voters.strongest()

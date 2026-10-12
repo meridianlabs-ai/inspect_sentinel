@@ -16,15 +16,74 @@ import types
 from collections.abc import Callable, Iterable, Iterator
 from typing import NamedTuple, TypeGuard, cast
 
-import inspect_ai.core
-from inspect_ai.util import StoreModel
-
-_CORE = "inspect_ai.core"
+from inspect_ai.event import SentinelAction, SentinelSuspicion
+from inspect_ai.model import (
+    BatchConfig,
+    CachePolicy,
+    ChatCompletionChoice,
+    ChatMessage,
+    ChatMessageAssistant,
+    ChatMessageBase,
+    ChatMessageSystem,
+    ChatMessageTool,
+    ChatMessageUser,
+    GenerateConfig,
+    GenerateConfigArgs,
+    ImageOutput,
+    Logprob,
+    Logprobs,
+    ModelFallback,
+    ModelOutput,
+    ModelUsage,
+    OutputModality,
+    ResponseSchema,
+    StopCategory,
+    StopDetails,
+    StopReason,
+    TopLogprob,
+)
+from inspect_ai.scorer import Reference, Target
+from inspect_ai.tool import (
+    INTERNAL_TOOL_TYPE,
+    Citation,
+    CitationBase,
+    Content,
+    ContentAudio,
+    ContentCitation,
+    ContentData,
+    ContentDocument,
+    ContentImage,
+    ContentReasoning,
+    ContentText,
+    ContentToolUse,
+    ContentVideo,
+    DocumentCitation,
+    ToolCall,
+    ToolCallContent,
+    ToolCallError,
+    ToolCallModelInput,
+    ToolCallView,
+    ToolCallViewer,
+    ToolChoice,
+    ToolFunction,
+    ToolInfo,
+    ToolParam,
+    ToolParams,
+    ToolResult,
+    UrlCitation,
+    internal_tool_type,
+)
+from inspect_ai.util import (
+    AdaptiveConcurrency,
+    JSONSchema,
+    JSONType,
+    StoreModel,
+)
 
 _ENVIRONMENT = "and a portable function has no environment variables; take configuration as factory parameters"
 _PROCESSES = "and a portable function cannot start processes or threads"
 _NETWORK = "and a portable function has no network access; call a model with `context.host.generate()`"
-_INSPECT = f"and inspect_ai is portable only through `{_CORE}`"
+_INSPECT = "and inspect_ai is portable only through a fixed list of its message, model output, config, tool and content types, such as `ChatMessage` and `ToolCall`"
 
 _OS_ENVIRONMENT = ("environ", "environb", "getenv", "getenvb", "putenv", "unsetenv")
 _OS_PROCESSES = ("system", "popen", "kill", "killpg", "startfile")
@@ -420,15 +479,77 @@ def _is_code(value: object) -> bool:
     return _is_class(value) or issubclass(type(value), _ROUTINES)
 
 
-def _allowed(value: object) -> bool:
-    return value is StoreModel or id(value) in _core_values()
-
-
-@functools.cache
-def _core_values() -> frozenset[int]:
-    return frozenset(
-        id(value) for name, value in vars(inspect_ai.core).items() if name[:1] != "_"
+# the inspect_ai a portable function may use, by id
+_INSPECT_TYPES = frozenset(
+    map(
+        id,
+        (
+            AdaptiveConcurrency,
+            BatchConfig,
+            CachePolicy,
+            ChatCompletionChoice,
+            ChatMessage,
+            ChatMessageAssistant,
+            ChatMessageBase,
+            ChatMessageSystem,
+            ChatMessageTool,
+            ChatMessageUser,
+            Citation,
+            CitationBase,
+            Content,
+            ContentAudio,
+            ContentCitation,
+            ContentData,
+            ContentDocument,
+            ContentImage,
+            ContentReasoning,
+            ContentText,
+            ContentToolUse,
+            ContentVideo,
+            DocumentCitation,
+            GenerateConfig,
+            GenerateConfigArgs,
+            ImageOutput,
+            INTERNAL_TOOL_TYPE,
+            internal_tool_type,
+            JSONSchema,
+            JSONType,
+            Logprob,
+            Logprobs,
+            ModelFallback,
+            ModelOutput,
+            ModelUsage,
+            OutputModality,
+            Reference,
+            ResponseSchema,
+            SentinelAction,
+            SentinelSuspicion,
+            StopCategory,
+            StopDetails,
+            StopReason,
+            StoreModel,
+            Target,
+            ToolCall,
+            ToolCallContent,
+            ToolCallError,
+            ToolCallModelInput,
+            ToolCallView,
+            ToolCallViewer,
+            ToolChoice,
+            ToolFunction,
+            ToolInfo,
+            ToolParam,
+            ToolParams,
+            ToolResult,
+            TopLogprob,
+            UrlCitation,
+        ),
     )
+)
+
+
+def _allowed(value: object) -> bool:
+    return id(value) in _INSPECT_TYPES
 
 
 def _module_of(value: object) -> str:
@@ -449,7 +570,7 @@ def _judge_name(name: str) -> str | None:
             return reason
     top = name.partition(".")[0]
     if top == "inspect_ai":
-        return None if name == _CORE or name.startswith(f"{_CORE}.") else _INSPECT
+        return _INSPECT
     if top in sys.stdlib_module_names or top in _WASI_BUILT:
         return None
     if top and top in _compiled_packages(tuple(sys.path)):

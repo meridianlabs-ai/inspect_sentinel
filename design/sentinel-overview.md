@@ -140,8 +140,8 @@ Built-in protocols cover the common compositions and basic control scenarios. `c
 | `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `escalate` \> `continue`). What a list containing a protocol resolves to. Use for independent guards that must all be satisfied. |
 | `sequential()` | Runs children in order until one decides; first non-`escalate` wins, and escalations are handed to the next link so a human at the end sees who asked and why. Use for a cheap rule ahead of an expensive judge. |
 | `observe_only()` | Records every observation and acts on none. How monitors run with nothing acting, since `Task(sentinel=)` takes no bare monitors, and how a benign score distribution gets collected. |
-| `threshold()` | Acts on scores: `reject` at or above one threshold, `terminate` at or above another, each one number or a mapping per dimension (`{"audit.sabotage": 0.6, "*": 0.9}`). The smallest protocol, and the one calibration feeds. |
-| `human()` | Asks a person whenever it is reached, at the stages named in its required `stages` (`tool_call`, `tool_result`), through `Host.ask_human(step, choices)`. The answer is an ordinary decision: it ends a `sequential()`, and beside other protocols in a `concurrent()` it is one vote; a reject's typed reason is the `message` the agent reads. Put it at the end of a `sequential()` to ask only on escalation. |
+| `threshold()` | Acts on scores: `escalate_at`, `reject_at` and `terminate_at` are floors, and the strongest action any score reaches decides; each is one number or a mapping per dimension (`{"audit.sabotage": 0.6, "*": 0.9}`). Escalations carry every monitor's score to `human()` through `step.escalations`. The smallest protocol, and the one calibration feeds. |
+| `human()` | Asks a person whenever it is reached, at the stages named in its required `stages` (`tool_call`, `tool_result`), through `Host.ask_human(step, choices)`. The answer is an ordinary decision: it ends a `sequential()`, and beside other protocols in a `concurrent()` it is one vote; a reject's typed reason is the `message` the agent reads. Put it at the end of a `sequential()` to ask when the links before it escalate, or abstain, as a `threshold()` does when none of its monitors reported. |
 | `resample()` | Above a threshold, draws further completions, scores each, and executes the least suspicious; escalates if none clears. |
 
 ### Writing a Protocol
@@ -154,23 +154,35 @@ For example, `threshold`, the smallest shipped protocol: it reads its children's
 @protocol
 def threshold(
     monitors: Monitor | MonitorGroup | Monitors,
-    reject_at: float | Mapping[str, float],
+    *,
+    escalate_at: float | Mapping[str, float] | None = None,
+    reject_at: float | Mapping[str, float] | None = None,
     terminate_at: float | Mapping[str, float] | None = None,
-) -> Protocol:
-    rejects = thresholds(reject_at)  # a float is {"*": float}
-    terminates = thresholds(terminate_at)
+) -> Protocol | ProtocolGroup:
+    # strongest first; a float is {"*": float}; the ones not given are left out
+    levels = [
+        ("terminate", thresholds(terminate_at)),
+        ("reject", thresholds(reject_at)),
+        ("escalate", thresholds(escalate_at)),
+    ]
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(context: Context, step: Step) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None
-        if crossed := crossing(observations, terminates):
-            return Decision.terminate(crossed.explain(), references=crossed.references)
-        if crossed := crossing(observations, rejects):
-            return Decision.reject(crossed.explain(), references=crossed.references)
+        for action, limits in levels:
+            if crossed := crossing(observations, limits):
+                return Decision(
+                    action=action,
+                    explanation=crossed.explain(),
+                    references=references(observations),
+                    metadata={"observations": scores(observations)},
+                )
         return Decision.proceed()
 
-    return decide
+    # one function per stage its monitors watch; before tool calls only, with
+    # reject_at
+    return per_stage(decide, monitors)
 ```
 
 ## Deployment
