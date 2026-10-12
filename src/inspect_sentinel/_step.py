@@ -86,8 +86,8 @@ class BeforeToolCall:
     view: ToolCallView
     """Rendering of the tool call and its context: custom when the tool registers a viewer, a default Python-call rendering otherwise."""
 
-    input: list[ChatMessage]
-    """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `context.eval.sample_input` is the sample's input, the assignment."""
+    input: list[ChatMessage] | None
+    """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `None` when no model call produced the assistant message (a pre-filled message, a human agent, or one the scaffold built itself) or when the transcript event that recorded the model call is no longer available; it is never approximated from `history`. `context.eval.sample_input` is the sample's input, the assignment."""
 
     history: list[ChatMessage]
     """The scaffold's full conversation, pre-compaction turns included. In-process this is the scaffold's own list; monitors must not mutate it."""
@@ -118,8 +118,8 @@ class AfterToolCall:
     view: ToolCallView
     """Rendering of the tool call and its context: custom when the tool registers a viewer, a default Python-call rendering otherwise."""
 
-    input: list[ChatMessage]
-    """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `context.eval.sample_input` is the sample's input, the assignment."""
+    input: list[ChatMessage] | None
+    """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `None` when no model call produced the assistant message (a pre-filled message, a human agent, or one the scaffold built itself) or when the transcript event that recorded the model call is no longer available; it is never approximated from `history`. `context.eval.sample_input` is the sample's input, the assignment."""
 
     history: list[ChatMessage]
     """The scaffold's full conversation, pre-compaction turns included. In-process this is the scaffold's own list; monitors must not mutate it."""
