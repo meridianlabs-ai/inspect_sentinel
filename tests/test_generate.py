@@ -241,11 +241,21 @@ async def test_threshold_decides_at_the_generate_stages(
         escalate_at=0.1,
         terminate_at=0.2,
     )
-    decision = await run_sentinel(
+    handled = await run_sentinel(
         sequential([root, handle_escalation("proceed")]), host_context(), step
     )
-    assert decision is not None
-    assert decision.action == ("proceed" if expected == "escalate" else expected)
+    alone = await run_sentinel(sequential([root]), host_context(), step)
+    assert handled is not None and alone is not None
+    assert handled.explanation is not None and alone.explanation is not None
+    if expected == "escalate":
+        # the threshold escalated: the handler answered it, and alone it is unhandled
+        assert handled.action == "proceed"
+        assert handled.explanation.startswith("escalated by threshold")
+        assert alone.action == "terminate"
+        assert alone.explanation.startswith("unhandled escalation from")
+    else:
+        assert handled.action == alone.action == "terminate"
+        assert not alone.explanation.startswith("unhandled escalation")
 
 
 @pytest.mark.parametrize(

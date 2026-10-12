@@ -146,7 +146,7 @@ class BeforeGenerate:
     model: str
     conversation: str           # links this agent's steps across compactions
     input: list[ChatMessage]    # exactly what the model is sent
-    history: list[ChatMessage]  # the scaffold's full conversation, pre-compaction turns included
+    history: list[ChatMessage]  # the caller's messages; may already be compacted (as-sent view: R10, deferred)
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
