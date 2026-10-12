@@ -1,6 +1,6 @@
 from collections import OrderedDict, UserDict, UserList
 from collections.abc import Callable, Mapping
-from typing import Any, cast
+from typing import Any, cast, get_args
 
 import pytest
 from inspect_ai._util.registry import registry_info
@@ -354,9 +354,9 @@ def test_the_shipped_protocols_register_under_the_package() -> None:
 
 
 def test_step_types_come_from_the_annotations() -> None:
-    both = frozenset({BeforeToolCall, AfterToolCall})
-    assert step_types(concurrent([graded()])) == both
-    assert step_types(observe_only([graded()])) == both
+    every = frozenset(get_args(Step))
+    assert step_types(concurrent([graded()])) == every
+    assert step_types(observe_only([graded()])) == every
 
 
 def test_observe_rejects_a_protocol_when_it_is_configured() -> None:

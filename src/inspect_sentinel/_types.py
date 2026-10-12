@@ -5,16 +5,20 @@ from typing import TypeAlias, cast, final
 
 from ._context import Context
 from ._report import Decision, Observation, Report
-from ._step import AfterToolCall, BeforeToolCall, Step
+from ._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 
 Monitor: TypeAlias = (
-    Callable[[Context, BeforeToolCall], Awaitable[Observation | None]]
+    Callable[[Context, BeforeGenerate], Awaitable[Observation | None]]
+    | Callable[[Context, AfterGenerate], Awaitable[Observation | None]]
+    | Callable[[Context, BeforeToolCall], Awaitable[Observation | None]]
     | Callable[[Context, AfterToolCall], Awaitable[Observation | None]]
 )
 """A monitor: observes a step at one stage and reports a suspicion score, or abstains."""
 
 Protocol: TypeAlias = (
     Callable[[Context, Step], Awaitable[Decision | None]]
+    | Callable[[Context, BeforeGenerate], Awaitable[Decision | None]]
+    | Callable[[Context, AfterGenerate], Awaitable[Decision | None]]
     | Callable[[Context, BeforeToolCall], Awaitable[Decision | None]]
     | Callable[[Context, AfterToolCall], Awaitable[Decision | None]]
 )

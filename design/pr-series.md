@@ -450,6 +450,10 @@ Decided by the maintainer on 2026-10-07, before the first release, so nothing is
 - An LLM monitor's factory takes `model=None, role=None` and passes both through (`examples/llm_suspicion.py`).
 - `tool_choice` is added beside `tools`, so a protocol that regenerates (`resample`) repeats exactly the request the agent made.
 
+## Generate stages prototype
+
+Prototyped 2026-10-02, a draft for review; [generate-stages.md](generate-stages.md) is the design and lists the decisions it needs. `BeforeGenerate` and `AfterGenerate` are steps with the design's fields, in `Step`, `Monitor` and `Protocol`. At those stages the shape check allowed `continue` and `terminate` only (since renamed `proceed`, with `escalate` added in the landing). The decorators record on each instance the stages it, or any instance passed to its factory, watches (`watched_stages()` in the integration contract), with `concurrent`, `sequential` and `observe_only` contributing only their children's, so the host skips a stage nothing watches. inspect_ai checks a generate on the sample's active model during its solvers, outside a sentinel run, a compaction and a tool's own body, once per call in `Model.generate` and outside the connection slot.
+
 ## threshold escalates and terminates without reject
 
 Decided with the maintainer on 2026-10-12 for AISI's R5 (`design/requirements-aisi-sync-monitor.md`, on the `docs/aisi-sync-monitor-requirements` branch), with no compatibility kept. First built on the typed-decisions branch (#77), which was closed; rebuilt on `main` without its type machinery.
@@ -461,6 +465,15 @@ Decided with the maintainer on 2026-10-12 for AISI's R5 (`design/requirements-ai
 - **What the reviewer sees.** The explanation still names the highest score that reached the decision's threshold and its monitor ([Threshold explanations](#threshold-explanations) stands). Every decision but `proceed` carries every reporting monitor's references, the named monitor's first, and `metadata["observations"]`, a list of `{"monitor", "suspicion", "explanation"}` for every monitor that reported at the step, so a `human()` after it finds every score in `step.escalations`. inspect_ai's `_human_view` renders only each escalation's name and explanation, so the scores reach the person once it also renders `metadata["observations"]` (Deferred, below).
 - **Escalations are answered in a `sequential()`.** `sequential([threshold(monitors, escalate_at=0.6, terminate_at=0.9), human(stages=["tool_call"])])`: the threshold's other decisions end the chain, so the person is asked when it escalates, and also when it abstains because no monitor reported. An escalate that reaches the root unanswered ends the sample as an unhandled escalation.
 - The two functions are named `tool_call` and `tool_result`, as `human()`'s and `handle_escalation()`'s are, so a lone `threshold` records `tool_call` where it recorded `decide`.
+
+## Generate stages landing
+
+Rulings of 2026-10-10 and 2026-10-12 ([generate-stages.md](generate-stages.md), decisions), landed with inspect_ai #5811:
+
+- **Every agent loop's model calls** are checked (decisions 1 and 2 revised; phase fence plus deny list): any model call while the sample runs its solvers, on any model, except inside a tool's own body (an agent the tool runs opens its own span and is checked), a sentinel run, a compaction summary, `score()` from a solver, an approver, a reviewer or an MCP server's sampling request. Sample init and scoring are outside the fence.
+- **`escalate` at the generate stages** (decision 16). `threshold` gains `model_input` and `model_output`; `handle_escalation` answers at all four stages and is marked as answering escalations only, so it never makes a stage watched on its own.
+- **`history` keeps its meaning** (decision 15, revised): the scaffold's list at the tool stages, the caller's at the generate stages. The as-sent view (AISI R10) is its own PR, an on-demand query on `TranscriptHistory.find_last` (inspect_ai #5831); marking compaction and `score()` calls in the transcript for it and for replay (R7) is deferred to that work, designed with its viewer and TUI impact. Decision 17's recording is dropped, since R2 finds a tool call's producing `ModelEvent` in the transcript.
+- **`reject` and `modify` at the generate stages** (decisions 8–13) are deferred to part 2 and stay shape-check errors.
 
 ## Deferred
 
@@ -495,7 +508,7 @@ Agreed work that waits for something else. Each entry says what unblocks it. Kee
 
 - **Revisit `decide_final()`: is it the right design at all?** Raised in review: any protocol at any depth, including third-party code inside `observe_only()` or `threshold()`, can call it and bypass every layer above, while the design sells child decisions as advisory to the parent. Options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism. `sentinel.md` open question 23. `human()` no longer uses it, which weakens the case for keeping it. Simplifying the runner's origin-threading and its superseded and bypassed bookkeeping is part of the outcome.
 - **Containing `decide_final()`**: a parent configured to hold back a child's final decision, e.g. `shadow(child)` for trialling a protocol on live traffic, recorded as its own event kind. Waits for a user who needs shadow mode.
-- **`Decision.modify(step, arguments=...)`**, a constructor that keeps the call's id and function by construction. A tool-call form can land before the generate stages, with the signature designed for both, since what a generate-stage modify replaces shapes it. Until then, authors write `Decision(action="modify", modified=replace(step.call, arguments={...}))`, and the shape check rejects a changed id or function.
+- **`Decision.modify(step, arguments=...)`**, a constructor that keeps the call's id and function by construction. A tool-call form can land before the generate-stage `modify`, with the signature designed for both; [generate-stages.md](generate-stages.md) proposes one constructor overloaded on the step type. Until then, authors write `Decision(action="modify", modified=replace(step.call, arguments={...}))`, and the shape check rejects a changed id or function.
 
 ### Then: tool-stage completeness
 
@@ -512,7 +525,7 @@ Agreed work that waits for something else. Each entry says what unblocks it. Kee
 
 Waits on another workstream, or not urgent.
 
-- **Generate stages** (`BeforeGenerate`, `AfterGenerate`), and with them the design of what a generate-stage `modify` may replace.
+- **Generate stages, part 2** ([generate-stages.md](generate-stages.md), decisions 8–13): `reject` and `modify` at `BeforeGenerate` and `AfterGenerate`, `Decision.modify`, and `SentinelEvent.modified` for an `AfterGenerate` modify.
 - **`compaction_summary(step)`**, a helper returning the latest compaction summary text. Waits on inspect_ai making the `"summary"` message metadata key a documented constant, and must handle a summary merged into the task prompt.
 - **An example compaction monitor.** Raised by the maintainer on 2026-10-02: a stateful generate-stage monitor that watches the messages, detects a compaction summary, and runs a check on the summary, keeping what it has seen in `store_as()`. Waits on the generate stages (inspect_sentinel PR #42), and uses `compaction_summary` once it exists.
 - **`react` overflow recovery rewriting history**: when a call overflows the context window, `react` replaces `state.messages` with the compacted list, so `step.history` loses the folded turns. To raise with inspect_ai.

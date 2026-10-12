@@ -43,7 +43,7 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
 Task(sentinel=threshold(suspicion_monitor(), reject_at=0.8))
 ```
 
-Both run before the tool call executes (the `step` they take is `BeforeToolCall`). There are four stages, the step types a monitor or protocol could choose to target; the two tool stages are built, and the generate stages are designed but not yet built:
+Both run before the tool call executes (the `step` they take is `BeforeToolCall`). There are four stages, the step types a monitor or protocol could choose to target; the two tool stages are built, and the generate stages are built (with `proceed`, `escalate` and `terminate`; `reject` and `modify` come later):
 
 | Stage | Fires |
 |------------------------------------|------------------------------------|
@@ -54,7 +54,7 @@ Both run before the tool call executes (the `step` they take is `BeforeToolCall`
 
 Each function handles one stage and never dispatches on the payload type; a protocol that only forwards the step, such as `concurrent`, annotates `Step` to run at every stage.
 
-Every step carries both `input`, exactly what the model was sent for that generate (at the tool stages `None` when no model call produced the call or its record is gone), and `history`, the scaffold's full conversation including turns a compaction has folded away, since scaffolds edit what they send and neither list is derivable from the other. Each step also carries a `conversation` id, shared with the loop's `ModelEvent`s and `CompactionEvent`s, that links one agent's steps across compactions when several agents share a sample.
+Every step carries both `input`, exactly what the model was sent for that generate (at the tool stages `None` when no model call produced the call or its record is gone), and `history`, the conversation as the scaffold holds it: at the tool stages the scaffold's full list, pre-compaction turns included; at the generate stages the caller's messages, which may already be compacted. Scaffolds edit what they send, so neither list is derivable from the other. A view of everything the model was sent over an agent's run is a separate query, deferred (AISI R10). Each step also carries a `conversation` id, shared with the loop's `ModelEvent`s and `CompactionEvent`s, that links one agent's steps across compactions when several agents share a sample.
 
 The sentinel API will include a variety of view functions that help with presenting task context and agent actions to the monitor (e.g. like the `messages_as_str()` function in Inspect Scout).
 
