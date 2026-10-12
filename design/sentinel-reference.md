@@ -174,7 +174,7 @@ class BeforeToolCall:
     message: str                # assistant text alongside the call
     call: ToolCall              # the call as it will execute
     view: ToolCallView
-    input: list[ChatMessage]    # the request that produced the call
+    input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage]  # the scaffold's full conversation
     escalations: tuple[Reported[Decision], ...] = ()
 
@@ -187,7 +187,7 @@ class AfterToolCall:
     result: ChatMessageTool     # what the model will see, after truncation
     output: ToolResult          # the tool's untruncated return value
     view: ToolCallView
-    input: list[ChatMessage]    # the request that produced the call
+    input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage]
     escalations: tuple[Reported[Decision], ...] = ()
 
@@ -508,7 +508,7 @@ Which surfaces exist where:
 | Tool result as the model saw it | yes | next request only, lossy | yes | evidence |
 | Untruncated tool output | yes | no | no | evidence |
 | `ToolCallView` | yes | no | from events only | evidence |
-| Exact model input (`step.input`) | yes | yes, the request | exact from `ModelEvent`; approximate from messages after a compaction | evidence |
+| Exact model input (`step.input`) | yes | yes, the request | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
 | Full history, pre-compaction turns included (`step.history`) | yes | keyed store; else equals `input` | yes | evidence |
 | Reasoning | provider-dependent | whatever the wire carries | as logged | evidence |
 | System prompt, as the model saw it (`step.input[0]`) | yes | yes, but written by the scaffold under observation | from events only | evidence |

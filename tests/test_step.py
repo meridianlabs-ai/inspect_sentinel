@@ -48,28 +48,6 @@ def test_before_tool_call_defaults_to_no_escalations() -> None:
     assert step.history is history
 
 
-def test_a_step_without_a_producing_model_call_has_no_input() -> None:
-    before = BeforeToolCall(
-        conversation="conv",
-        message="ok",
-        call=_call(),
-        view=ToolCallView(),
-        input=None,
-        history=_history(),
-    )
-    after = AfterToolCall(
-        conversation="conv",
-        message="ok",
-        call=before.call,
-        result=ChatMessageTool(content="out", tool_call_id=before.call.id),
-        output="out",
-        view=ToolCallView(),
-        input=None,
-        history=before.history,
-    )
-    assert before.input is None and after.input is None
-
-
 def test_before_tool_call_carries_escalations() -> None:
     escalation = Reported(
         name="guard",

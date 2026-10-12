@@ -172,7 +172,7 @@ class BeforeToolCall:
     message: str                # assistant text alongside the call
     call: ToolCall              # the call as it will execute
     view: ToolCallView
-    input: list[ChatMessage]    # the request that produced the call
+    input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage]  # the scaffold's full conversation
     escalations: tuple[Reported[Decision], ...] = ()
 
@@ -185,7 +185,7 @@ class AfterToolCall:
     result: ChatMessageTool     # what the model will see, after truncation
     output: ToolResult          # the tool's untruncated return value
     view: ToolCallView
-    input: list[ChatMessage]    # the request that produced the call
+    input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage]
     escalations: tuple[Reported[Decision], ...] = ()
 
@@ -1504,7 +1504,7 @@ What a monitor can be shown, where each thing comes from, and where it is availa
 | Tool result as the model sees it | `step.result` | yes | next request only (lossy) | yes; exact from `ToolEvent` | evidence |
 | Untruncated tool output | `step.output` | yes | **no** | **no** | evidence |
 | Tool call view (`ToolCallView`) | `step.view` | yes | **no** | from events only | evidence |
-| Exact model input | `step.input` | yes | yes (the request) | exact from `ModelEvent`; approximate from messages after a compaction | evidence |
+| Exact model input | `step.input` | yes | yes (the request) | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
 | Full history, pre-compaction turns included | `step.history` | yes | keyed store; else equals `input` | yes | evidence |
 | Reasoning (`ContentReasoning`) | inside assistant messages | provider-dependent: full, summary, or redacted | whatever the wire carries | as logged | evidence |
 | System prompt, as the model saw it | `step.input[0]` when present | yes | yes | from events only | **see below** |

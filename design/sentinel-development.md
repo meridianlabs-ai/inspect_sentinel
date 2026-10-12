@@ -74,7 +74,7 @@ The canonical reconstruction works from `list[ChatMessage]` alone, because that 
 | `BeforeToolCall` | each `tool_calls[i]` on an assistant message, with the message text and history to that point | `view` absent |
 | `AfterToolCall` | the `ChatMessageTool` whose `tool_call_id` matches, as `result`; history to that point | `output` (untruncated) absent |
 
-Messages give the two histories unevenly. A transcript's messages *are* `history`, the scaffold's full conversation with its pre-compaction turns, so that field is exact. `input` can only be approximated as the history to that point, which is right until the first compaction and wrong after it: the model was shown a summary plus recent turns, and the reconstruction shows it everything. A monitor measured on such a replay sees less in a live run than it was measured on, and the adapter should say so when the transcript carries compaction markers.
+Messages give the two histories unevenly. A transcript's messages *are* `history`, the scaffold's full conversation with its pre-compaction turns, so that field is exact. At the tool stages `input` is `None` from messages alone: the history to that point is right until the first compaction and wrong after it (the model was shown a summary plus recent turns), so it is not offered as the model's input. A live step without a recorded model call gets `None` the same way, so a monitor handles both alike.
 
 `view` and `output` being absent is the case `sentinel.md` already requires monitors to tolerate for proxies, so a portable monitor replays from messages unchanged. Note the last row is *better* than the proxy's: a proxy never sees the final step's result because no further request carries it, whereas a transcript is complete.
 
