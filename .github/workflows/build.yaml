@@ -40,7 +40,7 @@ jobs:
       # main, run `uv lock --upgrade-package inspect-ai` and remove this step and
       # --no-sync below.
       - name: Install inspect_ai (TEMPORARY)
-        run: uv pip install --no-deps "inspect_ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@77dec2567339631cdcef585e3e8ce295a7df76a6"
+        run: uv pip install --no-deps "inspect_ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@a5fa43dd1e3d39d9003bb0ac05ea42a06b8574a2"
       - name: Run pyright
         run: uv run --no-sync pyright
 
@@ -62,7 +62,7 @@ jobs:
       # main, run `uv lock --upgrade-package inspect-ai` and remove this step and
       # --no-sync below.
       - name: Install inspect_ai (TEMPORARY)
-        run: uv pip install --no-deps "inspect_ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@77dec2567339631cdcef585e3e8ce295a7df76a6"
+        run: uv pip install --no-deps "inspect_ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@a5fa43dd1e3d39d9003bb0ac05ea42a06b8574a2"
       - name: Run tests
         run: uv run --no-sync pytest
 
