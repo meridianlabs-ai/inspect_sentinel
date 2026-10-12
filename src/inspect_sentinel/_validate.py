@@ -19,19 +19,19 @@ from ._types import Group, Sentinel
 def validate_decision_shape(decision: Decision, step: Step) -> None:
     """Check a decision for the deterministic protocol bugs no type can express, raising `ValueError` on one.
 
-    The action must be legal for the stage (`reject` and `modify` are not legal after a tool call, and only `continue` and `terminate` are supported at the generate stages for now), `modified` must be set exactly when the action is `modify`, a `modify` may rewrite only the call's arguments (its `id` and `function` must match the step's call), and `message` may be set only on a `reject`.
+    The action must be legal for the stage (`reject` and `modify` are not legal after a tool call, and `reject` and `modify` are not yet supported at the generate stages), `modified` must be set exactly when the action is `modify`, a `modify` may rewrite only the call's arguments (its `id` and `function` must match the step's call), and `message` may be set only on a `reject`.
 
     Args:
         decision: The decision a layer returned.
         step: The step it decided about.
     """
-    if isinstance(step, (BeforeGenerate, AfterGenerate)) and decision.action not in (
-        "continue",
-        "terminate",
+    if isinstance(step, (BeforeGenerate, AfterGenerate)) and decision.action in (
+        "reject",
+        "modify",
     ):
         raise ValueError(
             f"A decision {_GENERATE_STAGES[type(step)]} cannot {decision.action} yet; "
-            "only 'continue' and 'terminate' are supported at the generate stages."
+            "only 'continue', 'escalate' and 'terminate' are supported at the generate stages."
         )
     if isinstance(step, AfterToolCall) and decision.action in ("reject", "modify"):
         raise ValueError(

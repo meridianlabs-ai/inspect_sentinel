@@ -55,6 +55,9 @@ STEP_TYPES_ATTR = "__sentinel_step_types__"
 WATCHED_ATTR = "__sentinel_watched__"
 # set on a composition's function, which only forwards the step to its children
 _FORWARDS_ATTR = "__sentinel_forwards__"
+# set on a function that only answers escalations from earlier links, so it
+# watches no stage of its own
+_ANSWERS_ATTR = "__sentinel_answers__"
 # the function a configured function guards, so configuring it again guards the
 # original rather than the guard
 _GUARDED_ATTR = "__sentinel_guarded__"
@@ -245,7 +248,7 @@ def step_types(sentinel: Sentinel) -> frozenset[type[Any]]:
 def watched_stages(sentinel: Sentinel) -> frozenset[type[Any]]:
     """The step payload types a configured monitor or protocol, or any monitor or protocol given to its factory, watches.
 
-    A composition that only forwards the step to its children, such as `concurrent`, `sequential` or `observe_only`, watches what its children watch. Any other function watches the stages it accepts, so a protocol annotated `Step` watches every stage.
+    A composition that only forwards the step to its children, such as `concurrent`, `sequential` or `observe_only`, watches what its children watch, and `handle_escalation`, which only answers escalations from earlier links, watches nothing of its own. Any other function watches the stages it accepts, so a protocol annotated `Step` watches every stage.
 
     Args:
         sentinel: An instance returned by a `@monitor` or `@protocol` factory.
@@ -258,6 +261,11 @@ def watched_stages(sentinel: Sentinel) -> frozenset[type[Any]]:
 
 def forwards(function: F) -> F:
     setattr(function, _FORWARDS_ATTR, True)
+    return function
+
+
+def answers_escalations(function: F) -> F:
+    setattr(function, _ANSWERS_ATTR, True)
     return function
 
 
@@ -291,6 +299,8 @@ def _own_stages(function: object, has_children: bool) -> frozenset[type[Any]]:
         return frozenset(inherited)
     # a composition whose children were not found watches every stage it accepts
     if has_children and getattr(function, _FORWARDS_ATTR, False):
+        return frozenset()
+    if getattr(function, _ANSWERS_ATTR, False):
         return frozenset()
     return step_types(cast(Any, function))
 

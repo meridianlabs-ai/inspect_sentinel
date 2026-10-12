@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Literal
 
 from .._context import Context
-from .._decorators import protocol
+from .._decorators import answers_escalations, protocol
 from .._report import Decision
-from .._step import AfterToolCall, BeforeToolCall, Step
+from .._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 from .._types import ProtocolGroup
 
 _ACTIONS = ("terminate", "continue")
@@ -17,7 +17,7 @@ def handle_escalation(action: Literal["terminate", "continue"]) -> ProtocolGroup
 
     Put it last in a `sequential()`, after the links that escalate what they are unsure about, as in `sequential([threshold(...), handle_escalation("terminate")])`, or after a `human()` for when the person cannot be reached. It decides only when `step.escalations` is non-empty and abstains otherwise, so at the root, or anywhere nothing escalated, it does nothing. Its explanation names each escalation it handled, `escalated by triage: call deletes files (rm)`, and it carries their references.
 
-    An escalate that reaches the root with nothing to handle it ends the sample, `run_sentinel` returning a `terminate` explained as an unhandled escalation; `handle_escalation()` is how a configuration states a fixed policy instead. `"continue"` lets an unsure escalation through, recorded in the configuration and the log. It runs before and after tool calls.
+    An escalate that reaches the root with nothing to handle it ends the sample, `run_sentinel` returning a `terminate` explained as an unhandled escalation; `handle_escalation()` is how a configuration states a fixed policy instead. `"continue"` lets an unsure escalation through, recorded in the configuration and the log. It runs before and after tool calls and the agent's model calls, but never makes a stage watched on its own: a stage runs only when something else in the configuration watches it.
 
     Args:
         action: What to do when the step was escalated: `"terminate"` to end the sample, or `"continue"` to let the step proceed. Required, so every configuration states its policy.
@@ -33,7 +33,18 @@ def handle_escalation(action: Literal["terminate", "continue"]) -> ProtocolGroup
     async def tool_result(context: Context, step: AfterToolCall) -> Decision | None:
         return _handle(action, step)
 
-    return ProtocolGroup(tool_call, tool_result)
+    async def model_input(context: Context, step: BeforeGenerate) -> Decision | None:
+        return _handle(action, step)
+
+    async def model_output(context: Context, step: AfterGenerate) -> Decision | None:
+        return _handle(action, step)
+
+    return ProtocolGroup(
+        *(
+            answers_escalations(function)
+            for function in (tool_call, tool_result, model_input, model_output)
+        )
+    )
 
 
 def _handle(action: Literal["terminate", "continue"], step: Step) -> Decision | None:

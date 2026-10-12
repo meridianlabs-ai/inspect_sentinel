@@ -1,10 +1,17 @@
+from collections import UserList
 from typing import Any
 
 import pytest
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol, watched_stages
-from inspect_sentinel._protocols import concurrent, observe_only, sequential, threshold
+from inspect_sentinel._protocols import (
+    concurrent,
+    handle_escalation,
+    observe_only,
+    sequential,
+    threshold,
+)
 from inspect_sentinel._report import Action, Decision, Observation
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import (
@@ -88,6 +95,19 @@ def tool_stages() -> ProtocolGroup:
     return ProtocolGroup(call, result)
 
 
+@monitor
+def returns_a_configured_monitor(through: int = 1) -> Monitor:
+    # a factory that returns another factory's configured instance (#75)
+    if through > 1:
+        return returns_a_configured_monitor(through - 1)
+    return sees_input()
+
+
+@protocol
+def returns_a_configured_protocol() -> Protocol:
+    return decides("terminate")
+
+
 @protocol
 def wraps_a_composition(monitors: Monitor) -> Protocol:
     return concurrent([observe_only(monitors), decides("terminate")])
@@ -134,9 +154,9 @@ async def test_a_monitor_failing_at_a_generate_stage_is_recorded_and_observe_onl
     assert [r.reported.name for r in recorder.records] == ["ok"]
 
 
-@pytest.mark.parametrize("action", ["continue", "terminate"])
+@pytest.mark.parametrize("action", ["continue", "escalate", "terminate"])
 @pytest.mark.parametrize("step", [before_generate_step(), after_generate_step()])
-def test_continue_and_terminate_are_legal_at_the_generate_stages(
+def test_continue_escalate_and_terminate_are_legal_at_the_generate_stages(
     action: Action, step: Step
 ) -> None:
     validate_decision_shape(Decision(action=action), step)
@@ -146,7 +166,6 @@ def test_continue_and_terminate_are_legal_at_the_generate_stages(
     "decision",
     [
         Decision.reject(message="no"),
-        Decision.escalate("unsure"),
         Decision(
             action="modify",
             modified=before_step().call,
@@ -154,10 +173,10 @@ def test_continue_and_terminate_are_legal_at_the_generate_stages(
     ],
 )
 @pytest.mark.parametrize("step", [before_generate_step(), after_generate_step()])
-def test_other_actions_are_not_supported_at_the_generate_stages_yet(
+def test_reject_and_modify_are_not_supported_at_the_generate_stages_yet(
     decision: Decision, step: Step
 ) -> None:
-    with pytest.raises(ValueError, match="only 'continue' and 'terminate'"):
+    with pytest.raises(ValueError, match="only 'continue', 'escalate' and 'terminate'"):
         validate_decision_shape(decision, step)
 
 
@@ -165,6 +184,68 @@ def test_other_actions_are_not_supported_at_the_generate_stages_yet(
 async def test_an_unsupported_generate_decision_fails_the_protocol() -> None:
     with pytest.raises(ValueError, match="decides.*cannot reject yet"):
         await run_sentinel(decides("reject"), host_context(), after_generate_step())
+
+
+@protocol
+def escalates_at_generates() -> ProtocolGroup:
+    async def before(context: Context, step: BeforeGenerate) -> Decision | None:
+        return Decision.escalate("unsure about the request")
+
+    async def after(context: Context, step: AfterGenerate) -> Decision | None:
+        return Decision.escalate("unsure about the reply")
+
+    return ProtocolGroup(before, after)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("step", [before_generate_step(), after_generate_step()])
+async def test_an_unhandled_escalate_at_a_generate_stage_terminates(
+    step: Step,
+) -> None:
+    decision = await run_sentinel(
+        sequential([escalates_at_generates()]), host_context(), step
+    )
+    assert decision is not None
+    assert decision.action == "terminate"
+    assert decision.explanation is not None
+    assert decision.explanation.startswith("unhandled escalation from")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("action", ["continue", "terminate"])
+@pytest.mark.parametrize("step", [before_generate_step(), after_generate_step()])
+async def test_handle_escalation_answers_an_escalate_at_a_generate_stage(
+    action: Any, step: Step
+) -> None:
+    root = sequential([escalates_at_generates(), handle_escalation(action)])
+    decision = await run_sentinel(root, host_context(), step)
+    assert decision is not None
+    assert decision.action == action
+    assert decision.explanation is not None
+    assert decision.explanation.startswith("escalated by escalates_at_generates")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "step, expected",
+    [
+        (before_generate_step(), "escalate"),
+        (after_generate_step(), "terminate"),
+    ],
+)
+async def test_threshold_decides_at_the_generate_stages(
+    step: Step, expected: str
+) -> None:
+    root = threshold(
+        {"input": sees_input(), "output": sees_output()},
+        escalate_at=0.1,
+        terminate_at=0.2,
+    )
+    decision = await run_sentinel(
+        sequential([root, handle_escalation("continue")]), host_context(), step
+    )
+    assert decision is not None
+    assert decision.action == ("continue" if expected == "escalate" else expected)
 
 
 @pytest.mark.parametrize(
@@ -190,6 +271,33 @@ async def test_an_unsupported_generate_decision_fails_the_protocol() -> None:
         ),
         (lambda: decides("continue"), {AfterGenerate}),
         (lambda: wraps_a_composition(sees_call()), {AfterGenerate, BeforeToolCall}),
+        (lambda: handle_escalation("terminate"), set[type[Any]]()),
+        (
+            lambda: sequential(
+                [threshold(sees_call(), escalate_at=0.5), handle_escalation("continue")]
+            ),
+            {BeforeToolCall},
+        ),
+        (
+            lambda: sequential(
+                [
+                    threshold(sees_output(), escalate_at=0.5),
+                    handle_escalation("continue"),
+                ]
+            ),
+            {AfterGenerate},
+        ),
+        (
+            lambda: threshold({"a": sees_input(), "b": sees_call()}, terminate_at=0.5),
+            {BeforeGenerate, BeforeToolCall},
+        ),
+        (lambda: returns_a_configured_monitor(), {BeforeGenerate}),
+        (lambda: returns_a_configured_monitor(through=2), {BeforeGenerate}),
+        (lambda: returns_a_configured_protocol(), {AfterGenerate}),
+        (
+            lambda: observe_only(UserList([sees_input(), sees_call()])),
+            {BeforeGenerate, BeforeToolCall},
+        ),
     ],
 )
 def test_watched_stages_are_what_the_tree_watches(

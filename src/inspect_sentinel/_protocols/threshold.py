@@ -11,7 +11,7 @@ from .._decorators import members, protocol
 from .._report import Action, Decision, Observation, Reported
 from .._results import Observations
 from .._runner import describe, run_monitors
-from .._step import AfterToolCall, BeforeToolCall, Step
+from .._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 from .._types import Group, Monitor, MonitorGroup, Monitors, Protocol, ProtocolGroup
 from .._validate import named_children
 
@@ -30,7 +30,7 @@ def threshold(
 
     A threshold is one number for every score, or a mapping that sets one per dimension. In a mapping, `"<monitor>.<dimension>"` applies to one dimension of one monitor (the monitor's instance name, as in `Reported.name`), a bare `"<dimension>"` applies to that dimension from every monitor, a monitor reporting a single number is keyed by its instance name, and `"*"` applies to anything unlisted. The most specific key wins: qualified, then bare, then `"*"`. A score no key covers never triggers. A number is shorthand for `{"*": number}`. A key containing `.` is always `"<monitor>.<dimension>"`, qualified by the longest monitor instance name that prefixes it, and is an error if none does: it is never also a bare dimension, so with monitors `a` and `a.b` the key `"a.b.c"` is dimension `c` of `a.b`, and a dimension containing `.` is keyed through its monitor. A threshold that can never apply, because a stronger action's threshold is at or below it for every score it covers, is a configuration error: `escalate_at=0.9` beside `terminate_at=0.8` would never escalate. A key that one mapping lists and another does not is not such a conflict.
 
-    It runs at each stage its monitors watch, before and after tool calls, and combines monitors that watch different stages, each thresholded at its own: at a step, only the monitors watching that stage report. A `reject` is legal only before a tool call, so with `reject_at` every monitor function must watch only `BeforeToolCall`, and `threshold` runs only there.
+    It runs at each stage its monitors watch, before and after tool calls and the agent's model calls, and combines monitors that watch different stages, each thresholded at its own: at a step, only the monitors watching that stage report. A `reject` is legal only before a tool call, so with `reject_at` every monitor function must watch only `BeforeToolCall`, and `threshold` runs only there.
 
     A decision is explained for the log: it names the highest-scoring score that reached the decision's threshold (the first in configuration order on a tie) with its monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host` when the threshold came from `"*"` or the score is a single number, and `sabotage 0.72 ≥ 0.60 from audit: edits the tests` when it came from the dimension's own key. It carries every reporting monitor's references, and its `metadata["observations"]` lists every monitor that reported at the step, `{"monitor": name, "suspicion": score, "explanation": text}` in configuration order, so they reach a `human()` after it through `step.escalations`, where a host can show each score and where the monitors disagree; inspect_ai's approval card shows only the explanation until it renders them. None sets `message`, so on a reject the agent gets the host's default "not approved" text and learns nothing about what the monitors saw.
 
@@ -101,10 +101,21 @@ def threshold(
     async def tool_result(context: Context, step: AfterToolCall) -> Decision | None:
         return await decide(context, step)
 
+    async def model_input(context: Context, step: BeforeGenerate) -> Decision | None:
+        return await decide(context, step)
+
+    async def model_output(context: Context, step: AfterGenerate) -> Decision | None:
+        return await decide(context, step)
+
     # one function per stage its monitors watch, so a stage is added by adding
     # its payload and function here
     functions: list[Protocol] = []
-    for stage, function in ((BeforeToolCall, tool_call), (AfterToolCall, tool_result)):
+    for stage, function in (
+        (BeforeToolCall, tool_call),
+        (AfterToolCall, tool_result),
+        (BeforeGenerate, model_input),
+        (AfterGenerate, model_output),
+    ):
         if stage in watched:
             functions.append(function)
     if len(functions) == 1:
