@@ -894,8 +894,9 @@ def alarm() -> Monitor:
 async def test_concurrent_runs_the_children_it_was_built_with(
     kind: str, first: Callable[[], Any]
 ) -> None:
-    # changing the caller's container afterwards changes neither what runs nor
-    # what is recorded, so a rebuild from the configuration runs the same tree
+    # the configuration is recorded when the layer is built; changing the
+    # caller's container afterwards must not change what runs either, so a run
+    # and a rebuild from the configuration agree
     children = _container(kind, first())
     layer = concurrent(children)
     recorded = config_from_sentinel(layer)
