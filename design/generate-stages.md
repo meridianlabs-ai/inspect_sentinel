@@ -49,6 +49,8 @@ A generate is the agent's when all of these hold:
 5. the call is not a compaction summary: the summary strategy sets the same variable;
 6. the call is not made from a tool's own body: `call_tool`, and the sandbox bridge service for a host tool, record the current agent span when a tool starts, and a generate in that same agent span is the tool's. An agent started inside the tool (`as_tool()`) opens its own agent span, so its calls are the agent's again.
 
+**Mechanism.** inspect_ai keeps the rule in one context, `sentinel_scope(AgentScope, final=)`, read by `Model.generate`. The solvers set `ACTIVE_MODEL`; an agent span sets `ANY_MODEL` (only inside a scope, so an agent run during sample init or scoring stays unchecked); a tool body sets `OFF`, which a nested agent span turns back on; a sentinel run, a compaction summary and a scorer set `OFF` as final, which nothing inside can turn back on, so an agent a monitor or scorer runs is not checked. Innermost wins otherwise. The scope is internal for now; a public marker for helper calls is a later decision.
+
 ### What is in and out
 
 | Caller | Checked | Why |
