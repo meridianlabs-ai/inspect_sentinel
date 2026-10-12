@@ -19,6 +19,7 @@ from inspect_sentinel import (
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._report import Action, Decision, Observation
+from inspect_sentinel._resolve import resolve_sentinel
 from inspect_sentinel._runner import run_monitors, run_sentinel
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
@@ -298,7 +299,9 @@ async def test_a_failed_monitor_under_threshold_fails_the_step() -> None:
     recorder = ListRecorder()
     with pytest.raises(MonitorFailedError, match="'broken'.*model unavailable"):
         await run_sentinel(
-            threshold({"broken": fails(), "ok": scores(0.1)}, reject_at=0.5),
+            resolve_sentinel(
+                threshold({"broken": fails(), "ok": scores(0.1)}, reject_at=0.5)
+            ),
             host_context(recorder=recorder),
             before_step(),
         )

@@ -768,28 +768,40 @@ The shipped `threshold` protocol, in outline, with configuration-time validation
 @protocol
 def threshold(
     monitors: Monitor | MonitorGroup | Monitors,
-    reject_at: float | Mapping[str, float],
+    *,
+    escalate_at: float | Mapping[str, float] | None = None,
+    reject_at: float | Mapping[str, float] | None = None,
     terminate_at: float | Mapping[str, float] | None = None,
-) -> Protocol:
-    rejects = thresholds(reject_at)  # a float is {"*": float}
-    terminates = thresholds(terminate_at)
+) -> Protocol | ProtocolGroup:
+    # strongest first; a float is {"*": float}; the ones not given are left out
+    levels = [
+        ("terminate", thresholds(terminate_at)),
+        ("reject", thresholds(reject_at)),
+        ("escalate", thresholds(escalate_at)),
+    ]
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(context: Context, step: Step) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None
-        if crossed := crossing(observations, terminates):
-            return Decision.terminate(crossed.explain(), references=crossed.references)
-        if crossed := crossing(observations, rejects):
-            return Decision.reject(crossed.explain(), references=crossed.references)
+        for action, limits in levels:
+            if crossed := crossing(observations, limits):
+                return Decision(
+                    action=action,
+                    explanation=crossed.explain(),
+                    references=references(observations),
+                    metadata={"observations": scores(observations)},
+                )
         return Decision.proceed()
 
-    return decide
+    # one function per stage its monitors watch; before tool calls only, with
+    # reject_at
+    return per_stage(decide, monitors)
 ```
 
-It holds the constants a monitor cannot, reads its children's scores through the runner, and returns a decision. Nothing else. A reject or terminate is explained for the log, with the highest crossing score, its monitor's name, and that monitor's explanation and references. Neither sets `message`, so the agent learns only that the call was refused.
+It holds the constants a monitor cannot, reads its children's scores through the runner, and returns a decision. Nothing else. Each of `escalate_at`, `reject_at` and `terminate_at` is a floor: at or above it the step gets at least that action, and the decision is the strongest action any score reaches. At least one is required; `observe_only()` is how to record scores with nothing acting on them. A decision is explained for the log with the highest score that reached its threshold, that monitor's name and its explanation; it carries every reporting monitor's references, and `metadata["observations"]` lists every monitor's score and explanation, so a `human()` after it receives all of them through `step.escalations`, and inspect_ai's approval card shows them once it renders that metadata ([pr-series.md](pr-series.md), Deferred, "inspect_ai's human view shows every score"). None sets `message`, so the agent learns only that the call was refused. It runs at each stage its monitors watch, monitors of different stages each thresholded at their own; `reject_at` limits it to `BeforeToolCall`, where a reject is legal. An escalation is answered by what follows it in a `sequential()`: `sequential([threshold(monitors, escalate_at=0.6, terminate_at=0.9), human(stages=["tool_call"])])`.
 
-Each threshold is one number or a mapping per dimension. A key `"<monitor>.<dimension>"` applies to one monitor's dimension (the monitor's instance name, as in `Reported.name`), a bare `"<dimension>"` to that dimension from every monitor, a monitor's instance name to its single-number score, and `"*"` to anything unlisted; the most specific key wins, and a score no key covers never triggers. A number is shorthand for `{"*": number}`, so a float threshold behaves and explains itself as it always has. A step is rejected (terminated) when any score reaches its threshold, terminate checked first. Configuration validates the keys, requires finite values, and requires terminate above reject wherever both cover a score. This is what thresholding [structured suspicion](#suspicion-is-structured) per dimension means: calibration produces one percentile per dimension, and the mapping holds them.
+Each threshold is one number or a mapping per dimension. A key `"<monitor>.<dimension>"` applies to one monitor's dimension (the monitor's instance name, as in `Reported.name`), a bare `"<dimension>"` to that dimension from every monitor, a monitor's instance name to its single-number score, and `"*"` to anything unlisted; the most specific key wins, and a score no key covers never triggers. A number is shorthand for `{"*": number}`, so a float threshold behaves and explains itself as it always has. The strongest action any score reaches decides: terminate, then reject, then escalate. A key containing `.` is always qualified, by the longest instance name that prefixes it, never a bare dimension. Configuration validates the keys, requires finite values, and rejects a threshold that can never apply because a stronger action's threshold is at or below it for every score it covers (`escalate_at=0.9` beside `terminate_at=0.8`); a key one mapping lists and another does not is not such a conflict. This is what thresholding [structured suspicion](#suspicion-is-structured) per dimension means: calibration produces one percentile per dimension, and the mapping holds them.
 
 And `no_curl` from [Shape](#shape), which is the same thing with the middle removed: no monitors, no runner call, a decision straight from the step. Both are protocols. **Deciding is what makes something a protocol, not having children.** An earlier draft defined a protocol as "a monitor that takes monitors", which made the combinator the essence and left rules and `human()` as a special kind of monitor — the kind that decides — with a decorator whose only job was to distinguish the two. That was the wrong seam. The seam the literature draws, and the one the report types already encode, is between observing and deciding; whether a decider consults anything is a detail of its implementation.
 
