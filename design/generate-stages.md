@@ -10,11 +10,11 @@ Status: landing (inspect_ai #5811, sentinel #42). Monitors observe both generate
 |---|---|---|
 | 1 | How an agent generate is identified | **Revised 2026-10-12:** a call made by an agent loop: inside an agent span (`react`, `handoff()`, `as_tool()`, `deepagent`, the bridges), or on the sample's active model during the solver phase (the `generate()` solver and custom solvers), and in either case not inside a tool's own body, a sentinel run, a compaction or a scorer. Coverage then matches the tool stages, which already check every agent's tool calls. Requires every agent loop to open an agent span consistently (tested per loop). |
 | 2 | Sub-agents and role models that are not the active model | **Revised 2026-10-12:** checked, by decision 1's agent-loop rule, whatever model they use. Reason: their tool calls are already checked at the tool stages, so leaving their turns unchecked was inconsistent and let an agent hand risky work to a sub-agent on another model. Helper calls stay out through the tool-body rule. The agent instance record (`step.agent`) and per-instance store remain later work ([sub-agents.md](sub-agents.md), #66). |
-| 3 | Compaction summary calls | Not checked. The summary reaches the next `BeforeGenerate` as part of `input`. Prototyped. |
-| 4 | Where the hook sits | **Decided 2026-10-10.** In `Model.generate`, once per call, outside the connection slot; the input preparation moves ahead of the slot so the step sees what is sent ([b](#b-where-the-hook-sits)). Prototyped. |
-| 5 | Cache hits | Both stages run on a cache hit. Prototyped. |
-| 6 | A generate that raises | No `AfterGenerate` (provider error, `fail_on_refusal`, a limit). Prototyped. |
-| 7 | Dispatching a stage nothing watches | Skip it, at every stage, so a tool-only sentinel opens no span per generate. Prototyped. |
+| 3 | Compaction summary calls | **Decided 2026-10-12:** not checked. The summary reaches the next `BeforeGenerate` as part of `input`. |
+| 4 | Where the hook sits | **Decided 2026-10-10.** In `Model.generate`, once per call, outside the connection slot; the input preparation moves ahead of the slot so the step sees what is sent ([b](#b-where-the-hook-sits)). Built. |
+| 5 | Cache hits | **Decided 2026-10-12:** both stages run on a cache hit. |
+| 6 | A generate that raises | **Decided 2026-10-12:** no `AfterGenerate` (provider error, `fail_on_refusal`, a limit). |
+| 7 | Dispatching a stage nothing watches | **Decided 2026-10-12:** skip it, at every stage, so a tool-only sentinel opens no span per generate. |
 | 8 | `reject` before a generate | **Deferred 2026-10-12 to part 2** (a follow-up PR); illegal at the generate stages until then. Proposal: Not legal in v1; use `modify` or `terminate`. If kept, define it as a sentinel-authored refusal ([c](#c-before-generate-decisions)). |
 | 9 | `modify` before a generate | **Deferred 2026-10-12 to part 2** (a follow-up PR); illegal at the generate stages until then. Proposal: Replace `input`, narrow `tools` to a subset by name, change `tool_choice`; not `model` or `config`. |
 | 10 | `reject` after a generate | **Deferred 2026-10-12 to part 2** (a follow-up PR); illegal at the generate stages until then. Proposal: Replay: append the rejected message and the `message` as a user turn, regenerate, bounded at three; then terminate ([d](#d-after-generate-decisions)). |
@@ -36,40 +36,41 @@ Decided before this design: the generate stages check the agent's own model call
 - **B. Agent loops opt in.** `react`, `generate()`, `generate_loop` and `bridge_generate` call a sentinel-aware generate. Exact about turns, but a custom agent or solver calling `model.generate` is never checked unless it adopts a new public API, and every loop must remember to.
 - **C. Any generate in an agent context.** Hook `Model.generate` and check every call made in the solver phase outside a tool body, whatever the model. Covers sub-agents and role models, but also a solver's helper calls to a classifier or a critique model, which are not agent actions.
 
-**Recommendation: A.** It matches the decided scope, needs no new public API, and covers custom agents. Its gaps (sub-agents and role models on another model) are the ones C would close at the cost of checking calls that are not the agent's, so they wait for a declared opt-in (decision 2).
+**Decided (decisions 1 and 2, revised 2026-10-12): A and C combined.** A call inside an agent span is an agent's turn whatever its model, since a sub-agent's tool calls are already checked and its model calls should be too; outside any agent span, A's active-model rule applies, so custom solvers stay covered. A was the earlier recommendation, with other-model sub-agents and role models left unchecked; that scope is superseded.
 
-### The rule, as prototyped
+### The rule
 
 A generate is the agent's when all of these hold:
 
 1. a sentinel is configured for the task and some function in it watches a generate stage;
 2. the sample is running its solvers: inspect_ai sets a context variable around `plan(state, generate)`, so init and scoring (the `scorers` span, and `inspect score`) are outside. A task's `setup` solvers are part of the plan and are inside; `score()` called from a solver runs its scorers outside;
-3. the model is the active model;
+3. the call is inside an agent span (`react` as a solver, `run()`, `handoff()`, `as_tool()`, deepagent sub-agents, the bridges), on any model; or, outside every agent span, the model is the active model;
 4. the call is not made inside a sentinel run: the dispatcher sets a context variable around `run_sentinel`, which covers `Host.generate` and a monitor that calls `get_model()` itself;
 5. the call is not a compaction summary: the summary strategy sets the same variable;
-6. the call is not made from a tool's own body: `call_tool` records the current agent span when a tool starts, and a generate in that same agent span is the tool's. An agent started inside the tool (`as_tool()`) opens its own agent span, so its calls are the agent's again.
+6. the call is not made from a tool's own body: `call_tool`, and the sandbox bridge service for a host tool, record the current agent span when a tool starts, and a generate in that same agent span is the tool's. An agent started inside the tool (`as_tool()`) opens its own agent span, so its calls are the agent's again.
 
 ### What is in and out
 
 | Caller | Checked | Why |
 |---|---|---|
-| `generate()` solver, `generate_loop` | yes | active model |
-| `react()`, `basic_agent()` on the default model | yes | active model |
-| `handoff()` to an agent on the default model | yes | active model; its steps carry the sub-agent's conversation id |
-| `as_tool()` agent on the default model | yes | its agent span differs from the tool's |
-| bridged agents (`agent_bridge()`, `sandbox_agent_bridge()`) on the `inspect` model | yes, untested | `bridge_generate` calls `model.generate` on the model `resolve_inspect_model` returns, `get_model()` for `inspect`; a model alias or another name resolves elsewhere |
-| a custom solver or agent calling `get_model().generate()` | yes | active model; includes helper calls such as `self_critique()` with no critique model |
-| a sub-agent or handoff with an explicit other model | no | rule 3; decision 2 |
-| an agent whose model is a role (`get_model(role="untrusted")`) | no | rule 3, as the role resolves to another instance; decision 2 |
-| a model-graded tool calling `get_model()` | no | rule 6 |
-| scorers, `model_graded_qa()`, including `score()` called from a solver | no | rule 2 |
+| `generate()` solver, `generate_loop` | yes | active model, outside any agent span |
+| `react()` as the solver, `basic_agent()` | yes | `react` runs in its agent span; `basic_agent` on the active model |
+| `handoff()`, `run()`, deepagent sub-agents, on any model | yes | each opens an agent span; its steps carry the sub-agent's conversation id |
+| an agent whose model is a role (`get_model(role="untrusted")`) | yes | inside its agent span (rule 3) |
+| `as_tool()` agent | yes | its agent span differs from the tool's |
+| bridged agents (`agent_bridge()`, `sandbox_agent_bridge()`) | yes | the bridge's model calls run inside the solver's agent span; tested in process, and the sandbox host-tool exclusion is tested through the service's `call_tool` handler; the sandbox transport itself is untested |
+| a custom solver calling `get_model().generate()` outside any agent span | yes | active model; includes helper calls such as `self_critique()` with no critique model |
+| a custom solver's call to another model outside any agent span | no | rule 3 |
+| a model-graded tool calling `get_model()`, natively or as a sandbox bridge host tool | no | rule 6 |
+| scorers, `model_graded_qa()`, including `score()` called from a solver | no | rule 2; `score()` from a solver also runs in a `scorer` span |
 | a task's `setup` solvers calling the active model | yes | they are part of the plan |
 | `Host.generate`, monitor model calls | no | rule 4 |
-| compaction summaries | no | rule 5; decision 3 |
+| compaction summaries | no | rule 5 (in a `compaction` span); decision 3 |
 | a bridge filter that returns a `ModelOutput` itself | no | no `Model.generate` call; a gap to close with the bridge hook (workstream 5) |
+| a tool an in-process bridged scaffold runs itself, calling inspect's model | yes | inspect never sees the tool start, so its calls look like the agent's |
 | MCP sampling (`get_model().generate()` from an MCP server callback) | depends | runs in the MCP session's context; unverified |
 
-Identity has one fragility: a sub-agent given the agent model's *name* rather than `None` is checked only if `get_model()` returns the memoized active instance, which depends on the name, role, config, base URL and model args matching how the eval created it. Comparing by qualified name and an unset role would be more predictable; the prototype keeps identity, the existing precedent.
+Identity has one fragility, outside agent spans only: a solver given the agent model's *name* rather than `None` is checked only if `get_model()` returns the memoized active instance, which depends on the name, role, config, base URL and model args matching how the eval created it. Comparing by qualified name and an unset role would be more predictable; the dispatcher keeps identity, the existing precedent.
 
 ## b. Where the hook sits {#b-where-the-hook-sits}
 
@@ -94,7 +95,7 @@ The step holds copies of the request's message and tool lists and of the config,
 - **Limits.** The token and turn limits are suspended inside a sentinel run, as at the tool stages. The message limit is checked before `BeforeGenerate`, so a generate the limit refuses is not checked. Time and working limits keep running, so a slow monitor counts against the sample's time. A turn or token limit raised inside the call means no `AfterGenerate`, since the output never reaches the agent.
 - **Monitor failures.** As at the tool stages ([sentinel.md](sentinel.md), "Failure semantics"): a monitor that raises at a generate stage is recorded as failed, with an `error` `SentinelEvent` in the stage's span, and the generate goes ahead unless a protocol reading its observations without checking `failed` raises `MonitorFailedError` and so fails the sample.
 - **`fail_on_refusal`.** The `ModelRefusalError` is raised before `AfterGenerate` runs, so a refusal configured to fail produces no after step (decision 6). A refusal returned as an output is checked like any output.
-- **Failures.** A monitor or protocol that raises fails the sample with its own error. The dispatcher wraps it so that, inside an `as_tool()` agent, the tool call does not turn it into a tool error the model sees; the tool call unwraps it, as at the tool stages, and so does the sample's solver phase for a generate outside any tool.
+- **Failures.** A monitor or protocol that raises fails the sample with its own error. The dispatcher wraps it so that, inside an `as_tool()` agent, the tool call does not turn it into a tool error the model sees; the tool call unwraps it, as at the tool stages, and the sample's error handling unwraps it for a generate outside any tool.
 - **Spans.** Each stage runs in its own `sentinel` span: the before span precedes the call's `ModelEvent`, the after span follows it, and monitor model calls sit inside their span. A stage that nothing in the configured tree watches opens no span (decision 7). Under a bridge with a `ModelEventSink`, the `ModelEvent` goes to the sink while the `SentinelEvent`s go to the transcript, so their order in the log depends on the sink; unverified.
 
 ### Dispatching only watched stages
@@ -104,9 +105,9 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 ## c. Before-generate decisions {#c-before-generate-decisions}
 
 - **`continue`**: the request is sent unchanged.
-- **`terminate`**: the request is not sent and the sample ends with an operator limit, as at the tool stages. No `ModelEvent` is recorded. Prototyped.
-- **`escalate`**: passed to the next decider; at the root it proceeds and warns, as at the tool stages (decision 16).
-- **`modify`**: the protocol replaces the request for this call only. What may change:
+- **`terminate`**: the request is not sent and the sample ends with an operator limit, as at the tool stages. No `ModelEvent` is recorded.
+- **`escalate`**: passed to the next decider, such as `handle_escalation()` in a `sequential()`. One that reaches the root unhandled ends the sample: `run_sentinel` returns a `terminate` explained as an unhandled escalation (decision 16).
+- **`modify`** (deferred to part 2, decision 9; a shape-check error in this landing). Proposed: the protocol replaces the request for this call only. What may change:
   - `input`, freely: redact a secret, annotate ("you have used 8 of 10 commands"), drop a turn. The change is not written back to the agent's history, so a persistent annotation is re-added at every generate.
   - `tools`, narrowed to a subset by name. Adding a tool the loop cannot execute produces a call that fails with "tool not found".
   - `tool_choice`, e.g. `"none"` to force a text answer.
@@ -115,7 +116,7 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 
   The replacement is applied to the prepared input, the list `step.input` showed, and the `ModelEvent` records it. The tool-stage policy argument for `AfterToolCall` (#5355: withholding a result makes the model's picture of the sandbox diverge from the sandbox) applies to a `modify` that removes or rewrites a tool result in `input`; the docs should say so rather than the shape check forbid it, since redacting a leaked secret from a result is a legitimate use.
 
-- **`reject`**: the existing table has it legal, meaning "do not run this generate, and tell the agent why". There is no channel to tell the agent anything without producing an output, since the caller is waiting for a `ModelOutput`. The options:
+- **`reject`** (deferred to part 2, decision 8; a shape-check error in this landing): the existing table has it legal, meaning "do not run this generate, and tell the agent why". There is no channel to tell the agent anything without producing an output, since the caller is waiting for a `ModelOutput`. The options:
   1. **Not legal** in v1; the use cases are `modify` (strip what should not be sent) and `terminate`. Recommended.
   2. **A sentinel-authored refusal**: return a `ModelOutput` with `stop_reason="content_filter"` and an assistant message carrying `message`, with no usage. Every loop already handles a refusal (`react` retries refusals and stops after three in a row; `fail_on_refusal` raises), and a proxy can return a refusal-shaped response. Its costs: the agent's history gains an assistant message the model did not write, which needs marking as sentinel-authored in its metadata, and a log reader cannot tell it from a provider refusal without that mark.
   3. **An exception** the loop must handle. No loop handles it, so it is `terminate` with a different name.
@@ -123,13 +124,13 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 ## d. After-generate decisions {#d-after-generate-decisions}
 
 - **`continue`**: the output is returned unchanged.
-- **`terminate`**: the output is discarded and the sample ends with an operator limit; the `ModelEvent` stays in the log, and the assistant message never reaches the agent's messages, so its tool calls do not run. Prototyped.
-- **`escalate`**: as elsewhere (decision 16).
-- **`reject`** ("discard this completion"). The options:
+- **`terminate`**: the output is discarded and the sample ends with an operator limit; the `ModelEvent` stays in the log, and the assistant message never reaches the agent's messages, so its tool calls do not run.
+- **`escalate`**: as before a generate: answered by a later decider, or, unhandled at the root, the sample ends (decision 16).
+- **`reject`** ("discard this completion"; deferred to part 2, decision 10; a shape-check error in this landing). The options:
   1. **Replay**: append the rejected assistant message and a user message carrying `message` (or the default "not approved" text) to this request, regenerate, and check the new output; bounded at three consecutive rejections, after which the sample terminates. This is what `_bridge/_approval.py` does for a rejected tool call in a bridged agent, and what a proxy can do. The agent's loop receives only the accepted output; the rejected exchange is in the log but not in the agent's history, as in the bridge. Each regenerate is a new call with its own two stages and `ModelEvent`. Recommended.
   2. **Regenerate silently**: the same request again. The model learns nothing and may produce the same output; `resample` already covers drawing again on purpose.
   3. **A synthetic refusal**, as for `BeforeGenerate` option 2.
-- **`modify`**: `modified` is a `ChatMessageAssistant` replacing `choices[0].message`, per [sentinel.md](sentinel.md), "One vocabulary across stages". Constraints:
+- **`modify`** (deferred to part 2, decision 11; a shape-check error in this landing). Proposed: `modified` is a `ChatMessageAssistant` replacing `choices[0].message`, per [sentinel.md](sentinel.md), "One vocabulary across stages". Constraints:
   - `usage`, `time` and `model` describe the call that happened and are kept; the replacement's own cost is recorded by the call that produced it (a `Host.generate` under its role).
   - Only `choices[0]` is substitutable; the other choices are dropped, so no call the monitors did not see can run.
   - `stop_reason` is recomputed: `tool_calls` when the replacement has tool calls, `stop` otherwise.
@@ -162,7 +163,7 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 
 ## f. Events and the viewer {#f-events-and-the-viewer}
 
-`SentinelEvent.stage` already declares `model_input` and `model_output` next to `tool_call` and `tool_result`; the prototype emits them, so no event schema or generated type changes. The stage names are the ones `human(stages=)` would take.
+`SentinelEvent.stage` already declares `model_input` and `model_output` next to `tool_call` and `tool_result`; the dispatcher emits them, so no event schema or generated type changes. The stage names are the ones `human(stages=)` would take.
 
 `step_id` follows sentinel-development.md, "Step ids":
 
@@ -171,7 +172,7 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 
 Linking to the `ModelEvent` needs no new field: a `model_output` event's `step_id` is the `ModelEvent`'s `output.message.id`, and a `model_input` event's `step_id`, without its suffix, is the id of the last message of the next `ModelEvent`'s `input`. Event uuids cannot be used, since a `BeforeGenerate` runs before its `ModelEvent` exists. In Inspect View the before span sits directly above the `ModelEvent` and the after span directly below it, so a viewer that renders the sentinel span inline needs no lookup; one that wants a "checked by" badge on the `ModelEvent` matches by message id. Whether ts-mono renders the two new stage values well is unverified. A monitor's own model calls sit in its stage's sentinel span, listed together as at the tool stages; tying each to its instance stays deferred (pr-series.md, "Monitor model calls tied to their row").
 
-Later contract changes, none in the prototype: `SentinelEvent.modified` gains `ChatMessageAssistant` for an `AfterGenerate` modify, and a `BeforeGenerate` modify leaves `modified` unset with the validator relaxed for that stage, since the `ModelEvent` records the request sent (decision 13). If decision 8 adopts the synthetic refusal, the assistant message it produces needs a documented metadata mark.
+Later contract changes, none in this landing: `SentinelEvent.modified` gains `ChatMessageAssistant` for an `AfterGenerate` modify, and a `BeforeGenerate` modify leaves `modified` unset with the validator relaxed for that stage, since the `ModelEvent` records the request sent (decision 13). If decision 8 adopts the synthetic refusal, the assistant message it produces needs a documented metadata mark.
 
 ## Scope of this landing
 
