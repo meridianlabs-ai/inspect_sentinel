@@ -45,7 +45,7 @@ def scores(value: float = 0.5) -> Monitor:
 
 
 @protocol
-def says(action: Action = "continue") -> Protocol:
+def says(action: Action = "proceed") -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(action=action)
 
@@ -330,7 +330,7 @@ async def test_concurrent_records_a_failed_monitor_and_still_votes(
     ("links", "expected"),
     [
         ({"sequential_flaky": fails(), "rule": says("reject")}, "reject"),
-        ({"sequential_alone": fails()}, "continue"),
+        ({"sequential_alone": fails()}, "proceed"),
     ],
 )
 async def test_sequential_records_a_failed_monitor_and_falls_through(
@@ -367,7 +367,7 @@ def tolerant(monitors: dict[str, Monitor], reject_at: float) -> Protocol:
     ("monitors", "expected"),
     [
         ({"broken": fails(), "high": scores(0.9)}, "reject"),
-        ({"broken": fails(), "low": scores(0.1)}, "continue"),
+        ({"broken": fails(), "low": scores(0.1)}, "proceed"),
         ({"broken": fails()}, "escalate"),
     ],
 )

@@ -133,17 +133,17 @@ async def _run(
 
 # (escalate_at, reject_at, terminate_at) and the action at each score
 _TABLE: list[tuple[Limit, Limit, Limit, list[tuple[float, Action]]]] = [
-    (0.6, None, None, [(0.59, "continue"), (0.6, "escalate"), (1.0, "escalate")]),
-    (None, 0.6, None, [(0.59, "continue"), (0.6, "reject"), (1.0, "reject")]),
-    (None, None, 0.6, [(0.59, "continue"), (0.6, "terminate"), (1.0, "terminate")]),
-    (0.4, 0.7, None, [(0.3, "continue"), (0.5, "escalate"), (0.7, "reject")]),
-    (0.4, None, 0.9, [(0.3, "continue"), (0.6, "escalate"), (0.9, "terminate")]),
-    (None, 0.5, 0.9, [(0.3, "continue"), (0.5, "reject"), (0.95, "terminate")]),
+    (0.6, None, None, [(0.59, "proceed"), (0.6, "escalate"), (1.0, "escalate")]),
+    (None, 0.6, None, [(0.59, "proceed"), (0.6, "reject"), (1.0, "reject")]),
+    (None, None, 0.6, [(0.59, "proceed"), (0.6, "terminate"), (1.0, "terminate")]),
+    (0.4, 0.7, None, [(0.3, "proceed"), (0.5, "escalate"), (0.7, "reject")]),
+    (0.4, None, 0.9, [(0.3, "proceed"), (0.6, "escalate"), (0.9, "terminate")]),
+    (None, 0.5, 0.9, [(0.3, "proceed"), (0.5, "reject"), (0.95, "terminate")]),
     (
         0.4,
         0.6,
         0.8,
-        [(0.39, "continue"), (0.4, "escalate"), (0.6, "reject"), (0.8, "terminate")],
+        [(0.39, "proceed"), (0.4, "escalate"), (0.6, "reject"), (0.8, "terminate")],
     ),
 ]
 
@@ -337,14 +337,14 @@ async def test_threshold_a_float_is_shorthand_for_a_star_key(
     [
         ({"audit.sabotage": 0.6}, "escalate", "sabotage 0.72 ≥ 0.60 from audit"),
         ({"sabotage": 0.6}, "escalate", "sabotage 0.72 ≥ 0.60 from audit"),
-        ({"audit.sabotage": 0.8, "sabotage": 0.6}, "continue", None),
+        ({"audit.sabotage": 0.8, "sabotage": 0.6}, "proceed", None),
         ({"sabotage": 0.8, "*": 0.1}, "escalate", "suspicion 0.40 from egress"),
         (
             {"audit.exfil": 0.2, "exfil": 0.9},
             "escalate",
             "exfil 0.30 ≥ 0.20 from audit",
         ),
-        ({"exfil": 0.9}, "continue", None),
+        ({"exfil": 0.9}, "proceed", None),
         ({"egress": 0.4}, "escalate", "suspicion 0.40 from egress"),
     ],
 )
@@ -598,13 +598,13 @@ def test_threshold_rejects_a_protocol_when_it_is_configured() -> None:
     ("handler", "action", "explanation"),
     [
         (None, "terminate", "unhandled escalation from threshold: suspicion 0.70"),
-        ("continue", "continue", "escalated by threshold: suspicion 0.70"),
+        ("proceed", "proceed", "escalated by threshold: suspicion 0.70"),
         ("terminate", "terminate", "escalated by threshold: suspicion 0.70"),
     ],
 )
 @pytest.mark.anyio
 async def test_an_escalation_is_answered_by_what_follows_threshold(
-    handler: Literal["terminate", "continue"] | None, action: Action, explanation: str
+    handler: Literal["terminate", "proceed"] | None, action: Action, explanation: str
 ) -> None:
     gate = threshold([th_graded(0.7)], escalate_at=0.6, terminate_at=0.9)
     spec = gate if handler is None else sequential([gate, handle_escalation(handler)])
@@ -641,7 +641,7 @@ def test_a_dotted_key_is_always_one_monitors_dimension(
 @pytest.mark.parametrize(
     ("escalate_at", "action", "explanation"),
     [
-        ({"a.x": 0.5}, "continue", None),
+        ({"a.x": 0.5}, "proceed", None),
         ({"z.a.x": 0.8}, "escalate", "a.x 0.90 ≥ 0.80 from z: z's reason"),
         ({"a.b.c": 0.5}, "escalate", "c 0.60 ≥ 0.50 from a.b: a.b's reason"),
     ],

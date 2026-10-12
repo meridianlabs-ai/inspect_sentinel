@@ -37,7 +37,7 @@ def _seen(store: Store) -> dict[str, list[tuple[str, ...]]]:
 
 
 @protocol
-def seq_link(action: Action = "continue", explanation: str | None = None) -> Protocol:
+def seq_link(action: Action = "proceed", explanation: str | None = None) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         seen = context.store_as(Seen)
         seen.escalations = [
@@ -158,7 +158,7 @@ async def test_escalations_are_handed_forward_link_by_link() -> None:
             {
                 "a": seq_link("escalate"),
                 "b": seq_link("escalate"),
-                "c": seq_link("continue"),
+                "c": seq_link("proceed"),
             }
         )
     )
@@ -219,7 +219,7 @@ async def test_a_link_at_its_own_stage_decides() -> None:
             {"a": seq_link("escalate", "a?"), "b": seq_link("escalate", "b?")},
             ("escalate", "b?"),
         ),
-        ({"watch": seq_watch()}, ("continue", None)),
+        ({"watch": seq_watch()}, ("proceed", None)),
         ({"quiet": seq_abstains(), "later": seq_after_only()}, None),
     ],
 )
@@ -242,7 +242,7 @@ async def test_a_group_link_runs_in_one_call_and_sees_the_step_before_its_escala
     decision, recorder, store = await _root(
         sequential({"pair": seq_pair(), "next": seq_link()})
     )
-    assert decision is not None and decision.action == "continue"
+    assert decision is not None and decision.action == "proceed"
     saw = PairSaw(store=store, instance="pair")
     assert (saw.first, saw.second) == (0, 0)
     assert _seen(store) == {"next": [("pair", "pair")]}
@@ -252,10 +252,10 @@ async def test_a_group_link_runs_in_one_call_and_sees_the_step_before_its_escala
 @pytest.mark.parametrize(
     ("first", "second", "expected"),
     [
-        ("continue", "terminate", ("terminate", "second")),
-        ("continue", "reject", ("reject", "second")),
-        ("reject", "continue", ("reject", "first")),
-        ("escalate", "continue", ("escalate", "first")),
+        ("proceed", "terminate", ("terminate", "second")),
+        ("proceed", "reject", ("reject", "second")),
+        ("reject", "proceed", ("reject", "first")),
+        ("escalate", "proceed", ("escalate", "first")),
     ],
 )
 @pytest.mark.anyio
@@ -270,9 +270,9 @@ async def test_a_group_link_decides_by_its_strongest_decision(
 @pytest.mark.anyio
 async def test_a_group_link_that_escalates_hands_forward() -> None:
     decision, _, store = await _root(
-        sequential({"pair": seq_mixed("escalate", "continue"), "next": seq_link()})
+        sequential({"pair": seq_mixed("escalate", "proceed"), "next": seq_link()})
     )
-    assert decision is not None and decision.action == "continue"
+    assert decision is not None and decision.action == "proceed"
     # only the escalating function's decision is handed forward
     assert _seen(store) == {"next": [("pair",)]}
 

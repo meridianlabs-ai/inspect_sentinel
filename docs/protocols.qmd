@@ -16,7 +16,7 @@ How to write a protocol: a `@protocol` factory returning a function that returns
 
 - The `@protocol` decorator
 - Rules: a protocol with no children
-- Actions: `continue`, `reject`, `modify`, `terminate`, `escalate`, and which stages allow each
+- Actions: `proceed`, `reject`, `modify`, `terminate`, `escalate`, and which stages allow each
 - `Decision.reject(explanation, message=...)`: the log versus the agent
 - Modifying a call with `dataclasses.replace(step.call, arguments=...)`
 - Requesting human review with `audit=True` (recorded; nothing acts on it yet)

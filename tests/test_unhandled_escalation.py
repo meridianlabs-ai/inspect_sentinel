@@ -55,7 +55,7 @@ def _limit() -> Protocol | ProtocolGroup:
     return threshold(ue_score(), reject_at=0.5)
 
 
-GUIDANCE = "To say what an escalation means, end the configuration with human() or handle_escalation('terminate' | 'continue') in a sequential()."
+GUIDANCE = "To say what an escalation means, end the configuration with human() or handle_escalation('terminate' | 'proceed') in a sequential()."
 
 CONVERTED: list[tuple[str, Callable[[], Sentinels], Step, str, list[str]]] = [
     (
@@ -83,7 +83,7 @@ CONVERTED: list[tuple[str, Callable[[], Sentinels], Step, str, list[str]]] = [
         "not an escalation a nested chain handled",
         lambda: {
             "gate": sequential(
-                {"x": ue_escalates("handled"), "h": handle_escalation("continue")}
+                {"x": ue_escalates("handled"), "h": handle_escalation("proceed")}
             ),
             "rule": ue_escalates(),
         },
