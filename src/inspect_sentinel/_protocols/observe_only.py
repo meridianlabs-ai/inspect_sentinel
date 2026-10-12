@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 from .._context import Context
 from .._decorators import protocol
 from .._report import Decision
@@ -21,12 +23,16 @@ def observe_only(monitors: Monitor | MonitorGroup | Monitors) -> Protocol:
     Args:
         monitors: The monitor, or monitors, to run at every step they watch.
     """
-    # so a misconfiguration fails here rather than at the first step
-    if not named_children(monitors, "monitor"):
+    # so a misconfiguration fails here rather than at the first step; and run
+    # the monitors as configured, not the caller's container as it is later
+    snapshot = cast(
+        dict[str, Monitor | MonitorGroup], dict(named_children(monitors, "monitor"))
+    )
+    if not snapshot:
         raise ValueError("observe_only needs at least one child.")
 
     async def run(context: Context, step: Step) -> Decision | None:
-        observations = await run_monitors(monitors, context, step)
+        observations = await run_monitors(snapshot, context, step)
         warn_failed(observations.failed)
         return None
 

@@ -1,5 +1,6 @@
 import math
-from collections.abc import Callable
+from collections import OrderedDict, UserList
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 import pytest
@@ -14,6 +15,7 @@ from inspect_sentinel._decorators import (
     step_types,
 )
 from inspect_sentinel._final import decide_final
+from inspect_sentinel._integration import config_from_sentinel
 from inspect_sentinel._protocols import concurrent, observe_only, threshold
 from inspect_sentinel._report import Action, Decision, Observation, Suspicion
 from inspect_sentinel._runner import (
@@ -848,3 +850,87 @@ async def test_concurrent_counts_a_groups_votes_by_instance(
     decision = await _run(concurrent(children()), before_step(), ListRecorder())
     assert decision is not None
     assert (decision.action, decision.explanation) == (action, explanation)
+
+
+def _container(kind: str, first: object) -> Any:
+    if kind == "list":
+        return [first]
+    if kind == "user_list":
+        return UserList[object]([first])
+    if kind == "dict":
+        return {"first": first}
+    return OrderedDict[str, object](first=first)
+
+
+def _add(container: Any, late: object) -> None:
+    if isinstance(container, Mapping):
+        cast(dict[str, object], container)["late"] = late
+    else:
+        cast(list[object], container).append(late)
+
+
+_KINDS = ["list", "user_list", "dict", "ordered_dict"]
+
+
+@protocol
+def stops() -> Protocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        return Decision.terminate("late")
+
+    return decide
+
+
+@monitor
+def alarm() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        return Observation.score(0.9)
+
+    return check
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("first", [says, rules], ids=["protocol", "group"])
+@pytest.mark.parametrize("kind", _KINDS)
+async def test_concurrent_runs_the_children_it_was_built_with(
+    kind: str, first: Callable[[], Any]
+) -> None:
+    # changing the caller's container afterwards changes neither what runs nor
+    # what is recorded, so a rebuild from the configuration runs the same tree
+    children = _container(kind, first())
+    layer = concurrent(children)
+    recorded = config_from_sentinel(layer)
+    _add(children, stops())
+    recorder = ListRecorder()
+    decision = await run_sentinel(layer, host_context(recorder=recorder), before_step())
+    assert decision is not None and decision.action != "terminate"
+    assert {r.reported.name for r in recorder.records if r.reported.path} == {
+        "first"
+        if isinstance(children, Mapping)
+        else registry_info(first).name.split("/")[-1]
+    }
+    assert config_from_sentinel(layer) == recorded
+
+
+def _thresholded(monitors: Any) -> Protocol:
+    return threshold(monitors, reject_at=0.5)
+
+
+def _observed(monitors: Any) -> Protocol:
+    return observe_only(monitors)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("build", [_thresholded, _observed])
+@pytest.mark.parametrize("kind", _KINDS)
+async def test_a_monitor_layer_runs_the_monitors_it_was_built_with(
+    kind: str, build: Callable[[Any], Protocol]
+) -> None:
+    monitors = _container(kind, graded(0.1))
+    layer = build(monitors)
+    recorded = config_from_sentinel(layer)
+    _add(monitors, alarm())
+    recorder = ListRecorder()
+    decision = await run_sentinel(layer, host_context(recorder=recorder), before_step())
+    assert decision is None or decision.action == "continue"
+    assert len([r for r in recorder.records if r.reported.path]) == 1
+    assert config_from_sentinel(layer) == recorded

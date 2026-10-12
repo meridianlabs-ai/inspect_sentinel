@@ -38,6 +38,8 @@ def threshold(
     named = named_children(monitors, "monitor")
     if not named:
         raise ValueError("threshold needs at least one child.")
+    # run the monitors as configured, not the caller's container as it is later
+    snapshot = cast(dict[str, Monitor | MonitorGroup], dict(named))
     names = {name for name, _ in named}
     rejects = _thresholds("reject_at", reject_at, names)
     terminates = (
@@ -64,7 +66,7 @@ def threshold(
                 )
 
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
-        observations = await run_monitors(monitors, context, step)
+        observations = await run_monitors(snapshot, context, step)
         if not observations:
             return None
         if terminates is not None:
