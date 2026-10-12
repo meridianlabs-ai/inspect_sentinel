@@ -32,7 +32,7 @@ class EvalContext:
     """What is distinctive about this instance: the sample's `description`. None when the sample sets none or the host does not provide it."""
 
     sample_input: str | list[ChatMessage]
-    """The sample's input: the assignment the agent was given. Judge a step against `step.input`, which is exactly what the model was sent; use this for what the agent was asked to do."""
+    """The sample's input: the assignment the agent was given. Judge a step against `step.input`, which is exactly what the model was sent (`None` at a tool stage no model call produced); use this for what the agent was asked to do."""
 
     metadata: dict[str, Any]
     """Task metadata merged with sample metadata."""
