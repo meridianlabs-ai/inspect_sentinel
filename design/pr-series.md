@@ -472,7 +472,7 @@ Rulings of 2026-10-10 and 2026-10-12 ([generate-stages.md](generate-stages.md), 
 
 - **Every agent loop's model calls** are checked (decisions 1 and 2 revised): inside an agent span on any model, or on the active model during the solvers; not in a tool's own body, a sentinel run, a compaction or a scorer.
 - **`escalate` at the generate stages** (decision 16). `threshold` gains `model_input` and `model_output`; `handle_escalation` answers at all four stages and is marked as answering escalations only, so it never makes a stage watched on its own.
-- **`history` is the model's view** of the agent instance's run at every stage (decision 15), built by inspect_ai from the transcript's `ModelEvent`s; decision 17's recording is dropped, since R2 (inspect_ai #5831) finds a tool call's producing `ModelEvent` in the transcript.
+- **`history` keeps its meaning** (decision 15, revised): the scaffold's list at the tool stages, the caller's at the generate stages. The as-sent view (AISI R10) is its own PR, an on-demand query on `TranscriptHistory.find_last` (inspect_ai #5831); inspect_ai's new `compaction` and `scorer` spans are there for it and for replay. Decision 17's recording is dropped, since R2 finds a tool call's producing `ModelEvent` in the transcript.
 - **`reject` and `modify` at the generate stages** (decisions 8–13) are deferred to part 2 and stay shape-check errors.
 
 ## Deferred

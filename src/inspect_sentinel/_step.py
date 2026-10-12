@@ -23,7 +23,7 @@ class BeforeGenerate:
     """Exactly what the model is sent: the caller's messages after the model's own preparation (the configured system message, reasoning history, merged consecutive messages)."""
 
     history: list[ChatMessage]
-    """The model's view of this agent instance's run, ending with this request: every message the instance has sent to its model or received from it, in order, deduplicated by id, an edited message kept in each version. Where the instance made no model call, the scaffold's conversation."""
+    """The conversation as the caller passed it to the model. For a scaffold that compacts its conversation this is the compacted conversation."""
 
     tools: list[ToolInfo]
     """The tools the model is offered, after `tool_choice` filtering."""
@@ -52,7 +52,7 @@ class AfterGenerate:
     """Exactly what the model was sent, as for `BeforeGenerate`."""
 
     history: list[ChatMessage]
-    """The model's view of this agent instance's run, as for `BeforeGenerate`, ending with `output.message`."""
+    """The conversation as the caller passed it to the model, as for `BeforeGenerate`."""
 
     tools: list[ToolInfo]
     """The tools the model was offered."""
@@ -90,7 +90,7 @@ class BeforeToolCall:
     """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `context.eval.sample_input` is the sample's input, the assignment."""
 
     history: list[ChatMessage]
-    """The model's view of this agent instance's run, as for `BeforeGenerate`, ending with the assistant message that made the call. Where the instance made no model call, the scaffold's conversation."""
+    """The scaffold's full conversation, pre-compaction turns included. In-process this is the scaffold's own list; monitors must not mutate it."""
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
@@ -122,7 +122,7 @@ class AfterToolCall:
     """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `context.eval.sample_input` is the sample's input, the assignment."""
 
     history: list[ChatMessage]
-    """The model's view of this agent instance's run, as for `BeforeGenerate`, ending with the assistant message that made the call. Where the instance made no model call, the scaffold's conversation."""
+    """The scaffold's full conversation, pre-compaction turns included. In-process this is the scaffold's own list; monitors must not mutate it."""
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
