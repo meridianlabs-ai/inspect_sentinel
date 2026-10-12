@@ -2,7 +2,7 @@
 
 How a sentinel covers an agent that starts other agents: which of their steps it sees, how a monitor tells agents apart, and what state they share. It extends [sentinel.md](sentinel.md) ("The payloads", open question 22) and [generate-stages.md](generate-stages.md) (decisions 1 and 2, on sentinel #42).
 
-Status: decided in part with the maintainer on 2026-10-10. The contract in [Decided](#decided) holds from the first release of the generate stages; coverage beyond the active model and the instance record are the [planned direction](#planned-direction), not built.
+Status: decided in part with the maintainer on 2026-10-10, revised 2026-10-12. Every agent loop's model calls are checked from the first release of the generate stages; the instance record and per-instance store are the [planned direction](#planned-direction), not built.
 
 ## Terms
 
@@ -23,7 +23,7 @@ main agent (react)                        instance a1
 
 Tool stages: every tool call that goes through `execute_tools` is checked, whichever instance makes it, so `a2`, `a3` and `a4`'s tool calls are checked in v1. The `handoff()` call itself is checked as a tool call.
 
-Generate stages (generate-stages.md, decision 1): a call on the sample's active model, made during the solver phase, outside a sentinel run, a compaction and a tool's own body. A `handoff()` or `as_tool()` sub-agent on the default model is therefore checked; one given an explicit other model, or a role model, is not (decision 2). A helper call on the active model is checked, because v1 cannot tell it from an agent turn.
+Generate stages (generate-stages.md, decisions 1 and 2, revised 2026-10-12): a call made by an agent loop, that is inside an agent span (`react`, `handoff()`, `as_tool()`, `deepagent`, the bridges) or on the sample's active model during the solver phase, and not inside a tool's own body, a sentinel run, a compaction or a scorer. Sub-agents and role-model agents are therefore checked whatever model they use, matching the tool stages. A helper call made inside a tool's body is not checked; one a solver makes directly on the active model still is.
 
 Bridged agents (inspect_ai #5765): the bridged scaffold's host tool calls are checked; its internal sub-agents are not attributed to separate instances.
 
@@ -31,16 +31,18 @@ Bridged agents (inspect_ai #5765): the bridged scaffold's host tool calls are ch
 
 Decided with the maintainer on 2026-10-10, so that monitors written against v1 do not break when coverage widens.
 
-1. **v1 coverage is the active model** (generate-stages.md decision 2, recorded as v1 scope rather than a permanent rule). Widening it is additive: a monitor already sees sub-agent steps in v1, from sub-agents on the default model, so steps from sub-agents on other models are more of a kind it already handles. What can change is cost and score distributions, not behaviour a monitor relies on.
+1. **Every agent loop's model calls are checked** (generate-stages.md decisions 1 and 2, revised 2026-10-12, replacing "v1 coverage is the active model"). The tool stages already checked every agent's tool calls; leaving sub-agent turns on other models unchecked was inconsistent and let an agent hand risky work to a sub-agent. Requires every agent loop to open an agent span consistently, tested per loop.
 2. **`step.conversation` identifies one agent instance.** It is public on every step today and holds the agent span id. The contract is the instance, not the span: a new id for each sub-agent run, distinct from its parent's; stable across that instance's compactions and across both stages of one call; the same live and in replay. Monitors may key state and logic on it (for example AISI's "record the opening prompts at a conversation's first monitored step", R7 and R10). If the span id stops meeting the contract (a scaffold whose agents share a span, a bridge with several sub-agent streams), the implementation changes, not the meaning.
 3. **`Context.store_as()` stays per sample.** State is namespaced by the instance's path in the sentinel tree (`_context.py`), not by agent instance, so every agent's steps share one monitor's state in v1 and after. Per-instance state comes later as an explicit option, `store_as(Model, scope="conversation")` or similar, keyed by `step.conversation`. Switching the default later would silently change every stateful monitor; an option is additive. Docs say so, with the consequence: a monitor that keeps cross-step state and wants it per agent keys it by `step.conversation` itself until the option exists.
-4. **Helper calls on the agent's model are checked for now.** When helper calls can be marked (below), marked calls stop being checked. Docs say this is v1 behaviour, so nobody builds on seeing them.
+4. **Helper calls:** one made inside a tool's body is not checked; one a solver makes directly on the active model still is, for now. When helper calls can be marked (below), marked calls stop being checked. Docs say so, so nobody builds on seeing them.
 
 ## Planned direction
 
 Agreed with the maintainer as the target ("we generally need this"); each item is its own piece of work, ordered roughly by dependency.
 
 ### Coverage follows the agent tree, not the model
+
+*Largely decided 2026-10-12 through the agent-loop rule above; what remains is marking helper calls on the active model.*
 
 Every model call and tool call made by an agent instance or any of its descendants is checked, whatever model it uses; helper calls are excluded by marking them, not by model identity. This closes v1's gap that a sub-agent on a cheaper model is unmonitored at the generate stages, which an agent could otherwise exploit by handing risky work to one.
 
