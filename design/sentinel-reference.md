@@ -410,7 +410,7 @@ For a first guard, write a rule. It acts with no further configuration. Write a 
 
 Which actions are legal at which stage:
 
-| Stage | continue | terminate | escalate | reject | modify |
+| Stage | proceed | terminate | escalate | reject | modify |
 |---|---|---|---|---|---|
 | `BeforeGenerate` | yes | yes | yes | yes | open |
 | `AfterGenerate` | yes | yes | yes | yes | no |
@@ -764,7 +764,7 @@ Rules:
 - **Use `sequential()` to ask a person only on escalation.** A `human()` in a `concurrent()`, including the root a top-level list or mapping resolves to, is allowed and asks about every call it is reached on, which can be intended; beside other protocols it is one vote.
 - **Do not expect ordered composition by default.** Ordered-by-default silences children: if A approves, B never runs, and B might have terminated. That is the defect #5423 reported against approval. Concurrent fails safe; its cost is latency and tokens.
 - **`step.escalations` never crosses layers.** A link's `escalate` goes to the next link in its own `sequential`. A `sequential` whose every deciding link escalated returns the last escalate, passing it up; one where only monitors participated returns `proceed`, and one where nothing participated abstains.
-- **An uncovered call continues in a `sequential`.** This matches review. The approval adapter keeps approval's `reject` for an uncovered call on its own path. A `sequential` that wants fail-closed ends with a rejecting rule.
+- **An uncovered call proceeds in a `sequential`.** This matches review. The approval adapter keeps approval's `reject` for an uncovered call on its own path. A `sequential` that wants fail-closed ends with a rejecting rule.
 
 `sequential()` as ordinary code over the runner:
 
@@ -1135,7 +1135,7 @@ Everything `sentinel-deployment.md` establishes for proxies applies to bridged a
 
 ```python
 ApprovalDecision = Literal["approve",  "modify", "reject", "terminate", "escalate"]
-ReviewDecision   = Literal["proceed",                     "terminate", "escalate"]
+ReviewDecision   = Literal["continue",                     "terminate", "escalate"]
 Action           = Literal["proceed", "modify", "reject", "terminate", "escalate"]
 ```
 
@@ -1148,7 +1148,7 @@ Action           = Literal["proceed", "modify", "reject", "terminate", "escalate
   | Word | Where | Means |
   |---|---|---|
   | `approve` | approver, pre-execution | I authorize this action |
-  | `proceed` | reviewer, post-execution | nothing to authorize; the tool already ran |
+  | `continue` | reviewer, post-execution | nothing to authorize; the tool already ran |
   | `proceed` | protocol, nested | I decline to object |
 
 - **`Task(approval=)` is to accept a protocol** (proposed, not built). Both forms compile down to an `Approver` that `apply_tool_approval` calls:
@@ -1168,7 +1168,7 @@ Issue #5423 proposed that `approval` and `review` accept a dict of named policy 
 |---|---|
 | independent chains that all run | concurrent is the default composition |
 | per-monitor events | one `SentinelEvent` per participating child, from the runner |
-| a framework severity order | `terminate > reject > modify > escalate > continue` in `Decisions.strongest()` |
+| a framework severity order | `terminate > reject > modify > escalate > proceed` in `Decisions.strongest()` |
 | an ordered chain inside each group; `escalate` stays inside it | `sequential()`; escalations never cross layers |
 | a human at the end who sees who escalated and why | `human()`, reading `step.escalations` |
 | named chains, and the name in the log | mapping keys as instance names; `SentinelEvent.path` |
@@ -1191,7 +1191,7 @@ What exists today and where it falls short:
 | Point in the loop | What exists | Limits |
 |---|---|---|
 | Before a tool call | `@approver` | Sees only the call. Fires only when the model calls a tool. |
-| After a tool result | `@reviewer` (#5356) | `proceed` / `terminate` / `escalate` only. No score, no rewrite. Separate policy machinery from approval (413 lines, 20 to 62% textually similar). |
+| After a tool result | `@reviewer` (#5356) | `continue` / `terminate` / `escalate` only. No score, no rewrite. Separate policy machinery from approval (413 lines, 20 to 62% textually similar). |
 | Before generate | `Hooks.on_before_model_generate` | Process-global, enabled by environment variable, so not per-eval. Exceptions swallowed. No transcript record. Cannot terminate. |
 | After generate | nothing | |
 
@@ -1355,7 +1355,7 @@ The literature's terms name mechanisms. `Action` names outcomes. Deferral, resam
 
 | Control term | Where it lives |
 |---|---|
-| `accept` | `Action.continue` |
+| `accept` | `Action.proceed` |
 | `audit` | `Decision.audit`, a flag |
 | `defer_to_trusted` | a protocol name; returns `modify` |
 | `trusted_editing` | a protocol name; returns `modify` |

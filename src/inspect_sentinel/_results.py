@@ -134,7 +134,7 @@ def warn_failed(failed: Iterable[Failed]) -> None:
         if key not in _warned:
             _warned.add(key)
             logger.warning(
-                f"Monitor {f.path!r} (function {f.function!r}) failed with {type(f.error).__name__}: {f.error}. Nothing reads its observations here, so the step proceeded; later {type(f.error).__name__} failures from it are recorded but not logged."
+                f"Monitor {f.path!r} (function {f.function!r}) failed with {type(f.error).__name__}: {f.error}. Nothing reads its observations here, so the step went on without it; later {type(f.error).__name__} failures from it are recorded but not logged."
             )
 
 

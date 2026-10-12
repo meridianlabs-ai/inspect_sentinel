@@ -55,7 +55,7 @@ def _handled(records: list[Reported[Report]]) -> list[Reported[Report]]:
     return [r for r in records if r.name == "handle_escalation"]
 
 
-@pytest.mark.parametrize("action", ["reject", "escalate", "modify", ""])
+@pytest.mark.parametrize("action", ["continue", "reject", "escalate", "modify", ""])
 def test_the_action_is_terminate_or_proceed(action: Any) -> None:
     with pytest.raises(ValueError, match="'terminate' or 'proceed'"):
         handle_escalation(action)

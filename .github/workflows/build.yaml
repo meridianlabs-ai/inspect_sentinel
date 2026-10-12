@@ -36,8 +36,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
       # TEMPORARY: the proceed rename needs inspect_ai's SentinelAction with
-      # "proceed" (UKGovernmentBEIS/inspect_ai#5822). Remove, with --no-sync below,
-      # when #5822 is on inspect_ai main.
+      # "proceed" (UKGovernmentBEIS/inspect_ai#5822). When #5822 is on inspect_ai
+      # main, run `uv lock --upgrade-package inspect-ai` and remove this step and
+      # --no-sync below.
       - name: Install inspect_ai (TEMPORARY)
         run: uv pip install --no-deps "inspect_ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@77dec2567339631cdcef585e3e8ce295a7df76a6"
       - name: Run pyright
@@ -57,8 +58,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
       # TEMPORARY: the proceed rename needs inspect_ai's SentinelAction with
-      # "proceed" (UKGovernmentBEIS/inspect_ai#5822). Remove, with --no-sync below,
-      # when #5822 is on inspect_ai main.
+      # "proceed" (UKGovernmentBEIS/inspect_ai#5822). When #5822 is on inspect_ai
+      # main, run `uv lock --upgrade-package inspect-ai` and remove this step and
+      # --no-sync below.
       - name: Install inspect_ai (TEMPORARY)
         run: uv pip install --no-deps "inspect_ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@77dec2567339631cdcef585e3e8ce295a7df76a6"
       - name: Run tests

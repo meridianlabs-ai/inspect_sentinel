@@ -545,7 +545,7 @@ Claude Code hooks separate `additionalContext` (the model sees it) from `systemM
 
 This is a different axis from the split above. `Observation` and `Decision` split by *who emits it* — a monitor or a protocol; nothing here splits by *where it runs*. A `BeforeToolCall` monitor and an `AfterGenerate` monitor both return `Observation`, a protocol at either returns `Decision`, and `Action` is one Literal across all four stages. The stages look like they need different vocabularies; they mostly don't:
 
-| Stage             | continue | terminate | escalate | reject | modify       |
+| Stage             | proceed  | terminate | escalate | reject | modify       |
 |-------------------|----------|-----------|----------|--------|--------------|
 | `BeforeGenerate`  | ✓        | ✓         | ✓        | ✓      | open (below) |
 | `AfterGenerate`   | ✓        | ✓         | ✓        | ✓      | —            |
@@ -1666,7 +1666,7 @@ The types a monitor works with also want to be importable without the eval frame
 
 ``` python
 ApprovalDecision = Literal["approve",  "modify", "reject", "terminate", "escalate"]
-ReviewDecision   = Literal["proceed",                     "terminate", "escalate"]
+ReviewDecision   = Literal["continue",                     "terminate", "escalate"]
 ```
 
 **Chosen: a childless `AfterToolCall` protocol subsumes `Reviewer`; `@approver` survives.**
@@ -1691,10 +1691,10 @@ But the better reason is that the difference tracks a real distinction:
 | Word | Where | Means |
 |------------------------|------------------------|------------------------|
 | `approve` | approver, pre-execution | I authorize this action |
-| `proceed` | reviewer, post-execution | nothing to authorize; the tool already ran |
+| `continue` | reviewer, post-execution | nothing to authorize; the tool already ran |
 | `proceed` | protocol, nested under another | I decline to object |
 
-`Reviewer` reached for `proceed` independently, for a decision where there is nothing left to authorize. That is evidence *for* the distinction rather than against it — and it is exactly why subsuming review into a rule is clean while subsuming approval is not. Both are `proceed`-shaped; `approve` is not.
+`Reviewer` reached for `continue` independently, for a decision where there is nothing left to authorize. That is evidence *for* the distinction rather than against it — and it is exactly why subsuming review into a rule is clean while subsuming approval is not. Both are `proceed`-shaped; `approve` is not.
 
 So: `@protocol` uses `proceed`, `Approval` keeps `approve`, and the adapter maps between them at the boundary, which it always had to do. If monitor ever subsumes approval, `approve` retires with `@approver` — reconciliation by attrition rather than by rename.
 
@@ -1733,7 +1733,7 @@ That proposal will not land as written; the group has agreed to build on sentine
 |------------------------|------------------------|
 | independent chains that all run | the default composition is concurrent; nothing is silenced |
 | per-monitor events, not one wrapper event | one `SentinelEvent` per participating child, from the runner |
-| a framework severity order | `terminate > reject > modify > escalate > continue`, in `Decisions.strongest()` |
+| a framework severity order | `terminate > reject > modify > escalate > proceed`, in `Decisions.strongest()` |
 | an ordered chain inside each group, with `escalate` staying within it | `sequential()`; `step.escalations` stays within one `sequential`, and a layer that ends on `escalate` passes it up as its own decision |
 | a human at the end of a chain who sees who escalated and why | `human()`, reading `step.escalations` |
 | named chains, and the name in the log | instance names from the mapping; `SentinelEvent.path` |
@@ -1771,7 +1771,7 @@ The concrete mitigations, in order of how much they do:
 
 | Control term | Where it lives now |
 |------------------------|------------------------|
-| `accept` | `Action.continue` — the same thing |
+| `accept` | `Action.proceed` — the same thing |
 | `audit` | `Decision.audit`, a flag; [a second axis, not a peer action](#audit-is-a-flag-not-an-action) |
 | `defer_to_trusted` | a protocol name; it returns `modify` |
 | `trusted_editing` | a protocol name; it returns `modify` |
