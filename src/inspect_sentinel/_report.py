@@ -20,7 +20,7 @@ PRECEDENCE: dict[Action, int] = {
     "reject": 4,
     "modify": 3,
     "escalate": 2,
-    "continue": 1,
+    "proceed": 1,
 }
 
 
@@ -114,9 +114,9 @@ class Decision(BaseModel):
     def proceed(
         cls, explanation: str | None = None, *, references: Sequence[Reference] = ()
     ) -> Decision:
-        """Let the step proceed unchanged: a decision with action `continue`."""
+        """Let the step proceed unchanged: a decision with action `proceed`."""
         return cls(
-            action="continue", explanation=explanation, references=list(references)
+            action="proceed", explanation=explanation, references=list(references)
         )
 
     @classmethod

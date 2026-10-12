@@ -125,6 +125,6 @@ def unhandled(escalations: Sequence[Reported[Decision]]) -> Decision:
     for e in escalations:
         references.extend(r for r in e.report.references if r not in references)
     return Decision.terminate(
-        f"unhandled escalation from {named}. To say what an escalation means, end the configuration with human() or handle_escalation('terminate' | 'continue') in a sequential().",
+        f"unhandled escalation from {named}. To say what an escalation means, end the configuration with human() or handle_escalation('terminate' | 'proceed') in a sequential().",
         references=references,
     )

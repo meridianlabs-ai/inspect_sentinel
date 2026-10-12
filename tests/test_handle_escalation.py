@@ -55,9 +55,9 @@ def _handled(records: list[Reported[Report]]) -> list[Reported[Report]]:
     return [r for r in records if r.name == "handle_escalation"]
 
 
-@pytest.mark.parametrize("action", ["reject", "escalate", "modify", ""])
-def test_the_action_is_terminate_or_continue(action: Any) -> None:
-    with pytest.raises(ValueError, match="'terminate' or 'continue'"):
+@pytest.mark.parametrize("action", ["continue", "reject", "escalate", "modify", ""])
+def test_the_action_is_terminate_or_proceed(action: Any) -> None:
+    with pytest.raises(ValueError, match="'terminate' or 'proceed'"):
         handle_escalation(action)
 
 
@@ -79,7 +79,7 @@ async def test_it_abstains_with_nothing_to_handle(spec: Any, step: Step) -> None
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("step", [before_step(), after_step()])
-@pytest.mark.parametrize("action", ["terminate", "continue"])
+@pytest.mark.parametrize("action", ["terminate", "proceed"])
 async def test_it_answers_the_escalation_before_it(action: Any, step: Step) -> None:
     decision, records, _ = await _run(
         sequential([he_rule("escalate", "unsure"), handle_escalation(action)]), step
@@ -102,13 +102,13 @@ async def test_its_explanation_names_each_escalation() -> None:
                 "first": he_rule("escalate", "deletes files"),
                 "second": he_rule("escalate", None),
                 "third": he_rule("escalate", "suspicion 0.6"),
-                "policy": handle_escalation("continue"),
+                "policy": handle_escalation("proceed"),
             }
         ),
         before_step(),
     )
     assert decision is not None
-    assert decision.action == "continue"
+    assert decision.action == "proceed"
     assert (
         decision.explanation
         == "escalated by first: deletes files; second; third: suspicion 0.6"
@@ -121,7 +121,7 @@ async def test_its_explanation_names_each_escalation() -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(("score", "expected"), [(0.9, "reject"), (0.1, "continue")])
+@pytest.mark.parametrize(("score", "expected"), [(0.9, "reject"), (0.1, "proceed")])
 async def test_after_threshold_the_threshold_decides(
     score: float, expected: str
 ) -> None:
@@ -149,7 +149,7 @@ async def test_after_human_it_handles_the_stages_the_person_is_not_asked_at() ->
         spec, before_step(), HumanAnswer(decision="approve")
     )
     assert before is not None
-    assert before.action == "continue"
+    assert before.action == "proceed"
     assert len(host.asked) == 1
     assert not _handled(before_records)
 
