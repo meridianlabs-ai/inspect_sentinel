@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from functools import wraps
 from typing import (
@@ -283,7 +283,11 @@ def _register(
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> object:
         if portable:
             check_portable(factory, kind, registered_name)
-        returned = factory(*args, **kwargs)
+        # the configuration records only plain lists and dicts, so a container
+        # of sentinels is handed on, and recorded, as one
+        plain_args = tuple(_plain(arg) for arg in args)
+        plain_kwargs = {key: _plain(value) for key, value in kwargs.items()}
+        returned = cast(Callable[..., object], factory)(*plain_args, **plain_kwargs)
         instance: object
         if isinstance(returned, Group):
             if not isinstance(returned, group_type):
@@ -307,11 +311,35 @@ def _register(
             instance = _configure(returned, kind, report_type)
             accepted = step_types(cast(Sentinel, instance))
         setattr(instance, STEP_TYPES_ATTR, accepted)
-        registry_tag(factory, instance, info.model_copy(deep=True), *args, **kwargs)
+        registry_tag(
+            factory, instance, info.model_copy(deep=True), *plain_args, **plain_kwargs
+        )
         return instance
 
     registry_add(wrapper, info)
     return wrapper
+
+
+def _plain(value: object) -> object:
+    # a mapping or sequence of configured monitors and protocols other than a
+    # dict, list or tuple, such as a UserList or an OrderedDict subclass, as the
+    # dict or list that keeps its names and order; any other argument as given
+    container: object = value
+    if isinstance(container, (dict, list, tuple, str, bytes)):
+        return value
+    if isinstance(container, Mapping):
+        mapping = dict(cast(Mapping[object, object], container))
+        if mapping and all(map(_configured, mapping.values())):
+            return mapping
+    elif isinstance(container, Sequence):
+        items = list(cast(Sequence[object], container))
+        if items and all(map(_configured, items)):
+            return items
+    return value
+
+
+def _configured(value: object) -> bool:
+    return hasattr(value, STEP_TYPES_ATTR)
 
 
 def _configure(function: object, kind: RegistryType, report_type: type[Report]) -> Any:
