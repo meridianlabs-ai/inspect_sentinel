@@ -30,7 +30,7 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 
 ## Monitors and protocols
 
-`Protocol` is a control protocol, not `typing.Protocol`.
+`Protocol` is a control protocol: the type of what a `@protocol` factory returns, generic in the decisions it can return. It is not `typing.Protocol`, though it is defined as one.
 
 ### monitor
 ### protocol

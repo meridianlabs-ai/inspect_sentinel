@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Generic, TypeAlias, cast, final
+from typing import Protocol as TypingProtocol
 
-from typing_extensions import TypeVar
+from typing_extensions import Never, TypeVar
 
 from ._context import Context
 from ._report import Decision, Observation, Report
@@ -20,14 +21,17 @@ R = TypeVar("R", bound=Decision | None, default=Decision | None, covariant=True)
 # no protocol among them, as with monitors alone, nothing decides
 D = TypeVar("D", bound=Decision | None, default=None)
 
-Protocol: TypeAlias = (
-    Callable[[Context, Step], Awaitable[R]]
-    | Callable[[Context, BeforeToolCall], Awaitable[R]]
-    | Callable[[Context, AfterToolCall], Awaitable[R]]
-)
-"""A control protocol, not `typing.Protocol`: decides what happens at a step, or abstains. Annotating `Step` runs it at every stage.
 
-Generic in what it can return: `Protocol[Reject | Proceed | None]` rejects, proceeds or abstains, and a bare `Protocol` is `Protocol[Decision | None]`, which may decide anything. A factory's instances have the type its return annotation gives, so annotate the factory `-> Protocol[...]` with the same union as the function it returns."""
+class Protocol(TypingProtocol[R]):
+    """A control protocol: decides what happens at a step, or abstains. Its function takes `(context, step)`, with `step` annotated as the stage it runs at, or `Step` to run at every stage.
+
+    Generic in what it can return: `Protocol[Reject | Proceed | None]` rejects, proceeds or abstains, and a bare `Protocol` is `Protocol[Decision | None]`, which may decide anything. A factory's instances have the type its return annotation gives, so annotate the factory `-> Protocol[...]` with the same union as the function it returns. A named type, so a type checker reports `Protocol[Escalate | Proceed]` where a `Protocol[Verdict | None]` is needed rather than comparing signatures. The stage a function takes is checked when its factory is called, since a type does not say which stage a protocol watches.
+    """
+
+    def __call__(self, context: Context, step: Never, /) -> Awaitable[R]:
+        """Decide about the step, or abstain. Only the runner calls it."""
+        ...
+
 
 SentinelFunction: TypeAlias = Callable[[Context, Step], Awaitable[Report | None]]
 
@@ -112,7 +116,9 @@ Protocols: TypeAlias = (
 )
 """Protocols handed to a protocol, named the same way."""
 
-Sentinel: TypeAlias = Monitor | MonitorGroup | Protocol[R] | ProtocolGroup[R]
+# protocols first, so a type checker explains a protocol that does not fit
+# before it compares it with a monitor
+Sentinel: TypeAlias = Protocol[R] | ProtocolGroup[R] | Monitor | MonitorGroup
 """A monitor or protocol, or a group of either, generic in what its protocols can return."""
 
 Sentinels: TypeAlias = Sentinel[R] | Mapping[str, Sentinel[R]] | Sequence[Sentinel[R]]
