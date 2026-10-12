@@ -8,7 +8,7 @@ Status: landing (inspect_ai #5811, sentinel #42). Monitors observe both generate
 
 | # | Decision | Recommendation |
 |---|---|---|
-| 1 | How an agent generate is identified | **Revised 2026-10-12 (phase fence plus deny list):** any model call while the sample runs its solvers, except inside a tool's own body (unless an agent the tool runs opens its own span), a sentinel run, a compaction summary or `score()` from a solver. Sample init and scoring are outside the fence. Coverage then matches the tool stages, which already check every agent's tool calls. A solver's direct helper call to another model is now checked. |
+| 1 | How an agent generate is identified | **Revised 2026-10-12 (phase fence plus deny list):** any model call while the sample runs its solvers, except inside a tool's own body (unless an agent the tool runs opens its own span), a sentinel run, a compaction summary, `score()` from a solver, an approver, a reviewer or MCP sampling. Sample init and scoring are outside the fence. Coverage then matches the tool stages, which already check every agent's tool calls. A solver's direct helper call to another model is now checked. |
 | 2 | Sub-agents and role models that are not the active model | **Revised 2026-10-12:** checked, by decision 1's agent-loop rule, whatever model they use. Reason: their tool calls are already checked at the tool stages, so leaving their turns unchecked was inconsistent and let an agent hand risky work to a sub-agent on another model. Helper calls stay out through the tool-body rule. The agent instance record (`step.agent`) and per-instance store remain later work ([sub-agents.md](sub-agents.md), #66). |
 | 3 | Compaction summary calls | **Decided 2026-10-12:** not checked. The summary reaches the next `BeforeGenerate` as part of `input`. |
 | 4 | Where the hook sits | **Decided 2026-10-10.** In `Model.generate`, once per call, outside the connection slot; the input preparation moves ahead of the slot so the step sees what is sent ([b](#b-where-the-hook-sits)). Built. |
@@ -36,7 +36,7 @@ Decided before this design: the generate stages check the agent's own model call
 - **B. Agent loops opt in.** `react`, `generate()`, `generate_loop` and `bridge_generate` call a sentinel-aware generate. Exact about turns, but a custom agent or solver calling `model.generate` is never checked unless it adopts a new public API, and every loop must remember to.
 - **C. Any generate in an agent context.** Hook `Model.generate` and check every call made in the solver phase outside a tool body, whatever the model. Covers sub-agents and role models, but also a solver's helper calls to a classifier or a critique model, which are not agent actions.
 
-**Decided (decisions 1 and 2, revised 2026-10-12): C, fenced to the solvers.** A model call during the solvers is an agent's turn whatever its model, since a sub-agent's tool calls are already checked and its model calls should be too; the exclusions are a deny list of scopes (tool bodies, sentinel runs, compaction, `score()`). The earlier rules, A (active model only) and then agent spans on any model plus the active model elsewhere, are superseded; the second was replaced after a review found it checked an `on_sample_init` agent's helper.
+**Decided (decisions 1 and 2, revised 2026-10-12): C, fenced to the solvers.** A model call during the solvers is an agent's turn whatever its model, since a sub-agent's tool calls are already checked and its model calls should be too; the exclusions are a deny list of scopes (tool bodies, sentinel runs, compaction, `score()`, approvers, reviewers, MCP sampling). The earlier rules, A (active model only) and then agent spans on any model plus the active model elsewhere, are superseded; the second was replaced after a review found it checked an `on_sample_init` agent's helper.
 
 ### The rule
 
@@ -46,11 +46,11 @@ Decided 2026-10-12 ("phase fence plus deny list"), after a review found that an 
 2. the sample is running its solvers (the phase fence): inspect_ai sets it around `plan(state, generate)`, and nothing nested can change it, so sample init (including `on_sample_init` hooks) and scoring (the scoring phase and `inspect score`) are outside. A task's `setup` solvers are part of the plan and are inside;
 3. the call is not in a denied scope, innermost first:
    - a tool's own body (`call_tool`, and the sandbox bridge service for a host tool) denies; an agent started inside the tool (`as_tool()`) opens an agent span, which allows again;
-   - a sentinel run (`Host.generate` and a monitor calling `get_model()` itself), a compaction summary and `score()` called from a solver deny finally: nothing inside them, an agent span included, allows again.
+   - a sentinel run (`Host.generate` and a monitor calling `get_model()` itself), a compaction summary, `score()` called from a solver, an approval policy's approver, a review policy's reviewer and an MCP server's sampling request deny finally: nothing inside them, an agent span included, allows again.
 
 Any model counts: inside the solvers, outside a denied scope, a call is the agent's whatever model it uses.
 
-**Mechanism.** inspect_ai keeps two context variables, read by `Model.generate`: the fence (true only around the solvers), and `sentinel_scope(AgentScope.ON | OFF, final=)`, which defaults to `ON`. A tool body sets `OFF`; an agent span sets `ON` where `span(type="agent")` opens, so no adapter can forget it; a sentinel run, a compaction summary and `score()` from a solver set `OFF` as final. The innermost scope wins, except that nothing inside a final scope changes it. Both are internal for now; a public marker for helper calls is a later decision.
+**Mechanism.** inspect_ai keeps two context variables, read by `Model.generate`: the fence (true only around the solvers), and `sentinel_scope(AgentScope.ON | OFF, final=)`, which defaults to `ON`. A tool body sets `OFF`; an agent span sets `ON` where `span(type="agent")` opens, so no adapter can forget it; a sentinel run, a compaction summary, `score()` from a solver, an approver, a reviewer and MCP sampling set `OFF` as final. The innermost scope wins, except that nothing inside a final scope changes it. Both are internal for now; a public marker for helper calls is a later decision.
 
 **Behaviour change (accepted 2026-10-12).** A custom solver's direct call to another model, outside a tool (a critique or classifier helper), is now checked. Before, outside an agent span only the active model's calls were.
 
@@ -73,7 +73,9 @@ Any model counts: inside the solvers, outside a denied scope, a call is the agen
 | compaction summaries | no | denied finally (in a `compaction` span); decision 3 |
 | a bridge filter that returns a `ModelOutput` itself | no | no `Model.generate` call; a gap to close with the bridge hook (workstream 5) |
 | a tool an in-process bridged scaffold runs itself, calling inspect's model | yes | inspect never sees the tool start, so its calls look like the agent's |
-| MCP sampling (`get_model().generate()` from an MCP server callback) | depends | runs in the MCP session's context; unverified |
+| approval policies (an approver's model calls, or an agent it runs) | no | the approver runs denied finally |
+| review policies (a reviewer's model calls, or an agent it runs) | no | the reviewer runs denied finally |
+| MCP sampling (`get_model().generate()` from an MCP server callback) | no | the sampling request runs denied finally, whatever context the session runs in |
 
 An agent run during sample init, such as from an `on_sample_init` hook, is not checked, however it is built: the fence is closed there.
 
