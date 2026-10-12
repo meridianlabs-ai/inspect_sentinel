@@ -470,7 +470,7 @@ Decided with the maintainer on 2026-10-12 for AISI's R5 (`design/requirements-ai
 
 Rulings of 2026-10-10 and 2026-10-12 ([generate-stages.md](generate-stages.md), decisions), landed with inspect_ai #5811:
 
-- **Every agent loop's model calls** are checked (decisions 1 and 2 revised): inside an agent span on any model, or on the active model during the solvers; not in a tool's own body, a sentinel run, a compaction or a scorer.
+- **Every agent loop's model calls** are checked (decisions 1 and 2 revised; phase fence plus deny list): any model call while the sample runs its solvers, on any model, except inside a tool's own body (an agent the tool runs opens its own span and is checked), a sentinel run, a compaction summary, `score()` from a solver, an approver, a reviewer or an MCP server's sampling request. Sample init and scoring are outside the fence.
 - **`escalate` at the generate stages** (decision 16). `threshold` gains `model_input` and `model_output`; `handle_escalation` answers at all four stages and is marked as answering escalations only, so it never makes a stage watched on its own.
 - **`history` keeps its meaning** (decision 15, revised): the scaffold's list at the tool stages, the caller's at the generate stages. The as-sent view (AISI R10) is its own PR, an on-demand query on `TranscriptHistory.find_last` (inspect_ai #5831); marking compaction and `score()` calls in the transcript for it and for replay (R7) is deferred to that work, designed with its viewer and TUI impact. Decision 17's recording is dropped, since R2 finds a tool call's producing `ModelEvent` in the transcript.
 - **`reject` and `modify` at the generate stages** (decisions 8–13) are deferred to part 2 and stay shape-check errors.
