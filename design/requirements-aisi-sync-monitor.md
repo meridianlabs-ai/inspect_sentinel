@@ -118,7 +118,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 | 8.8 | tool definitions | not met |
 | 8.9 | withheld messages | partly met |
 | R9 | `human()` routed to a team's review tool | not met |
-| R10 | the history as sent to the model, per agent instance | not met; designed in part for replay |
+| R10 | the history as sent to the model, per agent instance | decided 2026-10-12: met by `history` itself (generate-stages decision 15); not built |
 
 **R1.** Only the tool stages are wired ([pr-series.md](pr-series.md), Decisions, "Tool stages only, for now"). The generate-stages prototype, sentinel #42 (draft), allows only `continue` and `terminate` at `BeforeGenerate` and `AfterGenerate`; its decision 16 enables `escalate` next, with the tool stages' root behaviour. `human(stages=)` accepts only `tool_call` and `tool_result` (`_protocols/human.py`; [sentinel.md](sentinel.md), "Humans in the loop", open question 14). inspect_ai's `Host.ask_human` passes one `step.call` to `human_approver` (`_sentinel/_dispatch.py`), so there is no rendering of a whole turn. Gap: `escalate` at `AfterGenerate`, `human(stages=["model_output"])`, and a host rendering of a turn's tool calls with `step.escalations`.
 
@@ -148,7 +148,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 
 **R9.** `Host.ask_human` in inspect_ai always calls `human_approver` (`_dispatch.py`), so the approval panel, ACP or the console. Nothing routes `human()` to another surface. Workstream 13 decided remote surfaces go through a message queue that other tools consume ([workstreams.md](workstreams.md)); [proxy-host.md](proxy-host.md) maps `ask_human` to an audit queue.
 
-**R10.** `step.history` is the scaffold's message list (`_step.py`), and `step.input` is the as-sent input of the current call only. Nothing live accumulates what one agent instance has sent across calls. [sentinel-development.md](sentinel-development.md), "From events", designs the same reconstruction for replay from `ModelEvent`s and `CompactionEvent`s sharing a `conversation` id, which core does not record yet. Gap: a step field (for example `sent`) built per agent instance from each generate's recorded input (the R2 record), the `conversation` id on events, the same field in replay, and a rule for messages edited after they were sent.
+**R10** (decided 2026-10-12: `history` itself becomes the model's view of the agent's run, generate-stages.md decision 15, built with #42's recording; no separate field). Before: `step.history` was the scaffold's message list (`_step.py`), and `step.input` is the as-sent input of the current call only. Nothing live accumulates what one agent instance has sent across calls. [sentinel-development.md](sentinel-development.md), "From events", designs the same reconstruction for replay from `ModelEvent`s and `CompactionEvent`s sharing a `conversation` id, which core does not record yet. Gap: a step field (for example `sent`) built per agent instance from each generate's recorded input (the R2 record), the `conversation` id on events, the same field in replay, and a rule for messages edited after they were sent.
 
 ## Where each requirement sits in the plan
 
