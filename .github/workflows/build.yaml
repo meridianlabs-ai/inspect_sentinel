@@ -35,8 +35,13 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
       - name: Install dependencies
         run: uv sync --group dev
+      # TEMPORARY: the proceed rename needs inspect_ai's SentinelAction with
+      # "proceed" (UKGovernmentBEIS/inspect_ai#5822). Remove, with --no-sync below,
+      # when #5822 is on inspect_ai main.
+      - name: Install inspect_ai (TEMPORARY)
+        run: uv pip install --no-deps "inspect_ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@77dec2567339631cdcef585e3e8ce295a7df76a6"
       - name: Run pyright
-        run: uv run pyright
+        run: uv run --no-sync pyright
 
   py-test:
     runs-on: ubuntu-latest
@@ -51,8 +56,13 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
       - name: Install dependencies
         run: uv sync --group dev
+      # TEMPORARY: the proceed rename needs inspect_ai's SentinelAction with
+      # "proceed" (UKGovernmentBEIS/inspect_ai#5822). Remove, with --no-sync below,
+      # when #5822 is on inspect_ai main.
+      - name: Install inspect_ai (TEMPORARY)
+        run: uv pip install --no-deps "inspect_ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@77dec2567339631cdcef585e3e8ce295a7df76a6"
       - name: Run tests
-        run: uv run pytest
+        run: uv run --no-sync pytest
 
   py-build:
     runs-on: ubuntu-latest
