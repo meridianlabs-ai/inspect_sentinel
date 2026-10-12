@@ -910,7 +910,7 @@ threshold(
 | `sequential` | core | runs children in order; first non-`escalate` decides; hands escalations forward |
 | `observe_only` | core | records every observation, acts on none; how monitors run with nothing acting, since a bare monitor is an error |
 | `handle_escalation` | core | answers the escalations handed to it with a fixed `terminate` or `continue`, `action` required; abstains when nothing escalated; both tool stages |
-| `threshold` | core | `reject` at or above one threshold, `terminate` at or above another, each a number or a mapping per dimension; what calibration feeds |
+| `threshold` | core | `escalate_at`, `reject_at` and `terminate_at` are floors, at least one given, and the strongest action reached decides; each a number or a mapping per dimension; `reject_at` before tool calls only, otherwise both tool stages; what calibration feeds |
 | `resample` | core | above a threshold, draws `n` further completions, executes the least suspicious; `escalate` if none clears. `AfterGenerate` only |
 | `trusted_monitoring` | extension candidate | thresholds scores and spends a human-review budget; the budget is a deployment-economics idea that eval operators tend not to want |
 | `trusted_editing` | extension candidate | has a trusted model rewrite the untrusted output; returns `modify` |
