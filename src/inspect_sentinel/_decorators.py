@@ -321,9 +321,10 @@ def _register(
 
 
 def _plain(value: object) -> object:
-    # a mapping or sequence of configured monitors and protocols other than a
-    # dict, list or tuple, such as a UserList or an OrderedDict subclass, as the
-    # dict or list that keeps its names and order; any other argument as given
+    # a mapping or sequence of configured monitors and protocols that the
+    # registry cannot record, one that is not a dict (OrderedDict included), a
+    # list or a tuple, such as a UserList or a UserDict, as the dict or list that
+    # keeps its names and order; any other argument as given
     container: object = value
     if isinstance(container, (dict, list, tuple, str, bytes)):
         return value

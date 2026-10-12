@@ -857,12 +857,22 @@ async def test_concurrent_counts_a_groups_votes_by_instance(
     assert (decision.action, decision.explanation) == (action, explanation)
 
 
-_KINDS = ["list", "user_list", "dict", "ordered_dict", "user_dict", "lone"]
+_KINDS = [
+    "list",
+    "user_list",
+    "dict",
+    "ordered_dict",
+    "user_dict",
+    "lone",
+    "lone_function",
+]
 
 
 def _container(kind: str, children: list[tuple[str, object]]) -> Any:
     if kind == "lone":
         return children[0][1]
+    if kind == "lone_function":
+        return children[1][1]
     if kind in ("list", "user_list"):
         items = [child for _, child in children]
         return items if kind == "list" else UserList[object](items)
@@ -950,3 +960,21 @@ async def test_a_layer_records_and_runs_the_children_it_was_built_with(
     rebuilt = resolve_sentinel(sentinel_from_config(config))
     assert await _ran(layer) == expected
     assert await _ran(rebuilt) == expected
+
+
+_GIVEN = "given"
+
+
+@protocol
+def keeps(options: Mapping[str, float]) -> Protocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        return None
+
+    # so the test can see what the factory was given
+    setattr(decide, _GIVEN, options)
+    return decide
+
+
+def test_a_factory_gets_any_other_argument_as_given() -> None:
+    options = UserDict[str, float](limit=0.5)
+    assert getattr(keeps(options), _GIVEN) is options
