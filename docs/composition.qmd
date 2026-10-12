@@ -5,7 +5,7 @@ description: "Combining monitors and protocols: concurrent(), sequential(), thre
 
 ::: {.callout-warning}
 ## Outline
-This page is an outline: a summary and the sections planned for it, not yet the documentation. See [Getting Started](index.qmd) for a worked example.
+This page is an outline: a summary and the sections planned for it, not yet the documentation, apart from [Sequential](#sequential) and [Threshold](#threshold). See [Getting Started](index.qmd) for a worked example.
 :::
 
 ## Overview
@@ -17,7 +17,6 @@ How several monitors and protocols combine into one sentinel. Covers what a list
 - What `Task(sentinel=...)` resolves to: a lone protocol, or a list or mapping with at least one protocol; monitors alone are an error naming `observe_only()`
 - Instance names, mapping keys and paths (`llm/suspicion`)
 - `concurrent()`: every child runs; the strongest decision wins (`terminate` > `reject` > `modify` > `escalate` > `continue`)
-- `threshold()`: `reject_at` and `terminate_at`, as one number or per monitor and dimension
 - `observe_only()`: recording scores with nothing acting on them, and collecting a benign distribution; the only way to run monitors with no protocol
 - `resample()` (planned)
 - Nesting compositions
@@ -53,3 +52,27 @@ sentinel:
       judge: {name: llm_judge, params: {model: openai/gpt-4o-mini}}
 ```
 
+## Threshold
+
+`threshold()` turns monitors' suspicion scores into a decision. Each of `escalate_at`, `reject_at` and `terminate_at` is a floor: at or above it the step gets at least that action. The decision is the strongest action any score reaches, `terminate` over `reject` over `escalate`, and `continue` when none is reached. Give at least one; to record scores with nothing acting on them, use `observe_only()`.
+
+A configuration that never rejects, since a rejection tells the agent no and it tries again, escalates what is suspicious to a person and ends the sample above a higher score:
+
+```python
+from inspect_sentinel import human, sequential, threshold
+
+sentinel = sequential(
+    [
+        threshold([proposed_action()], escalate_at=0.6, terminate_at=0.9),
+        human(stages=["tool_call"]),
+    ]
+)
+```
+
+- **Thresholds are floors.** With `escalate_at=0.6, terminate_at=0.9`, a score of 0.7 escalates and 0.95 terminates. Across monitors the strongest action reached wins, so one monitor at 0.95 terminates whatever the others say.
+- **One number, or one per monitor and dimension.** A mapping is keyed by `"<monitor>.<dimension>"`, a bare `"<dimension>"` for that dimension from every monitor, a monitor's instance name for its single-number score, or `"*"` for anything unlisted, the most specific key winning: `escalate_at={"audit.sabotage": 0.6, "*": 0.8}`. A score no key covers never triggers. A key containing `.` always names a monitor and one of its dimensions, never a bare dimension.
+- **A threshold a stronger one always overrides is an error.** `escalate_at=0.9` beside `terminate_at=0.8` would never escalate, so `threshold()` raises when it is configured, naming both. A key that one mapping lists and another does not is not such a conflict.
+- **Stages.** `threshold()` runs at each stage its monitors watch, before and after tool calls, so a proposed-action monitor and a tool-result monitor combine in one, each thresholded at its own stage. A `reject` is legal only before a tool call, so with `reject_at` every monitor must watch only `BeforeToolCall`. When the monitors watch both stages, ask the person at both: `human(stages=["tool_call", "tool_result"])`.
+- **An escalation needs something after it.** With `escalate_at`, put `threshold()` first in a `sequential()` and a `human()` or `handle_escalation("terminate" | "continue")` after it: its other decisions end the chain, so the person is asked when it escalates, and also when it abstains because no monitor reported, so give `human()` only the stages its monitors watch. An escalation that reaches the top of the sentinel with nothing to handle it ends the sample (see [Unhandled Escalations](final-decisions.qmd#unhandled-escalations)). Without `escalate_at` it never escalates and needs nothing after it.
+- **What the person sees.** The explanation names the highest score that reached the threshold with its monitor's reasoning: `suspicion 0.72 from proposed_action: reads ~/.ssh`. The decision also carries every reporting monitor's references and, in `metadata["observations"]`, each monitor's score and explanation, so a `human()` after it receives every score through `step.escalations`. inspect_ai's approval card shows only each escalation's explanation for now; it shows every score once its renderer change lands (see the [deferred item](https://github.com/meridianlabs-ai/inspect_sentinel/blob/main/design/pr-series.md#then-tool-stage-completeness)). The agent sees none of it.
+- **A failed monitor fails the step.** `threshold()` does not decide without one of its monitors, so a monitor that raises fails the sample, with the failure in the transcript.

@@ -300,8 +300,8 @@ INVALID: list[tuple[Any, type[Exception], str]] = [
     (3, ValueError, r"sentinel must be a list or a mapping of entries"),
     (
         [{"name": "threshold", "monitors": [{"name": "cfg_suspicion"}]}],
-        TypeError,
-        r"sentinel\[0\]: .*reject_at",
+        ValueError,
+        r"sentinel\[0\]: threshold needs at least one of escalate_at.*observe_only",
     ),
     (
         [
@@ -312,7 +312,7 @@ INVALID: list[tuple[Any, type[Exception], str]] = [
             }
         ],
         ValueError,
-        r"sentinel\[0\]: threshold's terminate_at must be above reject_at",
+        r"sentinel\[0\]: threshold's reject_at=0.8 can never apply: terminate_at=0.5 is lower",
     ),
     (
         {
@@ -452,6 +452,12 @@ async def test_sentinel_to_config_to_sentinel_is_equivalent() -> None:
         ),
         "pair": cfg_pair(),
         "bundle": cfg_bundle(fast=[cfg_suspicion()]),
+        "staged": sequential(
+            [
+                threshold({"pair": cfg_pair()}, escalate_at=0.5, terminate_at=0.9),
+                human(stages=["tool_call", "tool_result"]),
+            ]
+        ),
     }
     rebuilt = sentinel_from_config(config_from_sentinel(original))
     assert _identity(rebuilt) == _identity(original)
@@ -483,7 +489,7 @@ async def test_a_lone_protocol_records_the_same_paths_once_rebuilt() -> None:
         await _paths(rebuilt)
         == await _paths(original)
         == [
-            ("", "decide"),
+            ("", "tool_call"),
             ("cfg_suspicion", "check"),
         ]
     )
@@ -759,7 +765,7 @@ COMPOSED: list[
             "monitors": [{"name": "cfg_watch", "params": {"model": "m"}}],
         },
         [
-            ("", "inspect_sentinel/threshold", "decide"),
+            ("", "inspect_sentinel/threshold", "tool_call"),
             ("cfg_watch", "cfg_watch", "check"),
         ],
     ),
