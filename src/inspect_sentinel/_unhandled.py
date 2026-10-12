@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 
-from inspect_ai.core import Reference
+from inspect_ai.scorer import Reference
 
 from ._report import Decision, Reported, origin, with_origin
 

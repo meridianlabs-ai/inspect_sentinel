@@ -4,7 +4,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, TypeAlias, TypeVar, cast
 
-from inspect_ai.core import Reference, SentinelAction, SentinelSuspicion, ToolCall
+from inspect_ai.event import SentinelAction, SentinelSuspicion
+from inspect_ai.scorer import Reference
+from inspect_ai.tool import ToolCall
 from pydantic import BaseModel, Field, PrivateAttr
 
 Suspicion: TypeAlias = SentinelSuspicion
