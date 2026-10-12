@@ -31,7 +31,7 @@ def validate_decision_shape(decision: Decision, step: Step) -> None:
     ):
         raise ValueError(
             f"A decision {_GENERATE_STAGES[type(step)]} cannot {decision.action} yet; "
-            "only 'continue', 'escalate' and 'terminate' are supported at the generate stages."
+            "only 'proceed', 'escalate' and 'terminate' are supported at the generate stages."
         )
     if isinstance(step, AfterToolCall) and decision.action in ("reject", "modify"):
         raise ValueError(

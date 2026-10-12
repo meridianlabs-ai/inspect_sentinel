@@ -183,14 +183,14 @@ async def test_the_answer_ends_only_its_chain() -> None:
     tree = concurrent(
         {
             "chain": sequential([hum_rule(), human(stages=["tool_call"])]),
-            "peer": hum_rule("continue"),
+            "peer": hum_rule("proceed"),
         }
     )
     decision, _, recorder = await _root(tree, HumanAnswer("reject", reason="no"))
     assert decision is not None and decision.action == "reject"
     assert decision.message == "no"
     assert recorder.bypassed_layers == []
-    assert decision.explanation == "no (chain: reject; peer: continue)"
+    assert decision.explanation == "no (chain: reject; peer: proceed)"
 
 
 @pytest.mark.anyio
@@ -251,8 +251,8 @@ async def test_after_a_call_the_person_sees_the_result() -> None:
 @pytest.mark.parametrize(
     "spec",
     [
-        [hum_rule("continue"), human(stages=["tool_call"])],
-        {"rule": hum_rule("continue"), "person": human(stages=["tool_call"])},
+        [hum_rule("proceed"), human(stages=["tool_call"])],
+        {"rule": hum_rule("proceed"), "person": human(stages=["tool_call"])},
         [hum_score(), human(stages=["tool_call"])],
     ],
 )

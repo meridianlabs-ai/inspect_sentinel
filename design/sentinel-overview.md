@@ -5,7 +5,7 @@
 Inspect Sentinel is a package for defining, developing, and deploying sentinels: functions that watch agents and intervene in their execution. Key design elements include:
 
 1.  A single interface that encompasses monitoring tool calls and model generations, with execution either before or after model generations and tool calls.
-2.  A division between monitors, which observe and report a suspicion score, and protocols, which decide on an action similar to the current Inspect tool call approval interface (e.g. continue, modify, reject, escalate, terminate). A protocol with no monitors is a simple rule.
+2.  A division between monitors, which observe and report a suspicion score, and protocols, which decide on an action similar to the current Inspect tool call approval interface (e.g. proceed, modify, reject, escalate, terminate). A protocol with no monitors is a simple rule.
 3.  Support for layering control protocols (thresholds, audit budgets, resampling, human review, etc.) on top of monitors.
 4.  Core interfaces decoupled from the Inspect runtime so that monitors can be deployed elsewhere (e.g. in network proxies).
 5.  Development tools for validating, calibrating, and backtesting monitors on test or production transcripts.
@@ -43,7 +43,7 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
 Task(sentinel=threshold(suspicion_monitor(), reject_at=0.8))
 ```
 
-Both run before the tool call executes (the `step` they take is `BeforeToolCall`). There are four stages, the step types a monitor or protocol could choose to target; the two tool stages are built, and the generate stages are prototyped (observing, with `continue` and `terminate` only):
+Both run before the tool call executes (the `step` they take is `BeforeToolCall`). There are four stages, the step types a monitor or protocol could choose to target; the two tool stages are built, and the generate stages are built (with `proceed`, `escalate` and `terminate`; `reject` and `modify` come later):
 
 | Stage | Fires |
 |------------------------------------|------------------------------------|
@@ -64,7 +64,7 @@ A protocol's `Decision` carries one of the following actions:
 
 | Action      | Effect                                                       |
 |------------------------------------|------------------------------------|
-| `continue`  | No change to the exchange                                    |
+| `proceed`  | No change to the exchange                                    |
 | `modify`    | Replace the step's subject with `modified`                   |
 | `reject`    | Reject the action, notifying the agent that it was rejected. |
 | `terminate` | End the sample                                               |
@@ -137,7 +137,7 @@ Built-in protocols cover the common compositions and basic control scenarios. `c
 
 | Protocol | Description |
 |------------------------|------------------------------------------------|
-| `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `escalate` \> `continue`). What a list containing a protocol resolves to. Use for independent guards that must all be satisfied. |
+| `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `escalate` \> `proceed`). What a list containing a protocol resolves to. Use for independent guards that must all be satisfied. |
 | `sequential()` | Runs children in order until one decides; first non-`escalate` wins, and escalations are handed to the next link so a human at the end sees who asked and why. Use for a cheap rule ahead of an expensive judge. |
 | `observe_only()` | Records every observation and acts on none. How monitors run with nothing acting, since `Task(sentinel=)` takes no bare monitors, and how a benign score distribution gets collected. |
 | `threshold()` | Acts on scores: `escalate_at`, `reject_at` and `terminate_at` are floors, and the strongest action any score reaches decides; each is one number or a mapping per dimension (`{"audit.sabotage": 0.6, "*": 0.9}`). Escalations carry every monitor's score to `human()` through `step.escalations`. The smallest protocol, and the one calibration feeds. |

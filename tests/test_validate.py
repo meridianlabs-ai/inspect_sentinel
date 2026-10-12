@@ -16,7 +16,7 @@ def _decision(action: Action) -> Decision:
 
 
 @pytest.mark.parametrize(
-    "action", ["continue", "modify", "reject", "terminate", "escalate"]
+    "action", ["proceed", "modify", "reject", "terminate", "escalate"]
 )
 def test_every_action_is_legal_before_a_tool_call(action: Action) -> None:
     validate_decision_shape(_decision(action), before_step())
@@ -28,7 +28,7 @@ def test_intervening_after_a_tool_call_is_a_bug(action: Action) -> None:
         validate_decision_shape(_decision(action), after_step())
 
 
-@pytest.mark.parametrize("action", ["continue", "terminate", "escalate"])
+@pytest.mark.parametrize("action", ["proceed", "terminate", "escalate"])
 def test_the_other_actions_are_legal_after_a_tool_call(action: Action) -> None:
     validate_decision_shape(_decision(action), after_step())
 
@@ -41,7 +41,7 @@ def test_a_modify_must_carry_the_replacement() -> None:
 def test_only_a_modify_may_carry_a_replacement() -> None:
     with pytest.raises(ValueError, match="modified"):
         validate_decision_shape(
-            Decision(action="continue", modified=_call()), before_step()
+            Decision(action="proceed", modified=_call()), before_step()
         )
 
 
@@ -70,7 +70,7 @@ def test_a_reject_may_carry_a_message_for_the_agent() -> None:
     validate_decision_shape(Decision.reject(message="not allowed"), before_step())
 
 
-@pytest.mark.parametrize("action", ["continue", "modify", "terminate", "escalate"])
+@pytest.mark.parametrize("action", ["proceed", "modify", "terminate", "escalate"])
 def test_only_a_reject_may_carry_a_message(action: Action) -> None:
     decision = _decision(action).model_copy(update={"message": "psst"})
     with pytest.raises(ValueError, match="message"):

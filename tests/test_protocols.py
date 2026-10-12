@@ -66,7 +66,7 @@ def afterwards() -> Monitor:
 
 
 @protocol
-def says(action: Action = "continue", explanation: str | None = None) -> Protocol:
+def says(action: Action = "proceed", explanation: str | None = None) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(action=action, explanation=explanation)
 
@@ -141,9 +141,9 @@ async def test_concurrent_passes_all_escalate_up() -> None:
 
 @pytest.mark.anyio
 async def test_nested_concurrent_passes_escalate_up() -> None:
-    inner = concurrent({"unsure": says("escalate"), "fine": says("continue")})
+    inner = concurrent({"unsure": says("escalate"), "fine": says("proceed")})
     decision = await _run(
-        concurrent({"inner": inner, "approver": says("continue")}),
+        concurrent({"inner": inner, "approver": says("proceed")}),
         before_step(),
         ListRecorder(),
     )
@@ -153,10 +153,10 @@ async def test_nested_concurrent_passes_escalate_up() -> None:
 @pytest.mark.parametrize(
     ("actions", "expected"),
     [
-        (["continue", "reject"], "reject"),
+        (["proceed", "reject"], "reject"),
         (["reject", "terminate"], "terminate"),
-        (["escalate", "continue"], "escalate"),
-        (["continue", "escalate"], "escalate"),
+        (["escalate", "proceed"], "escalate"),
+        (["proceed", "escalate"], "escalate"),
         (["escalate", "reject"], "reject"),
     ],
 )
@@ -179,14 +179,14 @@ async def test_concurrent_honours_a_lone_modify() -> None:
 @pytest.mark.anyio
 async def test_concurrent_turns_a_contested_modify_into_a_reject() -> None:
     decision = await _run(
-        concurrent({"rewriter": rewrites("safer"), "approver": says("continue")}),
+        concurrent({"rewriter": rewrites("safer"), "approver": says("proceed")}),
         before_step(),
         ListRecorder(),
     )
     assert decision is not None and decision.action == "reject"
     assert decision.explanation == (
         "rewriter modified the call but 1 other vote(s) also decided: safer"
-        " (rewriter: modify; approver: continue)"
+        " (rewriter: modify; approver: proceed)"
     )
 
 
@@ -194,17 +194,17 @@ async def test_concurrent_turns_a_contested_modify_into_a_reject() -> None:
     ("children", "expected"),
     [
         (
-            {"a": says("continue"), "b": says("reject", "too risky")},
-            "too risky (a: continue; b: reject)",
+            {"a": says("proceed"), "b": says("reject", "too risky")},
+            "too risky (a: proceed; b: reject)",
         ),
-        ({"a": says("continue"), "b": says("reject")}, "a: continue; b: reject"),
+        ({"a": says("proceed"), "b": says("reject")}, "a: proceed; b: reject"),
         (
             {"a": says("reject", "sure"), "b": says("escalate")},
             "sure (a: reject; b: escalate)",
         ),
         (
-            {"a": says("continue"), "b": says("escalate", "ask a person")},
-            "ask a person (a: continue; b: escalate)",
+            {"a": says("proceed"), "b": says("escalate", "ask a person")},
+            "ask a person (a: proceed; b: escalate)",
         ),
     ],
 )
@@ -219,16 +219,16 @@ async def test_concurrent_explains_a_contested_decision_by_its_voters(
 @pytest.mark.parametrize(
     ("children", "expected"),
     [
-        ({"a": says("continue"), "b": says("continue")}, None),
-        ({"a": says("continue", "looks fine"), "b": says("continue")}, "looks fine"),
+        ({"a": says("proceed"), "b": says("proceed")}, None),
+        ({"a": says("proceed", "looks fine"), "b": says("proceed")}, "looks fine"),
     ],
 )
 @pytest.mark.anyio
-async def test_concurrent_lists_no_votes_when_all_continue(
+async def test_concurrent_lists_no_votes_when_all_proceed(
     children: Protocols, expected: str | None
 ) -> None:
     decision = await _run(concurrent(children), before_step(), ListRecorder())
-    assert decision is not None and decision.action == "continue"
+    assert decision is not None and decision.action == "proceed"
     assert decision.explanation == expected
 
 
@@ -247,8 +247,8 @@ def panel(children: Protocols) -> Protocol:
 @pytest.mark.parametrize(
     ("votes", "expected"),
     [
-        (["reject", "reject", "continue"], "reject"),
-        (["reject", "continue", "continue"], "continue"),
+        (["reject", "reject", "proceed"], "reject"),
+        (["reject", "proceed", "proceed"], "proceed"),
     ],
 )
 @pytest.mark.anyio
@@ -292,7 +292,7 @@ async def test_concurrent_turns_two_modifies_into_a_reject() -> None:
 async def test_concurrent_records_monitors_and_protocols_alike() -> None:
     recorder = ListRecorder()
     await _run(
-        concurrent({"m": graded(0.4), "p": says("continue")}), before_step(), recorder
+        concurrent({"m": graded(0.4), "p": says("proceed")}), before_step(), recorder
     )
     assert sorted(r.reported.path for r in recorder.records) == [
         "concurrent",
@@ -436,9 +436,9 @@ def _edits(first: Action, second: Action) -> ProtocolGroup:
     ("children", "action", "explanation"),
     [
         (
-            lambda: [_edits("modify", "continue")],
+            lambda: [_edits("modify", "proceed")],
             "modify",
-            "edits.rewrite: modify; edits.audit: continue",
+            "edits.rewrite: modify; edits.audit: proceed",
         ),
         (
             lambda: [_edits("modify", "modify")],
@@ -447,10 +447,10 @@ def _edits(first: Action, second: Action) -> ProtocolGroup:
             " (edits.rewrite: modify; edits.audit: modify)",
         ),
         (
-            lambda: {"e": _edits("modify", "continue"), "ok": says("continue")},
+            lambda: {"e": _edits("modify", "proceed"), "ok": says("proceed")},
             "reject",
             "e.rewrite modified the call but 1 other vote(s) also decided"
-            " (e.rewrite: modify; e.audit: continue; ok: continue)",
+            " (e.rewrite: modify; e.audit: proceed; ok: proceed)",
         ),
     ],
 )

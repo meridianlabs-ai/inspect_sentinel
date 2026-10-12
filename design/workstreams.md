@@ -22,7 +22,7 @@ Touches modules that sentinel, Scout and inspect_ai all import. Agree up front w
 
 ## 2. Generate stages
 
-**Priority:** high. **Owner:** cteague. **Design:** [generate-stages.md](generate-stages.md), with [sentinel.md](sentinel.md), the payloads and "One vocabulary across stages". Prototyped: monitors observe both stages and protocols may `continue` or `terminate`.
+**Priority:** high. **Owner:** cteague. **Design:** [generate-stages.md](generate-stages.md), with [sentinel.md](sentinel.md), the payloads and "One vocabulary across stages". Built: monitors observe both stages and protocols may `proceed`, `escalate` or `terminate`; `reject` and `modify` are part 2.
 
 `BeforeGenerate` and `AfterGenerate`: the payload types, the dispatcher hooks around model generation in inspect_ai, and the decision about what a generate-stage `modify` may replace (a message, the request, or nothing). That decision unblocks `Decision.modify(step, ...)`, deferred until then.
 
@@ -108,7 +108,7 @@ Many small, independent tasks, good for onboarding:
 
 Support approvers in inspect modelled on the auto modes of Claude Code and Codex, in which a model decides whether each tool call may run without asking a person. Scope to establish first: how each auto mode decides (its inputs, policy and outputs) and what of that can be reproduced or reused. Then offer it in Inspect both as an `@approver`, for `Task(approval=)` users, and as a sentinel protocol, so it composes with monitors and `threshold`.
 
-Open questions: which model judges by default, and how its policy is configured; whether the result is a binary allow/deny or a score that `threshold` calibrates; how it maps to approval's vocabulary (`approve`) and sentinel's (`continue`); and, where an existing product's prompt or policy is reused, whether its terms allow that.
+Open questions: which model judges by default, and how its policy is configured; whether the result is a binary allow/deny or a score that `threshold` calibrates; how it maps to approval's vocabulary (`approve`) and sentinel's (`proceed`); and, where an existing product's prompt or policy is reused, whether its terms allow that.
 
 ## 9. Bridged agents and deployment
 

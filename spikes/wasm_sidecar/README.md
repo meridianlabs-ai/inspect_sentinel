@@ -234,18 +234,18 @@ The output has one report per step, followed by its records:
 
 ```
 -- benign step (two 200 ms generates, overlapped): wall 205 ms
-decision: {'action': 'continue', ...}
-   reported no_network       no_network                  continue
-   reported no_destruction   no_destruction              continue
+decision: {'action': 'proceed', ...}
+   reported no_network       no_network                  proceed
+   reported no_destruction   no_destruction              proceed
    reported threshold/suspicion  suspicion               0.2
    reported threshold/trusted    suspicion               0.2
-   reported threshold        inspect_sentinel/threshold  continue
-   reported <root>           inspect_sentinel/concurrent continue
+   reported threshold        inspect_sentinel/threshold  proceed
+   reported <root>           inspect_sentinel/concurrent proceed
 -- curl step
-decision: {'action': 'reject', 'explanation': 'command uses curl (threshold: continue; no_network: reject; no_destruction: continue)',
+decision: {'action': 'reject', 'explanation': 'command uses curl (threshold: proceed; no_network: reject; no_destruction: proceed)',
            'message': '`curl` needs the network, which this task does not allow.'}
 -- rm -rf step: both generates in flight when no_destruction terminates: wall 3 ms
-decision: {'action': 'terminate', 'explanation': 'rm -rf (no_network: continue; no_destruction: terminate)'}
+decision: {'action': 'terminate', 'explanation': 'rm -rf (no_network: proceed; no_destruction: terminate)'}
    reported no_destruction no_destruction terminate
    cancelled threshold/suspicion, threshold/trusted, threshold
    reported <root> inspect_sentinel/concurrent terminate

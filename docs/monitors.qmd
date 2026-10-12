@@ -15,7 +15,7 @@ How to write a monitor: a `@monitor` factory returning a function that takes a `
 ## Planned Sections
 
 - The `@monitor` decorator and factories (parameters, `name=`, `version=`, `portable=`)
-- Stages: `BeforeToolCall` and `AfterToolCall`; `BeforeGenerate` and `AfterGenerate`, before and after each of an agent loop's own model calls, sub-agents included (protocols may `continue`, `escalate` or `terminate` there; `reject` and `modify` come later)
+- Stages: `BeforeToolCall` and `AfterToolCall`; `BeforeGenerate` and `AfterGenerate`, before and after each of an agent loop's own model calls, sub-agents included (protocols may `proceed`, `escalate` or `terminate` there; `reject` and `modify` come later)
 - What a step carries: `call`, `message`, `view`, `result`, `input` and `history`; at the tool stages `input` is `None` when no model call produced the message or the event that recorded it is no longer available
 - Context: what the agent was asked to do (`context.eval`, None outside an Inspect eval), and why it is trusted where `step` is not
 - `Observation`: `score()`, `flag()`, structured suspicion (`{"sabotage": 0.8, ...}`), `references`

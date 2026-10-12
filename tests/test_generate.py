@@ -154,9 +154,9 @@ async def test_a_monitor_failing_at_a_generate_stage_is_recorded_and_observe_onl
     assert [r.reported.name for r in recorder.records] == ["ok"]
 
 
-@pytest.mark.parametrize("action", ["continue", "escalate", "terminate"])
+@pytest.mark.parametrize("action", ["proceed", "escalate", "terminate"])
 @pytest.mark.parametrize("step", [before_generate_step(), after_generate_step()])
-def test_continue_escalate_and_terminate_are_legal_at_the_generate_stages(
+def test_proceed_escalate_and_terminate_are_legal_at_the_generate_stages(
     action: Action, step: Step
 ) -> None:
     validate_decision_shape(Decision(action=action), step)
@@ -176,7 +176,7 @@ def test_continue_escalate_and_terminate_are_legal_at_the_generate_stages(
 def test_reject_and_modify_are_not_supported_at_the_generate_stages_yet(
     decision: Decision, step: Step
 ) -> None:
-    with pytest.raises(ValueError, match="only 'continue', 'escalate' and 'terminate'"):
+    with pytest.raises(ValueError, match="only 'proceed', 'escalate' and 'terminate'"):
         validate_decision_shape(decision, step)
 
 
@@ -212,7 +212,7 @@ async def test_an_unhandled_escalate_at_a_generate_stage_terminates(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("action", ["continue", "terminate"])
+@pytest.mark.parametrize("action", ["proceed", "terminate"])
 @pytest.mark.parametrize("step", [before_generate_step(), after_generate_step()])
 async def test_handle_escalation_answers_an_escalate_at_a_generate_stage(
     action: Any, step: Step
@@ -242,10 +242,10 @@ async def test_threshold_decides_at_the_generate_stages(
         terminate_at=0.2,
     )
     decision = await run_sentinel(
-        sequential([root, handle_escalation("continue")]), host_context(), step
+        sequential([root, handle_escalation("proceed")]), host_context(), step
     )
     assert decision is not None
-    assert decision.action == ("continue" if expected == "escalate" else expected)
+    assert decision.action == ("proceed" if expected == "escalate" else expected)
 
 
 @pytest.mark.parametrize(
@@ -269,12 +269,12 @@ async def test_threshold_decides_at_the_generate_stages(
             lambda: concurrent([every_stage()]),
             {BeforeGenerate, AfterGenerate, BeforeToolCall, AfterToolCall},
         ),
-        (lambda: decides("continue"), {AfterGenerate}),
+        (lambda: decides("proceed"), {AfterGenerate}),
         (lambda: wraps_a_composition(sees_call()), {AfterGenerate, BeforeToolCall}),
         (lambda: handle_escalation("terminate"), set[type[Any]]()),
         (
             lambda: sequential(
-                [threshold(sees_call(), escalate_at=0.5), handle_escalation("continue")]
+                [threshold(sees_call(), escalate_at=0.5), handle_escalation("proceed")]
             ),
             {BeforeToolCall},
         ),
@@ -282,7 +282,7 @@ async def test_threshold_decides_at_the_generate_stages(
             lambda: sequential(
                 [
                     threshold(sees_output(), escalate_at=0.5),
-                    handle_escalation("continue"),
+                    handle_escalation("proceed"),
                 ]
             ),
             {AfterGenerate},

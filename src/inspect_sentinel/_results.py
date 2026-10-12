@@ -134,7 +134,7 @@ def warn_failed(failed: Iterable[Failed]) -> None:
         if key not in _warned:
             _warned.add(key)
             logger.warning(
-                f"Monitor {f.path!r} (function {f.function!r}) failed with {type(f.error).__name__}: {f.error}. Nothing reads its observations here, so the step continued; later {type(f.error).__name__} failures from it are recorded but not logged."
+                f"Monitor {f.path!r} (function {f.function!r}) failed with {type(f.error).__name__}: {f.error}. Nothing reads its observations here, so the step went on without it; later {type(f.error).__name__} failures from it are recorded but not logged."
             )
 
 
@@ -142,7 +142,7 @@ class Decisions(_ReportSequence[Decision]):
     """What a layer's protocols decided, in configuration order."""
 
     def strongest(self) -> Reported[Decision] | None:
-        """The strongest decision by `terminate > reject > modify > escalate > continue`, the first in configuration order on a tie; `None` if nobody decided."""
+        """The strongest decision by `terminate > reject > modify > escalate > proceed`, the first in configuration order on a tie; `None` if nobody decided."""
         if not self._items:
             return None
         return max(self._items, key=lambda d: PRECEDENCE[d.report.action])

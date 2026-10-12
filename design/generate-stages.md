@@ -2,7 +2,7 @@
 
 Design for `BeforeGenerate` and `AfterGenerate`: which model calls they check, where the hook sits in inspect_ai, what each action means at a generate, what the step carries, and how the events link to the `ModelEvent`. It extends [sentinel.md](sentinel.md), "The payloads" and "One vocabulary across stages", and answers the deferred items in [pr-series.md](pr-series.md) that wait on the generate stages.
 
-Status: landing (inspect_ai #5811, sentinel #42). Monitors observe both generate stages of every agent loop's model calls, and protocols may return `continue`, `escalate` or `terminate` there; `reject` and `modify` are shape-check errors until part 2 (decisions 8–13). `history` keeps its meaning (decision 15, revised); the as-sent view AISI R10 asks for is a separate on-demand query in its own PR. Decision 17's recording is dropped.
+Status: landing (inspect_ai #5811, sentinel #42). Monitors observe both generate stages of every agent loop's model calls, and protocols may return `proceed`, `escalate` or `terminate` there; `reject` and `modify` are shape-check errors until part 2 (decisions 8–13). `history` keeps its meaning (decision 15, revised); the as-sent view AISI R10 asks for is a separate on-demand query in its own PR. Decision 17's recording is dropped.
 
 ## Decisions for the maintainer {#decisions}
 
@@ -89,7 +89,7 @@ The step holds copies of the request's message and tool lists and of the config,
 - **Retries.** Provider retries are inside one call and are not checked again. A loop's own retries (`react`'s `retry_refusals`, the bridge's refusal and rejection retries) are new calls, and each is checked; a retried request produces a second `BeforeGenerate` behind the same last message, whose step id takes an ordinal suffix ([f](#f-events-and-the-viewer)).
 - **Cache.** `BeforeGenerate` runs before the lookup and `AfterGenerate` after a hit: a cached output is still the agent's action in this sample. A monitor's own calls inherit the eval's `cache` setting and may hit the cache too.
 - **Batch.** Nothing special: a slow `BeforeGenerate` delays submission to the batch.
-- **Streaming.** `on_stream` deltas reach the caller before `AfterGenerate` decides. Streaming is display-only, so this does not matter for `continue` and `terminate`. When `modify` or `reject` lands, the dispatcher must send a `StreamRetryEvent`-style boundary so a display discards the replaced deltas.
+- **Streaming.** `on_stream` deltas reach the caller before `AfterGenerate` decides. Streaming is display-only, so this does not matter for `proceed` and `terminate`. When `modify` or `reject` lands, the dispatcher must send a `StreamRetryEvent`-style boundary so a display discards the replaced deltas.
 - **`fallback_models`.** Handled inside the provider call, so one call is checked once; `step.model` is the model requested, and `output.model` and `output.fallback` say which answered.
 - **`cache_prompt`.** Unaffected by observation. A future `BeforeGenerate` modify that edits an early message invalidates the provider's cached prefix, which costs tokens but is not wrong.
 - **Limits.** The token and turn limits are suspended inside a sentinel run, as at the tool stages. The message limit is checked before `BeforeGenerate`, so a generate the limit refuses is not checked. Time and working limits keep running, so a slow monitor counts against the sample's time. A turn or token limit raised inside the call means no `AfterGenerate`, since the output never reaches the agent.
@@ -104,7 +104,7 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 
 ## c. Before-generate decisions {#c-before-generate-decisions}
 
-- **`continue`**: the request is sent unchanged.
+- **`proceed`**: the request is sent unchanged.
 - **`terminate`**: the request is not sent and the sample ends with an operator limit, as at the tool stages. No `ModelEvent` is recorded.
 - **`escalate`**: passed to the next decider, such as `handle_escalation()` in a `sequential()`. One that reaches the root unhandled ends the sample: `run_sentinel` returns a `terminate` explained as an unhandled escalation (decision 16).
 - **`modify`** (deferred to part 2, decision 9; a shape-check error in this landing). Proposed: the protocol replaces the request for this call only. What may change:
@@ -123,7 +123,7 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 
 ## d. After-generate decisions {#d-after-generate-decisions}
 
-- **`continue`**: the output is returned unchanged.
+- **`proceed`**: the output is returned unchanged.
 - **`terminate`**: the output is discarded and the sample ends with an operator limit; the `ModelEvent` stays in the log, and the assistant message never reaches the agent's messages, so its tool calls do not run.
 - **`escalate`**: as before a generate: answered by a later decider, or, unhandled at the root, the sample ends (decision 16).
 - **`reject`** ("discard this completion"; deferred to part 2, decision 10; a shape-check error in this landing). The options:
@@ -179,7 +179,7 @@ Later contract changes, none in this landing: `SentinelEvent.modified` gains `Ch
 Built:
 
 - `BeforeGenerate` and `AfterGenerate` in `inspect_sentinel`, exported, in `Step`, `Monitor` and `Protocol`; a function annotated with either is registered for that stage.
-- The shape check allows `continue`, `escalate` and `terminate` at the generate stages and raises "only 'continue', 'escalate' and 'terminate' are supported at the generate stages" for `reject` and `modify`.
+- The shape check allows `proceed`, `escalate` and `terminate` at the generate stages and raises "only 'proceed', 'escalate' and 'terminate' are supported at the generate stages" for `reject` and `modify`.
 - `watched_stages()` in the integration contract, the forwarding mark on the three compositions, and the answers-escalations mark on `handle_escalation`.
 - `threshold` and `handle_escalation` at the generate stages.
 - In inspect_ai: `Model._prepare_input`, the two hooks in `Model.generate`, decision 1's agent-loop rule, the per-stage events and step ids, the skip for unwatched stages, and the `compaction` and `scorer` spans.
