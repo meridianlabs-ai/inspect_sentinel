@@ -83,7 +83,7 @@ from inspect_ai.util import (
 _ENVIRONMENT = "and a portable function has no environment variables; take configuration as factory parameters"
 _PROCESSES = "and a portable function cannot start processes or threads"
 _NETWORK = "and a portable function has no network access; call a model with `context.host.generate()`"
-_INSPECT = "and inspect_ai is portable only through its data types, such as `ChatMessage` and `ToolCall`"
+_INSPECT = "and inspect_ai is portable only through a fixed list of its message, model output, config, tool and content types, such as `ChatMessage` and `ToolCall`"
 
 _OS_ENVIRONMENT = ("environ", "environb", "getenv", "getenvb", "putenv", "unsetenv")
 _OS_PROCESSES = ("system", "popen", "kill", "killpg", "startfile")

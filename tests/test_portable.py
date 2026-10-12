@@ -43,7 +43,7 @@ DOCS = Path(__file__).parent.parent / "docs"
 ENVIRONMENT = "a portable function has no environment variables"
 PROCESSES = "a portable function cannot start processes or threads"
 NETWORK = "a portable function has no network access"
-INSPECT = "inspect_ai is portable only through its data types, such as `ChatMessage` and `ToolCall`"
+INSPECT = "inspect_ai is portable only through a fixed list of its message, model output, config, tool and content types, such as `ChatMessage` and `ToolCall`"
 
 HEADER = """\
 from inspect_sentinel import BeforeToolCall, Context, Monitor, Observation, monitor
