@@ -8,8 +8,8 @@ Status: prototyped. Monitors observe both generate stages and protocols may retu
 
 | # | Decision | Recommendation |
 |---|---|---|
-| 1 | How an agent generate is identified | A call on the sample's active model, made while the sample runs its solvers, outside a sentinel run, a compaction and a tool's own body ([a](#a-which-calls)). Prototyped. |
-| 2 | Sub-agents and role models that are not the active model | **Decided 2026-10-10:** not checked in v1, as v1 scope rather than a permanent rule. The planned direction is coverage of the whole agent tree with helper calls marked out ([sub-agents.md](sub-agents.md), on the design branch of #66), which is additive for monitors. Decided with it, so monitors written now do not break: `step.conversation` identifies one agent instance; `store_as()` stays per sample; helper calls on the active model are checked for now. |
+| 1 | How an agent generate is identified | **Revised 2026-10-12:** a call made by an agent loop: inside an agent span (`react`, `handoff()`, `as_tool()`, `deepagent`, the bridges), or on the sample's active model during the solver phase (the `generate()` solver and custom solvers), and in either case not inside a tool's own body, a sentinel run, a compaction or a scorer. Coverage then matches the tool stages, which already check every agent's tool calls. Requires every agent loop to open an agent span consistently (tested per loop). |
+| 2 | Sub-agents and role models that are not the active model | **Revised 2026-10-12:** checked, by decision 1's agent-loop rule, whatever model they use. Reason: their tool calls are already checked at the tool stages, so leaving their turns unchecked was inconsistent and let an agent hand risky work to a sub-agent on another model. Helper calls stay out through the tool-body rule. The agent instance record (`step.agent`) and per-instance store remain later work ([sub-agents.md](sub-agents.md), #66). |
 | 3 | Compaction summary calls | Not checked. The summary reaches the next `BeforeGenerate` as part of `input`. Prototyped. |
 | 4 | Where the hook sits | **Decided 2026-10-10.** In `Model.generate`, once per call, outside the connection slot; the input preparation moves ahead of the slot so the step sees what is sent ([b](#b-where-the-hook-sits)). Prototyped. |
 | 5 | Cache hits | Both stages run on a cache hit. Prototyped. |
@@ -24,7 +24,7 @@ Status: prototyped. Monitors observe both generate stages and protocols may retu
 | 14 | `Host.generate` and `tool_choice` | Add `tool_choice=`, so `resample` regenerates exactly. |
 | 15 | `history` at the generate stages | The caller's messages for now; the agent loops declare their full history later ([e](#e-what-the-step-carries)). |
 | 16 | `escalate` at the generate stages | **Decided 2026-10-10:** enable, under pr-series.md "Unhandled escalate" (sentinel's `run_sentinel` turns an unhandled root escalate into a terminate). Lands after that change (sentinel #74, inspect_ai #5812). |
-| 17 | Recording `step.input` at generate time | Follow-up: the after-generate hook records each input by its assistant message id, replacing the transcript scan the tool stages use. |
+| 17 | Recording `step.input` at generate time | The after-generate hook records each input (and tools) by assistant message id for every model call whose output has tool calls, whenever a tool stage is watched, not only agent calls; bounded per sample until that message's tool calls finish both stages. This is AISI R2/R3; `step.input` is `None` when no record exists. |
 
 ## a. Which calls are checked {#a-which-calls}
 
