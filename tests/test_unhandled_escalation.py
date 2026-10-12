@@ -51,7 +51,7 @@ def ue_final() -> Protocol:
     return decide
 
 
-def _limit() -> Protocol:
+def _limit() -> Protocol | ProtocolGroup:
     return threshold(ue_score(), reject_at=0.5)
 
 
