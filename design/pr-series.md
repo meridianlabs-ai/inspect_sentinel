@@ -466,6 +466,15 @@ Decided with the maintainer on 2026-10-12 for AISI's R5 (`design/requirements-ai
 - **Escalations are answered in a `sequential()`.** `sequential([threshold(monitors, escalate_at=0.6, terminate_at=0.9), human(stages=["tool_call"])])`: the threshold's other decisions end the chain, so the person is asked when it escalates, and also when it abstains because no monitor reported. An escalate that reaches the root unanswered ends the sample as an unhandled escalation.
 - The two functions are named `tool_call` and `tool_result`, as `human()`'s and `handle_escalation()`'s are, so a lone `threshold` records `tool_call` where it recorded `decide`.
 
+## Generate stages landing
+
+Rulings of 2026-10-10 and 2026-10-12 ([generate-stages.md](generate-stages.md), decisions), landed with inspect_ai #5811:
+
+- **Every agent loop's model calls** are checked (decisions 1 and 2 revised): inside an agent span on any model, or on the active model during the solvers; not in a tool's own body, a sentinel run, a compaction or a scorer.
+- **`escalate` at the generate stages** (decision 16). `threshold` gains `model_input` and `model_output`; `handle_escalation` answers at all four stages and is marked as answering escalations only, so it never makes a stage watched on its own.
+- **`history` is the model's view** of the agent instance's run at every stage (decision 15), built by inspect_ai from the transcript's `ModelEvent`s; decision 17's recording is dropped, since R2 (inspect_ai #5831) finds a tool call's producing `ModelEvent` in the transcript.
+- **`reject` and `modify` at the generate stages** (decisions 8–13) are deferred to part 2 and stay shape-check errors.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands. Grouped by priority, decided by the maintainer on 2026-10-02, in the order to take them.
@@ -516,7 +525,7 @@ Agreed work that waits for something else. Each entry says what unblocks it. Kee
 
 Waits on another workstream, or not urgent.
 
-- **Generate stages beyond the prototype** ([generate-stages.md](generate-stages.md)): `reject`, `modify` and `escalate` at `BeforeGenerate` and `AfterGenerate`, the full `history`, and the other decisions listed there. Waits on the maintainer's rulings.
+- **Generate stages, part 2** ([generate-stages.md](generate-stages.md), decisions 8–13): `reject` and `modify` at `BeforeGenerate` and `AfterGenerate`, `Decision.modify`, and `SentinelEvent.modified` for an `AfterGenerate` modify.
 - **`compaction_summary(step)`**, a helper returning the latest compaction summary text. Waits on inspect_ai making the `"summary"` message metadata key a documented constant, and must handle a summary merged into the task prompt.
 - **An example compaction monitor.** Raised by the maintainer on 2026-10-02: a stateful generate-stage monitor that watches the messages, detects a compaction summary, and runs a check on the summary, keeping what it has seen in `store_as()`. Waits on the generate stages (inspect_sentinel PR #42), and uses `compaction_summary` once it exists.
 - **`react` overflow recovery rewriting history**: when a call overflows the context window, `react` replaces `state.messages` with the compacted list, so `step.history` loses the folded turns. To raise with inspect_ai.

@@ -2,7 +2,7 @@
 
 Design for `BeforeGenerate` and `AfterGenerate`: which model calls they check, where the hook sits in inspect_ai, what each action means at a generate, what the step carries, and how the events link to the `ModelEvent`. It extends [sentinel.md](sentinel.md), "The payloads" and "One vocabulary across stages", and answers the deferred items in [pr-series.md](pr-series.md) that wait on the generate stages.
 
-Status: prototyped. Monitors observe both generate stages and protocols may return `continue` or `terminate` there; every other action is a shape-check error. The rest of this document is the design for review; [Decisions for the maintainer](#decisions) lists what needs a ruling, each with a recommendation.
+Status: landing (inspect_ai #5811, sentinel #42). Monitors observe both generate stages of every agent loop's model calls, and protocols may return `continue`, `escalate` or `terminate` there; `reject` and `modify` are shape-check errors until part 2 (decisions 8–13). `history` is the model's view of the agent instance's run at every stage (decision 15), built from the transcript, so decision 17's recording is dropped.
 
 ## Decisions for the maintainer {#decisions}
 
@@ -15,16 +15,16 @@ Status: prototyped. Monitors observe both generate stages and protocols may retu
 | 5 | Cache hits | Both stages run on a cache hit. Prototyped. |
 | 6 | A generate that raises | No `AfterGenerate` (provider error, `fail_on_refusal`, a limit). Prototyped. |
 | 7 | Dispatching a stage nothing watches | Skip it, at every stage, so a tool-only sentinel opens no span per generate. Prototyped. |
-| 8 | `reject` before a generate | Not legal in v1; use `modify` or `terminate`. If kept, define it as a sentinel-authored refusal ([c](#c-before-generate-decisions)). |
-| 9 | `modify` before a generate | Replace `input`, narrow `tools` to a subset by name, change `tool_choice`; not `model` or `config`. |
-| 10 | `reject` after a generate | Replay: append the rejected message and the `message` as a user turn, regenerate, bounded at three; then terminate ([d](#d-after-generate-decisions)). |
-| 11 | `modify` after a generate | Replace `choices[0].message` with a `ChatMessageAssistant`; usage, time and model unchanged; other choices dropped. |
-| 12 | `Decision.modify(step, ...)` | One constructor, overloaded on the step type: `arguments=` at `BeforeToolCall`, `input=`/`tools=`/`tool_choice=` at `BeforeGenerate`, `message=` at `AfterGenerate`. |
-| 13 | `SentinelEvent.modified` at the generate stages | `ChatMessageAssistant` joins the union for `AfterGenerate`; a `BeforeGenerate` modify records no copy, since the `ModelEvent` holds the request sent. A log contract change, for when `modify` lands. |
-| 14 | `Host.generate` and `tool_choice` | Add `tool_choice=`, so `resample` regenerates exactly. |
-| 15 | `history` at every stage | **Decided 2026-10-12:** `history` is the conversation as the model experienced it: every message this agent instance has sent to the model or received from it, in order, deduplicated by message id, an edited message kept in its versions; built from the recorded model calls (decision 17's hook), at every stage, identical live and in replay. `input` stays this call's request. The scaffold's own list is no longer on the step; where no model call produced the conversation (a pre-filled conversation, a human agent) `history` falls back to the scaffold's list for that agent, documented. This replaces "the caller's messages" and the separate `sent`/`input_history` field AISI R10 proposed. |
-| 16 | `escalate` at the generate stages | **Decided 2026-10-10:** enable, under pr-series.md "Unhandled escalate" (sentinel's `run_sentinel` turns an unhandled root escalate into a terminate). Lands after that change (sentinel #74, inspect_ai #5812). |
-| 17 | Recording `step.input` at generate time | The after-generate hook records each input (and tools) by assistant message id for every model call whose output has tool calls, whenever a tool stage is watched, not only agent calls; bounded per sample until that message's tool calls finish both stages. This is AISI R2/R3; `step.input` is `None` when no record exists. |
+| 8 | `reject` before a generate | **Deferred 2026-10-12 to part 2** (a follow-up PR); illegal at the generate stages until then. Proposal: Not legal in v1; use `modify` or `terminate`. If kept, define it as a sentinel-authored refusal ([c](#c-before-generate-decisions)). |
+| 9 | `modify` before a generate | **Deferred 2026-10-12 to part 2** (a follow-up PR); illegal at the generate stages until then. Proposal: Replace `input`, narrow `tools` to a subset by name, change `tool_choice`; not `model` or `config`. |
+| 10 | `reject` after a generate | **Deferred 2026-10-12 to part 2** (a follow-up PR); illegal at the generate stages until then. Proposal: Replay: append the rejected message and the `message` as a user turn, regenerate, bounded at three; then terminate ([d](#d-after-generate-decisions)). |
+| 11 | `modify` after a generate | **Deferred 2026-10-12 to part 2** (a follow-up PR); illegal at the generate stages until then. Proposal: Replace `choices[0].message` with a `ChatMessageAssistant`; usage, time and model unchanged; other choices dropped. |
+| 12 | `Decision.modify(step, ...)` | **Deferred 2026-10-12 to part 2** (a follow-up PR); illegal at the generate stages until then. Proposal: One constructor, overloaded on the step type: `arguments=` at `BeforeToolCall`, `input=`/`tools=`/`tool_choice=` at `BeforeGenerate`, `message=` at `AfterGenerate`. |
+| 13 | `SentinelEvent.modified` at the generate stages | **Deferred 2026-10-12 to part 2** (a follow-up PR); illegal at the generate stages until then. Proposal: `ChatMessageAssistant` joins the union for `AfterGenerate`; a `BeforeGenerate` modify records no copy, since the `ModelEvent` holds the request sent. A log contract change, for when `modify` lands. |
+| 14 | `Host.generate` and `tool_choice` | **Decided 2026-10-12: add.** Already on `main` in both repositories (2026-10-07, "`Host.generate` takes separate model and role strings"). |
+| 15 | `history` at every stage | **Decided 2026-10-12, built:** `history` is the conversation as the model experienced it: every message this agent instance has sent to the model or received from it, in order, deduplicated by message id, an edited message kept in its versions; at every stage, identical live and in replay. Built from the transcript's `ModelEvent`s rather than a recording ([e](#e-what-the-step-carries)). `input` stays this call's request. Where the instance made no model call (a pre-filled conversation, a human agent) `history` falls back to the scaffold's list. This replaces "the caller's messages" and the separate `sent`/`input_history` field AISI R10 proposed. |
+| 16 | `escalate` at the generate stages | **Decided 2026-10-10, built:** legal at both generate stages; an unhandled root escalate terminates through `run_sentinel` (sentinel #74). `threshold` gains `model_input` and `model_output` functions, and `handle_escalation` answers escalations at all four stages without making a stage watched on its own. inspect_ai's own fallback for an escalate that reaches it is #5812's. |
+| 17 | Recording `step.input` at generate time | **Dropped 2026-10-12** ("drop 17 recording if we can use the transcript history"). At the generate stages the step carries its own call's request; at the tool stages R2 (inspect_ai #5831) finds the producing `ModelEvent` in the transcript history, which carries `input`, `tools` and `tool_choice`; `history` is built from the same events ([e](#e-what-the-step-carries)). |
 
 ## a. Which calls are checked {#a-which-calls}
 
@@ -81,7 +81,7 @@ Identity has one fragility: a sub-agent given the agent model's *name* rather th
 
 **Recommendation: 2.** The input preparation that was at the top of `_generate` (resolving tools and `tool_choice`, reasoning history, tool `model_input` handlers, media extraction, merging consecutive messages) moves into `Model._prepare_input`, called before the slot, so `step.input` is what is sent. Only `Hooks.on_before_model_generate`, which runs per attempt and may mutate the request, can still change it afterwards. The move is a behaviour change for every caller, sentinel or not: tool resolution (an MCP server's tool listing, for example) no longer holds a connection slot, so `max_connections` no longer bounds it, and `ModelEvent.timestamp` and the fallback `working_time` start after preparation rather than before it.
 
-The step holds copies of the request's message and tool lists and of the config, so a monitor that mutates them cannot change what is sent; `history` is the caller's own list, as at the tool stages, and monitors must not mutate it.
+The step holds copies of the request's message and tool lists and of the config, so a monitor that mutates them cannot change what is sent; `history` is built for the step from the transcript ([e](#e-what-the-step-carries)).
 
 ### Interactions
 
@@ -145,7 +145,7 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 | `model` | the requested model, `provider/name` | same |
 | `conversation` | the current agent span id, or the sample uuid outside any agent span | same |
 | `input` | the prepared request: the caller's messages with the configured system message, resolved reasoning history, tool `model_input` handlers, extracted media and merged consecutive messages; what the `ModelEvent` records | the same list |
-| `history` | the messages the caller passed | same |
+| `history` | the model's view of this agent instance's run, ending with this request | the same, ending with `output.message` |
 | `tools` | `ToolInfo`s sent, after `tool_choice` filtering | same |
 | `tool_choice` | as sent (`"none"` when there are no tools) | same |
 | `config` | the resolved `GenerateConfig`: the task's, the model's and the call's, with `max_tokens` filled | same |
@@ -154,9 +154,9 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 
 `AfterGenerate` repeats the request so that `resample` can regenerate with exactly what the agent was given.
 
-**`history`.** `Model.generate` sees only the messages it is passed. For the `generate()` solver and for `react` without compaction those are the agent's whole conversation; with compaction they are the compacted conversation, and after `react`'s overflow recovery replaces `state.messages`, the folded turns are gone from both (pr-series.md, "react overflow recovery rewriting history"). The full history needs the loop that owns the messages to declare them: a context the loops set around their generate, holding their message list, which the dispatcher reads (decision 15). The same declaration is where a loop would mint `conversation`, which sentinel.md open question 22 leaves open.
+**`history`.** Built at each step from the transcript's completed `ModelEvent`s for this agent instance: each call's `input` and output message, deduplicated by id, a changed message added again as a new version, and a configured system message (minted again for every call) kept once. Before a generate, this call's request is appended. A call belongs to the instance whose agent span is its nearest, unless a `tool`, `sentinel`, `compaction` or `scorer` span is in between; outside any agent span, the active model's calls in the `solvers` span with no role. This is decision 1's rule read from the transcript, so inspect_ai wraps the compaction summary call and `score()` from a solver in `compaction` and `scorer` spans. Replay: the same function over the log's events up to the step gives the same history. Sub-agents: `step.conversation` is the agent span, and each instance sees only its own calls (a handoff's sub-agent sees the conversation it was handed, as its model did). Cost: the dispatcher reads back from the newest event to the instance's agent span begin (or the `solvers` span), so the read is the instance's events, through R2's newest-first `TranscriptHistory` search once #5831 lands. Live calls share message objects, so the merge is mostly identity checks: measured about 2 ms per step at 200 turns and 9 ms at 400 (about 14 ms and 58 ms over a replayed log, whose messages are copies). A bounded transcript (`INSPECT_TRANSCRIPT_BOUNDED`) pages evicted events from its history provider, at R2's measured cost (about 1 s per 4k events read), on every watched step; a provider-side index is the remedy if long bounded runs need it.
 
-**`step.input` at the tool stages.** The tool stages rebuild the request that produced a call by scanning the transcript for the `ModelEvent`. With the generate hook in place, the after-generate dispatch can record each input keyed by its assistant message id, scoped to the sample and bounded, whenever the call is an agent call and the sentinel watches a tool stage; the scan remains for a message no agent generate produced (decision 17, pr-series.md "Record step.input instead of rebuilding it").
+**`step.input` at the tool stages.** R2 (inspect_ai #5831) finds the `ModelEvent` that produced the call in the transcript history, resident or evicted, and `step.input` is `None` when none exists. Decision 17's recording is not needed.
 
 **Compaction.** A summary compaction's text reaches the next `BeforeGenerate` in `input`, so a monitor sees what the agent's model wrote about its own trajectory. `compaction_summary(step)` stays deferred on inspect_ai documenting the summary message metadata key.
 
@@ -173,13 +173,14 @@ Linking to the `ModelEvent` needs no new field: a `model_output` event's `step_i
 
 Later contract changes, none in the prototype: `SentinelEvent.modified` gains `ChatMessageAssistant` for an `AfterGenerate` modify, and a `BeforeGenerate` modify leaves `modified` unset with the validator relaxed for that stage, since the `ModelEvent` records the request sent (decision 13). If decision 8 adopts the synthetic refusal, the assistant message it produces needs a documented metadata mark.
 
-## Prototype scope
+## Scope of this landing
 
 Built:
 
 - `BeforeGenerate` and `AfterGenerate` in `inspect_sentinel`, exported, in `Step`, `Monitor` and `Protocol`; a function annotated with either is registered for that stage.
-- The shape check allows `continue` and `terminate` at the generate stages and raises "only 'continue' and 'terminate' are supported at the generate stages" for the rest.
-- `watched_stages()` in the integration contract, and the forwarding mark on the three compositions.
-- In inspect_ai: `Model._prepare_input`, the two hooks in `Model.generate`, the identification rule, the per-stage events and step ids, and the skip for unwatched stages.
+- The shape check allows `continue`, `escalate` and `terminate` at the generate stages and raises "only 'continue', 'escalate' and 'terminate' are supported at the generate stages" for `reject` and `modify`.
+- `watched_stages()` in the integration contract, the forwarding mark on the three compositions, and the answers-escalations mark on `handle_escalation`.
+- `threshold` and `handle_escalation` at the generate stages.
+- In inspect_ai: `Model._prepare_input`, the two hooks in `Model.generate`, decision 1's agent-loop rule, the per-stage events and step ids, the skip for unwatched stages, and `history` from the transcript.
 
-Not built: every action other than `continue` and `terminate`, `Decision.modify`, `Host.generate(tool_choice=)`, the full `history`, recording `step.input`, bridged-agent verification, and `human()` at the generate stages.
+Not built: `reject` and `modify` at the generate stages and `Decision.modify` (part 2, decisions 8–13), `human()` at the generate stages (AISI R1, next), and tool-stage sentinels for bridged agents (inspect_ai #5765).
