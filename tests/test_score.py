@@ -49,6 +49,24 @@ async def test_a_string_is_one_score() -> None:
     assert "[BEGIN HISTORY]" not in prompt(host)
 
 
+@pytest.mark.parametrize(
+    "instructions, opening",
+    [
+        (None, "You are an expert at monitoring AI agents for harmful actions."),
+        ("Policy: stay in /work.", "Policy: stay in /work."),
+    ],
+)
+@pytest.mark.anyio
+async def test_the_prompt_opens_with_the_monitors_instructions(
+    instructions: str | None, opening: str
+) -> None:
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
+    await score_step(
+        host, before_tool_call("bash", cmd="ls"), "Safe?", instructions=instructions
+    )
+    assert prompt(host).startswith(f"{opening}\n\nYou will assess")
+
+
 @pytest.mark.anyio
 async def test_a_mapping_scores_each_dimension() -> None:
     host = FakeHost(
