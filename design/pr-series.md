@@ -475,6 +475,10 @@ Rulings of 2026-10-10 and 2026-10-12 ([generate-stages.md](generate-stages.md), 
 - **`history` keeps its meaning** (decision 15, revised): the scaffold's list at the tool stages, the caller's at the generate stages. The as-sent view (AISI R10) is its own PR, an on-demand query on `TranscriptHistory.find_last` (inspect_ai #5831); marking compaction and `score()` calls in the transcript for it and for replay (R7) is deferred to that work, designed with its viewer and TUI impact. Decision 17's recording is dropped, since R2 finds a tool call's producing `ModelEvent` in the transcript.
 - **`reject` and `modify` at the generate stages** (decisions 8–13) are deferred to part 2 and stay shape-check errors.
 
+## `step.history` is `None` when the host can't provide it
+
+Decided 2026-10-13: `history` is `list[ChatMessage] | None` at every stage. It is `None` when the host can't know the caller's list: a replay from a log, which records what the model was sent but never the scaffold's list (R7); a proxy host, which sees only the request; or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`. Nothing in this package reads it; the planned windowing helpers take `None` and return it, and `step_as_str` names the absent history in its fixed phrase. inspect_ai's `Host.ask_human` (`_sentinel/_dispatch.py`) passes `step.history` to `human_approver`, whose `history` is `list[ChatMessage]`, so the inspect_ai PR that moves its sentinel pin past this change passes `[]` there for `None`.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands. Grouped by priority, decided by the maintainer on 2026-10-02, in the order to take them.

@@ -146,7 +146,7 @@ class BeforeGenerate:
     model: str
     conversation: str           # links this agent's steps across compactions
     input: list[ChatMessage]    # exactly what the model is sent
-    history: list[ChatMessage]  # the caller's messages; may already be compacted (as-sent view: R10, deferred)
+    history: list[ChatMessage] | None  # the caller's messages, may already be compacted; None when the host can't know them (as-sent view: R10, deferred)
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -158,7 +158,7 @@ class AfterGenerate:
     model: str
     conversation: str
     input: list[ChatMessage]    # exactly what the model was sent
-    history: list[ChatMessage]
+    history: list[ChatMessage] | None
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -173,7 +173,7 @@ class BeforeToolCall:
     call: ToolCall              # the call as it will execute
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
-    history: list[ChatMessage]  # the scaffold's full conversation
+    history: list[ChatMessage] | None  # the scaffold's full conversation; None when the host can't know it
     escalations: tuple[Reported[Decision], ...] = ()
 
 
@@ -186,7 +186,7 @@ class AfterToolCall:
     output: ToolResult          # the tool's untruncated return value
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
-    history: list[ChatMessage]
+    history: list[ChatMessage] | None
     escalations: tuple[Reported[Decision], ...] = ()
 
 
@@ -208,13 +208,13 @@ A monitor never annotates `Step`, since [its annotation is what selects the stag
 
 #### Two histories: `input` and `history` {#two-histories}
 
-Every payload carries two message lists, and they are not the same list. `input` is exactly what the model was sent for the generate this step belongs to: the request itself at the generate stages, and the request that produced the call at the tool stages. At the tool stages it is `None` when no model call produced the call (a pre-filled message, a human agent, a message the scaffold built) or the event that recorded the call is no longer available; it is never approximated from `history`. `history` is the conversation as the scaffold holds it — `state.messages` in an eval — including every turn a compaction has since folded away.
+Every payload carries two message lists, and they are not the same list. `input` is exactly what the model was sent for the generate this step belongs to: the request itself at the generate stages, and the request that produced the call at the tool stages. At the tool stages it is `None` when no model call produced the call (a pre-filled message, a human agent, a message the scaffold built) or the event that recorded the call is no longer available; it is never approximated from `history`. `history` is the conversation as the scaffold holds it — `state.messages` in an eval — including every turn a compaction has since folded away. It is `None` when the host can't know that list: a replay from a log, which records what the model was sent but never the scaffold's list; a proxy, which sees only the request; or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`.
 
 Two observations from the current approval-based monitor make the distinction load-bearing. Scaffolds edit what they send: `react` composes a system message from its prompt and inserts it, the bridge path rewrites the request, and a custom agent may transform the system or user message at the call, so the model's input is not `state.messages`, and a monitor reading the latter is not reading what the model read. Compaction pulls the two apart in the other direction: after a summary compaction the input is a summary plus recent turns, while the full trajectory — what "has this agent ever reached the internet" needs — exists only in the scaffold's history. Approvers today get the scaffold's messages (`execute_tools` passes its `conversation`) and never the input, so an approver cannot see the system prompt the model actually saw.
 
-The runner therefore has two obligations, and neither field is derived from the other. It carries the exact input through to the tool stages: in inspect_ai the dispatcher finds the `ModelEvent` whose output is the call's assistant message, newest first, through the transcript's bounded-memory history, which also serves events evicted from memory, and passes `None` when there is none. And it keeps the scaffold's full history available at every stage, whatever the model was shown. Both are evidence. The system prompt the model saw is `input[0]` when `input` is present, not `history[0]`. The [surfaces table](#the-surfaces) records where each is available: under a proxy `input` is the request, and `history` is what the proxy accumulated for the conversation, coinciding with `input` when there is no keyed store (`sentinel-deployment.md`).
+The runner therefore has two obligations, and neither field is derived from the other. It carries the exact input through to the tool stages: in inspect_ai the dispatcher finds the `ModelEvent` whose output is the call's assistant message, newest first, through the transcript's bounded-memory history, which also serves events evicted from memory, and passes `None` when there is none. And it keeps the scaffold's full history available at every stage where the host has it, whatever the model was shown. Both are evidence. The system prompt the model saw is `input[0]` when `input` is present, not `history[0]`. The [surfaces table](#the-surfaces) records where each is available: under a proxy `input` is the request and `history` is `None`, since a proxy never sees the scaffold's list; what a keyed store accumulates from the requests is the as-sent view (AISI R10), not `history` (`sentinel-deployment.md`).
 
-**Lineage.** Linking one agent's inputs across a compaction is not possible today by inspection. A `CompactionEvent` carries a `role` and a `source` but no reference to the conversation it compacted, a `ModelEvent` carries only its innermost span, and several agents can interleave their events in one sample. So every step carries `conversation: str`, an id minted by whichever loop owns the messages — `react`, the generate loop, a bridge — when that conversation starts and held for its life, and `SentinelEvent` records it. What this asks of core is that `ModelEvent` and `CompactionEvent` record the same id, so that "every input this agent was sent, in order, with the compactions between them" is a filter on one field rather than a heuristic over spans and timestamps. `sentinel-development.md` depends on it to rebuild `history` from events.
+**Lineage.** Linking one agent's inputs across a compaction is not possible today by inspection. A `CompactionEvent` carries a `role` and a `source` but no reference to the conversation it compacted, a `ModelEvent` carries only its innermost span, and several agents can interleave their events in one sample. So every step carries `conversation: str`, an id minted by whichever loop owns the messages — `react`, the generate loop, a bridge — when that conversation starts and held for its life, and `SentinelEvent` records it. What this asks of core is that `ModelEvent` and `CompactionEvent` record the same id, so that "every input this agent was sent, in order, with the compactions between them" is a filter on one field rather than a heuristic over spans and timestamps. `sentinel-development.md` depends on it to rebuild an agent's as-sent history from events.
 
 ### The context
 
@@ -1519,7 +1519,7 @@ What a monitor can be shown, where each thing comes from, and where it is availa
 | Untruncated tool output | `step.output` | yes | **no** | **no** | evidence |
 | Tool call view (`ToolCallView`) | `step.view` | yes | **no** | from events only | evidence |
 | Exact model input | `step.input` | yes | yes (the request) | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
-| Full history, pre-compaction turns included | `step.history` | yes | keyed store; else equals `input` | yes | evidence |
+| Full history, pre-compaction turns included | `step.history` | yes | **no**: `None` | **no**: `None` | evidence |
 | Reasoning (`ContentReasoning`) | inside assistant messages | provider-dependent: full, summary, or redacted | whatever the wire carries | as logged | evidence |
 | System prompt, as the model saw it | `step.input[0]` when present | yes | yes | from events only | **see below** |
 | Tool definitions, generate config | `step.tools`, `step.config` | yes | yes | from events only | evidence |
@@ -1544,15 +1544,17 @@ Lowest level first. The first three exist in Scout today and move down unchanged
 
 **`message_numbering(preprocessor=None)`.** Scout's `[M1]`-style numbering with a paired `extract_refs`. `sentinel-development.md` already assumes an LLM monitor uses it so that citations in an explanation resolve to messages for free; making it available to monitors is what makes that true.
 
-**Windowing helpers over `step.history`.** History is all-or-nothing on the payload, and [incremental monitoring](#deployment-beyond-the-eval-process) wants less than all of it. Three small functions, each returning a `list[ChatMessage]` that feeds `messages_as_str`:
+**Windowing helpers over `step.history`.** History is all-or-nothing on the payload, and [incremental monitoring](#deployment-beyond-the-eval-process) wants less than all of it. Three small functions, each returning a `list[ChatMessage]` that feeds `messages_as_str`. `step.history` is `None` where the host can't provide it, so each takes it as it is and returns `None` for `None`, which `step_as_str` renders as an absent surface:
 
 ``` python
-def last_turn(history: list[ChatMessage]) -> list[ChatMessage]:
+def last_turn(history: list[ChatMessage] | None) -> list[ChatMessage] | None:
     """Messages since the last user message."""
 
-def last_n(history: list[ChatMessage], n: int) -> list[ChatMessage]: ...
+def last_n(history: list[ChatMessage] | None, n: int) -> list[ChatMessage] | None: ...
 
-def new_since_last_report(context: Context, history: list[ChatMessage]) -> list[ChatMessage]:
+def new_since_last_report(
+    context: Context, history: list[ChatMessage] | None
+) -> list[ChatMessage] | None:
     """Messages after the one this monitor last reported on, read from its store.
     Records the new high-water mark. The incremental default."""
 ```
@@ -1565,7 +1567,7 @@ The third is the one that matters. It uses `context.store_as` under a reserved k
 
 **`briefing_as_str(context)`.** The instruction section, from `context.eval`: task and sample descriptions, the original input, and metadata the author chose to surface. Outside an eval it has no eval fields to render. Never includes `target` unless asked; the caller passing `include_target=True` is what the log records.
 
-**`step_as_str(step, *, history=..., preprocessor=None)`.** The evidence section for a stage, built from the helpers above: the subject, then as much history as the caller asked for. When a surface is absent in the deployment — no `view`, no untruncated `output` — the rendering says so in a fixed phrase rather than omitting it silently, so a monitor developed in an eval and run under a proxy produces a prompt that is visibly different rather than subtly different.
+**`step_as_str(step, *, history=..., preprocessor=None)`.** The evidence section for a stage, built from the helpers above: the subject, then as much history as the caller asked for. When a surface is absent in the deployment — no `view`, no untruncated `output`, no `history` — the rendering says so in a fixed phrase rather than omitting it silently, so a monitor developed in an eval and run under a proxy produces a prompt that is visibly different rather than subtly different.
 
 **`monitor_prompt(context, step, *, question, answer=..., history=..., preprocessor=None, messages_as_str=None)`.** The analogue of Scout's `scanner_prompt`, and the one most authors call. It emits: the briefing section, labelled as instructions; the evidence section inside a delimited envelope whose surrounding text says it was written by the agent under observation and may contain instructions to ignore; `step.escalations`, rendered as prior verdicts rather than as part of the conversation; and the question with an answer format. This is the "structural help" the injection section asked for, delivered as the default output of the helper people will reach for first.
 

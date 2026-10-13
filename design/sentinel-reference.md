@@ -148,7 +148,7 @@ class BeforeGenerate:
     model: str
     conversation: str           # links this agent's steps across compactions
     input: list[ChatMessage]    # exactly what the model is sent
-    history: list[ChatMessage]  # the scaffold's full conversation, pre-compaction turns included
+    history: list[ChatMessage] | None  # the scaffold's full conversation, pre-compaction turns included; None when the host can't know it
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -160,7 +160,7 @@ class AfterGenerate:
     model: str
     conversation: str
     input: list[ChatMessage]    # exactly what the model was sent
-    history: list[ChatMessage]
+    history: list[ChatMessage] | None
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -175,7 +175,7 @@ class BeforeToolCall:
     call: ToolCall              # the call as it will execute
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
-    history: list[ChatMessage]  # the scaffold's full conversation
+    history: list[ChatMessage] | None  # the scaffold's full conversation; None when the host can't know it
     escalations: tuple[Reported[Decision], ...] = ()
 
 
@@ -188,7 +188,7 @@ class AfterToolCall:
     output: ToolResult          # the tool's untruncated return value
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
-    history: list[ChatMessage]
+    history: list[ChatMessage] | None
     escalations: tuple[Reported[Decision], ...] = ()
 
 
@@ -200,7 +200,7 @@ Everything in `step` except `conversation` and `escalations` was written or shap
 
 `escalations` is filled only inside a `sequential()`: when an earlier link returns `escalate`, its report is handed to the next link here, so a human at the end sees who is asking and why. It is empty everywhere else. The reports are written by protocols, but their explanations may quote agent text, so label them as prior verdicts if you render them into a prompt.
 
-`input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. At the tool stages `input` is `None` when no model call produced the call or the event that recorded it is no longer available (inspect_ai finds it through the transcript's bounded-memory history); it is never approximated from `history`. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
+`input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. At the tool stages `input` is `None` when no model call produced the call or the event that recorded it is no longer available (inspect_ai finds it through the transcript's bounded-memory history); it is never approximated from `history`. `history` is `None` when the host can't know the scaffold's list: a replay from a log, which records what the model was sent but never the scaffold's list; a proxy, which sees only the request; or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`. A monitor that reads it checks for `None` and says the history is unavailable rather than judging an empty list. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
 
 `BeforeToolCall` and `AfterToolCall` are the `Approver` and `Reviewer` payloads with the same fields. `view` and `output` are optional under a proxy, which has no registered tool definitions to render a view from.
 
@@ -509,7 +509,7 @@ Which surfaces exist where:
 | Untruncated tool output | yes | no | no | evidence |
 | `ToolCallView` | yes | no | from events only | evidence |
 | Exact model input (`step.input`) | yes | yes, the request | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
-| Full history, pre-compaction turns included (`step.history`) | yes | keyed store; else equals `input` | yes | evidence |
+| Full history, pre-compaction turns included (`step.history`) | yes | no: `None` | no: `None` | evidence |
 | Reasoning | provider-dependent | whatever the wire carries | as logged | evidence |
 | System prompt, as the model saw it (`step.input[0]` when present) | yes | yes, but written by the scaffold under observation | from events only | evidence |
 | Tool definitions, config | yes | yes | from events only | evidence |
@@ -528,7 +528,7 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 |---|---|
 | `messages_as_str`, `message_as_str`, `MessagesPreprocessor` | Scout's message rendering: roles, tool calls and results, `<thinking>` blocks, media placeholders; exclusions and a `transform` via the preprocessor |
 | `message_numbering()` | `[M1]`-style numbering plus `extract_refs` for citations in explanations |
-| `last_turn`, `last_n`, `new_since_last_report` | windows over `step.history`; the last uses the monitor's store so an incremental monitor never re-reads what it already judged |
+| `last_turn`, `last_n`, `new_since_last_report` | windows over `step.history`, `None` for `None`; the last uses the monitor's store so an incremental monitor never re-reads what it already judged |
 | `call_as_str(call, view=None)` | the Python-call rendering approvers use, honouring a `ToolCallView` |
 | `result_as_str(result, truncated=None)` | a tool result with the truncation point marked |
 | `briefing_as_str(context)`, `step_as_str(step, ...)` | the instruction and evidence sections; an absent surface is named in a fixed phrase, not omitted |
