@@ -1441,7 +1441,6 @@ dependencies = [
     { name = "anyio" },
     { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
     { name = "inspect-ai" },
-    { name = "inspect-scout" },
     { name = "pydantic" },
 ]
 
@@ -1449,6 +1448,7 @@ dependencies = [
 dev = [
     { name = "exceptiongroup" },
     { name = "griffe" },
+    { name = "inspect-scout" },
     { name = "jupyter" },
     { name = "markdown" },
     { name = "panflute" },
@@ -1492,7 +1492,7 @@ requires-dist = [
     { name = "griffe", marker = "extra == 'dev'", specifier = ">=2" },
     { name = "griffe", marker = "extra == 'doc'", specifier = ">=2" },
     { name = "inspect-ai", specifier = ">=0.3.279" },
-    { name = "inspect-scout", specifier = ">=0.5.5" },
+    { name = "inspect-scout", marker = "extra == 'dev'" },
     { name = "jupyter", marker = "extra == 'dev'" },
     { name = "jupyter", marker = "extra == 'doc'" },
     { name = "markdown", marker = "extra == 'dev'" },
