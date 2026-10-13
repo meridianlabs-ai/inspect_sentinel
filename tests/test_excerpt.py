@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -15,7 +16,9 @@ from inspect_ai.util import Store
 from inspect_scout import message_numbering
 
 from inspect_sentinel import (
+    AfterGenerate,
     BeforeToolCall,
+    Context,
     Excerpt,
     Step,
     drop_history,
@@ -25,7 +28,11 @@ from inspect_sentinel import (
     new_since_last_report,
     step_as_str,
 )
+from inspect_sentinel._decorators import monitor
 from inspect_sentinel._excerpt import _excerpt
+from inspect_sentinel._report import Observation
+from inspect_sentinel._runner import run_monitors
+from inspect_sentinel._types import MonitorGroup
 
 from ._fakes import (
     after_generate_step,
@@ -199,65 +206,115 @@ def test_drops_empty_a_source_and_unknown_input_stays_unknown() -> None:
     assert last_turns(unknown, 1).input is None
 
 
-def test_new_since_last_report_shows_each_message_once_per_conversation() -> None:
-    store = Store()
-    shown: list[tuple[list[str] | None, list[str] | None]] = []
-    for conversation, input, history in [
-        ("c", CONVERSATION[:3], CONVERSATION[:3]),
-        ("c", CONVERSATION, CONVERSATION),
-        ("other", None, CONVERSATION[:2]),
-        ("c", CONVERSATION, [user("compacted"), asks("after")]),
-    ]:
-        step = replace(tool_step(input, history), conversation=conversation)
-        with in_step("judge", store=store) as context:
-            cut = new_since_last_report(context, _excerpt(step))
-        shown.append((texts(cut.input), texts(cut.history)))
-    assert shown == [
-        (REPLIED, REPLIED),
-        (["result a", "reply 2"], ["result a", "reply 2"]),
-        (None, ["sys", "task"]),
-        ([], ["compacted", "after"]),
+Shown = tuple[list[str] | None, list[str] | None]
+
+
+def report(cut: Excerpt[Step]) -> Observation:
+    return Observation.score(0.0, json.dumps([texts(cut.input), texts(cut.history)]))
+
+
+@monitor
+def incremental() -> MonitorGroup:
+    async def calls(context: Context, step: BeforeToolCall) -> Observation | None:
+        cut = new_since_last_report(context, step)
+        if step.message == "fail":
+            raise ValueError("model unavailable")
+        return report(cut)
+
+    async def also_calls(context: Context, step: BeforeToolCall) -> Observation | None:
+        return report(new_since_last_report(context, step))
+
+    async def replies(context: Context, step: AfterGenerate) -> Observation | None:
+        return report(new_since_last_report(context, step))
+
+    return MonitorGroup(calls, also_calls, replies)
+
+
+async def shown(store: Store, steps: list[Step]) -> list[list[Shown]]:
+    # what each function of the monitor was shown at each step
+    seen: list[list[Shown]] = []
+    for step in steps:
+        with in_step(store=store) as context:
+            observations = await run_monitors({"judge": incremental()}, context, step)
+        seen.append(
+            [
+                tuple(json.loads(o.report.explanation or ""))
+                for o in observations.succeeded
+            ]
+        )
+    return seen
+
+
+def shared(input: list[str] | None, history: list[str] | None) -> list[Shown]:
+    # both tool-stage functions were shown the same
+    return [(input, history)] * 2
+
+
+@pytest.mark.anyio
+async def test_new_since_last_report_shows_each_message_once_per_function() -> None:
+    steps: list[Step] = [
+        replace(tool_step(input, history), conversation=conversation)
+        for conversation, input, history in [
+            ("c", CONVERSATION[:3], CONVERSATION[:3]),
+            ("c", CONVERSATION, CONVERSATION),
+            ("other", None, CONVERSATION[:2]),
+            ("c", CONVERSATION, [user("compacted"), asks("after")]),
+        ]
+    ]
+    assert await shown(Store(), steps) == [
+        shared(REPLIED, REPLIED),
+        shared(["result a", "reply 2"], ["result a", "reply 2"]),
+        shared(None, ["sys", "task"]),
+        shared([], ["compacted", "after"]),
     ]
 
 
-def test_new_since_last_report_marks_the_last_message_with_an_id() -> None:
-    unnamed: ChatMessage = ChatMessageUser(content="no id")
-    unnamed.id = None
-    store = Store()
-    shown: list[list[str] | None] = []
+@pytest.mark.anyio
+async def test_new_since_last_report_shows_again_what_a_failed_function_was_shown() -> (
+    None
+):
+    steps: list[Step] = [
+        replace(tool_step(None, CONVERSATION[:3]), message="fail"),
+        tool_step(None, CONVERSATION),
+    ]
+    assert await shown(Store(), steps) == [
+        [(None, REPLIED)],
+        [(None, texts(CONVERSATION)), (None, ["result a", "reply 2"])],
+    ]
+
+
+@pytest.mark.anyio
+async def test_new_since_last_report_records_the_last_message_with_an_id() -> None:
     histories: list[list[ChatMessage]] = [
-        [unnamed],
-        [unnamed, user("task"), unnamed],
-        [unnamed, user("task"), unnamed, asks("later")],
-        [unnamed, user("task"), unnamed, asks("later")],
+        [unnamed("no id"), user("task"), unnamed("no id")],
+        [unnamed("no id"), user("task"), unnamed("no id"), asks("later")],
+        [unnamed("no id"), user("task"), unnamed("no id"), asks("later")],
     ]
-    for history in histories:
-        with in_step("judge", store=store) as context:
-            cut = new_since_last_report(context, _excerpt(tool_step(None, history)))
-        shown.append(texts(cut.history))
-    assert shown == [
-        ["no id"],
-        ["no id", "task", "no id"],
-        ["no id", "later"],
-        [],
+    assert await shown(Store(), [tool_step(None, h) for h in histories]) == [
+        shared(None, ["no id", "task", "no id"]),
+        shared(None, ["no id", "later"]),
+        shared(None, []),
     ]
 
 
-def test_new_since_last_report_is_shared_across_stages() -> None:
-    store = Store()
+@pytest.mark.anyio
+async def test_new_since_last_report_records_per_function_so_per_stage() -> None:
     generated = replace(
         after_generate_step(),
         conversation="c",
         input=CONVERSATION[:2],
         history=CONVERSATION[:2],
     )
-    with in_step("judge", store=store) as context:
-        new_since_last_report(context, _excerpt(generated))
-    with in_step("judge", store=store) as context:
-        cut = new_since_last_report(
-            context, _excerpt(replace(tool_step(None, CONVERSATION), conversation="c"))
-        )
-    assert texts(cut.history) == ["reply 1", "result a", "reply 2"]
+    called = replace(tool_step(None, CONVERSATION), conversation="c")
+    assert await shown(Store(), [generated, called]) == [
+        [(texts(CONVERSATION[:2]), texts(CONVERSATION[:2]))],
+        shared(None, texts(CONVERSATION)),
+    ]
+
+
+def test_new_since_last_report_outside_the_runner_raises() -> None:
+    with in_step() as context, pytest.raises(RuntimeError, match="runner"):
+        new_since_last_report(context, windowed())
 
 
 @pytest.mark.parametrize(

@@ -377,7 +377,7 @@ async def _run_member(
     report: Report | None = None
     finals: list[Final] = []
     failure: BaseException | None = None
-    node = invocation()
+    node = invocation(function.__name__)
     try:
         with running(node):
             report = await invoke(function, child_context, step)
@@ -413,6 +413,8 @@ async def _run_member(
             recorder.failed(child_context, factory, step, failed)
             return failed
         raise failure
+    for save in node.on_success:
+        save()
     if finals:
         raise _on_final(
             finals, kind, child_context, step, child_name, function.__name__, label

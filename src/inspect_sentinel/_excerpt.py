@@ -1,17 +1,19 @@
 # Common ways to choose what a monitor shows a model about a step. Each window
-# takes a step or an excerpt and returns an excerpt, so they compose:
+# takes a step or an excerpt and returns an excerpt, so they compose. Inside a
+# monitor, which is given its context and the step:
 #
-#   last_turns(step, 6)                                # the last 6 turns
-#   last_messages(step, 20)                            # the last 20 messages
-#   drop_history(last_turns(step, 6))                  # the last 6 turns the model was sent
-#   drop_input(step)                                   # the scaffold's conversation only
-#   drop_input(drop_history(step))                     # the step alone
-#   new_since_last_report(context, step)               # only what this monitor has not seen
-#   last_turns(new_since_last_report(context, step), 6)  # that, at most 6 turns
+#   async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+#       last_turns(step, 6)                             # the last 6 turns
+#       last_messages(step, 20)                         # the last 20 messages
+#       drop_history(last_turns(step, 6))               # the last 6 turns the model was sent
+#       drop_input(step)                                # the scaffold's conversation only
+#       drop_input(drop_history(step))                  # the step alone
+#       new_since_last_report(context, step)            # only what this monitor has not seen
+#       last_turns(new_since_last_report(context, step), 6)  # that, at most 6 turns
 #
 # then render it for the prompt (a step on its own renders whole):
 #
-#   evidence = await step_as_str(last_turns(step, 6))
+#       evidence = await step_as_str(last_turns(step, 6))
 
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ from pydantic import Field
 
 from ._context import Context
 from ._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
+from ._unhandled import current_invocation
 
 S = TypeVar("S", bound=Step)
 
@@ -128,28 +131,37 @@ def last_messages(step: S | Excerpt[S], n: int) -> Excerpt[S]:
 
 
 class _Marks(StoreModel):
-    # "<conversation>/<input|history>" -> id of the last message shown
+    # "<conversation>/<input|history>/<function>" -> id of the last message
+    # shown
     marks: dict[str, str] = Field(default_factory=dict)
 
 
 def new_since_last_report(context: Context, step: S | Excerpt[S]) -> Excerpt[S]:
-    """`step`, excerpted, with `input` and `history` each cut to the messages after the last one this monitor was shown in them, so an incremental monitor does not re-read its conversations.
+    """`step`, excerpted, with `input` and `history` each cut to the messages after the last one this monitor reported on, so an incremental monitor does not re-read its conversations.
 
-    The last message of each is recorded by id in the monitor's store (by `context.path`), separately for each conversation and shared across stages. Only `input` and `history` are tracked, so the step's own part, such as the last step's call, can be shown again in a later step's conversation. A conversation is kept whole the first time, and when its recorded message is gone: after a compaction (and a tool step's `history`, which is not compacted, may then be shown whole once after a generate marked the compacted one), or where a host gives messages new ids on each step. inspect_ai does that to `input` when a provider merges consecutive messages (Anthropic and Bedrock merge user messages) and to earlier reasoning messages when `reasoning_history` is `none` or `last`, so for those, window `input` some other way or drop it. Call it once per step, while the monitor runs.
+    The last message of each is recorded by id in the monitor's store (by `context.path`), separately for each conversation and each function of the monitor (so for each stage, since a function watches one). It is recorded only when the function returns or decides final; when it raises or is cancelled, the next step shows those messages again. Only `input` and `history` are tracked, so the step's own part, such as the last step's call, can be shown again in a later step's conversation. A conversation is kept whole the first time, and when its recorded message is gone: after a compaction (and a tool step's `history`, which is not compacted, may then be shown whole once after a generate recorded the compacted one), or where a host gives messages new ids on each step. inspect_ai does that to `input` when a provider merges consecutive messages (Anthropic and Bedrock merge user messages) and to earlier reasoning messages when `reasoning_history` is `none` or `last`, so for those, window `input` some other way or drop it. Call it once per step, from the monitor or protocol function the runner is running.
 
     Args:
         context: The monitor's context.
         step: A step, or an excerpt to narrow further.
+
+    Raises:
+        RuntimeError: If called outside a monitor or protocol function the runner is running.
     """
+    node = current_invocation()
+    if node is None:
+        raise RuntimeError(
+            "new_since_last_report() works only in a monitor or protocol function the runner is running, since it records what the function reported on."
+        )
     cut = _excerpt(step)
     store = context.store_as(_Marks)
-    marks = dict(store.marks)
+    marks: dict[str, str] = {}
 
     def after_mark(
         source: Literal["input", "history"], messages: list[ChatMessage]
     ) -> list[ChatMessage]:
-        key = f"{cut.step.conversation}/{source}"
-        seen = marks.get(key)
+        key = f"{cut.step.conversation}/{source}/{node.function}"
+        seen = store.marks.get(key)
         ids = [m.id for m in messages]
         last = next((m.id for m in reversed(messages) if m.id is not None), None)
         if last is not None:
@@ -165,7 +177,7 @@ def new_since_last_report(context: Context, step: S | Excerpt[S]) -> Excerpt[S]:
         input=None if cut.input is None else after_mark("input", cut.input),
         history=after_mark("history", cut.history),
     )
-    store.marks = marks
+    node.on_success.append(lambda: setattr(store, "marks", {**store.marks, **marks}))
     return narrowed
 
 

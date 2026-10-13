@@ -1549,12 +1549,12 @@ Lowest level first. The first three exist in Scout today and move down unchanged
 ``` python
 drop_input(step); drop_history(step)
 last_turns(step, n)      # a turn runs from one assistant message to the next
-last_messages(step, n)   # never starts on a tool result
+last_messages(step, n)   # never cuts a result from its call
 new_since_last_report(context, step)
 last_turns(new_since_last_report(context, step), 6)
 ```
 
-The last is the one that matters. It keeps the id of the last message shown, per conversation and per source (`input`, `history`), in the monitor's store (`context.store_as`), so an incremental monitor does not re-read its conversations, and the cost argument from `sentinel-deployment.md` — quadratic inference, linear deserialization, WASM memory that never shrinks — is answered by a helper rather than by discipline. A conversation whose recorded message is gone, as after a compaction or where a host gives messages new ids on each step, is shown whole. The step's own part is not tracked, so the last step's call can come back in the next step's history.
+The last is the one that matters. It keeps the id of the last message shown, per conversation, per source (`input`, `history`) and per monitor function (so per stage), in the monitor's store (`context.store_as`). The runner saves it only when the function returns or decides final, so a function that raises or is cancelled is shown those messages again at the next step; so an incremental monitor does not re-read its conversations, and the cost argument from `sentinel-deployment.md` — quadratic inference, linear deserialization, WASM memory that never shrinks — is answered by a helper rather than by discipline. A conversation whose recorded message is gone, as after a compaction or where a host gives messages new ids on each step, is shown whole. The step's own part is not tracked, so the last step's call can come back in the next step's history.
 
 **`call_as_str(call, view=None)`.** The Python-call rendering `default_tool_call_viewer` produces for approvers, honouring a registered `ToolCallView` when one is present. One implementation serves the human approval surface and the monitor prompt.
 
