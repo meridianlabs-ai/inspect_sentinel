@@ -25,7 +25,7 @@ from inspect_sentinel import (
     new_since_last_report,
     step_as_str,
 )
-from inspect_sentinel._excerpt import _excerpt as excerpt
+from inspect_sentinel._excerpt import _excerpt
 
 from ._fakes import (
     after_generate_step,
@@ -46,6 +46,12 @@ def user(text: str) -> ChatMessage:
 
 def asks(text: str, *calls: ToolCall) -> ChatMessage:
     return ChatMessageAssistant(content=text, id=text, tool_calls=list(calls) or None)
+
+
+def unnamed(text: str) -> ChatMessage:
+    message = ChatMessageUser(content=text)
+    message.id = None
+    return message
 
 
 def result(of: str, text: str) -> ChatMessage:
@@ -110,7 +116,7 @@ def parallel_after_b() -> Step:
 def test_a_tool_steps_history_ends_before_the_message_holding_its_call(
     step: Step, history: list[str]
 ) -> None:
-    assert texts(excerpt(step).history) == history
+    assert texts(_excerpt(step).history) == history
 
 
 REPLIED = ["sys", "task", "reply 1"]
@@ -127,6 +133,8 @@ GO = [user("go")]
         # history loses only the step's own messages, by id
         (CONVERSATION[:4], CONVERSATION[1:2], REPLIED, ["task"]),
         ([user("prepared")], [user("original")], [], ["original"]),
+        # messages without ids are never taken for the request's
+        ([unnamed("prepared")], [unnamed("original")], [], ["original"]),
     ],
 )
 def test_before_a_generate_conversations_end_at_the_last_reply(
@@ -135,7 +143,7 @@ def test_before_a_generate_conversations_end_at_the_last_reply(
     kept_input: list[str],
     kept_history: list[str],
 ) -> None:
-    cut = excerpt(replace(before_generate_step(), input=input, history=history))
+    cut = _excerpt(replace(before_generate_step(), input=input, history=history))
     assert (texts(cut.input), texts(cut.history)) == (kept_input, kept_history)
 
 
@@ -167,6 +175,12 @@ def test_windows_cut_input_and_history_alike(
     assert window(drop_input(windowed()), n).history == cut.history
 
 
+def test_last_messages_keeps_a_result_it_did_not_part_from_its_call() -> None:
+    # as new_since_last_report leaves it when the call was already shown
+    started = Excerpt(windowed(), None, CONVERSATION[3:])
+    assert texts(last_messages(started, 9).history) == ["result a", "reply 2"]
+
+
 @pytest.mark.parametrize("window", [last_turns, last_messages])
 def test_a_negative_window_raises(
     window: Callable[
@@ -180,7 +194,7 @@ def test_a_negative_window_raises(
 def test_drops_empty_a_source_and_unknown_input_stays_unknown() -> None:
     assert texts(drop_input(windowed()).input) == []
     assert texts(drop_history(windowed()).history) == []
-    unknown = excerpt(tool_step(None, CONVERSATION))
+    unknown = _excerpt(tool_step(None, CONVERSATION))
     assert drop_input(unknown).input is None
     assert last_turns(unknown, 1).input is None
 
@@ -196,7 +210,7 @@ def test_new_since_last_report_shows_each_message_once_per_conversation() -> Non
     ]:
         step = replace(tool_step(input, history), conversation=conversation)
         with in_step("judge", store=store) as context:
-            cut = new_since_last_report(context, excerpt(step))
+            cut = new_since_last_report(context, _excerpt(step))
         shown.append((texts(cut.input), texts(cut.history)))
     assert shown == [
         (REPLIED, REPLIED),
@@ -219,7 +233,7 @@ def test_new_since_last_report_marks_the_last_message_with_an_id() -> None:
     ]
     for history in histories:
         with in_step("judge", store=store) as context:
-            cut = new_since_last_report(context, excerpt(tool_step(None, history)))
+            cut = new_since_last_report(context, _excerpt(tool_step(None, history)))
         shown.append(texts(cut.history))
     assert shown == [
         ["no id"],
@@ -238,19 +252,12 @@ def test_new_since_last_report_is_shared_across_stages() -> None:
         history=CONVERSATION[:2],
     )
     with in_step("judge", store=store) as context:
-        new_since_last_report(context, excerpt(generated))
+        new_since_last_report(context, _excerpt(generated))
     with in_step("judge", store=store) as context:
         cut = new_since_last_report(
-            context, excerpt(replace(tool_step(None, CONVERSATION), conversation="c"))
+            context, _excerpt(replace(tool_step(None, CONVERSATION), conversation="c"))
         )
     assert texts(cut.history) == ["reply 1", "result a", "reply 2"]
-
-
-def test_an_excerpt_of_one_stage_is_an_excerpt_of_a_step() -> None:
-    def step_of(e: Excerpt[Step]) -> Step:
-        return e.step
-
-    assert step_of(excerpt(windowed())) == windowed()
 
 
 @pytest.mark.parametrize(
@@ -259,18 +266,18 @@ def test_an_excerpt_of_one_stage_is_an_excerpt_of_a_step() -> None:
         (windowed(), [], ["cmd: ls"]),
         (drop_history(windowed()), ["HISTORY"], ["cmd: ls"]),
         (
-            excerpt(after_tool_call("bash", "out.txt", cmd="ls")),
+            _excerpt(after_tool_call("bash", "out.txt", cmd="ls")),
             ["HISTORY"],
             ["cmd: ls", "out.txt"],
         ),
         (
-            excerpt(replace(before_generate_step(), input=GO, history=GO)),
+            _excerpt(replace(before_generate_step(), input=GO, history=GO)),
             ["HISTORY", "INPUT"],
             ["go"],
         ),
-        (excerpt(after_generate_step()), [], ["ASSISTANT:\ndone"]),
+        (_excerpt(after_generate_step()), [], ["ASSISTANT:\ndone"]),
         (
-            excerpt(
+            _excerpt(
                 replace(
                     after_generate_step(), output=ModelOutput(model="m", choices=[])
                 )
@@ -295,7 +302,7 @@ async def test_step_as_str_renders_each_kept_part_in_a_block(
 async def test_a_request_ending_in_a_prefill_has_no_step_block() -> None:
     prefilled = [user("task"), asks("prefill")]
     rendered = await step_as_str(
-        excerpt(replace(before_generate_step(), input=prefilled, history=prefilled))
+        _excerpt(replace(before_generate_step(), input=prefilled, history=prefilled))
     )
     assert "[BEGIN AGENT STEP]" not in rendered
     assert "prefill" in rendered.split("[BEGIN INPUT]")[1]
@@ -303,7 +310,7 @@ async def test_a_request_ending_in_a_prefill_has_no_step_block() -> None:
 
 @pytest.mark.anyio
 async def test_step_as_str_says_when_the_model_input_is_unknown() -> None:
-    rendered = await step_as_str(excerpt(tool_step(None, [])))
+    rendered = await step_as_str(_excerpt(tool_step(None, [])))
     assert (
         "[BEGIN INPUT]\nThe model input for this call is not available.\n[END INPUT]"
         in rendered
@@ -313,7 +320,7 @@ async def test_step_as_str_says_when_the_model_input_is_unknown() -> None:
 @pytest.mark.anyio
 async def test_numbered_citations_resolve_to_the_agents_messages() -> None:
     numbered, extract_refs = message_numbering()
-    rendered = await step_as_str(excerpt(parallel_after_b()), messages_as_str=numbered)
+    rendered = await step_as_str(_excerpt(parallel_after_b()), messages_as_str=numbered)
     step_block = rendered.split("[BEGIN AGENT STEP]")[1]
     assert "cmd: b" in step_block and "cmd: a" not in step_block
     # history's task is [M1]; the step's message holding the call is [M2]

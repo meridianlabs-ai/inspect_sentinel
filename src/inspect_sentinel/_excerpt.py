@@ -41,7 +41,7 @@ class Excerpt(Generic[S_co]):
 
     A step's conversations start whole, each cut before the step's own part so that part is not shown twice: `history` before the assistant message that holds the call at a tool stage, and before a generate `input` after the model's last reply and `history` before the messages that follow it, matched by id. Where the host gave those messages new ids in the request (inspect_ai does when a provider merges consecutive messages, or a tool rewrites its result for the model), `history` keeps them and they show twice.
 
-    `step_as_str()` renders the conversations and the step's own part: the assistant's message and the call before a tool call, those and the result after one, the messages after the model's last reply before a generate (none when the request ends with an assistant message, such as a prefill, which then shows in `input`), and the reply after one. Nothing else of the step is rendered, such as its escalations, tools, config, `view` or untruncated tool output.
+    `step_as_str()` renders the conversations and the step's own part: the assistant's message and the call before a tool call, those and the result after one (other calls the same message holds, and their results, are not shown), the messages after the model's last reply before a generate (none when the request ends with an assistant message, such as a prefill, which then shows in `input`), and the reply after one. Nothing else of the step is rendered, such as its escalations, tools, config, `view` or untruncated tool output.
     """
 
     step: S_co
@@ -76,7 +76,7 @@ def drop_history(step: S | Excerpt[S]) -> Excerpt[S]:
 def last_turns(step: S | Excerpt[S], n: int) -> Excerpt[S]:
     """`step`, excerpted, with `input` and `history` each cut to their last `n` turns.
 
-    A turn starts at an assistant message and runs to the next one, so a call in a conversation is never separated from its result. The step's own part is not windowed: before a generate it can be a result whose call was cut. Earlier messages, including the system message and the task, are left out unless a conversation has no more than `n` turns, in which case all of it is kept.
+    A turn starts at an assistant message and runs to the next one, so a call in a conversation is never separated from its result, unless the conversation already starts mid-turn, as after `new_since_last_report()`. The step's own part is not windowed: before a generate it can be a result whose call was cut. Earlier messages, including the system message and the task, are left out unless a conversation has no more than `n` turns, in which case all of it is kept.
 
     Args:
         step: A step, or an excerpt to narrow further.
@@ -98,7 +98,7 @@ def last_turns(step: S | Excerpt[S], n: int) -> Excerpt[S]:
 
 
 def last_messages(step: S | Excerpt[S], n: int) -> Excerpt[S]:
-    """`step`, excerpted, with `input` and `history` each cut to their last `n` messages, fewer when the cut would start on a tool result, so a result in a conversation is never shown without its call. The step's own part is not windowed.
+    """`step`, excerpted, with `input` and `history` each cut to their last `n` messages, fewer when the cut would start on a tool result, so the cut never parts a result from its call. A conversation that already starts with a result, as after `new_since_last_report()`, keeps it. The step's own part is not windowed.
 
     Args:
         step: A step, or an excerpt to narrow further.
@@ -112,9 +112,14 @@ def last_messages(step: S | Excerpt[S], n: int) -> Excerpt[S]:
 
     def cut(messages: list[ChatMessage]) -> list[ChatMessage]:
         start = len(messages) - min(n, len(messages))
+        # skip results only where this cut parted them from their call
         return messages[
             next(
-                (i for i in range(start, len(messages)) if messages[i].role != "tool"),
+                (
+                    i
+                    for i in range(start, len(messages))
+                    if start == 0 or messages[i].role != "tool"
+                ),
                 len(messages),
             ) :
         ]
@@ -130,7 +135,7 @@ class _Marks(StoreModel):
 def new_since_last_report(context: Context, step: S | Excerpt[S]) -> Excerpt[S]:
     """`step`, excerpted, with `input` and `history` each cut to the messages after the last one this monitor was shown in them, so an incremental monitor does not re-read its conversations.
 
-    The last message of each is recorded by id in the monitor's store (by `context.path`), separately for each conversation and shared across stages. Only `input` and `history` are tracked, so the step's own part, such as the last step's call, can be shown again in a later step's conversation. A conversation is kept whole the first time, and when its recorded message is gone: after a compaction, or where a host gives messages new ids on each step. inspect_ai does that to `input` when a provider merges consecutive messages (Anthropic and Bedrock merge user messages) and to earlier reasoning messages when `reasoning_history` is `none` or `last`, so for those, window `input` some other way or drop it. Call it once per step, while the monitor runs.
+    The last message of each is recorded by id in the monitor's store (by `context.path`), separately for each conversation and shared across stages. Only `input` and `history` are tracked, so the step's own part, such as the last step's call, can be shown again in a later step's conversation. A conversation is kept whole the first time, and when its recorded message is gone: after a compaction (and a tool step's `history`, which is not compacted, may then be shown whole once after a generate marked the compacted one), or where a host gives messages new ids on each step. inspect_ai does that to `input` when a provider merges consecutive messages (Anthropic and Bedrock merge user messages) and to earlier reasoning messages when `reasoning_history` is `none` or `last`, so for those, window `input` some other way or drop it. Call it once per step, while the monitor runs.
 
     Args:
         context: The monitor's context.
@@ -198,8 +203,8 @@ async def step_as_str(
 def _step_part(step: Step) -> list[ChatMessage]:
     if isinstance(step, BeforeToolCall | AfterToolCall):
         # the agent's own message holds the call, and its id lets a model's
-        # answer cite it (when history has it); other calls it holds are not
-        # shown
+        # answer cite it; when history lacks it, the message gets a new id and
+        # a cite of it matches no message. Other calls it holds are not shown
         holder = next((m for m in reversed(step.history) if _holds(m, step.call)), None)
         call = ChatMessageAssistant(
             id=holder.id if holder else None,
@@ -222,7 +227,7 @@ def _excerpt(step: S | Excerpt[S]) -> Excerpt[S]:
     if isinstance(step, BeforeToolCall | AfterToolCall):
         return Excerpt(step, step.input, _before_call(step.history, step.call))
     if isinstance(step, BeforeGenerate):
-        new = {m.id for m in _new(step)}
+        new = {m.id for m in _new(step) if m.id is not None}
         return Excerpt(
             step,
             step.input[: _last(step.input, lambda m: m.role == "assistant") + 1],
