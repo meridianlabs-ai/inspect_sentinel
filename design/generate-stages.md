@@ -38,6 +38,8 @@ Decided before this design: the generate stages check the agent's own model call
 
 **Decided (decisions 1 and 2, revised 2026-10-12): C, fenced to the solvers.** A model call during the solvers is an agent's turn whatever its model, since a sub-agent's tool calls are already checked and its model calls should be too; the exclusions are a deny list of scopes (tool bodies, sentinel runs, compaction, `score()`, approvers, reviewers, MCP sampling). The earlier rules, A (active model only) and then agent spans on any model plus the active model elsewhere, are superseded; the second was replaced after a review found it checked an `on_sample_init` agent's helper.
 
+**Decided (2026-10-13): tool calls follow the final scopes.** A tool call made inside a scope that pins model calls as not the agent's (a sentinel run, compaction, `score()`, an approver, a reviewer, MCP sampling) is not checked either. Before, every tool call was checked while a sentinel was active, so a monitor that ran a tool, as `Host.score` does through Scout's answer tool, was checked by the sentinel it belonged to, which ran the monitor again without end. Tool calls made inside a tool body are still checked, since a tool body's scope is not final.
+
 ### The rule
 
 Decided 2026-10-12 ("phase fence plus deny list"), after a review found that an `on_sample_init` agent's `as_tool()` helper was checked under the earlier scope rule. A generate is the agent's when all of these hold:
