@@ -175,6 +175,7 @@ class BeforeToolCall:
     input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage]  # the scaffold's full conversation
     escalations: tuple[Reported[Decision], ...] = ()
+    tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
 
 
 @dataclass(frozen=True)
@@ -188,6 +189,14 @@ class AfterToolCall:
     input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage]
     escalations: tuple[Reported[Decision], ...] = ()
+    tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
+    truncated: Truncation | Literal[False] | None = None  # the host's cut; False: not cut; None: can't tell
+
+
+@dataclass(frozen=True)
+class Truncation:
+    original_bytes: int         # size of the tool's output
+    limit_bytes: int            # the limit it was cut to
 
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall
@@ -198,11 +207,13 @@ Which model calls the generate stages check, where the hook sits, and what each 
 
 `AfterGenerate` carries the request that produced `output` — `input`, `tools`, `tool_choice`, `config` — as well as the output, because a protocol that substitutes an action (`resample`) has to regenerate with exactly what the agent was given.
 
+The tool stages carry the producing request's `input` and `tools` (AISI R3), found by the same lookup (see [Two histories](#two-histories)) and `None` under the same conditions, because what a tool does changes how suspicious a call to it is and the tools a call was chosen from are the ones the model was offered, not the ones registered now. They are the tools as the `ModelEvent` recorded them, after any model hooks, so they can differ from that call's `AfterGenerate.tools` when a hook changed them. `AfterToolCall.truncated` says whether the host cut the result: a `Truncation` (the output's size and the limit it was cut to, in bytes) when it did, `False` when it did not, and `None` when the host cannot tell, as under a proxy or in a replay from messages alone. That follows the convention that `None` on a step means the host cannot provide the value (as for `input` and `history`), so a host that does not set the field says "unknown", never "not cut". It is built from the value `ToolEvent.truncated` records, so live and replay read one field from one source. A cut made earlier, by a sandbox output limit or a timeout, is reported by `result.error` (type `"limit"` or `"timeout"`), not here. Monitors use it rather than the "output was too long" notice in `result`, which is text a tool's output can contain. Live, `result` against `output` shows the cut too, but the log does not hold the untruncated `output`.
+
 A monitor never annotates `Step`, since [its annotation is what selects the stage](#the-stage-comes-from-the-annotation). The alias exists for the layer above, which does see all four.
 
 **Everything in `step` is agent-influenced; nothing in `context` is.** `call`, `message`, `history`, `view`, `result` and `output` are all written or shaped by the agent under observation and are therefore injection-bearing; the briefing is author-written, the store is the monitor's own, the host is the framework's. Splitting them across two arguments makes that boundary structural rather than a matter of field ordering, which is the most useful thing the framework can do about injection (see [It is the only input the agent did not write](#it-is-the-only-input-the-agent-did-not-write)). Which of these fields a given monitor is actually shown, and how they are rendered into its prompt, is the monitor's [view](#views).
 
-`conversation` and `escalations` are the exceptions. The first is a framework-minted id and carries no text. The second is worth naming as such. It is filled by an [ordered composition](#two-compositions-concurrent-and-ordered): when an earlier link in a `sequential` returns `escalate`, its report is handed to the next link here, so a human at the end of the `sequential` sees who is asking and why. The reports are protocol-authored rather than agent-authored, but they may quote agent text in their explanations, so a monitor rendering them into its own prompt should label them as prior verdicts rather than as instructions. The field is per-step, which is why it lives on the payload and not on `Context`, and it is empty everywhere except inside a `sequential`. Approval's equivalent is a block appended to `view.context`; a first-class field is used instead because `view` exists only on the tool stages and is absent under a proxy.
+`conversation`, `truncated` and `escalations` are the exceptions. The first two are framework-computed and carry no text. The last is worth naming as such. It is filled by an [ordered composition](#two-compositions-concurrent-and-ordered): when an earlier link in a `sequential` returns `escalate`, its report is handed to the next link here, so a human at the end of the `sequential` sees who is asking and why. The reports are protocol-authored rather than agent-authored, but they may quote agent text in their explanations, so a monitor rendering them into its own prompt should label them as prior verdicts rather than as instructions. The field is per-step, which is why it lives on the payload and not on `Context`, and it is empty everywhere except inside a `sequential`. Approval's equivalent is a block appended to `view.context`; a first-class field is used instead because `view` exists only on the tool stages and is absent under a proxy.
 
 `BeforeToolCall` and `AfterToolCall` are the `Approver` and `Reviewer` payloads. `AfterToolCall` is a faithful dataclass-ification of the merged `Reviewer.__call__`, which takes exactly `message`, `call`, `result`, `output`, `view` and `history` — this document predicted the shape from the PR and it survived contact with the merged code unchanged. The before/after naming earns its keep here: `BeforeToolCall` carries a `call: ToolCall` and `AfterGenerate` an `output: ModelOutput`, so a payload named for the object it wraps would collide with a field inside itself.
 
@@ -1517,13 +1528,14 @@ What a monitor can be shown, where each thing comes from, and where it is availa
 | Briefing: `task_description`, `sample_description`, `sample_input`, `metadata` | `context.eval` | yes | **no**: `eval` is None | from transcript info | instruction |
 | The subject: the call, the assistant message, or the request | `step.call` / `step.output` / `step.input` | yes | yes | yes | evidence |
 | Tool result as the model sees it | `step.result` | yes | next request only (lossy) | yes; exact from `ToolEvent` | evidence |
+| Whether the host truncated the result | `step.truncated` | yes | **no**: `None` (unknown) | exact from `ToolEvent.truncated` in a log new enough to record it; else `None` | framework |
 | Untruncated tool output | `step.output` | yes | **no** | **no** | evidence |
 | Tool call view (`ToolCallView`) | `step.view` | yes | **no** | from events only | evidence |
 | Exact model input | `step.input` | yes | yes (the request) | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
 | Full history, pre-compaction turns included | `step.history` | yes | keyed store; else equals `input` | yes | evidence |
 | Reasoning (`ContentReasoning`) | inside assistant messages | provider-dependent: full, summary, or redacted | whatever the wire carries | as logged | evidence |
 | System prompt, as the model saw it | `step.input[0]` when present | yes | yes | from events only | **see below** |
-| Tool definitions, generate config | `step.tools`, `step.config` | yes | yes | from events only | evidence |
+| Tool definitions, generate config | `step.tools`, `step.config` (tool stages: `step.tools` only, the producing call's) | yes | yes | from events only; `None` at a tool stage without a producing `ModelEvent` | evidence |
 | Media (images, audio, documents) | content parts | yes | yes | yes | evidence |
 | Prior escalations | `step.escalations` | yes | yes | recorded | prior verdicts |
 | Expected answer | `context.eval.target` | yes | **never** | yes | instruction |
@@ -1562,7 +1574,7 @@ The third is the one that matters. It uses `context.store_as` under a reserved k
 
 **`call_as_str(call, view=None)`.** The Python-call rendering `default_tool_call_viewer` produces for approvers, honouring a registered `ToolCallView` when one is present. One implementation serves the human approval surface and the monitor prompt.
 
-**`result_as_str(result, *, truncated=None)`.** A tool result with the truncation range marked, so the monitor knows the model saw a cut and where. Given `output` as well, it can say how much was cut.
+**`result_as_str(result, *, truncated=None)`.** A tool result with the truncation (`step.truncated`) marked, so the monitor knows the model saw a cut and how much was cut. Marking where the cut falls in the text needs inspect_ai to record it; see `pr-series.md`, Deferred.
 
 **`briefing_as_str(context)`.** The instruction section, from `context.eval`: task and sample descriptions, the original input, and metadata the author chose to surface. Outside an eval it has no eval fields to render. Never includes `target` unless asked; the caller passing `include_target=True` is what the log records.
 
