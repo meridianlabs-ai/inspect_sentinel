@@ -103,6 +103,30 @@ def test_after_tool_call_output_may_be_structured_content() -> None:
     assert step.output == output
 
 
+def test_tool_steps_default_to_no_tools_and_no_truncation() -> None:
+    before = BeforeToolCall(
+        conversation="conv",
+        message="ok",
+        call=_call(),
+        view=ToolCallView(),
+        input=None,
+        history=_history(),
+    )
+    after = AfterToolCall(
+        conversation="conv",
+        message="ok",
+        call=_call(),
+        result=ChatMessageTool(content="out", tool_call_id="c1"),
+        output="out",
+        view=ToolCallView(),
+        input=None,
+        history=_history(),
+    )
+    assert before.tools is None
+    assert after.tools is None
+    assert after.truncated is None
+
+
 def test_step_union_covers_every_stage() -> None:
     assert set(get_args(Step)) == {
         BeforeGenerate,

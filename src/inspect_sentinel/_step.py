@@ -101,6 +101,9 @@ class BeforeToolCall:
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
+    tools: list[ToolInfo] | None = None
+    """The tool definitions offered to the model call that produced the call, as that call recorded them (what `AfterGenerate.tools` held for it): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""
+
 
 @dataclass(frozen=True)
 class AfterToolCall:
@@ -116,7 +119,7 @@ class AfterToolCall:
     """The call as executed, after any `modify`."""
 
     result: ChatMessageTool
-    """What the model will see, after truncation."""
+    """What the model will see, after truncation; `truncated` says whether it was cut."""
 
     output: ToolResult
     """The tool's untruncated return value."""
@@ -132,6 +135,12 @@ class AfterToolCall:
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
+
+    tools: list[ToolInfo] | None = None
+    """The tool definitions offered to the model call that produced the call, as that call recorded them (what `AfterGenerate.tools` held for it): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""
+
+    truncated: tuple[int, int] | None = None
+    """When `result` is a cut-down form of `output`, the cut as `(from, to)` in bytes: the size of the tool's output and the limit it was cut to. `None` when the model sees the whole output, including always for structured content, which is never truncated. It is the value the transcript's `ToolEvent.truncated` records, so a monitor reads one field the same way live and from a log. Use it to tell whether the model saw a cut: the "output was too long" notice in `result` is text a tool's output can contain, so it can be forged."""
 
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall

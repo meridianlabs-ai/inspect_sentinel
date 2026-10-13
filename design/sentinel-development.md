@@ -72,9 +72,9 @@ The canonical reconstruction works from `list[ChatMessage]` alone, because that 
 | `BeforeGenerate` | every message before an assistant message is that generate's `input` | `tools`, `tool_choice`, `config` absent |
 | `AfterGenerate` | the assistant message is `output.choices[0].message`; `usage`, `time` absent | good |
 | `BeforeToolCall` | each `tool_calls[i]` on an assistant message, with the message text and history to that point | `view` absent |
-| `AfterToolCall` | the `ChatMessageTool` whose `tool_call_id` matches, as `result`; history to that point | `output` (untruncated) absent |
+| `AfterToolCall` | the `ChatMessageTool` whose `tool_call_id` matches, as `result`; history to that point | `output` (untruncated) absent; `truncated` unknown |
 
-Messages give the two histories unevenly. A transcript's messages *are* `history`, the scaffold's full conversation with its pre-compaction turns, so that field is exact. At the tool stages `input` is `None` from messages alone: the history to that point is right until the first compaction and wrong after it (the model was shown a summary plus recent turns), so it is not offered as the model's input. A live step without a recorded model call gets `None` the same way, so a monitor handles both alike.
+Messages give the two histories unevenly. A transcript's messages *are* `history`, the scaffold's full conversation with its pre-compaction turns, so that field is exact. At the tool stages `input` (and with it `tools`) is `None` from messages alone: the history to that point is right until the first compaction and wrong after it (the model was shown a summary plus recent turns), so it is not offered as the model's input. A live step without a recorded model call gets `None` the same way, so a monitor handles both alike.
 
 `view` and `output` being absent is the case `sentinel.md` already requires monitors to tolerate for proxies, so a portable monitor replays from messages unchanged. Note the last row is *better* than the proxy's: a proxy never sees the final step's result because no further request carries it, whereas a transcript is complete.
 
@@ -94,7 +94,7 @@ def steps_from_messages(
 
 ### From events
 
-An eval log's events restore what messages lose. `ModelEvent` carries `input`, `tools`, `tool_choice`, `config` and `output` — `BeforeGenerate` and `AfterGenerate` field for field. `ToolEvent` carries `function`, `arguments`, `view`, `result` and the `truncated` range, which restores `view` and lets `result` be exactly what the model saw. The one thing an eval log does not hold is the untruncated tool `output`, so `AfterToolCall.output` stays optional in replay too.
+An eval log's events restore what messages lose. `ModelEvent` carries `input`, `tools`, `tool_choice`, `config` and `output` — `BeforeGenerate` and `AfterGenerate` field for field. `ToolEvent` carries `function`, `arguments`, `view`, `result` and the `truncated` range, which restores `view`, lets `result` be exactly what the model saw, and is `AfterToolCall.truncated` as recorded live. At the tool stages the producing `ModelEvent` gives `input` and `tools`, the same lookup the live dispatcher makes. The one thing an eval log does not hold is the untruncated tool `output`, so `AfterToolCall.output` stays optional in replay too.
 
 Events also restore `input` exactly, from `ModelEvent.input`, and let `history` be rebuilt per agent: walk the `ModelEvent`s and `CompactionEvent`s that share one `conversation` id in order, accumulating what each generate added and marking each compaction. That id is what `sentinel.md` asks core to record; without it the link between a pre- and a post-compaction event is a guess, because a span identifies the innermost scope rather than the agent, and a sample with several agents interleaves their events. That guess is the reconstruction difficulty the current approval-based monitor runs into, and it is why the id is a requirement rather than a convenience.
 
