@@ -148,7 +148,7 @@ class BeforeGenerate:
     model: str
     conversation: str           # links this agent's steps across compactions
     input: list[ChatMessage]    # exactly what the model is sent
-    history: list[ChatMessage] | None  # the scaffold's full conversation, pre-compaction turns included; None when the host can't know it
+    history: list[ChatMessage] | None  # the scaffold's full conversation, pre-compaction turns included; None when the host cannot know it
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -175,7 +175,7 @@ class BeforeToolCall:
     call: ToolCall              # the call as it will execute
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
-    history: list[ChatMessage] | None  # the scaffold's full conversation; None when the host can't know it
+    history: list[ChatMessage] | None  # the scaffold's full conversation; None when the host cannot know it
     escalations: tuple[Reported[Decision], ...] = ()
 
 
@@ -200,9 +200,9 @@ Everything in `step` except `conversation` and `escalations` was written or shap
 
 `escalations` is filled only inside a `sequential()`: when an earlier link returns `escalate`, its report is handed to the next link here, so a human at the end sees who is asking and why. It is empty everywhere else. The reports are written by protocols, but their explanations may quote agent text, so label them as prior verdicts if you render them into a prompt.
 
-`input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. At the tool stages `input` is `None` when no model call produced the call or the event that recorded it is no longer available (inspect_ai finds it through the transcript's bounded-memory history); it is never approximated from `history`. `history` is `None` when the host can't know the scaffold's list: a replay from a log, which records what the model was sent but never the scaffold's list; a proxy, which sees only the request; or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`. A monitor that reads it checks for `None` and says the history is unavailable rather than judging an empty list. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
+`input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. At the tool stages `input` is `None` when no model call produced the call or the event that recorded it is no longer available (inspect_ai finds it through the transcript's bounded-memory history); it is never approximated from `history`. `history` is `None` when the host cannot know the scaffold's list: a proxy, which sees only the request; a replay from a log that cannot establish the list at that step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`. A monitor that reads it checks for `None` and says the history is unavailable rather than judging an empty list. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
 
-`BeforeToolCall` and `AfterToolCall` are the `Approver` and `Reviewer` payloads with the same fields. `view` and `output` are optional under a proxy, which has no registered tool definitions to render a view from.
+`BeforeToolCall` and `AfterToolCall` are the `Approver` and `Reviewer` payloads with the same fields. `view` and `output` are optional under a proxy, which has no registered tool definitions to render a view from, and `history` is `None` there, since a proxy sees only the request.
 
 ### Context
 
@@ -509,7 +509,7 @@ Which surfaces exist where:
 | Untruncated tool output | yes | no | no | evidence |
 | `ToolCallView` | yes | no | from events only | evidence |
 | Exact model input (`step.input`) | yes | yes, the request | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
-| Full history, pre-compaction turns included (`step.history`) | yes | no: `None` | no: `None` | evidence |
+| Full history, pre-compaction turns included (`step.history`) | yes | proxy: no, `None`; bridged in-process: yes | only where replay can establish it; else `None` | evidence |
 | Reasoning | provider-dependent | whatever the wire carries | as logged | evidence |
 | System prompt, as the model saw it (`step.input[0]` when present) | yes | yes, but written by the scaffold under observation | from events only | evidence |
 | Tool definitions, config | yes | yes | from events only | evidence |
@@ -1122,7 +1122,7 @@ What each stage sees:
 Rules for portable monitors:
 
 - **Prefer `BeforeGenerate`, `AfterGenerate`, and `BeforeToolCall`.** `AfterToolCall` should decline to fire under a proxy or bridged agent and say why, rather than run on lossy data.
-- **Expect `view` and `output` to be absent.** A proxy has wire types, not registered tool definitions. The [rendering helpers](#view) name an absent surface in the prompt rather than omitting it.
+- **Expect `view`, `output` and `history` to be absent.** A proxy has wire types, not registered tool definitions, and sees only the request, not the scaffold's list. The [rendering helpers](#view) name an absent surface in the prompt rather than omitting it.
 - **Expect `terminate` to be best-effort.** In an eval it is total and synchronous. Under a proxy it is an error response plus an out-of-band `host.terminate()`, the same shape as `bridge.request_terminate()`, and the host may not support it. There is no separate set of portable actions. Whether `terminate` works is a property of the host.
 - **Take state from `context.store_as`,** never from an ambient accessor. A proxy has nothing to bind an ambient accessor to.
 - **Keep the module's imports light.** Bundling is per-module because the import closure is a module property. One `import requests` at the top of a file disqualifies every monitor in it. A bundler finds monitors with `ast` alone, which works because monitors are top-level functions.
@@ -1444,7 +1444,7 @@ What keeps the simple case simple:
 19. **`ControlProtocol` or `Protocol`?** Settled: `Protocol`, pairing with `@protocol` as `Tool` pairs with `@tool`. The collision with `typing.Protocol` is accepted: a monitor author's file rarely defines structural types, the package imports typing's under an alias, and the docs say "a control protocol, not `typing.Protocol`" on first use.
 20. **Should `sequential` and `concurrent` accept monitors at all?** They do here, recorded and falling through, so that a mixed top-level list has a meaning and a `sequential` can carry a scorer beside its rules. The alternative is protocols only, with `observe_only()` as the way to record a monitor.
 21. **What is the umbrella called?** Settled: `sentinel`, for the feature, `Task(sentinel=)`, the package and the event, with `monitor` kept for the scorer and `protocol` for the decider. `Task(monitor=)` read as "the monitor plus the protocol".
-22. **Where does `conversation` come from, and is `history` eager?** In-process the dispatcher takes the current agent span's id (the sample uuid outside any agent span); whether `AgentState` should carry it instead is open. `history` is a reference in-process, but replay and a proxy materialise it per step, O(n) per step unless the runner hands out a shared, append-only view.
+22. **Where does `conversation` come from, and is `history` eager?** In-process the dispatcher takes the current agent span's id (the sample uuid outside any agent span); whether `AgentState` should carry it instead is open. `history` is a reference in-process and `None` under a proxy; a replay that reconstructs it materialises it per step, O(n) per step unless the runner hands out a shared, append-only view.
 23. **Is `decide_final()` the right design at all?** Any protocol at any depth, third-party code inside `observe_only()` or `threshold()` included, can call it and bypass every layer above, while this design presents child decisions as advisory to the parent. The options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism. `human()` no longer uses it, which weakens the case for keeping it.
 24. **What should an `escalate` that reaches the root mean?** Today the step proceeds, is recorded as the root's decision, and the host warns once per process. The alternatives are rejecting it (fail-closed, as approval does when every approver escalates) or a setting with a chosen default. Rejecting turns every unsure rule into a blocked call.
 25. **How do `review=` and tool approvers migrate?** Is `review=` deprecated in favour of after-call protocols, as [Relationship to approval and review](#relationship-to-approval-and-review) proposes? How does `approval=` coexist with `sentinel=`? The ordering is already written down: approval and then the sentinel before a call, review and then the sentinel after. Can an existing approver run as a protocol through an `as_protocol(approver)` adapter? Tracked in `pr-series.md`, Deferred.

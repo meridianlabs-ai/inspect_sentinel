@@ -26,7 +26,7 @@ class BeforeGenerate:
     """Exactly what the model is sent: the caller's messages after the model's own preparation (the configured system message, reasoning history, merged consecutive messages). In-process these are the host's own messages; monitors must not mutate them."""
 
     history: list[ChatMessage] | None
-    """The caller's message list, the conversation as it passed it to the model. For a scaffold that compacts its conversation this is the compacted conversation. `None` when the host can't know the caller's list: a replay from a log, which records what the model was sent but never the caller's list; a proxy host, which sees only the request; or a step with no caller conversation behind it. In-process Inspect always provides it. It is never approximated from `input`; for what the model saw, use `input`. In-process this is the caller's own list; monitors must not mutate it."""
+    """The caller's message list: the conversation as the caller passed it to the model. For a scaffold that compacts its conversation this is the compacted conversation. `None` when the host cannot know the caller's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the caller's list at each step; or at a step with no caller conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the caller's own list; monitors must not mutate it."""
 
     tools: list[ToolInfo]
     """The tools the model is offered, after `tool_choice` filtering. In-process these are the host's own objects; monitors must not mutate them."""
@@ -58,7 +58,7 @@ class AfterGenerate:
     """Exactly what the model was sent, as for `BeforeGenerate`; monitors must not mutate it."""
 
     history: list[ChatMessage] | None
-    """The caller's message list, as for `BeforeGenerate`, including when it is `None`; monitors must not mutate it."""
+    """The caller's message list, or `None`, as for `BeforeGenerate`; monitors must not mutate it."""
 
     tools: list[ToolInfo]
     """The tools the model was offered; monitors must not mutate them."""
@@ -96,7 +96,7 @@ class BeforeToolCall:
     """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `None` when no model call produced the assistant message (a pre-filled message, a human agent, or one the scaffold built itself) or when the transcript event that recorded the model call is no longer available; it is never approximated from `history`. `context.eval.sample_input` is the sample's input, the assignment."""
 
     history: list[ChatMessage] | None
-    """The scaffold's message list: its full conversation, pre-compaction turns included. `None` when the host can't know the scaffold's list: a replay from a log, which records what the model was sent but never the scaffold's list; a proxy host, which sees only the request; or a step with no scaffold conversation behind it. In-process Inspect always provides it. It is never approximated from `input`; for what the model saw, use `input`. In-process this is the scaffold's own list; monitors must not mutate it."""
+    """The scaffold's message list: its full conversation, pre-compaction turns included. `None` when the host cannot know the scaffold's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or at a step with no scaffold conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the scaffold's own list; monitors must not mutate it."""
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
@@ -128,7 +128,7 @@ class AfterToolCall:
     """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `None` when no model call produced the assistant message (a pre-filled message, a human agent, or one the scaffold built itself) or when the transcript event that recorded the model call is no longer available; it is never approximated from `history`. `context.eval.sample_input` is the sample's input, the assignment."""
 
     history: list[ChatMessage] | None
-    """The scaffold's message list: its full conversation, pre-compaction turns included. `None` when the host can't know the scaffold's list: a replay from a log, which records what the model was sent but never the scaffold's list; a proxy host, which sees only the request; or a step with no scaffold conversation behind it. In-process Inspect always provides it. It is never approximated from `input`; for what the model saw, use `input`. In-process this is the scaffold's own list; monitors must not mutate it."""
+    """The scaffold's message list: its full conversation, pre-compaction turns included. `None` when the host cannot know the scaffold's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or at a step with no scaffold conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the scaffold's own list; monitors must not mutate it."""
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
