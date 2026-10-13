@@ -102,7 +102,7 @@ class BeforeToolCall:
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
     tools: list[ToolInfo] | None = None
-    """The tool definitions offered to the model call that produced the call, as that call recorded them (what `AfterGenerate.tools` held for it): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""
+    """The tool definitions offered to the model call that produced the call, as the transcript's `ModelEvent` recorded them, after any model hooks (so they can differ from that call's `AfterGenerate.tools` when a hook changed them): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""
 
 
 @dataclass(frozen=True)
@@ -137,10 +137,10 @@ class AfterToolCall:
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
     tools: list[ToolInfo] | None = None
-    """The tool definitions offered to the model call that produced the call, as that call recorded them (what `AfterGenerate.tools` held for it): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""
+    """The tool definitions offered to the model call that produced the call, as the transcript's `ModelEvent` recorded them, after any model hooks (so they can differ from that call's `AfterGenerate.tools` when a hook changed them): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""
 
     truncated: tuple[int, int] | None = None
-    """When `result` is a cut-down form of `output`, the cut as `(from, to)` in bytes: the size of the tool's output and the limit it was cut to. `None` when the model sees the whole output, including always for structured content, which is never truncated. It is the value the transcript's `ToolEvent.truncated` records, so a monitor reads one field the same way live and from a log. Use it to tell whether the model saw a cut: the "output was too long" notice in `result` is text a tool's output can contain, so it can be forged."""
+    """When `result` is a cut-down form of `output`, the cut as `(from, to)` in bytes: the size of the tool's output and the limit it was cut to. `None` when the host did not cut it, which is always so for structured content. `None` does not prove the model saw everything the tool produced: a tool's output can be cut before the host's limit applies (a sandbox output limit or a timeout, which `result.error` reports with type `"limit"` or `"timeout"`), and a host that cannot observe the cut (a proxy, or replay from messages alone) leaves it `None`. It is the value the transcript's `ToolEvent.truncated` records, so a monitor reads one field the same way live and from a log. Use it, not the "output was too long" notice in `result`, to tell whether the host cut the result: that notice is text a tool's output can contain, so it can be forged."""
 
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall
