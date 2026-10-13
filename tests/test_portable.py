@@ -15,6 +15,7 @@ from typing import Any, NamedTuple, cast
 
 import pytest
 from inspect_ai._util.registry import is_registry_object, registry_info
+from inspect_ai.model import ModelOutput
 
 from inspect_sentinel import (
     BeforeToolCall,
@@ -967,7 +968,15 @@ async def test_llm_suspicion_passes_model_through(
 ) -> None:
     modules_from(EXAMPLES)
     suspicion = importlib.import_module("llm_suspicion").suspicion
-    host = FakeHost(completion='{"reasoning": "deletes files", "score": 0.9}')
+    host = FakeHost(
+        outputs=[
+            ModelOutput.for_tool_call(
+                model="fake",
+                tool_name="answer",
+                tool_arguments={"explanation": "deletes files", "suspicion": 0.9},
+            )
+        ]
+    )
     decision = await run_sentinel(
         resolve_sentinel(threshold(suspicion(model=model, role=role), reject_at=0.8)),
         host_context(host=host),
