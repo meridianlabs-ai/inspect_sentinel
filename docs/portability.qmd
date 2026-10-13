@@ -20,7 +20,7 @@ Some mistakes would only show up once the monitor is deployed. Sentinel's check 
 
 A portable function computes anything, and affects the outside world only through `context`:
 
-- `context.host.generate()` to call a model, `context.host.score()` to have a model score the step, and `context.host.ask_human()` to ask a person.
+- `context.host.generate()` to call a model, `context.host.score()` to have a model score the step (in an eval only, for now), and `context.host.ask_human()` to ask a person.
 - `context.store_as()` to keep state across a sample's steps. Don't keep state in files: in a proxy a write is lost.
 - Outbound HTTP through `context.host.fetch()` and named endpoints is planned; until then a monitor that needs an HTTP API is not portable.
 

@@ -4,9 +4,18 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from inspect_ai.model import ChatMessage, ChatMessageAssistant, GenerateConfig, Model
-from pydantic import Field, create_model
+from inspect_ai.model import (
+    ChatMessage,
+    ChatMessageAssistant,
+    ChatMessageTool,
+    ChatMessageUser,
+    GenerateConfig,
+)
+from inspect_ai.tool import ToolCall, ToolCallError, ToolInfo, ToolParams
+from inspect_ai.util import json_schema
+from pydantic import BaseModel, Field, ValidationError, create_model
 
+from ._host import Host
 from ._report import Observation
 from ._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 
@@ -36,38 +45,43 @@ _REQUIRED = ("{{ step }}", "{{ answer_format }}")
 
 _SINGLE = "suspicion"
 
+_ANSWER = "answer"
+
+_ATTEMPTS = 3
+
+# a dimension named this would collide with the answer's own field
+_RESERVED = ("explanation",)
+
 
 async def score_step(
-    model: Model,
+    host: Host,
     step: Step,
     dimensions: str | Mapping[str, str],
     *,
     task: str | None = None,
     history: Sequence[ChatMessage] | None = None,
     template: str | None = None,
+    model: str | None = None,
+    role: str | None = None,
     config: GenerateConfig | None = None,
 ) -> Observation:
-    """Ask `model` to score `step`, for a host implementing `Host.score`.
+    """Score `step` by asking a model through `host.generate`, for a host implementing `Host.score`.
 
-    The host resolves `model` from the monitor's `model` and `role` as for `Host.generate` and passes the task the agent was given, if it has one; everything else is as `Host.score` describes. Raises `RuntimeError` when the model gives no valid answer within its attempts.
+    The host passes itself and the task the agent was given, if it has one; everything else is as `Host.score` describes. Raises when the model gives no valid answer within its attempts.
 
     Args:
-        model: The monitor model.
+        host: The host, whose `generate` asks the model.
         step: The step to score.
         dimensions: The prompt text for a single score, or each dimension's name mapped to its prompt text.
         task: The task the agent was given, or None when the host has none.
         history: Earlier conversation to show the model, numbered so its explanation can cite it.
         template: A replacement for the default prompt template.
+        model: A model name, as for `Host.generate`.
+        role: A model role, as for `Host.generate`.
         config: Generation configuration.
     """
     # Scout imports duckdb and pandas, so load it only when a monitor scores
-    from inspect_scout import (
-        AnswerStructured,
-        answer_type,
-        generate_answer,
-        message_numbering,
-        messages_as_str,
-    )
+    from inspect_scout import message_numbering, messages_as_str
 
     template = template or DEFAULT_TEMPLATE
     missing = [variable for variable in _REQUIRED if variable not in template]
@@ -75,6 +89,17 @@ async def score_step(
         raise ValueError(f"A score template must include {' and '.join(missing)}.")
 
     names = [_SINGLE] if isinstance(dimensions, str) else list(dimensions)
+    if not names:
+        raise ValueError("score() needs at least one dimension.")
+    reserved = [
+        name
+        for name in names
+        if name.startswith("_") or name in _RESERVED or hasattr(BaseModel, name)
+    ]
+    if reserved:
+        raise ValueError(
+            f"score() cannot use {', '.join(map(repr, reserved))} as a dimension name: a name must not start with '_', and must not be 'explanation' or an attribute of pydantic's BaseModel."
+        )
     # explanation first, so the model reasons before it scores
     fields: dict[str, Any] = {
         "explanation": (
@@ -93,39 +118,97 @@ async def score_step(
             for name in names
         },
     }
-    answer = AnswerStructured(create_model("Scores", **fields))
+    scores_type = create_model("Scores", **fields)
+    schema = json_schema(scores_type)
+    answer = ToolInfo(
+        name=_ANSWER,
+        description="Use this tool to submit your final answer.",
+        parameters=ToolParams(
+            properties=schema.properties or {}, required=schema.required or []
+        ),
+    )
     history_as_str, extract_refs = message_numbering()
     values = {
         "task": _block("TASK", task),
         "history": _block("CONVERSATION", await history_as_str(list(history or []))),
-        "step": _block("AGENT STEP", await messages_as_str(_subject(step))),
+        "step": _block("AGENT STEP", await messages_as_str(_step_messages(step))),
         "dimensions": dimensions
         if isinstance(dimensions, str)
         else "\n\n".join(f"{name}:\n{text}" for name, text in dimensions.items()),
-        "answer_format": answer_type(answer).format,
+        "answer_format": f"You should use the {_ANSWER}() tool to provide your final answer.",
     }
-    prompt = _VARIABLE.sub(lambda match: values[match[1]], template)
+    messages: list[ChatMessage] = [
+        ChatMessageUser(content=_VARIABLE.sub(lambda match: values[match[1]], template))
+    ]
+    config = (config or GenerateConfig()).merge(
+        GenerateConfig(parallel_tool_calls=False)
+    )
 
-    result = await generate_answer(
-        prompt, answer, model=model, config=config, extract_refs=extract_refs
-    )
-    if result.parsed is None:
-        raise RuntimeError(
-            f"The monitor model gave no valid answer within {answer.max_attempts} attempts; its last reply was {result.answer!r}."
+    for _ in range(_ATTEMPTS):
+        output = await host.generate(
+            messages,
+            model=model,
+            role=role,
+            tools=[answer],
+            tool_choice="auto",
+            config=config,
         )
-    scores = result.parsed.model_dump(exclude={"explanation"})
-    return Observation.score(
-        scores[_SINGLE] if isinstance(dimensions, str) else scores,
-        result.explanation,
-        references=result.references,
+        calls = output.message.tool_calls or []
+        checked = [(call, _check(call, scores_type)) for call in calls]
+        valid = next((r for _, r in checked if isinstance(r, BaseModel)), None)
+        if valid is not None:
+            scores = valid.model_dump()
+            explanation: str = scores.pop("explanation")
+            return Observation.score(
+                scores[_SINGLE] if isinstance(dimensions, str) else scores,
+                explanation,
+                references=extract_refs(explanation),
+            )
+        # every call gets its error back, as a provider requires a result for
+        # each call; a reply with no call (a refusal, say) gets a reminder
+        messages = [
+            *messages,
+            output.message,
+            *(
+                [
+                    ChatMessageTool(
+                        content="",
+                        tool_call_id=call.id,
+                        function=call.function,
+                        error=ToolCallError("parsing", str(error)),
+                    )
+                    for call, error in checked
+                ]
+                if calls
+                else [
+                    ChatMessageUser(
+                        content=f"Please use the {_ANSWER}() tool to report your answer."
+                    )
+                ]
+            ),
+        ]
+
+    raise RuntimeError(
+        f"The monitor model gave no valid answer within {_ATTEMPTS} attempts; its last reply was {messages[-2].text!r}."
     )
+
+
+def _check(call: ToolCall, scores_type: type[BaseModel]) -> BaseModel | str:
+    if call.function != _ANSWER:
+        return f"There is no {call.function}() tool. Use the {_ANSWER}() tool to report your answer."
+    if call.parse_error:
+        return call.parse_error
+    try:
+        return scores_type.model_validate(call.arguments)
+    except ValidationError as error:
+        return str(error)
 
 
 def _block(name: str, text: str | None) -> str:
     return f"[BEGIN {name}]\n{text}\n[END {name}]" if text else ""
 
 
-def _subject(step: Step) -> list[ChatMessage]:
+def _step_messages(step: Step) -> list[ChatMessage]:
     if isinstance(step, BeforeToolCall | AfterToolCall):
         call = ChatMessageAssistant(content=step.message, tool_calls=[step.call])
         return [call, step.result] if isinstance(step, AfterToolCall) else [call]
@@ -137,4 +220,7 @@ def _subject(step: Step) -> list[ChatMessage]:
         )
         return step.input[last + 1 :]
     assert isinstance(step, AfterGenerate)
-    return [step.output.message]
+    # a provider can return no choices: show that as an empty reply
+    return [
+        step.output.message if step.output.choices else ChatMessageAssistant(content="")
+    ]

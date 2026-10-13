@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -7,18 +8,14 @@ from inspect_ai.model import (
     ChatMessageAssistant,
     ChatMessageTool,
     ChatMessageUser,
-    GenerateConfig,
-    Model,
     ModelOutput,
-    get_model,
 )
-from inspect_ai.tool import ToolChoice, ToolInfo
-from inspect_ai.util._concurrency import init_concurrency
 
 from inspect_sentinel._integration import score_step
 from inspect_sentinel._step import Step
 
 from ._fakes import (
+    FakeHost,
     after_generate_step,
     after_tool_call,
     before_generate_step,
@@ -26,49 +23,21 @@ from ._fakes import (
 )
 
 
-@pytest.fixture(autouse=True)
-def fresh_concurrency() -> None:
-    # inspect_ai keeps a model's connection limiter for the process, bound to
-    # the backend that made it; these tests generate on asyncio and on trio
-    init_concurrency()
-
-
-class Monitor:
-    """A mockllm model that answers with the given outputs and keeps what it was sent."""
-
-    def __init__(self, *outputs: ModelOutput) -> None:
-        self.outputs = list(outputs)
-        self.inputs: list[list[ChatMessage]] = []
-        self.model: Model = get_model(
-            "mockllm/model", custom_outputs=self._answer, memoize=False
-        )
-
-    def _answer(
-        self,
-        input: list[ChatMessage],
-        tools: list[ToolInfo],
-        tool_choice: ToolChoice,
-        config: GenerateConfig,
-    ) -> ModelOutput:
-        self.inputs.append(input)
-        return self.outputs.pop(0)
-
-    @property
-    def prompt(self) -> str:
-        return self.inputs[0][0].text
-
-
 def answer(**arguments: Any) -> ModelOutput:
     return ModelOutput.for_tool_call(
-        model="mockllm/model", tool_name="answer", tool_arguments=arguments
+        model="fake", tool_name="answer", tool_arguments=arguments
     )
+
+
+def prompt(host: FakeHost) -> str:
+    return host.inputs[0][0].text
 
 
 @pytest.mark.anyio
 async def test_a_string_is_one_score() -> None:
-    monitor = Monitor(answer(explanation="writes outside /work", suspicion=0.9))
+    host = FakeHost(outputs=[answer(explanation="writes outside /work", suspicion=0.9)])
     observation = await score_step(
-        monitor.model,
+        host,
         before_tool_call("bash", cmd="rm -rf /etc"),
         "Does this call write outside /work?",
         task="Free disk space.",
@@ -77,26 +46,28 @@ async def test_a_string_is_one_score() -> None:
         0.9,
         "writes outside /work",
     )
-    assert "[BEGIN TASK]\nFree disk space.\n[END TASK]" in monitor.prompt
-    assert "cmd: rm -rf /etc" in monitor.prompt
-    assert "Does this call write outside /work?" in monitor.prompt
-    assert "use the answer() tool" in monitor.prompt
-    assert "[BEGIN CONVERSATION]" not in monitor.prompt
+    assert "[BEGIN TASK]\nFree disk space.\n[END TASK]" in prompt(host)
+    assert "cmd: rm -rf /etc" in prompt(host)
+    assert "Does this call write outside /work?" in prompt(host)
+    assert "use the answer() tool" in prompt(host)
+    assert "[BEGIN CONVERSATION]" not in prompt(host)
 
 
 @pytest.mark.anyio
 async def test_a_mapping_scores_each_dimension() -> None:
-    monitor = Monitor(answer(explanation="neither", exfiltration=0.1, sabotage=0.2))
+    host = FakeHost(
+        outputs=[answer(explanation="neither", exfiltration=0.1, sabotage=0.2)]
+    )
     observation = await score_step(
-        monitor.model,
+        host,
         before_tool_call("bash", cmd="ls"),
         {"exfiltration": "Is data leaving?", "sabotage": "Is the task undermined?"},
     )
     assert observation.suspicion == {"exfiltration": 0.1, "sabotage": 0.2}
     assert "exfiltration:\nIs data leaving?\n\nsabotage:\nIs the task undermined?" in (
-        monitor.prompt
+        prompt(host)
     )
-    assert "[BEGIN TASK]" not in monitor.prompt
+    assert "[BEGIN TASK]" not in prompt(host)
 
 
 @pytest.mark.anyio
@@ -105,62 +76,92 @@ async def test_history_is_numbered_and_cites_become_references() -> None:
         ChatMessageUser(content="clean up", id="user"),
         ChatMessageAssistant(content="deleting the logs", id="assistant"),
     ]
-    monitor = Monitor(answer(explanation="as planned in [M2]", suspicion=0.0))
+    host = FakeHost(outputs=[answer(explanation="as planned in [M2]", suspicion=0.0)])
     observation = await score_step(
-        monitor.model,
+        host,
         before_tool_call("bash", cmd="ls"),
         "Is it safe?",
         history=history,
     )
-    assert "[M1] USER:\nclean up" in monitor.prompt
-    assert "[M2] ASSISTANT:\ndeleting the logs" in monitor.prompt
+    assert "[M1] USER:\nclean up" in prompt(host)
+    assert "[M2] ASSISTANT:\ndeleting the logs" in prompt(host)
     assert [reference.id for reference in observation.references] == ["assistant"]
 
 
+@pytest.mark.parametrize(
+    "first, feedback",
+    [
+        (answer(explanation="very", suspicion=1.5), ChatMessageTool),
+        (answer(explanation="very"), ChatMessageTool),
+        (
+            ModelOutput.from_content(model="fake", content="I can't help."),
+            ChatMessageUser,
+        ),
+    ],
+)
 @pytest.mark.anyio
-async def test_an_out_of_range_score_goes_back_to_the_model() -> None:
-    monitor = Monitor(
-        answer(explanation="very", suspicion=1.5),
-        answer(explanation="quite", suspicion=0.8),
-    )
+async def test_a_reply_without_a_valid_answer_goes_back_to_the_model(
+    first: ModelOutput, feedback: type[ChatMessage]
+) -> None:
+    host = FakeHost(outputs=[first, answer(explanation="quite", suspicion=0.8)])
     observation = await score_step(
-        monitor.model, before_tool_call("bash", cmd="ls"), "Is it safe?"
+        host,
+        before_tool_call("bash", cmd="ls"),
+        "Is it safe?",
+        model="openai/gpt-4o-mini",
+        role="trusted",
     )
     assert observation.suspicion == 0.8
-    errors = [m for m in monitor.inputs[1] if isinstance(m, ChatMessageTool)]
-    assert errors and errors[0].error is not None
+    assert isinstance(host.inputs[1][-1], feedback)
+    assert host.models == [("openai/gpt-4o-mini", "trusted")] * 2
 
 
 @pytest.mark.anyio
 async def test_no_valid_answer_raises() -> None:
-    monitor = Monitor(*[answer(explanation="very", suspicion=1.5)] * 3)
+    host = FakeHost(outputs=[answer(explanation="very", suspicion=1.5)] * 3)
     with pytest.raises(RuntimeError, match="no valid answer within 3 attempts"):
-        await score_step(monitor.model, before_tool_call("bash", cmd="ls"), "Safe?")
+        await score_step(host, before_tool_call("bash", cmd="ls"), "Safe?")
 
 
-@pytest.mark.anyio
-async def test_a_template_without_the_step_or_answer_format_raises() -> None:
-    monitor = Monitor()
-    with pytest.raises(ValueError, match=r"\{\{ step \}\} and \{\{ answer_format \}\}"):
-        await score_step(
-            monitor.model,
-            before_tool_call("bash", cmd="ls"),
+@pytest.mark.parametrize(
+    "dimensions, template, match",
+    [
+        (
             "Safe?",
-            template="Score {{ dimensions }}",
+            "Score {{ dimensions }}",
+            r"\{\{ step \}\} and \{\{ answer_format \}\}",
+        ),
+        ({}, None, "at least one dimension"),
+        ({"explanation": "Why?", "risk": "Risky?"}, None, "'explanation'"),
+        ({"_risk": "Risky?"}, None, "'_risk'"),
+        ({"model_dump": "Dumped?"}, None, "'model_dump'"),
+    ],
+)
+@pytest.mark.anyio
+async def test_bad_arguments_raise_before_the_model_is_asked(
+    dimensions: str | dict[str, str], template: str | None, match: str
+) -> None:
+    host = FakeHost(outputs=[])
+    with pytest.raises(ValueError, match=match):
+        await score_step(
+            host,
+            before_tool_call("bash", cmd="ls"),
+            dimensions,
+            template=template,
         )
-    assert monitor.inputs == []
+    assert host.inputs == []
 
 
 @pytest.mark.anyio
 async def test_the_agents_text_is_not_read_as_a_template_variable() -> None:
-    monitor = Monitor(answer(explanation="fine", suspicion=0.0))
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
     await score_step(
-        monitor.model,
+        host,
         before_tool_call("bash", cmd="echo '{{ dimensions }}'"),
         "Is it safe?",
         template="{{ step }}\n{{ dimensions }}\n{{ answer_format }}",
     )
-    assert "cmd: echo '{{ dimensions }}'" in monitor.prompt
+    assert "cmd: echo '{{ dimensions }}'" in prompt(host)
 
 
 def _before_generate() -> Step:
@@ -184,14 +185,22 @@ def _before_generate() -> Step:
         ),
         (_before_generate, ["new request"], ["earlier"]),
         (after_generate_step, ["ASSISTANT:\ndone"], ["go"]),
+        (
+            lambda: replace(
+                after_generate_step(),
+                output=ModelOutput(model="fake", choices=[]),
+            ),
+            ["ASSISTANT:"],
+            ["go"],
+        ),
     ],
 )
 @pytest.mark.anyio
 async def test_the_step_block_shows_the_stages_subject(
     step: Callable[[], Step], shown: list[str], hidden: list[str]
 ) -> None:
-    monitor = Monitor(answer(explanation="fine", suspicion=0.0))
-    await score_step(monitor.model, step(), "Is it safe?")
-    block = monitor.prompt.split("[BEGIN AGENT STEP]")[1].split("[END AGENT STEP]")[0]
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
+    await score_step(host, step(), "Is it safe?")
+    block = prompt(host).split("[BEGIN AGENT STEP]")[1].split("[END AGENT STEP]")[0]
     assert all(text in block for text in shown)
     assert not any(text in block for text in hidden)

@@ -15,6 +15,7 @@ from inspect_ai.util import Store
 from inspect_sentinel._context import Context, EvalContext
 from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step
 from inspect_sentinel._report import Decision, Failed, Observation, Report, Reported
+from inspect_sentinel._score import score_step
 from inspect_sentinel._step import (
     AfterGenerate,
     AfterToolCall,
@@ -30,11 +31,18 @@ class Asked(NamedTuple):
 
 
 class FakeHost:
-    def __init__(self, *answers: HumanAnswer, completion: str = "ok") -> None:
+    def __init__(
+        self,
+        *answers: HumanAnswer,
+        completion: str = "ok",
+        outputs: Sequence[ModelOutput] = (),
+    ) -> None:
         self.answers = list(answers)
         self.asked: list[Asked] = []
         self.completion = completion
+        self.outputs = list(outputs)
         self.models: list[tuple[str | None, str | None]] = []
+        self.inputs: list[list[ChatMessage]] = []
 
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
         self.asked.append(Asked(step, tuple(choices)))
@@ -51,7 +59,14 @@ class FakeHost:
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
         self.models.append((model, role))
-        return ModelOutput.from_content(model="fake", content=self.completion)
+        self.inputs.append(
+            [ChatMessageUser(content=input)] if isinstance(input, str) else input
+        )
+        return (
+            self.outputs.pop(0)
+            if self.outputs
+            else ModelOutput.from_content(model="fake", content=self.completion)
+        )
 
     async def score(
         self,
@@ -64,7 +79,16 @@ class FakeHost:
         role: str | None = None,
         config: GenerateConfig | None = None,
     ) -> Observation:
-        raise NotImplementedError("score_step is tested directly in test_score.py")
+        return await score_step(
+            self,
+            step,
+            dimensions,
+            history=history,
+            template=template,
+            model=model,
+            role=role,
+            config=config,
+        )
 
 
 class Recorded(NamedTuple):
