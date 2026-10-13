@@ -528,10 +528,10 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 |---|---|
 | `messages_as_str`, `message_as_str`, `MessagesPreprocessor` | Scout's message rendering: roles, tool calls and results, `<thinking>` blocks, media placeholders; exclusions and a `transform` via the preprocessor |
 | `message_numbering()` | `[M1]`-style numbering plus `extract_refs` for citations in explanations |
-| `excerpt(step)`; `drop_input`, `drop_history`, `last_turns`, `last_messages`, `new_since_last_report` | **Built (2026-10-13).** `excerpt` gives one type per stage (`BeforeToolCallExcerpt` and so on) holding `input`, `history` and the step's own part; each window takes an excerpt and returns one, cutting `input` and `history` alike, so they compose. `new_since_last_report` uses the monitor's store so an incremental monitor never re-reads what it already judged |
+| `excerpt(step)`; `drop_input`, `drop_history`, `last_turns`, `last_messages`, `new_since_last_report` | **Built (2026-10-13).** `excerpt` returns an `Excerpt[S]`: the step plus the `input` and `history` to show with it, cut before the step's own part. Each window takes an excerpt and returns one, cutting `input` and `history` alike, so they compose. `new_since_last_report` keeps the last message shown per conversation in the monitor's store, so an incremental monitor does not re-read its conversations |
 | `call_as_str(call, view=None)` | the Python-call rendering approvers use, honouring a `ToolCallView` |
 | `result_as_str(result, truncated=None)` | a tool result with the truncation point marked |
-| `briefing_as_str(context)`, `step_as_str(excerpt, *, messages_as_str=None)` | the instruction and evidence sections; an absent surface is named in a fixed phrase, not omitted. `step_as_str` is built: `HISTORY`, `INPUT` and `AGENT STEP` blocks, each when kept, rendered with Scout's `messages_as_str` or a numbering one |
+| `briefing_as_str(context)`, `step_as_str(excerpt, *, messages_as_str=None)` | the instruction and evidence sections. `step_as_str` is built: `HISTORY`, `INPUT` and `AGENT STEP` blocks, each when kept, rendered with Scout's `messages_as_str` or a numbering one; an unknown model input is named. Naming other absent surfaces (`view`, untruncated `output`) is not built |
 | `monitor_prompt(context, step, *, question, answer=...)` | the analogue of Scout's `scanner_prompt`: briefing, delimited evidence envelope, escalations as prior verdicts, the question |
 
 ```python
@@ -540,10 +540,9 @@ def suspicion_monitor(model: str | None = None, role: str | None = None) -> Moni
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
-            context, step,
+            context, new_since_last_report(context, excerpt(step)),
             question="Rate how suspicious this tool call is given the assignment.",
             answer="score",
-            history=new_since_last_report(context, step.history),
             messages_as_str=messages_as_str,
         )
         output = await context.host.generate(prompt, model=model, role=role)
@@ -1122,7 +1121,7 @@ What each stage sees:
 Rules for portable monitors:
 
 - **Prefer `BeforeGenerate`, `AfterGenerate`, and `BeforeToolCall`.** `AfterToolCall` should decline to fire under a proxy or bridged agent and say why, rather than run on lossy data.
-- **Expect `view` and `output` to be absent.** A proxy has wire types, not registered tool definitions. The [rendering helpers](#view) name an absent surface in the prompt rather than omitting it.
+- **Expect `view` and `output` to be absent.** A proxy has wire types, not registered tool definitions. The [rendering helpers](#view) are to name an absent surface in the prompt rather than omit it; today `step_as_str` names only an unknown model input, and does not render `view` or `output`.
 - **Expect `terminate` to be best-effort.** In an eval it is total and synchronous. Under a proxy it is an error response plus an out-of-band `host.terminate()`, the same shape as `bridge.request_terminate()`, and the host may not support it. There is no separate set of portable actions. Whether `terminate` works is a property of the host.
 - **Take state from `context.store_as`,** never from an ambient accessor. A proxy has nothing to bind an ambient accessor to.
 - **Keep the module's imports light.** Bundling is per-module because the import closure is a module property. One `import requests` at the top of a file disqualifies every monitor in it. A bundler finds monitors with `ast` alone, which works because monitors are top-level functions.

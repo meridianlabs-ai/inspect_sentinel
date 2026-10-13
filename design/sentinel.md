@@ -1544,7 +1544,7 @@ Lowest level first. The first three exist in Scout today and move down unchanged
 
 **`message_numbering(preprocessor=None)`.** Scout's `[M1]`-style numbering with a paired `extract_refs`. `sentinel-development.md` already assumes an LLM monitor uses it so that citations in an explanation resolve to messages for free; making it available to monitors is what makes that true.
 
-**Excerpts and windowing helpers.** Built (2026-10-13), replacing the earlier sketch of three windows over `step.history`. History is all-or-nothing on the payload, and [incremental monitoring](#deployment-beyond-the-eval-process) wants less than all of it. `excerpt(step)` gives the parts of a step a monitor shows a model, one type per stage (`BeforeToolCallExcerpt`, `AfterToolCallExcerpt`, `BeforeGenerateExcerpt`, `AfterGenerateExcerpt`): `input` and `history`, each cut before the step's own part so that part is not shown twice, and the step's own part (the call; the call and its result; the messages after the model's last reply; the reply). Escalations, tools, config and the untruncated tool output are left out, so an excerpt holds only what a deployed monitor also sees. The windows take an excerpt and return one, cutting `input` and `history` alike, so they compose:
+**Excerpts and windowing helpers.** Built (2026-10-13), replacing the earlier sketch of three windows over `step.history`. History is all-or-nothing on the payload, and [incremental monitoring](#deployment-beyond-the-eval-process) wants less than all of it. `excerpt(step)` returns an `Excerpt[S]` (`Excerpt[BeforeToolCall]` and so on): the step itself, plus the `input` and `history` to show with it, each cut before the step's own part so that part is not shown twice. An excerpt is not a step, so a cut conversation never passes for what the model was sent. The step's own part is the call; the call and its result; the messages after the model's last reply; or the reply. Nothing else of the step is rendered: not its escalations, tools, config, `view` or untruncated tool output. The windows take an excerpt and return one, cutting `input` and `history` alike, so they compose:
 
 ``` python
 drop_input(e); drop_history(e)
@@ -1553,7 +1553,7 @@ last_messages(e, n)   # never starts on a tool result
 new_since_last_report(context, e)
 ```
 
-The last is the one that matters. It keeps the id of the last message shown per conversation in the monitor's store (`context.store_as`), so an incremental monitor never re-reads what it has already judged, and the cost argument from `sentinel-deployment.md` — quadratic inference, linear deserialization, WASM memory that never shrinks — is answered by a helper rather than by discipline. A conversation whose recorded message is gone, as after a compaction, is shown whole.
+The last is the one that matters. It keeps the id of the last message shown, per conversation and per source (`input`, `history`), in the monitor's store (`context.store_as`), so an incremental monitor does not re-read its conversations, and the cost argument from `sentinel-deployment.md` — quadratic inference, linear deserialization, WASM memory that never shrinks — is answered by a helper rather than by discipline. A conversation whose recorded message is gone, as after a compaction or where a host gives messages new ids on each step, is shown whole. The step's own part is not tracked, so the last step's call can come back in the next step's history.
 
 **`call_as_str(call, view=None)`.** The Python-call rendering `default_tool_call_viewer` produces for approvers, honouring a registered `ToolCallView` when one is present. One implementation serves the human approval surface and the monitor prompt.
 
@@ -1561,9 +1561,9 @@ The last is the one that matters. It keeps the id of the last message shown per 
 
 **`briefing_as_str(context)`.** The instruction section, from `context.eval`: task and sample descriptions, the original input, and metadata the author chose to surface. Outside an eval it has no eval fields to render. Never includes `target` unless asked; the caller passing `include_target=True` is what the log records.
 
-**`step_as_str(excerpt, *, messages_as_str=None)`.** Built. The evidence section for a stage: `HISTORY`, `INPUT` and `AGENT STEP` blocks, each when the excerpt kept it, rendered with Scout's `messages_as_str` or a numbering function from `message_numbering()`. When a surface is absent in the deployment — no `view`, no untruncated `output` — the rendering says so in a fixed phrase rather than omitting it silently, so a monitor developed in an eval and run under a proxy produces a prompt that is visibly different rather than subtly different.
+**`step_as_str(excerpt, *, messages_as_str=None)`.** Built. The evidence section for a stage: `HISTORY`, `INPUT` and `AGENT STEP` blocks, each when the excerpt kept it, rendered with Scout's `messages_as_str` or a numbering function from `message_numbering()`. A tool step whose model input is unknown says so in its `INPUT` block. Not built yet: naming the other absent surfaces (no `view`, no untruncated `output`) in a fixed phrase, so a monitor developed in an eval and run under a proxy produces a prompt that is visibly different rather than subtly different; `step_as_str` does not render those surfaces at all yet.
 
-**`monitor_prompt(context, step, *, question, answer=..., history=..., preprocessor=None, messages_as_str=None)`.** The analogue of Scout's `scanner_prompt`, and the one most authors call. It emits: the briefing section, labelled as instructions; the evidence section inside a delimited envelope whose surrounding text says it was written by the agent under observation and may contain instructions to ignore; `step.escalations`, rendered as prior verdicts rather than as part of the conversation; and the question with an answer format. This is the "structural help" the injection section asked for, delivered as the default output of the helper people will reach for first.
+**`monitor_prompt(context, excerpt, *, question, answer=..., preprocessor=None, messages_as_str=None)`.** The analogue of Scout's `scanner_prompt`, and the one most authors call. It emits: the briefing section, labelled as instructions; the evidence section inside a delimited envelope whose surrounding text says it was written by the agent under observation and may contain instructions to ignore; `step.escalations`, rendered as prior verdicts rather than as part of the conversation; and the question with an answer format. This is the "structural help" the injection section asked for, delivered as the default output of the helper people will reach for first.
 
 An LLM monitor built from them:
 
@@ -1573,10 +1573,9 @@ def suspicion_monitor(model: str | None = None, role: str | None = None) -> Moni
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
-            context, step,
+            context, new_since_last_report(context, excerpt(step)),
             question="Rate how suspicious this tool call is given the assignment.",
             answer="score",
-            history=new_since_last_report(context, step.history),
             messages_as_str=messages_as_str,
         )
         output = await context.host.generate(prompt, model=model, role=role)
