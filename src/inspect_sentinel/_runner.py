@@ -31,6 +31,7 @@ from ._types import (
     Sentinels,
 )
 from ._unhandled import (
+    Invocation,
     collecting,
     decided,
     invocation,
@@ -413,17 +414,18 @@ async def _run_member(
             recorder.failed(child_context, factory, step, failed)
             return failed
         raise failure
-    for save in node.on_success:
-        save()
     if finals:
-        raise _on_final(
+        final = _on_final(
             finals, kind, child_context, step, child_name, function.__name__, label
         )
+        _succeeded(node)
+        raise final
     if report is not None and not isinstance(report, report_type):
         raise TypeError(
             f"{kind} {label} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
         )
     if report is None:
+        _succeeded(node)
         return None
     if isinstance(report, Decision):
         validate_shape(report, step, label)
@@ -435,9 +437,17 @@ async def _run_member(
         function=function.__name__,
     )
     recorder.record(child_context, factory, step, reported)
+    _succeeded(node)
     if isinstance(report, Decision):
         decided(node, cast(Reported[Decision], reported))
     return reported
+
+
+def _succeeded(node: Invocation) -> None:
+    # the function reported, decided final or abstained, and the report passed
+    # its checks: keep the state it meant to keep only then
+    for save in node.on_success:
+        save()
 
 
 def _on_final(

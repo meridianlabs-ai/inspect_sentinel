@@ -2,6 +2,7 @@ import json
 from collections.abc import Callable
 from dataclasses import replace
 
+import anyio
 import pytest
 from inspect_ai.model import (
     ChatMessage,
@@ -21,6 +22,8 @@ from inspect_sentinel import (
     Context,
     Excerpt,
     Step,
+    concurrent,
+    decide_final,
     drop_history,
     drop_input,
     last_messages,
@@ -28,17 +31,19 @@ from inspect_sentinel import (
     new_since_last_report,
     step_as_str,
 )
-from inspect_sentinel._decorators import monitor
+from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._excerpt import _excerpt
-from inspect_sentinel._report import Observation
-from inspect_sentinel._runner import run_monitors
-from inspect_sentinel._types import MonitorGroup
+from inspect_sentinel._report import Decision, Observation
+from inspect_sentinel._runner import run_monitors, run_sentinel
+from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
 
 from ._fakes import (
+    ListRecorder,
     after_generate_step,
     after_tool_call,
     before_generate_step,
     before_tool_call,
+    host_context,
     in_step,
 )
 
@@ -298,7 +303,7 @@ async def test_new_since_last_report_records_the_last_message_with_an_id() -> No
 
 
 @pytest.mark.anyio
-async def test_new_since_last_report_records_per_function_so_per_stage() -> None:
+async def test_new_since_last_report_records_per_function() -> None:
     generated = replace(
         after_generate_step(),
         conversation="c",
@@ -310,6 +315,92 @@ async def test_new_since_last_report_records_per_function_so_per_stage() -> None
         [(texts(CONVERSATION[:2]), texts(CONVERSATION[:2]))],
         shared(None, texts(CONVERSATION)),
     ]
+
+
+@pytest.mark.anyio
+async def test_new_since_last_report_is_not_recorded_for_a_cancelled_function() -> None:
+    started = anyio.Event()
+
+    @monitor
+    def watcher(stall: bool = False) -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            cut = new_since_last_report(context, step)
+            if stall:
+                started.set()
+                await anyio.sleep_forever()
+            return report(cut)
+
+        return check
+
+    @protocol
+    def stops() -> Protocol:
+        async def decide(context: Context, step: Step) -> Decision | None:
+            await started.wait()
+            return Decision.terminate()
+
+        return decide
+
+    store, recorder = Store(), ListRecorder()
+    with anyio.fail_after(5):
+        await run_sentinel(
+            concurrent({"watch": watcher(stall=True), "stops": stops()}),
+            host_context(store=store),
+            tool_step(None, CONVERSATION[:3]),
+        )
+        await run_sentinel(
+            concurrent({"watch": watcher()}),
+            host_context(store=store, recorder=recorder),
+            tool_step(None, CONVERSATION),
+        )
+    [seen] = [r.reported.report.explanation for r in recorder.records]
+    assert json.loads(seen or "") == [None, texts(CONVERSATION)]
+
+
+@pytest.mark.parametrize("in_task", [False, True])
+@pytest.mark.anyio
+async def test_new_since_last_report_is_recorded_for_a_final_decision(
+    in_task: bool,
+) -> None:
+    @protocol
+    def decides() -> Protocol:
+        async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+            cut = new_since_last_report(context, step)
+            final = Decision.proceed(json.dumps([texts(cut.input), texts(cut.history)]))
+            if in_task:
+                async with anyio.create_task_group() as group:
+                    group.start_soon(_decide_final, final)
+            decide_final(final)
+
+        return decide
+
+    store = Store()
+    seen: list[str | None] = []
+    for history in [CONVERSATION[:3], CONVERSATION]:
+        decision = await run_sentinel(
+            decides(), host_context(store=store), tool_step(None, history)
+        )
+        assert decision is not None
+        seen.append(decision.explanation)
+    assert [json.loads(e or "") for e in seen] == [
+        [None, REPLIED],
+        [None, ["result a", "reply 2"]],
+    ]
+
+
+async def _decide_final(decision: Decision) -> None:
+    decide_final(decision)
+
+
+@pytest.mark.anyio
+async def test_step_as_str_leaves_out_empty_parts_whatever_the_renderer() -> None:
+    async def as_json(messages: list[ChatMessage]) -> str:
+        return json.dumps([m.text for m in messages])
+
+    prefilled = [user("task"), asks("prefill")]
+    step = replace(before_generate_step(), input=prefilled, history=prefilled)
+    rendered = await step_as_str(drop_history(step), messages_as_str=as_json)
+    assert "[BEGIN HISTORY]" not in rendered
+    assert "[BEGIN AGENT STEP]" not in rendered
 
 
 def test_new_since_last_report_outside_the_runner_raises() -> None:

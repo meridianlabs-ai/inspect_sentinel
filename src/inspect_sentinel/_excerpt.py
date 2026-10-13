@@ -139,7 +139,7 @@ class _Marks(StoreModel):
 def new_since_last_report(context: Context, step: S | Excerpt[S]) -> Excerpt[S]:
     """`step`, excerpted, with `input` and `history` each cut to the messages after the last one this monitor reported on, so an incremental monitor does not re-read its conversations.
 
-    The last message of each is recorded by id in the monitor's store (by `context.path`), separately for each conversation and each function of the monitor (so for each stage, since a function watches one). It is recorded only when the function returns or decides final; when it raises or is cancelled, the next step shows those messages again. Only `input` and `history` are tracked, so the step's own part, such as the last step's call, can be shown again in a later step's conversation. A conversation is kept whole the first time, and when its recorded message is gone: after a compaction (and a tool step's `history`, which is not compacted, may then be shown whole once after a generate recorded the compacted one), or where a host gives messages new ids on each step. inspect_ai does that to `input` when a provider merges consecutive messages (Anthropic and Bedrock merge user messages) and to earlier reasoning messages when `reasoning_history` is `none` or `last`, so for those, window `input` some other way or drop it. Call it once per step, from the monitor or protocol function the runner is running.
+    The last message of each is recorded by id in the monitor's store (by `context.path`), separately for each conversation and each function of the monitor; a function that watches several stages shares them across those stages. It is recorded only when the function returns or decides final and the runner accepts what it returned; when it raises or is cancelled, the next step shows those messages again. Only `input` and `history` are tracked, so the step's own part, such as the last step's call, can be shown again in a later step's conversation. A conversation is kept whole the first time, and when its recorded message is gone: after a compaction (and a tool step's `history`, which is not compacted, may then be shown whole once after a generate recorded the compacted one), or where a host gives messages new ids on each step. inspect_ai does that to `input` when a provider merges consecutive messages (Anthropic and Bedrock merge user messages) and to earlier reasoning messages when `reasoning_history` is `none` or `last`, so for those, window `input` some other way or drop it. Call it once per step, from the monitor or protocol function the runner is running.
 
     Args:
         context: The monitor's context.
@@ -197,15 +197,20 @@ async def step_as_str(
 
     shown = _excerpt(step)
     render = messages_as_str or scout_messages_as_str
+
+    async def text(messages: list[ChatMessage]) -> str:
+        # a renderer may write an empty list as something, such as JSON's []
+        return await render(messages) if messages else ""
+
     blocks = [
-        ("HISTORY", await render(shown.history)),
+        ("HISTORY", await text(shown.history)),
         (
             "INPUT",
             "The model input for this call is not available."
             if shown.input is None
-            else await render(shown.input),
+            else await text(shown.input),
         ),
-        ("AGENT STEP", await render(_step_part(shown.step))),
+        ("AGENT STEP", await text(_step_part(shown.step))),
     ]
     return "\n\n".join(
         f"[BEGIN {name}]\n{text}\n[END {name}]" for name, text in blocks if text
