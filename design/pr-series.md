@@ -475,6 +475,14 @@ Rulings of 2026-10-10 and 2026-10-12 ([generate-stages.md](generate-stages.md), 
 - **`history` keeps its meaning** (decision 15, revised): the scaffold's list at the tool stages, the caller's at the generate stages. The as-sent view (AISI R10) is its own PR, an on-demand query on `TranscriptHistory.find_last` (inspect_ai #5831); marking compaction and `score()` calls in the transcript for it and for replay (R7) is deferred to that work, designed with its viewer and TUI impact. Decision 17's recording is dropped, since R2 finds a tool call's producing `ModelEvent` in the transcript.
 - **`reject` and `modify` at the generate stages** (decisions 8–13) are deferred to part 2 and stay shape-check errors.
 
+## human() at AfterGenerate
+
+AISI R1, 2026-10-13: a protocol at `AfterGenerate` can escalate, and `human()` can answer it, so a monitor that judges a turn as a whole, because the combined effect of parallel calls matters, can hand that turn to a person before any of its calls runs.
+
+- **`human(stages=["model_output"])`**, the stage name `SentinelEvent.stage` records. Its choices are `approve` (to `proceed`, the turn reaching the agent unchanged) and `terminate`; offering `reject` or `modify` there is a `ValueError` when the factory is called, since neither is legal at the generate stages until part 2. `model_input` stays unsupported.
+- **inspect_ai renders the turn as one view.** `Host.ask_human` hands the existing surfaces (ACP, the approval panel, the console), which show one call per prompt, a single view: `step.escalations` (name and explanation, escaped as at the tool stages) and then each of the turn's calls as the transcript shows it, through its tool's viewer when it has one (the viewer's call content; its context is not shown). The assistant text is the prompt's message, as at the tool stages, and ACP shows it in the conversation above the card. The person approves or terminates the turn as a whole, not call by call. ACP gets one permission card of its own for the turn, not linked to the calls' cards, with no `raw_input`. Ending the prompt without a choice terminates, since `reject` is not offered.
+- `examples/escalate_turn_to_human.py` escalates a turn whose `bash()` or `python()` calls delete files.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands. Grouped by priority, decided by the maintainer on 2026-10-02, in the order to take them.
@@ -525,7 +533,7 @@ Agreed work that waits for something else. Each entry says what unblocks it. Kee
 
 Waits on another workstream, or not urgent.
 
-- **Generate stages, part 2** ([generate-stages.md](generate-stages.md), decisions 8–13): `reject` and `modify` at `BeforeGenerate` and `AfterGenerate`, `Decision.modify`, and `SentinelEvent.modified` for an `AfterGenerate` modify.
+- **Generate stages, part 2** ([generate-stages.md](generate-stages.md), decisions 8–13): `reject` and `modify` at `BeforeGenerate` and `AfterGenerate`, `Decision.modify`, and `SentinelEvent.modified` for an `AfterGenerate` modify. With them, `human(stages=["model_output"])` may offer `reject` and `modify`, which needs a surface that can reject or edit a turn.
 - **`compaction_summary(step)`**, a helper returning the latest compaction summary text. Waits on inspect_ai making the `"summary"` message metadata key a documented constant, and must handle a summary merged into the task prompt.
 - **An example compaction monitor.** Raised by the maintainer on 2026-10-02: a stateful generate-stage monitor that watches the messages, detects a compaction summary, and runs a check on the summary, keeping what it has seen in `store_as()`. Waits on the generate stages (inspect_sentinel PR #42), and uses `compaction_summary` once it exists.
 - **`react` overflow recovery rewriting history**: when a call overflows the context window, `react` replaces `state.messages` with the compacted list, so `step.history` loses the folded turns. To raise with inspect_ai.

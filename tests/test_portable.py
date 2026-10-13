@@ -941,6 +941,7 @@ def modules_from(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[Path], N
         ("no_network", "network_rule"),
         ("trajectory", "trajectory"),
         ("escalate_to_human", "escalate_to_human"),
+        ("escalate_turn_to_human", "escalate_turn_to_human"),
         ("llm_suspicion", "llm_suspicion"),
         ("nested", "nested"),
     ],
