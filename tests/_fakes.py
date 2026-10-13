@@ -13,6 +13,7 @@ from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolChoice, T
 from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context, EvalContext
+from inspect_sentinel._excerpt import Excerpt
 from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step
 from inspect_sentinel._report import Decision, Failed, Observation, Report, Reported
 from inspect_sentinel._score import score_step
@@ -70,10 +71,9 @@ class FakeHost:
 
     async def score(
         self,
-        step: Step,
+        step: Step | Excerpt[Step],
         dimensions: str | Mapping[str, str],
         *,
-        history: Sequence[ChatMessage] | None = None,
         template: str | None = None,
         model: str | None = None,
         role: str | None = None,
@@ -83,7 +83,6 @@ class FakeHost:
             self,
             step,
             dimensions,
-            history=history,
             template=template,
             model=model,
             role=role,

@@ -17,7 +17,7 @@ How a monitor or protocol calls a model. Covers `context.host.generate()` and wh
 - `context.host.generate()`: prompts, messages, tools, `tool_choice` and `GenerateConfig`
 - `model=` and `role=` on an LLM monitor's factory: `model` is a model name, `role` a model role; a configured role wins, then `model`, and with neither the role is `monitor`
 - The `monitor` role: `--model-role monitor=...` and `Task(model_roles=...)`, and the fallback to the agent's model
-- `context.host.score()`: a score from 0.0 to 1.0 for the step, or one per named dimension, with an explanation; the default template and custom templates; `history` numbered so the explanation can cite it
+- `context.host.score()`: a score from 0.0 to 1.0 for the step, or one per named dimension, with an explanation; the default template and custom templates; narrowing what the model sees with the windowing functions, such as `last_turns(step, 6)`, its messages numbered so the explanation can cite them
 - Structured output with `ResponseSchema`
 - Usage: monitor calls recorded separately and not charged to the agent's limits
 - Treating agent text as untrusted in prompts

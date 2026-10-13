@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -11,14 +10,11 @@ from inspect_ai.model import (
     ModelOutput,
 )
 
+from inspect_sentinel import last_turns
 from inspect_sentinel._integration import score_step
-from inspect_sentinel._step import Step
 
 from ._fakes import (
     FakeHost,
-    after_generate_step,
-    after_tool_call,
-    before_generate_step,
     before_tool_call,
 )
 
@@ -50,7 +46,7 @@ async def test_a_string_is_one_score() -> None:
     assert "cmd: rm -rf /etc" in prompt(host)
     assert "Does this call write outside /work?" in prompt(host)
     assert "use the answer() tool" in prompt(host)
-    assert "[BEGIN CONVERSATION]" not in prompt(host)
+    assert "[BEGIN HISTORY]" not in prompt(host)
 
 
 @pytest.mark.anyio
@@ -71,20 +67,18 @@ async def test_a_mapping_scores_each_dimension() -> None:
 
 
 @pytest.mark.anyio
-async def test_history_is_numbered_and_cites_become_references() -> None:
+async def test_an_excerpt_is_shown_numbered_and_cites_become_references() -> None:
     history: list[ChatMessage] = [
+        ChatMessageAssistant(content="looking around", id="first"),
         ChatMessageUser(content="clean up", id="user"),
         ChatMessageAssistant(content="deleting the logs", id="assistant"),
+        ChatMessageUser(content="go on", id="later"),
     ]
-    host = FakeHost(outputs=[answer(explanation="as planned in [M2]", suspicion=0.0)])
-    observation = await score_step(
-        host,
-        before_tool_call("bash", cmd="ls"),
-        "Is it safe?",
-        history=history,
-    )
-    assert "[M1] USER:\nclean up" in prompt(host)
-    assert "[M2] ASSISTANT:\ndeleting the logs" in prompt(host)
+    step = replace(before_tool_call("bash", cmd="ls"), history=history)
+    host = FakeHost(outputs=[answer(explanation="as planned in [M1]", suspicion=0.0)])
+    observation = await score_step(host, last_turns(step, 1), "Is it safe?")
+    assert "clean up" not in prompt(host)
+    assert "[M1] ASSISTANT:\ndeleting the logs" in prompt(host)
     assert [reference.id for reference in observation.references] == ["assistant"]
 
 
@@ -162,45 +156,3 @@ async def test_the_agents_text_is_not_read_as_a_template_variable() -> None:
         template="{{ step }}\n{{ dimensions }}\n{{ answer_format }}",
     )
     assert "cmd: echo '{{ dimensions }}'" in prompt(host)
-
-
-def _before_generate() -> Step:
-    step = before_generate_step()
-    step.input[:] = [
-        ChatMessageUser(content="earlier request"),
-        ChatMessageAssistant(content="earlier reply"),
-        ChatMessageUser(content="new request"),
-    ]
-    return step
-
-
-@pytest.mark.parametrize(
-    "step, shown, hidden",
-    [
-        (lambda: before_tool_call("bash", cmd="ls"), ["cmd: ls"], []),
-        (
-            lambda: after_tool_call("bash", "out.txt", cmd="ls"),
-            ["cmd: ls", "out.txt"],
-            [],
-        ),
-        (_before_generate, ["new request"], ["earlier"]),
-        (after_generate_step, ["ASSISTANT:\ndone"], ["go"]),
-        (
-            lambda: replace(
-                after_generate_step(),
-                output=ModelOutput(model="fake", choices=[]),
-            ),
-            ["ASSISTANT:"],
-            ["go"],
-        ),
-    ],
-)
-@pytest.mark.anyio
-async def test_the_step_block_shows_the_stages_subject(
-    step: Callable[[], Step], shown: list[str], hidden: list[str]
-) -> None:
-    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
-    await score_step(host, step(), "Is it safe?")
-    block = prompt(host).split("[BEGIN AGENT STEP]")[1].split("[END AGENT STEP]")[0]
-    assert all(text in block for text in shown)
-    assert not any(text in block for text in hidden)

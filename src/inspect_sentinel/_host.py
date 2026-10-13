@@ -16,6 +16,7 @@ from ._step import Step
 
 if TYPE_CHECKING:
     from ._context import Context
+    from ._excerpt import Excerpt
 
 
 @dataclass(frozen=True)
@@ -64,10 +65,9 @@ class Host(TypingProtocol):
 
     async def score(
         self,
-        step: Step,
+        step: Step | Excerpt[Step],
         dimensions: str | Mapping[str, str],
         *,
-        history: Sequence[ChatMessage] | None = None,
         template: str | None = None,
         model: str | None = None,
         role: str | None = None,
@@ -77,20 +77,20 @@ class Host(TypingProtocol):
 
         The model is asked through `generate`, with the same `model`, `role` and `config`. It is sent a prompt built from `template`, and answers by calling an answer tool whose arguments are checked, so a missing or out-of-range score goes back to the model to correct. When the model gives no valid answer within three attempts (a refusal counts as one), `score` raises, and the runner records the monitor as failed. A host implements `score` by calling `score_step` with itself and the task the agent was given.
 
-        The default template shows the model the task, `history` and the step, asks it to score the step from 0.0 to 1.0 against `dimensions`, and asks for an explanation. A custom template uses the same variables, each written as `{{ name }}`, and must include `{{ step }}` and `{{ answer_format }}`:
+        Pass the step to show the model all of it, or narrow what it sees with the windowing functions, such as `last_turns(step, 6)` or `new_since_last_report(context, step)`.
 
-        - `{{ task }}`: the task the agent was given, when the host has one (in an eval, the sample's input).
-        - `{{ history }}`: `history`, numbered `[M1]`, `[M2]` and so on, so the explanation can cite it; the observation's `references` come from those cites.
-        - `{{ step }}`: what the step is about: before a tool call the assistant's message and the call; after a tool call those and the result; before a generate the messages sent since the model's last reply (only the tool results after a tool turn, so pass `history` to show the call, and nothing when the request ends with an assistant message); after a generate the model's reply, empty when the output has no choices.
+        The default template shows the model the task and the step, asks it to score the step from 0.0 to 1.0 against `dimensions`, and asks for an explanation. A custom template uses the same variables, each written as `{{ name }}`, and must include `{{ step }}` and `{{ answer_format }}`:
+
+        - `{{ task }}`: the task the agent was given, between `[BEGIN TASK]` and `[END TASK]` lines, when the host has one (in an eval, the sample's input); empty otherwise.
+        - `{{ step }}`: `step_as_str()` of the step or excerpt, its messages numbered `[M1]`, `[M2]` and so on so the explanation can cite them; the observation's `references` come from those cites.
         - `{{ dimensions }}`: `dimensions` as given, or each dimension's name followed by its text.
         - `{{ answer_format }}`: the instruction to call the answer tool.
 
-        Each of `{{ task }}`, `{{ history }}` and `{{ step }}` is wrapped in `[BEGIN ...]` and `[END ...]` lines, or is empty when there is nothing to show. A custom template states the 0.0 to 1.0 scale in its own words; without it the answer tool still rejects scores out of range.
+        A custom template states the 0.0 to 1.0 scale in its own words; without it the answer tool still rejects scores out of range.
 
         Args:
-            step: The step to score.
+            step: The step to score, whole, or an excerpt of it from a windowing function.
             dimensions: What to score and how. A string is the prompt text for a single score, and the observation's `suspicion` is one float. A mapping is each dimension's name to its prompt text, and `suspicion` is a dict keyed by name; a name must not start with `_` or be `explanation` or an attribute of pydantic's `BaseModel`.
-            history: Earlier messages to judge the step against, such as the last few of `step.history`. None, the default, shows the model only the step.
             template: A replacement for the default prompt template.
             model: A model name, as for `generate`.
             role: A model role, as for `generate`.
