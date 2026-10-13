@@ -2,7 +2,7 @@
 
 A sentinel is what a task runs to watch an agent: a protocol with its monitors, configured with `Task(sentinel=)`. A monitor is a function that watches an agent while it runs and reports what it sees. It attaches to one of four stages, the points in the agent loop before a model call, after a model call, before a tool call, and after a tool call. At every stage it receives the same context object and keeps its state in the same place. A monitor observes: it returns an `Observation` or nothing, and can never act. A protocol decides: it returns a `Decision`, optionally after consulting monitors and other protocols. A protocol with no children is a rule.
 
-Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe_only`, `concurrent`, `sequential`, `threshold`, `human` and `handle_escalation` are implemented (`Host.ask_human` in inspect_ai follows). The [failure policy](#failures) is implemented too. The generate stages are built with `proceed`, `escalate` and `terminate`; `reject` and `modify` there are deferred to a follow-up (`generate-stages.md`). `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
+Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe_only`, `concurrent`, `sequential`, `threshold`, `human` and `handle_escalation` are implemented (`Host.ask_human` in inspect_ai follows). The [failure policy](#failures) is implemented too. `Host.score` is built (`sentinel-deployment.md`, "The host ABI"), and its inspect_ai implementation follows. The generate stages are built with `proceed`, `escalate` and `terminate`; `reject` and `modify` there are deferred to a follow-up (`generate-stages.md`). `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
 
 Related documents:
 
@@ -485,7 +485,7 @@ There is no `monitor_store_as()` or `monitor_host()` global. Helpers take what t
 
 ### Effects
 
-`context.host` is how a monitor reaches the outside world portably. Today that is inference (`generate`) and asking a person (`ask_human`); outbound JSON through named endpoints (`fetch`) and keyed storage are planned, and `sentinel-deployment.md` defines them. The runner records through a separate `Recorder`. In-process these are ordinary implementations; under a proxy they cross the host boundary. Until `fetch` lands, a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, if it is declared `portable=False`, at the cost of portability to a proxy.
+`context.host` is how a monitor reaches the outside world portably. Today that is inference (`generate`), a model's score for a step (`score`) and asking a person (`ask_human`); outbound JSON through named endpoints (`fetch`) and keyed storage are planned, and `sentinel-deployment.md` defines them. The runner records through a separate `Recorder`. In-process these are ordinary implementations; under a proxy they cross the host boundary. Until `fetch` lands, a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, if it is declared `portable=False`, at the cost of portability to a proxy.
 
 Rules:
 

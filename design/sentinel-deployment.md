@@ -88,6 +88,18 @@ class Host(typing.Protocol):
         tool_choice: ToolChoice | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput: ...
+    async def score(
+        self,
+        step: Step,
+        dimensions: str | Mapping[str, str],  # one prompt text, or each dimension's name to its text
+        *,
+        history: Sequence[ChatMessage] | None = None,
+        template: str | None = None,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> Observation: ...
+    """Ask a model to score the step from 0.0 to 1.0, with an explanation, through a checked answer tool."""
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
     """Ask a person about the step, rendered by its type; a proxy might use a review queue.
     A person who ends the prompt without an offered choice yields `reject` if offered, otherwise `terminate`."""
@@ -115,7 +127,9 @@ class HostResponse(typing.Protocol):
     def text(self) -> str: ...
 ```
 
-Only `generate` and `ask_human` are built; `fetch`, `get`/`put` and `terminate` are planned.
+Only `generate`, `score` and `ask_human` are built; `fetch`, `get`/`put` and `terminate` are planned.
+
+`score` takes the narrow form of a monitor that asks a model for its judgement: one score or one per named dimension, from 0.0 to 1.0, and an explanation, returned as an `Observation`. The model answers through an answer tool whose arguments pydantic checks, and an invalid answer goes back to it as a tool error; after the last attempt `score` raises, and the runner records the monitor as failed. The prompt and the answer are sentinel code, `score_step` in `inspect_sentinel._integration`, built on Inspect Scout's structured answer (`generate_answer`, `AnswerStructured`, `message_numbering`), so sentinel depends on Scout. The host resolves the `Model` from `model` and `role` as for `generate` and calls it, passing the task the agent was given; `Model` stays out of the author API. Scout's answer loop needs a `Model`, so for now only an in-process host can serve `score`; the shared parts are to move from Scout into inspect_ai, and a host without a `Model` can then use them (decided by the maintainers on 2026-10-13, in place of a separate shared package).
 
 `ask_human` answers one of the offered choices, or, when the person ends the prompt without one, `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered.
 

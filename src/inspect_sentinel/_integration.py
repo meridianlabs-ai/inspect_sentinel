@@ -11,6 +11,7 @@ from ._decorators import step_types, watched_stages
 from ._host import HostContext, Recorder
 from ._resolve import resolve_sentinel
 from ._runner import run_sentinel
+from ._score import score_step
 from ._types import Sentinels
 
 __all__ = [
@@ -22,6 +23,7 @@ __all__ = [
     "validate_instance_name",
     "resolve_sentinel",
     "run_sentinel",
+    "score_step",
     "step_types",
     "watched_stages",
 ]

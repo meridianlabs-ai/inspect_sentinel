@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -11,7 +11,7 @@ from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
 from inspect_ai.tool import ToolCall, ToolChoice, ToolInfo
 from inspect_ai.util import Store
 
-from ._report import Decision, Failed, Report, Reported
+from ._report import Decision, Failed, Observation, Report, Reported
 from ._step import Step
 
 if TYPE_CHECKING:
@@ -58,6 +58,42 @@ class Host(TypingProtocol):
             role: A model role. Defaults to `monitor` when `model` is None.
             tools: Tool definitions to offer the model.
             tool_choice: Which of `tools` the model may or must call.
+            config: Generation configuration.
+        """
+        ...
+
+    async def score(
+        self,
+        step: Step,
+        dimensions: str | Mapping[str, str],
+        *,
+        history: Sequence[ChatMessage] | None = None,
+        template: str | None = None,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> Observation:
+        """Ask a model to score a step from 0.0 to 1.0, with an explanation.
+
+        The model is sent a prompt built from `template`, and answers by calling an answer tool whose arguments are checked, so a missing or out-of-range score goes back to the model to correct. When the model gives no valid answer within its attempts, `score` raises, and the runner records the monitor as failed.
+
+        The default template shows the model the task, `history` and the step, asks it to score the step from 0.0 to 1.0 against `dimensions`, and asks for an explanation. A custom template uses the same variables, each written as `{{ name }}`, and must include `{{ step }}` and `{{ answer_format }}`:
+
+        - `{{ task }}`: the task the agent was given, when the host has one (in an eval, the sample's input).
+        - `{{ history }}`: `history`, numbered `[M1]`, `[M2]` and so on, so the explanation can cite it; the observation's `references` come from those cites.
+        - `{{ step }}`: what the step is about: before a tool call the assistant's message and the call; after a tool call those and the result; before a generate the messages sent since the model's last reply; after a generate the model's reply.
+        - `{{ dimensions }}`: `dimensions` as given, or each dimension's name followed by its text.
+        - `{{ answer_format }}`: the instruction to call the answer tool.
+
+        Each of `{{ task }}`, `{{ history }}` and `{{ step }}` is wrapped in `[BEGIN ...]` and `[END ...]` lines, or is empty when there is nothing to show. A custom template states the 0.0 to 1.0 scale in its own words; without it the answer tool still rejects scores out of range.
+
+        Args:
+            step: The step to score.
+            dimensions: What to score and how. A string is the prompt text for a single score, and the observation's `suspicion` is one float. A mapping is each dimension's name to its prompt text, and `suspicion` is a dict keyed by name.
+            history: Earlier messages to judge the step against, such as the last few of `step.history`. None, the default, shows the model only the step.
+            template: A replacement for the default prompt template.
+            model: A model name, as for `generate`.
+            role: A model role, as for `generate`.
             config: Generation configuration.
         """
         ...

@@ -98,6 +98,7 @@ def test_integration_module_exports_the_host_surface() -> None:
         "step_types",
         "watched_stages",
         "run_sentinel",
+        "score_step",
     }
 
 

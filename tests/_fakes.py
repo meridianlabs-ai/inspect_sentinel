@@ -1,4 +1,4 @@
-from collections.abc import Generator, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any, NamedTuple
 
@@ -14,7 +14,7 @@ from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context, EvalContext
 from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step
-from inspect_sentinel._report import Decision, Failed, Report, Reported
+from inspect_sentinel._report import Decision, Failed, Observation, Report, Reported
 from inspect_sentinel._step import (
     AfterGenerate,
     AfterToolCall,
@@ -52,6 +52,19 @@ class FakeHost:
     ) -> ModelOutput:
         self.models.append((model, role))
         return ModelOutput.from_content(model="fake", content=self.completion)
+
+    async def score(
+        self,
+        step: Step,
+        dimensions: str | Mapping[str, str],
+        *,
+        history: Sequence[ChatMessage] | None = None,
+        template: str | None = None,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> Observation:
+        raise NotImplementedError("score_step is tested directly in test_score.py")
 
 
 class Recorded(NamedTuple):
