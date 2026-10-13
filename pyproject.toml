@@ -26,6 +26,10 @@ dependencies = [
     # `>=<latest>` floor on the Release Please release PR, and
     # release-dep-guard.yml blocks the release if it is still a git ref.
     "inspect-ai>=0.3.279",
+    # step_as_str renders messages with Scout's messages_as_str (and score
+    # numbers them with its message_numbering). This is short term: message
+    # rendering is to move from Scout into inspect_ai (design/pr-series.md).
+    "inspect-scout>=0.5.5",
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.
     "pydantic>=2.0",

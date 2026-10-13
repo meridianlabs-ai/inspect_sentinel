@@ -5,6 +5,20 @@ A *monitor* observes a step of an agent's execution and reports a suspicion scor
 
 from ._context import Context, EvalContext
 from ._decorators import monitor, protocol
+from ._excerpt import (
+    AfterGenerateExcerpt,
+    AfterToolCallExcerpt,
+    BeforeGenerateExcerpt,
+    BeforeToolCallExcerpt,
+    Excerpt,
+    drop_history,
+    drop_input,
+    excerpt,
+    last_messages,
+    last_turns,
+    new_since_last_report,
+    step_as_str,
+)
 from ._final import decide_final
 from ._host import Host, HumanAnswer
 from ._portable import PortabilityError
@@ -52,6 +66,18 @@ except ImportError:
 
 
 __all__ = [
+    "step_as_str",
+    "new_since_last_report",
+    "last_turns",
+    "last_messages",
+    "excerpt",
+    "drop_input",
+    "drop_history",
+    "Excerpt",
+    "BeforeToolCallExcerpt",
+    "BeforeGenerateExcerpt",
+    "AfterToolCallExcerpt",
+    "AfterGenerateExcerpt",
     "Action",
     "AfterGenerate",
     "AfterToolCall",

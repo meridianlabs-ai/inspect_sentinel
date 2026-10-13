@@ -528,10 +528,10 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 |---|---|
 | `messages_as_str`, `message_as_str`, `MessagesPreprocessor` | Scout's message rendering: roles, tool calls and results, `<thinking>` blocks, media placeholders; exclusions and a `transform` via the preprocessor |
 | `message_numbering()` | `[M1]`-style numbering plus `extract_refs` for citations in explanations |
-| `last_turn`, `last_n`, `new_since_last_report` | windows over `step.history`; the last uses the monitor's store so an incremental monitor never re-reads what it already judged |
+| `excerpt(step)`; `drop_input`, `drop_history`, `last_turns`, `last_messages`, `new_since_last_report` | **Built (2026-10-13).** `excerpt` gives one type per stage (`BeforeToolCallExcerpt` and so on) holding `input`, `history` and the step's own part; each window takes an excerpt and returns one, cutting `input` and `history` alike, so they compose. `new_since_last_report` uses the monitor's store so an incremental monitor never re-reads what it already judged |
 | `call_as_str(call, view=None)` | the Python-call rendering approvers use, honouring a `ToolCallView` |
 | `result_as_str(result, truncated=None)` | a tool result with the truncation point marked |
-| `briefing_as_str(context)`, `step_as_str(step, ...)` | the instruction and evidence sections; an absent surface is named in a fixed phrase, not omitted |
+| `briefing_as_str(context)`, `step_as_str(excerpt, *, messages_as_str=None)` | the instruction and evidence sections; an absent surface is named in a fixed phrase, not omitted. `step_as_str` is built: `HISTORY`, `INPUT` and `AGENT STEP` blocks, each when kept, rendered with Scout's `messages_as_str` or a numbering one |
 | `monitor_prompt(context, step, *, question, answer=...)` | the analogue of Scout's `scanner_prompt`: briefing, delimited evidence envelope, escalations as prior verdicts, the question |
 
 ```python

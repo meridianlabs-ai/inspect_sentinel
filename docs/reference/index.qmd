@@ -75,3 +75,20 @@ Pure functions for rules that check tool calls, and builders of steps for testin
 ### tool_matches
 ### find_words
 ### result_text
+
+## Excerpts
+
+What a monitor shows a model about a step: `excerpt()` keeps every part, the windows narrow it and compose, and `step_as_str()` renders it.
+
+### excerpt
+### BeforeToolCallExcerpt
+### AfterToolCallExcerpt
+### BeforeGenerateExcerpt
+### AfterGenerateExcerpt
+### Excerpt
+### drop_input
+### drop_history
+### last_turns
+### last_messages
+### new_since_last_report
+### step_as_str
