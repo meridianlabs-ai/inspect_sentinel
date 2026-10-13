@@ -37,7 +37,9 @@ MessagesAsStr: TypeAlias = Callable[[list[ChatMessage]], Awaitable[str]]
 
 @dataclass(frozen=True)
 class Excerpt(Generic[S_co]):
-    """What a monitor shows a model about a step: the step, and the conversations to show with it, cut down by the windowing functions.
+    """What a monitor shows a model about a step: the step, and the conversations to show with it, cut down by the windowing functions, which return one.
+
+    A step's conversations start whole, each cut before the step's own part so that part is not shown twice: `history` before the assistant message that holds the call at a tool stage, and before a generate `input` after the model's last reply and `history` before the messages that follow it, matched by id. Where the host gave those messages new ids in the request (inspect_ai does when a provider merges consecutive messages, or a tool rewrites its result for the model), `history` keeps them and they show twice.
 
     `step_as_str()` renders the conversations and the step's own part: the assistant's message and the call before a tool call, those and the result after one, the messages after the model's last reply before a generate (none when the request ends with an assistant message, such as a prefill, which then shows in `input`), and the reply after one. Nothing else of the step is rendered, such as its escalations, tools, config, `view` or untruncated tool output.
     """
@@ -50,26 +52,6 @@ class Excerpt(Generic[S_co]):
 
     history: list[ChatMessage]
     """The part of `step.history` to show."""
-
-
-def excerpt(step: S) -> Excerpt[S]:
-    """An excerpt of `step` that shows all of its conversations.
-
-    Each conversation is cut before the step's own part, so that part is not shown twice: `history` before the assistant message that holds the call at a tool stage, and before a generate `input` after the model's last reply and `history` before the messages that follow it, matched by id. Where the host gave those messages new ids in the request (inspect_ai does when a provider merges consecutive messages, or a tool rewrites its result for the model), `history` keeps them and they show twice. Narrow the result with the windowing functions, such as `last_turns()`, and render it with `step_as_str()`.
-
-    Args:
-        step: The step to excerpt.
-    """
-    if isinstance(step, BeforeToolCall | AfterToolCall):
-        return Excerpt(step, step.input, _before_call(step.history, step.call))
-    if isinstance(step, BeforeGenerate):
-        new = {m.id for m in _new(step)}
-        return Excerpt(
-            step,
-            step.input[: _last(step.input, lambda m: m.role == "assistant") + 1],
-            step.history[: _last(step.history, lambda m: m.id not in new) + 1],
-        )
-    return Excerpt(step, step.input, step.history)
 
 
 def drop_input(step: S | Excerpt[S]) -> Excerpt[S]:
@@ -235,7 +217,18 @@ def _step_part(step: Step) -> list[ChatMessage]:
 
 
 def _excerpt(step: S | Excerpt[S]) -> Excerpt[S]:
-    return step if isinstance(step, Excerpt) else excerpt(step)
+    if isinstance(step, Excerpt):
+        return step
+    if isinstance(step, BeforeToolCall | AfterToolCall):
+        return Excerpt(step, step.input, _before_call(step.history, step.call))
+    if isinstance(step, BeforeGenerate):
+        new = {m.id for m in _new(step)}
+        return Excerpt(
+            step,
+            step.input[: _last(step.input, lambda m: m.role == "assistant") + 1],
+            step.history[: _last(step.history, lambda m: m.id not in new) + 1],
+        )
+    return Excerpt(step, step.input, step.history)
 
 
 def _window(

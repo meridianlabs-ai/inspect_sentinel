@@ -20,12 +20,12 @@ from inspect_sentinel import (
     Step,
     drop_history,
     drop_input,
-    excerpt,
     last_messages,
     last_turns,
     new_since_last_report,
     step_as_str,
 )
+from inspect_sentinel._excerpt import _excerpt as excerpt
 
 from ._fakes import (
     after_generate_step,
