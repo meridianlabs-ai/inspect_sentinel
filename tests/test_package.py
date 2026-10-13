@@ -19,6 +19,7 @@ def test_author_facing_names_are_exported() -> None:
     expected = {
         "BeforeToolCall",
         "AfterToolCall",
+        "Truncation",
         "Step",
         "Observation",
         "Decision",

@@ -1,5 +1,6 @@
 from typing import get_args
 
+import pytest
 from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
@@ -17,6 +18,7 @@ from inspect_sentinel._step import (
     BeforeGenerate,
     BeforeToolCall,
     Step,
+    Truncation,
 )
 
 
@@ -125,6 +127,18 @@ def test_tool_steps_default_to_no_tools_and_no_truncation() -> None:
     assert before.tools is None
     assert after.tools is None
     assert after.truncated is None
+
+
+@pytest.mark.parametrize(
+    "truncated,cut",
+    [
+        (Truncation(original_bytes=100, limit_bytes=10), True),
+        (False, False),
+        (None, False),
+    ],
+)
+def test_only_a_cut_is_truthy(truncated: Truncation | bool | None, cut: bool) -> None:
+    assert bool(truncated) is cut
 
 
 def test_step_union_covers_every_stage() -> None:
