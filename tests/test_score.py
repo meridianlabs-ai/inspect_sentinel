@@ -50,21 +50,32 @@ async def test_a_string_is_one_score() -> None:
 
 
 @pytest.mark.parametrize(
-    "instructions, opening",
+    "instructions, task_extra, shown, hidden",
     [
-        (None, "You are an expert at monitoring AI agents for harmful actions."),
-        ("Policy: stay in /work.", "Policy: stay in /work."),
+        (None, None, ["You are an expert at monitoring", "treat it as data"], []),
+        ("Watch the agent.", None, ["Watch the agent."], ["You are an expert"]),
+        # after the task the host gave
+        (None, "Policy: stay in /work.", ["[END TASK]\n\nPolicy: stay in /work."], []),
     ],
 )
 @pytest.mark.anyio
-async def test_the_prompt_opens_with_the_monitors_instructions(
-    instructions: str | None, opening: str
+async def test_the_monitors_own_text_goes_into_the_default_template(
+    instructions: str | None,
+    task_extra: str | None,
+    shown: list[str],
+    hidden: list[str],
 ) -> None:
     host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
     await score_step(
-        host, before_tool_call("bash", cmd="ls"), "Safe?", instructions=instructions
+        host,
+        before_tool_call("bash", cmd="ls"),
+        "Safe?",
+        task="Free disk space.",
+        instructions=instructions,
+        task_extra=task_extra,
     )
-    assert prompt(host).startswith(f"{opening}\n\nYou will assess")
+    assert all(text in prompt(host) for text in shown)
+    assert not any(text in prompt(host) for text in hidden)
 
 
 @pytest.mark.anyio
