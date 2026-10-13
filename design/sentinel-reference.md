@@ -528,7 +528,7 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 |---|---|
 | `messages_as_str`, `message_as_str`, `MessagesPreprocessor` | Scout's message rendering: roles, tool calls and results, `<thinking>` blocks, media placeholders; exclusions and a `transform` via the preprocessor |
 | `message_numbering()` | `[M1]`-style numbering plus `extract_refs` for citations in explanations |
-| `excerpt(step)`; `drop_input`, `drop_history`, `last_turns`, `last_messages`, `new_since_last_report` | **Built (2026-10-13).** `excerpt` returns an `Excerpt[S]`: the step plus the `input` and `history` to show with it, cut before the step's own part. Each window takes an excerpt and returns one, cutting `input` and `history` alike, so they compose. `new_since_last_report` keeps the last message shown per conversation in the monitor's store, so an incremental monitor does not re-read its conversations |
+| `excerpt(step)`; `drop_input`, `drop_history`, `last_turns`, `last_messages`, `new_since_last_report` | **Built (2026-10-13).** `excerpt` returns an `Excerpt[S]`: the step plus the `input` and `history` to show with it, cut before the step's own part. Each window takes a step or an excerpt and returns an excerpt, cutting `input` and `history` alike, so they compose. `new_since_last_report` keeps the last message shown per conversation in the monitor's store, so an incremental monitor does not re-read its conversations |
 | `call_as_str(call, view=None)` | the Python-call rendering approvers use, honouring a `ToolCallView` |
 | `result_as_str(result, truncated=None)` | a tool result with the truncation point marked |
 | `briefing_as_str(context)`, `step_as_str(excerpt, *, messages_as_str=None)` | the instruction and evidence sections. `step_as_str` is built: `HISTORY`, `INPUT` and `AGENT STEP` blocks, each when kept, rendered with Scout's `messages_as_str` or a numbering one; an unknown model input is named. Naming other absent surfaces (`view`, untruncated `output`) is not built |
@@ -540,7 +540,7 @@ def suspicion_monitor(model: str | None = None, role: str | None = None) -> Moni
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
-            context, new_since_last_report(context, excerpt(step)),
+            context, new_since_last_report(context, step),
             question="Rate how suspicious this tool call is given the assignment.",
             answer="score",
             messages_as_str=messages_as_str,

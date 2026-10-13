@@ -1544,13 +1544,14 @@ Lowest level first. The first three exist in Scout today and move down unchanged
 
 **`message_numbering(preprocessor=None)`.** Scout's `[M1]`-style numbering with a paired `extract_refs`. `sentinel-development.md` already assumes an LLM monitor uses it so that citations in an explanation resolve to messages for free; making it available to monitors is what makes that true.
 
-**Excerpts and windowing helpers.** Built (2026-10-13), replacing the earlier sketch of three windows over `step.history`. History is all-or-nothing on the payload, and [incremental monitoring](#deployment-beyond-the-eval-process) wants less than all of it. `excerpt(step)` returns an `Excerpt[S]` (`Excerpt[BeforeToolCall]` and so on): the step itself, plus the `input` and `history` to show with it, each cut before the step's own part so that part is not shown twice. An excerpt is not a step, so a cut conversation never passes for what the model was sent. The step's own part is the call; the call and its result; the messages after the model's last reply; or the reply. Nothing else of the step is rendered: not its escalations, tools, config, `view` or untruncated tool output. The windows take an excerpt and return one, cutting `input` and `history` alike, so they compose:
+**Excerpts and windowing helpers.** Built (2026-10-13), replacing the earlier sketch of three windows over `step.history`. History is all-or-nothing on the payload, and [incremental monitoring](#deployment-beyond-the-eval-process) wants less than all of it. `excerpt(step)` returns an `Excerpt[S]` (`Excerpt[BeforeToolCall]` and so on): the step itself, plus the `input` and `history` to show with it, each cut before the step's own part so that part is not shown twice. An excerpt is not a step, so a cut conversation never passes for what the model was sent. The step's own part is the call; the call and its result; the messages after the model's last reply; or the reply. Nothing else of the step is rendered: not its escalations, tools, config, `view` or untruncated tool output. The windows, and `step_as_str`, take a step or an excerpt; the windows return an excerpt, cutting `input` and `history` alike, so they compose:
 
 ``` python
-drop_input(e); drop_history(e)
-last_turns(e, n)      # a turn runs from one assistant message to the next
-last_messages(e, n)   # never starts on a tool result
-new_since_last_report(context, e)
+drop_input(step); drop_history(step)
+last_turns(step, n)      # a turn runs from one assistant message to the next
+last_messages(step, n)   # never starts on a tool result
+new_since_last_report(context, step)
+last_turns(new_since_last_report(context, step), 6)
 ```
 
 The last is the one that matters. It keeps the id of the last message shown, per conversation and per source (`input`, `history`), in the monitor's store (`context.store_as`), so an incremental monitor does not re-read its conversations, and the cost argument from `sentinel-deployment.md` — quadratic inference, linear deserialization, WASM memory that never shrinks — is answered by a helper rather than by discipline. A conversation whose recorded message is gone, as after a compaction or where a host gives messages new ids on each step, is shown whole. The step's own part is not tracked, so the last step's call can come back in the next step's history.
@@ -1573,7 +1574,7 @@ def suspicion_monitor(model: str | None = None, role: str | None = None) -> Moni
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
-            context, new_since_last_report(context, excerpt(step)),
+            context, new_since_last_report(context, step),
             question="Rate how suspicious this tool call is given the assignment.",
             answer="score",
             messages_as_str=messages_as_str,

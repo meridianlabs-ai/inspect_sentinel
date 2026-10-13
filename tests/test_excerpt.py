@@ -72,8 +72,8 @@ def tool_step(
     return replace(before_tool_call("bash", cmd="ls"), input=input, history=history)
 
 
-def windowed() -> Excerpt[BeforeToolCall]:
-    return excerpt(tool_step(CONVERSATION, CONVERSATION))
+def windowed() -> BeforeToolCall:
+    return tool_step(CONVERSATION, CONVERSATION)
 
 
 def parallel_after_b() -> Step:
@@ -115,6 +115,8 @@ def test_a_tool_steps_history_ends_before_the_message_holding_its_call(
 
 REPLIED = ["sys", "task", "reply 1"]
 
+GO = [user("go")]
+
 
 @pytest.mark.parametrize(
     "input, history, kept_input, kept_history",
@@ -122,8 +124,9 @@ REPLIED = ["sys", "task", "reply 1"]
         (CONVERSATION[:4], CONVERSATION[:4], REPLIED, REPLIED),
         (CONVERSATION[:2], CONVERSATION[:2], [], []),
         (CONVERSATION, CONVERSATION, texts(CONVERSATION), texts(CONVERSATION)),
-        # each is cut at its own last reply
-        (CONVERSATION[:4], CONVERSATION[1:2], REPLIED, []),
+        # history loses only the step's own messages, by id
+        (CONVERSATION[:4], CONVERSATION[1:2], REPLIED, ["task"]),
+        ([user("prepared")], [user("original")], [], ["original"]),
     ],
 )
 def test_before_a_generate_conversations_end_at_the_last_reply(
@@ -151,18 +154,24 @@ def test_before_a_generate_conversations_end_at_the_last_reply(
     ],
 )
 def test_windows_cut_input_and_history_alike(
-    window: Callable[[Excerpt[BeforeToolCall], int], Excerpt[BeforeToolCall]],
+    window: Callable[
+        [BeforeToolCall | Excerpt[BeforeToolCall], int], Excerpt[BeforeToolCall]
+    ],
     n: int,
     kept: list[str],
 ) -> None:
     cut = window(windowed(), n)
     assert (texts(cut.input), texts(cut.history)) == (kept, kept)
-    assert cut.step == windowed().step
+    assert cut.step == windowed()
+    # a window narrows an excerpt as well as a step
+    assert window(drop_input(windowed()), n).history == cut.history
 
 
 @pytest.mark.parametrize("window", [last_turns, last_messages])
 def test_a_negative_window_raises(
-    window: Callable[[Excerpt[BeforeToolCall], int], Excerpt[BeforeToolCall]],
+    window: Callable[
+        [BeforeToolCall | Excerpt[BeforeToolCall], int], Excerpt[BeforeToolCall]
+    ],
 ) -> None:
     with pytest.raises(ValueError, match="n >= 0"):
         window(windowed(), -1)
@@ -197,12 +206,51 @@ def test_new_since_last_report_shows_each_message_once_per_conversation() -> Non
     ]
 
 
-def test_new_since_last_report_shows_messages_without_ids() -> None:
-    unnamed = ChatMessageUser(content="no id")
+def test_new_since_last_report_marks_the_last_message_with_an_id() -> None:
+    unnamed: ChatMessage = ChatMessageUser(content="no id")
     unnamed.id = None
-    with in_step("judge", store=Store()) as context:
-        cut = new_since_last_report(context, excerpt(tool_step(None, [unnamed])))
-    assert texts(cut.history) == ["no id"]
+    store = Store()
+    shown: list[list[str] | None] = []
+    histories: list[list[ChatMessage]] = [
+        [unnamed],
+        [unnamed, user("task"), unnamed],
+        [unnamed, user("task"), unnamed, asks("later")],
+        [unnamed, user("task"), unnamed, asks("later")],
+    ]
+    for history in histories:
+        with in_step("judge", store=store) as context:
+            cut = new_since_last_report(context, excerpt(tool_step(None, history)))
+        shown.append(texts(cut.history))
+    assert shown == [
+        ["no id"],
+        ["no id", "task", "no id"],
+        ["no id", "later"],
+        [],
+    ]
+
+
+def test_new_since_last_report_is_shared_across_stages() -> None:
+    store = Store()
+    generated = replace(
+        after_generate_step(),
+        conversation="c",
+        input=CONVERSATION[:2],
+        history=CONVERSATION[:2],
+    )
+    with in_step("judge", store=store) as context:
+        new_since_last_report(context, excerpt(generated))
+    with in_step("judge", store=store) as context:
+        cut = new_since_last_report(
+            context, excerpt(replace(tool_step(None, CONVERSATION), conversation="c"))
+        )
+    assert texts(cut.history) == ["reply 1", "result a", "reply 2"]
+
+
+def test_an_excerpt_of_one_stage_is_an_excerpt_of_a_step() -> None:
+    def step_of(e: Excerpt[Step]) -> Step:
+        return e.step
+
+    assert step_of(excerpt(windowed())) == windowed()
 
 
 @pytest.mark.parametrize(
@@ -215,7 +263,11 @@ def test_new_since_last_report_shows_messages_without_ids() -> None:
             ["HISTORY"],
             ["cmd: ls", "out.txt"],
         ),
-        (excerpt(before_generate_step()), ["HISTORY", "INPUT"], ["go"]),
+        (
+            excerpt(replace(before_generate_step(), input=GO, history=GO)),
+            ["HISTORY", "INPUT"],
+            ["go"],
+        ),
         (excerpt(after_generate_step()), [], ["ASSISTANT:\ndone"]),
         (
             excerpt(
@@ -237,6 +289,16 @@ async def test_step_as_str_renders_each_kept_part_in_a_block(
     assert rendered.endswith("[END AGENT STEP]")
     step_block = rendered.split("[BEGIN AGENT STEP]")[1]
     assert all(text in step_block for text in shown)
+
+
+@pytest.mark.anyio
+async def test_a_request_ending_in_a_prefill_has_no_step_block() -> None:
+    prefilled = [user("task"), asks("prefill")]
+    rendered = await step_as_str(
+        excerpt(replace(before_generate_step(), input=prefilled, history=prefilled))
+    )
+    assert "[BEGIN AGENT STEP]" not in rendered
+    assert "prefill" in rendered.split("[BEGIN INPUT]")[1]
 
 
 @pytest.mark.anyio
