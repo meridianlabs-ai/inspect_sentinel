@@ -149,6 +149,7 @@ class BeforeGenerate:
     conversation: str           # links this agent's steps across compactions
     input: list[ChatMessage]    # exactly what the model is sent
     history: list[ChatMessage] | None  # the scaffold's full conversation, pre-compaction turns included; None when the host cannot know it
+    sent: list[ChatMessage] | None = field(default=None, kw_only=True)  # every message this agent instance has sent, in order sent; None when the host cannot produce it
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -161,6 +162,7 @@ class AfterGenerate:
     conversation: str
     input: list[ChatMessage]    # exactly what the model was sent
     history: list[ChatMessage] | None
+    sent: list[ChatMessage] | None = field(default=None, kw_only=True)
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -176,6 +178,7 @@ class BeforeToolCall:
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage] | None  # the scaffold's full conversation; None when the host cannot know it
+    sent: list[ChatMessage] | None = field(default=None, kw_only=True)
     escalations: tuple[Reported[Decision], ...] = ()
     tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
 
@@ -190,6 +193,7 @@ class AfterToolCall:
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage] | None
+    sent: list[ChatMessage] | None = field(default=None, kw_only=True)
     escalations: tuple[Reported[Decision], ...] = ()
     tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
     truncated: Truncation | Literal[False] | None = None  # the host's cut; False: not cut; None: can't tell
@@ -210,6 +214,8 @@ Everything in `step` except `conversation`, `truncated` and `escalations` was wr
 `escalations` is filled only inside a `sequential()`: when an earlier link returns `escalate`, its report is handed to the next link here, so a human at the end sees who is asking and why. It is empty everywhere else. The reports are written by protocols, but their explanations may quote agent text, so label them as prior verdicts if you render them into a prompt.
 
 `input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. At the tool stages `input` is `None` when no model call produced the call or the event that recorded it is no longer available (inspect_ai finds it through the transcript's bounded-memory history); it is never approximated from `history`. `history` is `None` when the host cannot know the scaffold's list: a proxy, which sees only the request; a replay from a log that cannot establish the list at that step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`. A monitor that reads it checks for `None` and says the history is unavailable rather than judging an empty list. The tool stages also carry that request's `tools`, `None` exactly when `input` is, and `AfterToolCall.truncated` is the host's cut to the result as `ToolEvent.truncated` records it: a `Truncation` (original size and limit, in bytes) for a cut, `False` for none, `None` when the host cannot tell (proxy, replay from messages). Monitors read it rather than the forgeable "output was too long" notice in `result`; a sandbox output-limit or timeout cut is reported by `result.error` instead. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
+
+`sent` is every message this agent instance has sent to the model so far, in the order sent: the inputs of its model calls taken together, each message once where it was first sent, so the opening prompts as the model saw them come first and turns a compaction dropped stay. Use it, not `store_as()` state accumulated from `input`, for "what has this agent been told". A message sent again changed appears again as its new version; a message the host rebuilds with a fresh id each call (a configured system message) is not repeated while it is unchanged at the same index. Outputs appear once a later call sends them back, so at `BeforeGenerate` it does not include `input` yet. Only the instance's agent turns count: not a sub-agent's, a parallel agent's, a compaction summary's or a monitor's. A model call a scaffold makes inside its agent loop does count (ControlArena's own monitor, for example); a scaffold keeps one out by running it through `inspect_ai.agent.run()`, as an agent with its own conversation. It is filled for every monitor and protocol while a sentinel runs, and `None` when the host cannot produce it: a proxy, or a replay from a log (not yet recorded). See `sentinel.md`, "The history as sent".
 
 `BeforeToolCall` and `AfterToolCall` are the `Approver` and `Reviewer` payloads with the same fields. `view` and `output` are optional under a proxy, which has no registered tool definitions to render a view from, and `history` is `None` there, since a proxy sees only the request.
 
@@ -494,12 +500,11 @@ There is no `monitor_store_as()` or `monitor_host()` global. Helpers take what t
 
 ### Effects
 
-`context.host` is how a monitor reaches the outside world portably. Today that is inference (`generate`) and asking a person (`ask_human`), plus one read only the host can answer, what the agent has sent (`sent`); outbound JSON through named endpoints (`fetch`) and keyed storage are planned, and `sentinel-deployment.md` defines them. The runner records through a separate `Recorder`. In-process these are ordinary implementations; under a proxy they cross the host boundary. Until `fetch` lands, a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, if it is declared `portable=False`, at the cost of portability to a proxy.
+`context.host` is how a monitor reaches the outside world portably. Today that is inference (`generate`) and asking a person (`ask_human`); outbound JSON through named endpoints (`fetch`) and keyed storage are planned, and `sentinel-deployment.md` defines them. The runner records through a separate `Recorder`. In-process these are ordinary implementations; under a proxy they cross the host boundary. Until `fetch` lands, a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, if it is declared `portable=False`, at the cost of portability to a proxy.
 
 Rules:
 
 - **Call `context.host.generate()` for inference, never `get_model()`.** It takes a prompt string or a message list, with optional `model` (a model name, e.g. `openai/gpt-4o-mini`), `role` (a model role, e.g. `trusted`), `tools`, `tool_choice` and `config`, and returns a `ModelOutput`. A configured role wins, then `model`; with neither, the role is `monitor`. In an eval an unconfigured role with no `model` falls back to the agent's model with a warning, once per process for each role, naming the role to set. A `Model` instance is not accepted; put a configured client in `model_roles`. It records monitor inference separately from the agent's: a host labels inference with the role it resolved, and in inspect_ai a call naming only a `model` is labelled with the role `sentinel`, so all sentinel inference is separable from the agent's in `role_usage`. The `portable=True` check bans `get_model()`.
-- **Read what the agent has sent with `await context.host.sent(step)`**, not by accumulating `step.input` in the store. It returns every message the step's agent instance has sent to the model, in the order sent: the inputs of its model calls taken together, each message once where it was first sent, so the opening prompts as the model saw them come first and turns a compaction dropped stay. A message sent again changed appears again as its new version; a message the host rebuilds with a fresh id each call (a configured system message) is not repeated while it is unchanged at the same index. Outputs appear once a later call sends them back, so at `BeforeGenerate` the list does not include `step.input` yet. Only the instance's agent turns count: not a sub-agent's, a parallel agent's, a compaction summary's or a monitor's; a model call a scaffold makes inside its agent loop does count. It is `None`, never partial, when the host cannot produce the whole list (a proxy; an earlier call's record gone), and not yet available in replay. See `sentinel.md`, "The history as sent".
 - **Expose `model` and `role` on an LLM monitor's factory**, both defaulting to None, and pass them through, so a task can point it at another role or model without editing it.
 - **Monitor inference does not count toward the agent's token and turn limits.** Those two are suspended, as approvers' are via `suspend_token_limit()` and `suspend_turn_limit()`; cost and working-time limits still apply, so a monitor's model call can end the sample (see `pr-series.md`, "Failure policy"). Monitor usage is separable from agent usage in `ModelUsage`.
 - **Treat model completions, tool arguments, and tool output as untrusted.** The monitor's output decides whether the sample stops, so a successful injection against the monitor can stop a sample or prevent it from being stopped. `monitor_prompt` delivers evidence in a delimited, clearly-untrusted envelope by default; see [View](#view).
@@ -1133,7 +1138,7 @@ What each stage sees:
 Rules for portable monitors:
 
 - **Prefer `BeforeGenerate`, `AfterGenerate`, and `BeforeToolCall`.** `AfterToolCall` should decline to fire under a proxy or bridged agent and say why, rather than run on lossy data.
-- **Expect `view`, `output` and `history` to be absent, and `context.host.sent()` to return `None`.** A proxy has wire types, not registered tool definitions, and sees only the request, not the scaffold's list or earlier requests. The [rendering helpers](#view) name an absent surface in the prompt rather than omitting it.
+- **Expect `view`, `output`, `history` and `sent` to be absent.** A proxy has wire types, not registered tool definitions, and sees only the request, not the scaffold's list or earlier requests. The [rendering helpers](#view) name an absent surface in the prompt rather than omitting it.
 - **Expect `terminate` to be best-effort.** In an eval it is total and synchronous. Under a proxy it is an error response plus an out-of-band `host.terminate()`, the same shape as `bridge.request_terminate()`, and the host may not support it. There is no separate set of portable actions. Whether `terminate` works is a property of the host.
 - **Take state from `context.store_as`,** never from an ambient accessor. A proxy has nothing to bind an ambient accessor to.
 - **Keep the module's imports light.** Bundling is per-module because the import closure is a module property. One `import requests` at the top of a file disqualifies every monitor in it. A bundler finds monitors with `ast` alone, which works because monitors are top-level functions.

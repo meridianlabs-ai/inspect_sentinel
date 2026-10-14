@@ -28,7 +28,7 @@ Touches modules that sentinel, Scout and inspect_ai all import. Agree up front w
 
 Lives in inspect_ai's model path and sentinel's step types. Best after inspect_core, or at least not overlapping its moves in `model/`.
 
-AISI requirements that depend on it ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)): R1, `escalate` and `human()` at `AfterGenerate` (built, sentinel #42 and #89); R5 at `AfterGenerate` (built, in `threshold`); R2 and R3, the producing model call's input and tools at the tool stages (built: found in the transcript, not a separate record; [pr-series.md](pr-series.md), Deferred); R10, the history as each agent instance sent it (built live as `Host.sent`, [pr-series.md](pr-series.md), "The history as sent"; replay with workstream 10).
+AISI requirements that depend on it ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)): R1, `escalate` and `human()` at `AfterGenerate` (built, sentinel #42 and #89); R5 at `AfterGenerate` (built, in `threshold`); R2 and R3, the producing model call's input and tools at the tool stages (built: found in the transcript, not a separate record; [pr-series.md](pr-series.md), Deferred); R10, the history as each agent instance sent it (built live as `step.sent`, [pr-series.md](pr-series.md), "The history as sent"; replay with workstream 10).
 
 ## 3. LLM affordances for monitors
 

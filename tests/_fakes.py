@@ -40,9 +40,6 @@ class FakeHost:
         self.asked.append(Asked(step, tuple(choices)))
         return self.answers.pop(0)
 
-    async def sent(self, step: Step) -> list[ChatMessage] | None:
-        return None
-
     async def generate(
         self,
         input: str | list[ChatMessage],

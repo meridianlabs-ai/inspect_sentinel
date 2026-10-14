@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, TypeAlias
 
 from inspect_ai.model import ChatMessage, ChatMessageTool, GenerateConfig, ModelOutput
@@ -27,6 +27,9 @@ class BeforeGenerate:
 
     history: list[ChatMessage] | None
     """The caller's message list: the conversation as the caller passed it to the model. For a scaffold that compacts its conversation this is the compacted conversation. `None` when the host cannot know the caller's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the caller's list at each step; or at a step with no caller conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the caller's own list; monitors must not mutate it."""
+
+    sent: list[ChatMessage] | None = field(default=None, kw_only=True)
+    """Every message this agent instance has sent to the model so far, in the order sent: the inputs of all its model calls taken together, each message once, where it was first sent. The opening prompts as the model saw them come first, a message the scaffold rewrote before sending shows as it was sent, and turns a compaction later dropped are still here. A message sent again changed (the same id with different content) appears again as its new version, where that version was sent; a message the host rebuilds with a fresh id for every call, such as a configured system message, is not repeated while it is unchanged and at the same position as in the call before. inspect_ai sends an earlier assistant turn without its reasoning under `reasoning_history="last"`, so such a turn appears once with its reasoning and once without. A message the scaffold changes in place after sending it shows its current content. The model's outputs appear once a later call sends them back. It does not yet include `input`, which is about to be sent. Only this agent instance's model calls count: a sub-agent or a parallel agent has its own conversation, and a compaction summary, a scorer or a monitor is not an agent turn. A model call the scaffold makes itself inside its agent loop does count; a scaffold keeps one out by running it as an agent of its own, through `inspect_ai.agent.run()`. Sub-agents inside one bridged CLI share its conversation. `None` when the host cannot produce it: under a proxy, which sees one request at a time, or in a replay from a log, which does not yet record which model calls were agent turns. In-process Inspect always provides it. The messages are the host's own, mostly shared with the scaffold's list; monitors must not mutate them."""
 
     tools: list[ToolInfo]
     """The tools the model is offered, after `tool_choice` filtering. In-process these are the host's own objects; monitors must not mutate them."""
@@ -59,6 +62,9 @@ class AfterGenerate:
 
     history: list[ChatMessage] | None
     """The caller's message list, or `None`, as for `BeforeGenerate`; monitors must not mutate it."""
+
+    sent: list[ChatMessage] | None = field(default=None, kw_only=True)
+    """Every message this agent instance has sent to the model so far, in the order sent, or `None` when the host cannot produce it, as for `BeforeGenerate.sent`. It includes `input`; `output` is not in it yet. Monitors must not mutate them."""
 
     tools: list[ToolInfo]
     """The tools the model was offered; monitors must not mutate them."""
@@ -109,6 +115,9 @@ class BeforeToolCall:
     history: list[ChatMessage] | None
     """The scaffold's message list: its full conversation, pre-compaction turns included. `None` when the host cannot know the scaffold's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or at a step with no scaffold conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the scaffold's own list; monitors must not mutate it."""
 
+    sent: list[ChatMessage] | None = field(default=None, kw_only=True)
+    """Every message this agent instance has sent to the model so far, in the order sent: the inputs of all its model calls taken together, each message once, where it was first sent. The opening prompts as the model saw them come first, a message the scaffold rewrote before sending shows as it was sent, and turns a compaction later dropped are still here. A message sent again changed (the same id with different content) appears again as its new version, where that version was sent; a message the host rebuilds with a fresh id for every call, such as a configured system message, is not repeated while it is unchanged and at the same position as in the call before. inspect_ai sends an earlier assistant turn without its reasoning under `reasoning_history="last"`, so such a turn appears once with its reasoning and once without. A message the scaffold changes in place after sending it shows its current content. The model's outputs appear once a later call sends them back. It includes the input of the call that produced this tool call. Only this agent instance's model calls count: a sub-agent or a parallel agent has its own conversation, and a compaction summary, a scorer or a monitor is not an agent turn. A model call the scaffold makes itself inside its agent loop does count; a scaffold keeps one out by running it as an agent of its own, through `inspect_ai.agent.run()`. Sub-agents inside one bridged CLI share its conversation. `None` when the host cannot produce it: under a proxy, which sees one request at a time, or in a replay from a log, which does not yet record which model calls were agent turns. In-process Inspect always provides it. The messages are the host's own, mostly shared with the scaffold's list; monitors must not mutate them."""
+
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
@@ -143,6 +152,9 @@ class AfterToolCall:
 
     history: list[ChatMessage] | None
     """The scaffold's message list: its full conversation, pre-compaction turns included. `None` when the host cannot know the scaffold's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or at a step with no scaffold conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the scaffold's own list; monitors must not mutate it."""
+
+    sent: list[ChatMessage] | None = field(default=None, kw_only=True)
+    """Every message this agent instance has sent to the model so far, in the order sent, or `None` when the host cannot produce it, as for `BeforeToolCall.sent`. It includes the input of the call that produced this tool call; `result` is not in it yet. Monitors must not mutate them."""
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""

@@ -20,5 +20,4 @@ How a monitor or protocol calls a model. Covers `context.host.generate()` and wh
 - Structured output with `ResponseSchema`
 - Usage: monitor calls recorded separately and not charged to the agent's limits
 - Treating agent text as untrusted in prompts
-- What the agent has sent: `context.host.sent(step)`, the agent instance's messages in the order sent, and `None` where the host cannot produce them
 - Other effects: `fetch` (planned), and calling inspect_ai APIs directly at the cost of portability

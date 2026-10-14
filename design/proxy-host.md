@@ -35,7 +35,7 @@ Buffering first, since it gives a complete `ModelOutput`; streaming, which means
 
 ## 3. A proxy implementation of the host interface
 
-The host interface after sentinel #47 is `HostContext(context, recorder, store)` passed to `run_sentinel`, with `Host.generate`, `Host.ask_human` and `Host.sent` on `context.host`. A proxy host provides:
+The host interface after sentinel #47 is `HostContext(context, recorder, store)` passed to `run_sentinel`, with `Host.generate` and `Host.ask_human` on `context.host`. A proxy host provides:
 
 - **`Context`**: `path` and `host` as in an eval, and `eval=None`: a proxy request is not an Inspect eval and has no task, sample or epoch, so the eval's fields (`context.eval.task`, `sample_id`, `sample_input`, `metadata`, `task_description`) are absent rather than filled with stand-ins. Decided by the maintainer on 2026-10-05. Whether a proxy needs its own equivalents (a deployment id, a conversation key, a charter from deployment config) is for this spike to find out; the conversation key backs the store, below.
 - **`Host.generate`**: routes to models with a recursion guard, so a monitor's own model call does not pass back through the proxy it runs in (deployment doc, open question 5). `role` is a model role and `model` a model name; with neither, the role is `monitor` (deployment doc, "The host ABI"). The proxy maps each role to an endpoint and credentials from deployment config, and applies a policy to model names: allow them, map them to configured endpoints, or refuse them. Two decisions to make: whether an unconfigured role is an error in a proxy (there is no agent model to fall back to), and whether arbitrary model names are allowed.
@@ -43,7 +43,7 @@ The host interface after sentinel #47 is `HostContext(context, recorder, store)`
 - **`Recorder`**: `SentinelEvent`s to a sink (structured logs, OpenTelemetry, or files a viewer or workstream 12 can read).
 - **The store**: a keyed store, keyed by a session header verified against a fingerprint of the conversation's start (deployment doc, "Making the key trustworthy"), behind `store_as()`.
 - **`step.history`** is `None`: a proxy sees only the request, never the scaffold's list. The keyed store's accumulation of what each request added is an as-sent view across compaction (cf. AISI R10), not `history`.
-- **`Host.sent`** returns `None` at first: a proxy sees one request at a time. It can later answer from that keyed accumulation, with the same duplicate rule as inspect_ai (`sentinel.md`, "The history as sent"), if the session key is trustworthy enough to scope it to one agent.
+- **`step.sent`** is `None` at first: a proxy sees one request at a time. It can later be filled from that keyed accumulation, with the same duplicate rule as inspect_ai (`sentinel.md`, "The history as sent"), if the session key is trustworthy enough to scope it to one agent.
 - **Files**: read-only access to files bundled with the monitor (a read-only preopened bundle data directory, or `importlib.resources`) and nothing else by default; arbitrary host paths are never granted. State goes in the store, since a write is per instance and lost. Decided by the maintainer on 2026-10-06 (deployment doc, "What the guest can reach").
 - **New host methods**: `fetch` through named endpoints (designed in the deployment doc, not built), and possibly an out-of-band `terminate()`.
 

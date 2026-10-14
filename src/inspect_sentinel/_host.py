@@ -35,7 +35,7 @@ class HumanAnswer:
 class Host(TypingProtocol):
     """What a monitor or protocol may do to the outside world. Author-facing.
 
-    It also answers what the agent has sent to its model (`sent`), which only the host knows. Inference and asking a person are the only effects for now. Outbound HTTP through named endpoints (`fetch`) is planned. Meanwhile a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()`, if it is declared `portable=False`.
+    Inference and asking a person are the only effects for now. Outbound HTTP through named endpoints (`fetch`) is planned. Meanwhile a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()`, if it is declared `portable=False`.
     """
 
     async def generate(
@@ -70,20 +70,6 @@ class Host(TypingProtocol):
         Args:
             step: The step to decide about.
             choices: What the person may pick, from `approve`, `reject`, `terminate` and `modify`, in the order to present them.
-        """
-        ...
-
-    async def sent(self, step: Step) -> list[ChatMessage] | None:
-        """Every message the step's agent instance has sent to the model so far, in the order sent, or `None` when the host cannot produce them.
-
-        `step.history` is the caller's list, which can differ from what the model was sent: a scaffold can rewrite messages before sending them, the model adds a configured system message, and a compaction drops turns from later requests. `step.input` is what one call was sent. This is the inputs of every model call of the agent instance that `step.conversation` names, taken together: each message once, where it was first sent, so the opening prompts come first and turns a compaction later dropped are still there. A message sent again changed (the same id with different content) appears again as its new version, where the changed version was sent; so does a message the host itself sends in a changed form, such as an assistant turn inspect_ai sends without its reasoning once a later turn follows (`reasoning_history="last"`). A message the host rebuilds with a fresh id for every call, such as a configured system message, is not repeated while it is unchanged and in the same position as in the call before. The model's outputs appear once a later call sends them back: the current turn's output is `AfterGenerate.output`, and at `BeforeGenerate` the list does not yet include `step.input`.
-
-        Only the agent instance's own model calls count. A sub-agent or a parallel agent has its own conversation, and model calls that are not agent turns (a compaction summary, a scorer, a monitor) are left out. A model call the scaffold makes itself inside its agent loop counts as one of its turns.
-
-        `None` when the host cannot produce the whole list, for example under a proxy, which sees only the current request, or when the record of an earlier call is no longer available. It is never a partial list. In-process the messages are the host's own; monitors must not mutate them.
-
-        Args:
-            step: The step whose agent instance's messages to return.
         """
         ...
 
