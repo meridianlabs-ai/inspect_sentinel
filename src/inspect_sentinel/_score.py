@@ -102,7 +102,7 @@ async def score_step(
     """
     # Scout imports duckdb and pandas, so load it only when a monitor scores;
     # jinja2 comes with it
-    from inspect_scout import message_numbering
+    from inspect_scout import MessagesPreprocessor, message_numbering
     from jinja2 import Environment, StrictUndefined, meta
 
     if retry_refusals < 0:
@@ -168,7 +168,10 @@ async def score_step(
             properties=schema.properties or {}, required=schema.required or []
         ),
     )
-    numbered, extract_refs = message_numbering()
+    # the excerpt decides what is left out, system messages included
+    numbered, extract_refs = message_numbering(
+        MessagesPreprocessor(exclude_system=False)
+    )
     values = {
         "instructions": (instructions or DEFAULT_INSTRUCTIONS).strip(),
         "policy": f"[BEGIN POLICY]\n{policy.strip()}\n[END POLICY]" if policy else "",

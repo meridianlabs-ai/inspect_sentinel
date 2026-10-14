@@ -5,16 +5,20 @@ from dataclasses import replace
 import anyio
 import pytest
 from inspect_ai.model import (
+    ChatCompletionChoice,
     ChatMessage,
     ChatMessageAssistant,
     ChatMessageSystem,
     ChatMessageTool,
     ChatMessageUser,
+    ContentReasoning,
+    ContentText,
+    ContentToolUse,
     ModelOutput,
 )
 from inspect_ai.tool import ToolCall
 from inspect_ai.util import Store
-from inspect_scout import message_numbering
+from inspect_scout import MessagesPreprocessor, message_numbering
 
 from inspect_sentinel import (
     AfterGenerate,
@@ -26,6 +30,9 @@ from inspect_sentinel import (
     decide_final,
     drop_history,
     drop_input,
+    drop_reasoning,
+    drop_system,
+    drop_tool_usage,
     last_messages,
     last_turns,
     new_since_last_report,
@@ -454,6 +461,80 @@ async def test_a_request_ending_in_a_prefill_has_no_step_block() -> None:
     )
     assert "[BEGIN AGENT STEP]" not in rendered
     assert "prefill" in rendered.split("[BEGIN INPUT]")[1]
+
+
+def thinks(text: str, id: str) -> ChatMessageAssistant:
+    return ChatMessageAssistant(
+        id=id,
+        content=[
+            ContentReasoning(reasoning=f"thinking about {text}"),
+            ContentToolUse(
+                tool_type="web_search",
+                id="w",
+                name="search",
+                arguments="{}",
+                result=f"searched {text}",
+            ),
+            ContentText(text=text),
+        ],
+    )
+
+
+def thoughtful() -> Step:
+    # reasoning and a provider's tool use in history and in the reply itself
+    conversation: list[ChatMessage] = [
+        ChatMessageSystem(content="be helpful", id="sys"),
+        user("task"),
+        asks("first"),
+        user("more"),
+        thinks("earlier", "earlier"),
+        user("go on"),
+    ]
+    return replace(
+        after_generate_step(),
+        input=conversation,
+        history=conversation,
+        output=ModelOutput(
+            model="m",
+            choices=[ChatCompletionChoice(message=thinks("reply", "reply"))],
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "drop, gone, kept",
+    [
+        (None, [], ["be helpful", "thinking about", "searched"]),
+        (drop_system, ["be helpful"], ["thinking about", "searched"]),
+        (drop_reasoning, ["thinking about"], ["be helpful", "searched"]),
+        (drop_tool_usage, ["searched"], ["be helpful", "thinking about"]),
+    ],
+)
+@pytest.mark.anyio
+async def test_drops_leave_content_out_of_every_block(
+    drop: Callable[[Step], Excerpt[Step]] | None, gone: list[str], kept: list[str]
+) -> None:
+    step = thoughtful()
+    rendered = await step_as_str(drop(step) if drop else step)
+    step_block = rendered.split("[BEGIN AGENT STEP]")[1]
+    assert not any(text in rendered for text in gone)
+    assert all(text in rendered for text in kept)
+    # the reply's own reasoning goes too, its text stays
+    assert ("thinking about reply" in step_block) == (drop is not drop_reasoning)
+    assert "reply" in step_block
+
+
+@pytest.mark.anyio
+async def test_drops_compose_with_windows_and_keep_cites() -> None:
+    numbered, extract_refs = message_numbering(
+        MessagesPreprocessor(exclude_system=False)
+    )
+    rendered = await step_as_str(
+        drop_reasoning(drop_system(last_turns(thoughtful(), 1))),
+        messages_as_str=numbered,
+    )
+    assert "be helpful" not in rendered and "thinking about" not in rendered
+    assert [r.id for r in extract_refs("see [M1]")] == ["earlier"]
 
 
 @pytest.mark.anyio

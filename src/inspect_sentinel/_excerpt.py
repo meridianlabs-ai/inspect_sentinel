@@ -8,6 +8,7 @@
 #       drop_history(last_turns(step, 6))               # the last 6 turns the model was sent
 #       drop_input(step)                                # the scaffold's conversation only
 #       drop_input(drop_history(step))                  # the step alone
+#       drop_reasoning(drop_system(last_turns(step, 6)))  # without the system prompt or reasoning
 #       new_since_last_report(context, step)            # only what this monitor has not seen
 #       last_turns(new_since_last_report(context, step), 6)  # that, at most 6 turns
 #
@@ -21,7 +22,12 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Generic, Literal, TypeAlias, TypeVar
 
-from inspect_ai.model import ChatMessage, ChatMessageAssistant
+from inspect_ai.model import (
+    ChatMessage,
+    ChatMessageAssistant,
+    ContentReasoning,
+    ContentToolUse,
+)
 from inspect_ai.tool import ToolCall
 from inspect_ai.util import StoreModel
 from pydantic import Field
@@ -34,6 +40,8 @@ S = TypeVar("S", bound=Step)
 
 # an excerpt is frozen, so an Excerpt[BeforeToolCall] is an Excerpt[Step]
 S_co = TypeVar("S_co", bound=Step, covariant=True)
+
+Exclusion: TypeAlias = Literal["system", "reasoning", "tool_usage"]
 
 MessagesAsStr: TypeAlias = Callable[[list[ChatMessage]], Awaitable[str]]
 
@@ -56,6 +64,9 @@ class Excerpt(Generic[S_co]):
     history: list[ChatMessage]
     """The part of `step.history` to show."""
 
+    exclude: frozenset[Exclusion] = frozenset()
+    """What `step_as_str()` leaves out of every block, the step's own part included: `system` messages, `reasoning`, and `tool_usage` (a provider's own tool use, such as web search, recorded in a message). Set by `drop_system()`, `drop_reasoning()` and `drop_tool_usage()`."""
+
 
 def drop_input(step: S | Excerpt[S]) -> Excerpt[S]:
     """`step`, excerpted, without the model's input: an empty `input`, or None where the step had none, which `step_as_str()` still names as unknown.
@@ -74,6 +85,33 @@ def drop_history(step: S | Excerpt[S]) -> Excerpt[S]:
         step: A step, or an excerpt to narrow further.
     """
     return replace(_excerpt(step), history=[])
+
+
+def drop_system(step: S | Excerpt[S]) -> Excerpt[S]:
+    """`step`, excerpted, with system messages left out when it is rendered.
+
+    Args:
+        step: A step, or an excerpt to narrow further.
+    """
+    return _leave_out(step, "system")
+
+
+def drop_reasoning(step: S | Excerpt[S]) -> Excerpt[S]:
+    """`step`, excerpted, with the model's reasoning left out when it is rendered, in the step's own reply too.
+
+    Args:
+        step: A step, or an excerpt to narrow further.
+    """
+    return _leave_out(step, "reasoning")
+
+
+def drop_tool_usage(step: S | Excerpt[S]) -> Excerpt[S]:
+    """`step`, excerpted, with a provider's own tool use (such as web search, recorded in a message) left out when it is rendered.
+
+    Args:
+        step: A step, or an excerpt to narrow further.
+    """
+    return _leave_out(step, "tool_usage")
 
 
 def last_turns(step: S | Excerpt[S], n: int) -> Excerpt[S]:
@@ -190,17 +228,25 @@ async def step_as_str(
 
     Args:
         step: A step, rendered whole, or an excerpt of one.
-        messages_as_str: Renders a list of messages; pass the first function of Scout's `message_numbering()` to number them so a model's answer can cite them. Scout's `messages_as_str` by default.
+        messages_as_str: Renders a list of messages; pass the first function of Scout's `message_numbering()` to number them so a model's answer can cite them (made with `MessagesPreprocessor(exclude_system=False)`, so that `drop_system()` decides whether system messages show). By default Scout's `messages_as_str`, keeping system messages.
     """
     # Scout imports duckdb and pandas, so load it only when a monitor renders
+    from inspect_scout import MessagesPreprocessor
     from inspect_scout import messages_as_str as scout_messages_as_str
 
+    async def render_all(messages: list[ChatMessage]) -> str:
+        # Scout leaves out system messages by default; the excerpt decides here
+        return await scout_messages_as_str(
+            messages, preprocessor=MessagesPreprocessor(exclude_system=False)
+        )
+
     shown = _excerpt(step)
-    render = messages_as_str or scout_messages_as_str
+    render = messages_as_str or render_all
 
     async def text(messages: list[ChatMessage]) -> str:
+        kept = _without(messages, shown.exclude)
         # a renderer may write an empty list as something, such as JSON's []
-        return await render(messages) if messages else ""
+        return await render(kept) if kept else ""
 
     blocks = [
         ("HISTORY", await text(shown.history)),
@@ -251,6 +297,36 @@ def _excerpt(step: S | Excerpt[S]) -> Excerpt[S]:
             step.history[: _last(step.history, lambda m: m.id not in new) + 1],
         )
     return Excerpt(step, step.input, step.history)
+
+
+def _leave_out(step: S | Excerpt[S], exclusion: Exclusion) -> Excerpt[S]:
+    shown = _excerpt(step)
+    return replace(shown, exclude=shown.exclude | {exclusion})
+
+
+def _without(
+    messages: list[ChatMessage], exclude: frozenset[Exclusion]
+) -> list[ChatMessage]:
+    removed = tuple(
+        kind
+        for name, kind in (
+            ("reasoning", ContentReasoning),
+            ("tool_usage", ContentToolUse),
+        )
+        if name in exclude
+    )
+    # a copy keeps the message's id, so a cite of it still resolves
+    return [
+        message
+        if isinstance(message.content, str) or not removed
+        else message.model_copy(
+            update={
+                "content": [c for c in message.content if not isinstance(c, removed)]
+            }
+        )
+        for message in messages
+        if not ("system" in exclude and message.role == "system")
+    ]
 
 
 def _window(
