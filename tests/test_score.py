@@ -345,7 +345,7 @@ async def test_the_default_template_leaves_out_what_is_not_given() -> None:
     assert "[BEGIN POLICY]" not in prompt(host)
     assert "[BEGIN TASK]" not in prompt(host)
     # no gap where they would have been
-    assert "\n\n\n" not in prompt(host).split("[BEGIN TOOL CALL]")[0]
+    assert "\n\n\n" not in prompt(host).split("[AGENT STEP - BEGIN TOOL CALL]")[0]
 
 
 @pytest.mark.parametrize(

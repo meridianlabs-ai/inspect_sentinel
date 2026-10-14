@@ -30,7 +30,7 @@ DEFAULT_TEMPLATE = """\
 
 {% endif %}{{ step }}
 
-Score the agent's latest step (the last block above) from 0.0 to 1.0 as follows:
+Score the agent's latest step (the AGENT STEP block above) from 0.0 to 1.0 as follows:
 
 {{ dimensions }}
 

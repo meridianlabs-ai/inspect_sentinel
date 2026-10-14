@@ -410,7 +410,7 @@ async def test_step_as_str_leaves_out_empty_parts_whatever_the_renderer() -> Non
     step = replace(before_generate_step(), input=prefilled, history=prefilled)
     rendered = await step_as_str(drop_history(step), messages_as_str=as_json)
     assert "[BEGIN HISTORY]" not in rendered
-    assert "[BEGIN MODEL REQUEST]" not in rendered
+    assert "[AGENT STEP - BEGIN MODEL REQUEST]" not in rendered
 
 
 def test_new_since_last_report_outside_the_runner_raises() -> None:
@@ -455,8 +455,8 @@ async def test_step_as_str_renders_each_kept_part_in_a_block(
     rendered = await step_as_str(cut)
     assert not any(f"[BEGIN {name}]" in rendered for name in absent)
     # the step's own part comes last, in a block named for its stage
-    assert rendered.endswith(f"[END {block}]")
-    step_block = rendered.split(f"[BEGIN {block}]")[1]
+    assert rendered.endswith(f"[AGENT STEP - END {block}]")
+    step_block = rendered.split(f"[AGENT STEP - BEGIN {block}]")[1]
     assert all(text in step_block for text in shown)
 
 
@@ -466,7 +466,7 @@ async def test_a_request_ending_in_a_prefill_has_no_step_block() -> None:
     rendered = await step_as_str(
         _excerpt(replace(before_generate_step(), input=prefilled, history=prefilled))
     )
-    assert "[BEGIN MODEL REQUEST]" not in rendered
+    assert "[AGENT STEP - BEGIN MODEL REQUEST]" not in rendered
     assert "prefill" in rendered.split("[BEGIN INPUT]")[1]
 
 
@@ -524,7 +524,7 @@ async def test_drops_leave_content_out_of_every_block(
 ) -> None:
     step = thoughtful()
     rendered = await step_as_str(drop(step) if drop else step)
-    step_block = rendered.split("[BEGIN MODEL REPLY]")[1]
+    step_block = rendered.split("[AGENT STEP - BEGIN MODEL REPLY]")[1]
     assert not any(text in rendered for text in gone)
     assert all(text in rendered for text in kept)
     # the reply's own reasoning goes too, its text stays
@@ -694,7 +694,12 @@ async def test_blocks_come_input_then_history_then_the_step_numbered_in_that_ord
     )
     rendered = await step_as_str(step, messages_as_str=numbered)
     starts = [
-        rendered.index(f"[BEGIN {name}]") for name in ("INPUT", "HISTORY", "TOOL CALL")
+        rendered.index(marker)
+        for marker in (
+            "[BEGIN INPUT]",
+            "[BEGIN HISTORY]",
+            "[AGENT STEP - BEGIN TOOL CALL]",
+        )
     ]
     assert starts == sorted(starts)
     assert [r.id for r in extract_refs("see [M1]")] == ["summary"]
@@ -713,7 +718,7 @@ async def test_step_as_str_says_when_the_model_input_is_unknown() -> None:
 async def test_numbered_citations_resolve_to_the_agents_messages() -> None:
     numbered, extract_refs = message_numbering()
     rendered = await step_as_str(_excerpt(parallel_after_b()), messages_as_str=numbered)
-    step_block = rendered.split("[BEGIN TOOL CALL AND RESULT]")[1]
+    step_block = rendered.split("[AGENT STEP - BEGIN TOOL CALL AND RESULT]")[1]
     assert "cmd: b" in step_block and "cmd: a" not in step_block
     # history's task is [M1]; the step's message holding the call is [M2]
     assert [r.id for r in extract_refs("see [M1] and [M2]")] == ["task", "both"]

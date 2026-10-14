@@ -226,7 +226,7 @@ async def step_as_str(
 ) -> str:
     """Render `step`, or an excerpt of it, for a monitor's prompt.
 
-    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it has nothing to show: `INPUT`, `HISTORY`, then the step's own part (see `Excerpt`), in a block named for the stage: `TOOL CALL` before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` (the messages the model is about to answer) before a generate, and `MODEL REPLY` after one. The history is usually the same conversation as the input, so `HISTORY` is shown, whole, only when it holds a message the input does not, such as turns before a compaction; messages are matched by id, counting the ones a merged message was made from. When a tool step has no model input, the `INPUT` block says so, even after `drop_input()`. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
+    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it has nothing to show: `INPUT`, `HISTORY`, then the step's own part (see `Excerpt`), in a block marked `[AGENT STEP - BEGIN ...]` and `[AGENT STEP - END ...]` and named for the stage: `TOOL CALL` before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` (the messages the model is about to answer) before a generate, and `MODEL REPLY` after one. The history is usually the same conversation as the input, so `HISTORY` is shown, whole, only when it holds a message the input does not, such as turns before a compaction; messages are matched by id, counting the ones a merged message was made from. When a tool step has no model input, the `INPUT` block says so, even after `drop_input()`. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
 
     Args:
         step: A step, rendered whole, or an excerpt of one.
@@ -254,6 +254,7 @@ async def step_as_str(
     # rendered in this order, so messages are numbered in it too
     blocks = [
         (
+            "",
             "INPUT",
             "The model input for this call is not available."
             if input is None
@@ -261,14 +262,17 @@ async def step_as_str(
         ),
         # usually the same conversation as the input, so shown only when it
         # holds a message the input does not, such as turns before a compaction
-        ("HISTORY", await text(history) if _adds(history, input or []) else ""),
+        ("", "HISTORY", await text(history) if _adds(history, input or []) else ""),
         (
+            "AGENT STEP - ",
             _step_block(shown.step),
             await text(_without(_step_part(shown.step), shown.exclude)),
         ),
     ]
     return "\n\n".join(
-        f"[BEGIN {name}]\n{text}\n[END {name}]" for name, text in blocks if text
+        f"[{prefix}BEGIN {name}]\n{text}\n[{prefix}END {name}]"
+        for prefix, name, text in blocks
+        if text
     )
 
 
