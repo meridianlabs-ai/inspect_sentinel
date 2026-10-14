@@ -22,9 +22,9 @@ from ._step import Step
 DEFAULT_TEMPLATE = """\
 {{ instructions }}
 
-{{ task }}
-
 {{ policy }}
+
+{{ task }}
 
 {{ step }}
 
