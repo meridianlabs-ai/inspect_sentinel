@@ -132,6 +132,8 @@ Repository: `inspect_ai`. Depends on: nothing. Each can be its own pull request,
 
 - Public OpenAI converters that read a dict as leniently as the SDK does.
 - An Anthropic converter that says so when it meets a block it does not recognise, or a Beta type.
+- Chat Completions converters that read a custom tool call, as the Responses converters do.
+- An Anthropic converter that reads every block of a document whose source is a list of blocks.
 - A public function that writes a message in Anthropic's format.
 - A public function for each provider that turns stream events into a `ModelOutput`.
 - A public way to obtain the running sample's uuid and attempt id before its first model call.
