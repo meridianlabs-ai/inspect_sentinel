@@ -214,6 +214,16 @@ async def test_a_reply_without_a_valid_answer_goes_back_to_the_model(
 
 
 @pytest.mark.anyio
+async def test_an_output_with_no_choices_gets_the_reminder() -> None:
+    host = FakeHost(outputs=[ModelOutput(model="fake", choices=[]), valid()])
+    observation = await Host(host).score(before_tool_call("bash", cmd="ls"), "Safe?")
+    assert observation.suspicion == 0.8
+    [asked, again] = host.inputs
+    assert again[0] == asked[0]
+    assert [(m.role, REMINDER[2] in m.text) for m in again[1:]] == [("user", True)]
+
+
+@pytest.mark.anyio
 async def test_a_valid_answer_among_several_calls_is_used() -> None:
     host = FakeHost(
         outputs=[

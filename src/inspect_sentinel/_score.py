@@ -197,8 +197,10 @@ async def score_step(
             config=config,
             retry_refusals=retry_refusals,
         )
-        replies.append(output.message)
-        calls = output.message.tool_calls or []
+        # an output with no choices counts as a reply with no call
+        reply = output.message if output.choices else None
+        replies.append(reply or ChatMessageAssistant(content=""))
+        calls = (reply.tool_calls or []) if reply else []
         checked = [(call, _check(call, scores_type)) for call in calls]
         valid = next((r for _, r in checked if isinstance(r, BaseModel)), None)
         if valid is not None:
@@ -213,7 +215,7 @@ async def score_step(
         # each call; a reply with no call (a refusal, say) gets a reminder
         messages = [
             *messages,
-            output.message,
+            *([reply] if reply else []),
             *(
                 [
                     ChatMessageTool(
@@ -273,7 +275,7 @@ async def _generate(
             tool_choice="auto",
             config=config,
         )
-        if output.stop_reason != "content_filter":
+        if not output.choices or output.stop_reason != "content_filter":
             return output
     raise RuntimeError(
         f"The monitor model refused {retry_refusals + 1} times (stop reason content_filter)."
