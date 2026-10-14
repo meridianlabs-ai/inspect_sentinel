@@ -4,13 +4,13 @@ Thanks for your interest in contributing. Bug reports, doc fixes, and core chang
 
 ## Development setup
 
-Inspect Sentinel uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, and requires Python 3.10+.
+Inspect Sentinel uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, and requires Python 3.11+.
 
-The development environment pins 3.13 (`.python-version`). CI covers both ends of the supported range: 3.10 proves the floor still works, and 3.14 exercises the newest interpreter. `make check` only ever sees the 3.13 environment, so a construct that is new in 3.11 or later passes locally and fails in CI on 3.10. To reproduce the floor locally:
+The development environment pins 3.13 (`.python-version`). CI covers both ends of the supported range: 3.11 proves the floor still works, and 3.15 exercises the newest interpreter. `make check` only ever sees the 3.13 environment, so a construct that is new in 3.12 or later passes locally and fails in CI on 3.11. To reproduce the floor locally:
 
 ```bash
-uv venv --python 3.10 /tmp/py310 && uv pip install --python /tmp/py310/bin/python -e ".[dev]"
-.venv/bin/pyright --pythonpath /tmp/py310/bin/python
+uv venv --python 3.11 /tmp/py311 && uv pip install --python /tmp/py311/bin/python -e ".[dev]"
+.venv/bin/pyright --pythonpath /tmp/py311/bin/python
 ```
 
 ```bash

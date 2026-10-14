@@ -26,7 +26,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.14"]
+        python-version: ["3.11", "3.15"]
+    env:
+      # .python-version pins the dev interpreter; without this uv uses it
+      # rather than the matrix version
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install uv
@@ -42,7 +46,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.14"]
+        python-version: ["3.11", "3.15"]
+    env:
+      # .python-version pins the dev interpreter; without this uv uses it
+      # rather than the matrix version
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install uv
@@ -58,7 +66,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.14"]
+        python-version: ["3.11", "3.15"]
+    env:
+      # .python-version pins the dev interpreter; without this uv uses it
+      # rather than the matrix version
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install uv
