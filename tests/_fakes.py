@@ -31,6 +31,12 @@ class Asked(NamedTuple):
     choices: tuple[str, ...]
 
 
+class Offered(NamedTuple):
+    tools: list[ToolInfo]
+    tool_choice: ToolChoice | None
+    config: GenerateConfig | None
+
+
 class FakeHost:
     def __init__(
         self,
@@ -44,6 +50,7 @@ class FakeHost:
         self.outputs = list(outputs)
         self.models: list[tuple[str | None, str | None]] = []
         self.inputs: list[list[ChatMessage]] = []
+        self.offered: list[Offered] = []
 
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
         self.asked.append(Asked(step, tuple(choices)))
@@ -60,6 +67,7 @@ class FakeHost:
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
         self.models.append((model, role))
+        self.offered.append(Offered(tools or [], tool_choice, config))
         self.inputs.append(
             [ChatMessageUser(content=input)] if isinstance(input, str) else input
         )

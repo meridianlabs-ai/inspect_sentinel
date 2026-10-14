@@ -6,6 +6,7 @@ from typing import Any
 
 from inspect_ai.model import (
     ChatMessage,
+    ChatMessageAssistant,
     ChatMessageTool,
     ChatMessageUser,
     GenerateConfig,
@@ -155,6 +156,7 @@ async def score_step(
         GenerateConfig(parallel_tool_calls=False)
     )
 
+    replies: list[ChatMessageAssistant] = []
     for _ in range(_ATTEMPTS):
         output = await host.generate(
             messages,
@@ -164,6 +166,7 @@ async def score_step(
             tool_choice="auto",
             config=config,
         )
+        replies.append(output.message)
         calls = output.message.tool_calls or []
         checked = [(call, _check(call, scores_type)) for call in calls]
         valid = next((r for _, r in checked if isinstance(r, BaseModel)), None)
@@ -200,7 +203,7 @@ async def score_step(
         ]
 
     raise RuntimeError(
-        f"The monitor model gave no valid answer within {_ATTEMPTS} attempts; its last reply was {messages[-2].text!r}."
+        f"The monitor model gave no valid answer within {_ATTEMPTS} attempts; its last reply was {replies[-1].text!r}."
     )
 
 
