@@ -501,6 +501,10 @@ Rulings of 2026-10-10 and 2026-10-12 ([generate-stages.md](generate-stages.md), 
 - **`history` keeps its meaning** (decision 15, revised): the scaffold's list at the tool stages, the caller's at the generate stages. The as-sent view (AISI R10) is its own PR, an on-demand query on `TranscriptHistory.find_last` (inspect_ai #5831); marking compaction and `score()` calls in the transcript for it and for replay (R7) is deferred to that work, designed with its viewer and TUI impact. Decision 17's recording is dropped, since R2 finds a tool call's producing `ModelEvent` in the transcript.
 - **`reject` and `modify` at the generate stages** (decisions 8–13) are deferred to part 2 and stay shape-check errors.
 
+## `step.history` is `None` when the host cannot provide it
+
+Decided 2026-10-13: `history` is `list[ChatMessage] | None` at every stage. It is `None` when the host cannot know the caller's list: a proxy host, which sees only the request; a replay from a log that cannot establish the list at that step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step (R7; the reconstruction options are on #66, not built); or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`. Nothing in this package reads it; the planned windowing helpers take `None` and return it, and `step_as_str` names the absent history in its fixed phrase. inspect_ai's `Host.ask_human` (`_sentinel/_dispatch.py`) passes `step.history` to `human_approver`, whose `history` is `list[ChatMessage]`, so the inspect_ai PR that moves its sentinel pin past this change passes `[]` there for `None`.
+
 ## human() at AfterGenerate
 
 AISI R1, 2026-10-13: a protocol at `AfterGenerate` can escalate, and `human()` can answer it, so a monitor that judges a turn as a whole, because the combined effect of parallel calls matters, can hand that turn to a person before any of its calls runs.
