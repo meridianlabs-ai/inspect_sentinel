@@ -210,7 +210,7 @@ class EarlierDecision:
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]  # as SentinelEvent.stage
     step_id: str                # as SentinelEvent.step_id
     call_ids: tuple[str, ...]   # the calls it covered: the call at a tool stage, every call in the turn at model_output
-    decided: Reported[Decision] # the human() instance and its decision; the person's reason is the explanation
+    decided: Reported[Decision] # the human() instance and its decision; a reject's or terminate's reason is the explanation
 
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall

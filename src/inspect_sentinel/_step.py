@@ -23,7 +23,7 @@ class EarlierDecision:
     """The tool calls the decision covered: the step's call at a tool stage, and every call the turn makes at `model_output` (none for a turn without calls). How a prompt says which calls a person approved."""
 
     decided: Reported[Decision]
-    """The `human()` instance that asked (`name`, `path`, `function`) and its decision: `approve` is a `proceed`, and the person's reason is the `explanation` (and, for a `reject`, the `message`). It is what the person decided, not what happened to the step: beside other protocols in a `concurrent()`, a peer's `reject` outranks the person's `approve`."""
+    """The `human()` instance that asked (`name`, `path`, `function`) and its decision: `approve` is a `proceed`, with no explanation, and on a `reject` or `terminate` the person's reason is the `explanation` (and, for a `reject`, the `message`). It is what the person decided, not what happened to the step: beside other protocols in a `concurrent()`, a peer's `reject` outranks the person's `approve`."""
 
 
 @dataclass(frozen=True)
