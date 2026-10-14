@@ -20,7 +20,7 @@ def earlier_decision(
 ) -> EarlierDecision | None:
     """What a host keeps of a recorded report for `earlier_decisions` at the later steps of the conversation.
 
-    Call it from `Recorder.record` with what the runner passed there, and hand the records kept for `step.conversation` to each later step of that conversation, as they were before that step began. Only a decision of `human()` is kept, so the result is None for an observation, and for a decision of any other protocol, including the layers that pass the person's decision up.
+    Call it from `Recorder.record` with what the runner passed there, and hand the records kept for `step.conversation` to each later step of that conversation, as they were before that step began. Only a decision of `human()` is kept, so the result is None for an observation, and for a decision of any other protocol, including the layers that pass the person's decision up. When `Recorder.superseded` later reports a kept decision, its report the same object, the decision did not take effect: drop the record kept for it, so later steps do not see it.
 
     Args:
         factory: Registry name of the instance's factory, as passed to `Recorder.record`.

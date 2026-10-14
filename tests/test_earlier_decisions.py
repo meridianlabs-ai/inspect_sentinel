@@ -1,11 +1,19 @@
+from collections.abc import Sequence
 from dataclasses import replace
 
+import anyio
 import pytest
 from inspect_ai.model import ChatMessageAssistant, ModelOutput
 from inspect_ai.model._model_output import ChatCompletionChoice
 from inspect_ai.tool import ToolCall
 
-from inspect_sentinel import EarlierDecision, HumanAnswer, human, sequential
+from inspect_sentinel import (
+    EarlierDecision,
+    HumanAnswer,
+    decide_final,
+    human,
+    sequential,
+)
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._integration import (
@@ -157,3 +165,43 @@ async def test_a_turn_decision_covers_each_of_its_calls(ids: tuple[str, ...]) ->
     [kept] = await _kept(spec, _turn(*ids), HumanAnswer("approve"))
     assert (kept.stage, kept.call_ids) == ("model_output", ids)
     assert _REASONING not in repr(kept)
+
+
+@pytest.mark.anyio
+async def test_a_superseded_decision_is_the_report_a_host_kept() -> None:
+    # a host drops a kept decision when the runner supersedes it, matching the
+    # report it kept
+    started, answered = anyio.Event(), anyio.Event()
+
+    class Host(FakeHost):
+        async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
+            await started.wait()
+            answered.set()
+            return HumanAnswer("terminate", reason="stop")
+
+    @protocol
+    def final_after_the_person() -> Protocol:
+        async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+            with anyio.CancelScope(shield=True):
+                started.set()
+                await answered.wait()
+                decide_final(Decision.proceed())
+            return None
+
+        return decide
+
+    recorder = ListRecorder()
+    context = host_context(recorder=recorder, host=Host())
+    spec = concurrent([human(stages=["tool_call"]), final_after_the_person()])
+    with anyio.fail_after(5):
+        decision = await run_sentinel(resolve_sentinel(spec), context, before_step())
+
+    assert decision is not None and decision.action == "proceed"
+    kept = [
+        record
+        for r in recorder.records
+        if (record := earlier_decision(r.factory, r.step, "call_1", r.reported))
+    ]
+    [superseded] = recorder.supersessions
+    assert [k.decided.report for k in kept] == [superseded.reported.report]
+    assert kept[0].decided.report is superseded.reported.report
