@@ -151,7 +151,7 @@ def host_context(
     store: Store | None = None,
 ) -> HostContext:
     return HostContext(
-        context=Context(path=path, host=Host(host or FakeHost(eval=eval_context()))),
+        context=Context(path=path, host=Host(host or FakeHost())),
         recorder=recorder or ListRecorder(),
         store=store or Store(),
     )

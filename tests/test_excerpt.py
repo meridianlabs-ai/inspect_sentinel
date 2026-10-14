@@ -44,7 +44,7 @@ from inspect_sentinel import (
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._excerpt import _excerpt
 from inspect_sentinel._report import Decision, Observation
-from inspect_sentinel._runner import run_monitors, run_sentinel
+from inspect_sentinel._runner import run_monitors, run_protocols, run_sentinel
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
 
 from ._fakes import (
@@ -213,11 +213,33 @@ def test_a_negative_window_raises(
         window(windowed(), -1)
 
 
-def test_drop_input_empties_it_and_an_unknown_input_stays_unknown() -> None:
-    assert texts(drop_input(windowed()).input) == []
-    unknown = _excerpt(tool_step(None, CONVERSATION))
-    assert drop_input(unknown).input is None
-    assert last_turns(unknown, 1).input is None
+def one_turn(step: Step | Excerpt[Step]) -> Excerpt[Step]:
+    return last_turns(step, 1)
+
+
+UNKNOWN_INPUT = (
+    "[BEGIN INPUT]\nThe model input for this call is not available.\n[END INPUT]"
+)
+
+
+@pytest.mark.parametrize(
+    "excerpting, input, says_unknown",
+    [
+        (drop_input, CONVERSATION, False),
+        # an unknown input is still named, dropped or windowed
+        (drop_input, None, True),
+        (one_turn, None, True),
+    ],
+)
+@pytest.mark.anyio
+async def test_drop_input_leaves_it_out_and_an_unknown_input_stays_named(
+    excerpting: Callable[[Step], Excerpt[Step]],
+    input: list[ChatMessage] | None,
+    says_unknown: bool,
+) -> None:
+    rendered = await step_as_str(excerpting(tool_step(input, CONVERSATION)))
+    assert (UNKNOWN_INPUT in rendered) == says_unknown
+    assert ("[BEGIN INPUT]" in rendered) == says_unknown
 
 
 Shown = tuple[list[str] | None, list[str] | None]
@@ -400,6 +422,39 @@ async def _decide_final(decision: Decision) -> None:
     decide_final(decision)
 
 
+@protocol
+def ends_the_step() -> Protocol:
+    async def end(context: Context, step: BeforeToolCall) -> Decision | None:
+        decide_final(Decision.proceed())
+
+    return end
+
+
+@pytest.mark.anyio
+async def test_new_since_last_report_is_not_recorded_when_a_childs_final_passes_by() -> (
+    None
+):
+    seen: list[list[str]] = []
+
+    @protocol
+    def passed_by() -> Protocol:
+        async def judge(context: Context, step: BeforeToolCall) -> Decision | None:
+            cut = new_since_last_report(context, step)
+            seen.append(texts(cut.history) or [])
+            await run_protocols(ends_the_step(), context, step)
+            return Decision.proceed()
+
+        return judge
+
+    store = Store()
+    for _ in range(2):
+        await run_sentinel(
+            passed_by(), host_context(store=store), tool_step(None, CONVERSATION)
+        )
+    # it never judged the history, so it is shown again
+    assert seen == [texts(CONVERSATION)] * 2
+
+
 @pytest.mark.anyio
 async def test_step_as_str_leaves_out_empty_parts_whatever_the_renderer() -> None:
     async def as_json(messages: list[ChatMessage]) -> str:
@@ -577,7 +632,7 @@ async def test_a_chain_gives_the_same_excerpt_in_any_order(
         lambda shown, f: f(shown), order, cast(Step | Excerpt[Step], thoughtful())
     )
     assert isinstance(chained, Excerpt)
-    assert chained.exclude == {"reasoning", "tool_usage"}
+    assert chained.exclude == {"input", "reasoning", "tool_usage"}
     rendered = await step_as_str(chained)
     assert rendered == await step_as_str(
         drop_input(
@@ -675,6 +730,9 @@ def with_system(step: Step | Excerpt[Step]) -> Excerpt[Step]:
         (history_only, CONVERSATION, CONVERSATION, True),
         # a dropped input is not an unknown one
         (drop_input, CONVERSATION, CONVERSATION, False),
+        # and an unknown input, dropped, leaves only the step
+        (drop_input, None, CONVERSATION, False),
+        (history_only, None, CONVERSATION, True),
         # only hidden messages are extra
         (keep_history, CONVERSATION[1:], CONVERSATION, False),
         (with_system, CONVERSATION[1:], CONVERSATION, True),

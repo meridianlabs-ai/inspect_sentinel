@@ -415,10 +415,13 @@ async def _run_member(
             return failed
         raise failure
     if finals:
+        # a descendant's final passes this function by: it did not finish
+        own = finals[0].origin is None
         final = _on_final(
             finals, kind, child_context, step, child_name, function.__name__, label
         )
-        _succeeded(node)
+        if own:
+            _succeeded(node)
         raise final
     if report is not None and not isinstance(report, report_type):
         raise TypeError(

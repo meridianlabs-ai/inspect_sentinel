@@ -312,7 +312,7 @@ How the fields are populated:
 | `eval.sample_input` | `Sample.input` | |
 | `eval.metadata` | task + sample metadata | |
 
-A proxy answers requests that are not Inspect evals and have no task, sample or epoch, so it passes `eval=None` rather than stand-ins a monitor could not tell from real values; in an eval, `task`, `sample_id` and `epoch` are always present. Decided by the maintainer on 2026-10-05. A proxy's equivalent of the briefing (a deployment's charter, say) is open; see `proxy-host.md`.
+A proxy answers requests that are not Inspect evals and have no task, sample or epoch, so its `HostNative.eval` is None rather than stand-ins a monitor could not tell from real values; in an eval, `task`, `sample_id` and `epoch` are always present. Decided by the maintainer on 2026-10-05. A proxy's equivalent of the briefing (a deployment's charter, say) is open; see `proxy-host.md`.
 
 inspect_ai fills `eval.task_description` and `eval.sample_description` from `Task(description=)` and `Sample(description=)` (inspect_ai #5667), in the first release that includes them; they are None when the task or sample sets no description, and under a host that does not provide them. Structured context goes in `metadata`.
 
@@ -827,7 +827,7 @@ class HumanAnswer:
     reason: str | None = None       # the reason the surface gives
     modified: ToolCall | None = None  # the replacement call for a tool-stage modify
 
-class Host(Protocol):
+class HostNative(Protocol):  # what a host implements; monitors call it as `context.host.ask_human`
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
 ```
 

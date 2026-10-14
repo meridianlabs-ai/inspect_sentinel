@@ -44,7 +44,7 @@ S = TypeVar("S", bound=Step)
 # an excerpt is frozen, so an Excerpt[BeforeToolCall] is an Excerpt[Step]
 S_co = TypeVar("S_co", bound=Step, covariant=True)
 
-Exclusion: TypeAlias = Literal["history", "system", "reasoning", "tool_usage"]
+Exclusion: TypeAlias = Literal["input", "history", "system", "reasoning", "tool_usage"]
 
 MessagesAsStr: TypeAlias = Callable[[list[ChatMessage]], Awaitable[str]]
 
@@ -53,7 +53,13 @@ MessagesAsStr: TypeAlias = Callable[[list[ChatMessage]], Awaitable[str]]
 class Excerpt(Generic[S_co]):
     """What a monitor shows a model about a step: the step, and the conversations to show with it, cut down by the windowing functions, which return one.
 
-    A step's conversations start whole, each cut before the step's own part so that part is not shown twice: `history` before the assistant message that holds the call at a tool stage, and before a generate `input` after the model's last reply and `history` before the messages that follow it, matched by id. Where the host gave those messages new ids in the request (inspect_ai does when a provider merges consecutive messages, or a tool rewrites its result for the model), `history` keeps them and they show twice.
+    A step's conversations start whole, then each is cut before the step's own part, so that part is not shown twice.
+
+    At a tool stage, `history` is cut before the assistant message that holds the call, and `input` is not cut.
+
+    Before a generate, `input` is cut after the model's last reply. `history` is cut before the messages that follow that reply, matched by id. Where the host gave those messages new ids in the request (inspect_ai does when a provider merges consecutive messages, or a tool rewrites its result for the model), `history` keeps them and they show twice.
+
+    After a generate, neither is cut.
 
     `step_as_str()` renders the conversations and the step's own part: the assistant's message and the call before a tool call, those and the result after one (other calls the same message holds, and their results, are not shown), the messages after the model's last reply before a generate (none when the request ends with an assistant message, such as a prefill, which then shows in `input`), and the reply after one. Nothing else of the step is rendered, such as its tools, config, `view` or untruncated tool output, nor its escalations, which are not the agent's: `Host.score` shows those in a block of their own.
     """
@@ -68,17 +74,16 @@ class Excerpt(Generic[S_co]):
     """The part of `step.history` to show, None when the host could not provide it (see `BeforeToolCall.history`); every window keeps it None."""
 
     exclude: frozenset[Exclusion] = frozenset({"history", "system"})
-    """What `step_as_str()` leaves out: the `history` block, and from every block, the step's own part included, `system` messages, `reasoning`, and `tool_usage` (a provider's own tool use, such as web search, recorded in a message). The history and system messages are left out by default, the latter as Scout leaves them out; `keep_history()` and `keep_system()` keep them, and `drop_reasoning()` and `drop_tool_usage()` add to it."""
+    """What `step_as_str()` leaves out: the `input` and `history` blocks, and from every block, the step's own part included, `system` messages, `reasoning`, and `tool_usage` (a provider's own tool use, such as web search, recorded in a message). The history and system messages are left out by default, the latter as Scout leaves them out; `keep_history()` and `keep_system()` keep them, and `drop_input()`, `drop_reasoning()` and `drop_tool_usage()` add to it."""
 
 
 def drop_input(step: S | Excerpt[S]) -> Excerpt[S]:
-    """`step`, excerpted, without the model's input: an empty `input`, or None where the step had none, which `step_as_str()` still names as unknown.
+    """`step`, excerpted, with the model's input left out when it is rendered. Where the step has no input, `step_as_str()` still names it as unknown, but does not show the history in its place unless `keep_history()` asks for it.
 
     Args:
         step: A step, or an excerpt to narrow further.
     """
-    cut = _excerpt(step)
-    return replace(cut, input=None if cut.input is None else [])
+    return _leave_out(step, "input")
 
 
 def keep_history(step: S | Excerpt[S]) -> Excerpt[S]:
@@ -184,7 +189,7 @@ class _Marks(StoreModel):
 def new_since_last_report(context: Context, step: S | Excerpt[S]) -> Excerpt[S]:
     """`step`, excerpted, with `input` and `history` each cut to the messages after the last one this monitor reported on, so an incremental monitor does not re-read its conversations.
 
-    The last message of each is recorded by id in the monitor's store (by `context.path`), separately for each conversation and each function of the monitor; a function that watches several stages shares them across those stages. It is recorded only when the function returns or decides final and the runner accepts what it returned; when it raises or is cancelled, the next step shows those messages again. Only `input` and `history` are tracked, so the step's own part, such as the last step's call, can be shown again in a later step's conversation. A conversation is kept whole the first time, and when its recorded message is gone: after a compaction (and a tool step's `history`, which is not compacted, may then be shown whole once after a generate recorded the compacted one), or where a host gives messages new ids on each step. inspect_ai does that to `input` when a provider merges consecutive messages (Anthropic and Bedrock merge user messages) and to earlier reasoning messages when `reasoning_history` is `none` or `last`, so for those, window `input` some other way or drop it. Call it once per step, from the monitor or protocol function the runner is running.
+    The last message of each is recorded by id in the monitor's store (by `context.path`), separately for each conversation and each function of the monitor; a function that watches several stages shares them across those stages. It is recorded only when the function returns or decides final and the runner accepts what it returned; when it raises or is cancelled, or a descendant's final decision ends the step past it, the next step shows those messages again. Only `input` and `history` are tracked, so the step's own part, such as the last step's call, can be shown again in a later step's conversation. A conversation is kept whole the first time, and when its recorded message is gone: after a compaction (and a tool step's `history`, which is not compacted, may then be shown whole once after a generate recorded the compacted one), or where a host gives messages new ids on each step. inspect_ai does that to `input` when a provider merges consecutive messages (Anthropic and Bedrock merge user messages) and to earlier reasoning messages when `reasoning_history` is `none` or `last`, so for those, window `input` some other way or drop it. Call it once per step, from the monitor or protocol function the runner is running.
 
     Args:
         context: The monitor's context.
@@ -231,7 +236,7 @@ async def step_as_str(
 ) -> str:
     """Render `step`, or an excerpt of it, for a monitor's prompt.
 
-    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it has nothing to show: `INPUT`, `HISTORY`, then the step's own part (see `Excerpt`), in a block marked `[AGENT STEP - BEGIN ...]` and `[AGENT STEP - END ...]` and named for the stage: `TOOL CALL` before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` (the messages the model is about to answer) before a generate, and `MODEL REPLY` after one. `HISTORY` is shown only after `keep_history()`, or in place of an unknown input; even then, since it is usually the same conversation as the input, it is shown, whole, only when it holds a message the input does not, such as turns before a compaction; messages are matched by id, counting the ones a merged message was made from. When a tool step has no model input, the `INPUT` block says so, even after `drop_input()`, and when the host could not provide the history, the `HISTORY` block says so wherever it would be shown. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
+    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it has nothing to show: `INPUT`, `HISTORY`, then the step's own part (see `Excerpt`), in a block marked `[AGENT STEP - BEGIN ...]` and `[AGENT STEP - END ...]` and named for the stage: `TOOL CALL` before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` (the messages the model is about to answer) before a generate, and `MODEL REPLY` after one. `HISTORY` is shown only after `keep_history()`, or in place of an unknown input that `drop_input()` did not leave out; even then, since it is usually the same conversation as the input, it is shown, whole, only when it holds a message the input does not, such as turns before a compaction; messages are matched by id, counting the ones a merged message was made from. When a tool step has no model input, the `INPUT` block says so, even after `drop_input()`, and when the host could not provide the history, the `HISTORY` block says so wherever it would be shown. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
 
     Args:
         step: A step, rendered whole, or an excerpt of one.
@@ -255,7 +260,15 @@ async def step_as_str(
         return await render(messages) if messages else ""
 
     history = None if shown.history is None else _without(shown.history, shown.exclude)
-    input = None if shown.input is None else _without(shown.input, shown.exclude)
+    input = (
+        None
+        if shown.input is None
+        else []
+        if "input" in shown.exclude
+        else _without(shown.input, shown.exclude)
+    )
+    # in place of an unknown input, unless the input is left out
+    instead = input is None and "input" not in shown.exclude
     # rendered in this order, so messages are numbered in it too
     blocks = [
         (
@@ -272,7 +285,7 @@ async def step_as_str(
             "",
             "HISTORY",
             ""
-            if input is not None and "history" in shown.exclude
+            if "history" in shown.exclude and not instead
             else "The agent's conversation history is not available."
             if history is None
             else await text(history)

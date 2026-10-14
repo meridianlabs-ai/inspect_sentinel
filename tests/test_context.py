@@ -59,7 +59,7 @@ def test_the_contexts_annotations_resolve_at_runtime() -> None:
 
 
 def test_the_context_exposes_no_store_and_cannot_be_reassigned() -> None:
-    context = host_context().context
+    context = host_context(host=FakeHost(eval=eval_context())).context
     assert not hasattr(context, "store")
     with pytest.raises(FrozenInstanceError):
         cast(Any, context).path = "elsewhere"
