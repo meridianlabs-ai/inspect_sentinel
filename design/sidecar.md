@@ -38,7 +38,7 @@ When the sentinel runs in a sidecar, Inspect talks to it through `RemoteSentinel
 
 1. **One implementation of providers.** The sidecar reads and writes the formats of model providers with inspect_ai's Python code, and has no second implementation of its own. Where inspect_ai's code falls short of what a proxy needs, the gap is listed near the end of this document, under "Asked of inspect_ai", and raised with inspect_ai. The code is not forked.
 2. **No in-process advantage.** A sentinel gains nothing from running in the same process as the eval. A task and its sentinel are written as if the sentinel were behind a proxy. Whatever an eval's own host gives a sentinel, the sidecar gives too, or the sidecar says that it cannot.
-3. **A sidecar that is mostly independent of the proxy.** Middleman is supported first, LiteLLM second and Envoy third. What is specific to one proxy is kept out of the sidecar where it can be, in a proxy hook that the proxy runs. For a proxy that can run no code of ours, the sidecar has a thin adapter called a shim.
+3. **A sidecar that is mostly independent of the proxy.** LiteLLM is supported first and Middleman second, both in Python; Envoy comes later. What is specific to one proxy is kept out of the sidecar where it can be, in a proxy hook that the proxy runs. For a proxy that can run no code of ours, the sidecar has a thin adapter called a shim.
 
 ## 1. The shape
 

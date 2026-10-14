@@ -47,9 +47,11 @@ AISI requirement R8 ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-
 
 ## 4. Host in a proxy
 
-**Priority:** high. **Owner:** Pete. **Design:** [sentinel-deployment.md](sentinel-deployment.md); spike plan in [proxy-host.md](proxy-host.md).
+**Priority:** high. **Owner:** Pete. **Design:** [sidecar.md](sidecar.md), with its implementation plan in [sidecar-plan.md](sidecar-plan.md); background in [sentinel-deployment.md](sentinel-deployment.md) and [proxy-host.md](proxy-host.md).
 
 Raised by the maintainer on 2026-10-02: a technical spike implementing a monitor host in a proxy, WASM inside an `ext_proc` sidecar beside Envoy first ([proxy-host.md](proxy-host.md), section 4), then an RPC-based interface in another proxy that supports one. Includes the changes to the `Host` interface, `Context` and the rest that proxy deployment needs. It is the later, larger project in workstream 9; coordinate with the bridged-agent work there and with workstream 11.
+
+Since 2026-10-14 the first target is a plain Python sidecar beside the proxy, running the sentinel in its own process: LiteLLM first, through a guardrail, then Middleman, with Envoy later ([sidecar-plan.md](sidecar-plan.md)). WASM is not a priority.
 
 The WASM sidecar spike (sentinel #58, 2026-10-06) answered the WASM question: the unchanged sentinel runner runs as a CPython-in-WASM component in a wasmtime host, with asyncio, many concurrent steps per instance, and an empty sandbox. The WASM phase is now an `ext_proc` sidecar embedding wasmtime rather than proxy-wasm inside Envoy; [proxy-host.md](proxy-host.md), section 4, has the result and what is next.
 
