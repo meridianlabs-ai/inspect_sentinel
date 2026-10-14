@@ -74,7 +74,7 @@ The canonical reconstruction works from `list[ChatMessage]` alone, because that 
 | `BeforeToolCall` | each `tool_calls[i]` on an assistant message, with the message text and history to that point | `view` absent |
 | `AfterToolCall` | the `ChatMessageTool` whose `tool_call_id` matches, as `result`; history to that point | `output` (untruncated) absent; `truncated` is `None` (unknown) |
 
-Messages give the two histories unevenly. A transcript's messages are `history` at the end of the run; at a step, `history` is a prefix of them only where replay can establish that the scaffold had not rewritten its list since (`react`'s overflow recovery replaces it, and a sub-agent's list is not the sample's), and `None` otherwise, as under a proxy. At the tool stages `input` (and with it `tools`) is `None` from messages alone: the history to that point is right until the first compaction and wrong after it (the model was shown a summary plus recent turns), so it is not offered as the model's input. A live step without a recorded model call gets `None` the same way, so a monitor handles both alike.
+Messages give the two histories unevenly. A transcript's messages are `history` at the end of the run; at a step, `history` is a prefix of them only where replay can establish that the scaffold had not rewritten its list since (`react`'s overflow recovery replaces it, and a sub-agent's list is not the sample's), and `None` otherwise, as under a proxy (see "Reconstructing `history` in replay" below). At the tool stages `input` (and with it `tools`) is `None` from messages alone: the history to that point is right until the first compaction and wrong after it (the model was shown a summary plus recent turns), so it is not offered as the model's input. A live step without a recorded model call gets `None` the same way, so a monitor handles both alike.
 
 `view` and `output` being absent, and `history` being `None`, is the case `sentinel.md` already requires monitors to tolerate for proxies, so a portable monitor replays from messages unchanged. Note the last row is *better* than the proxy's: a proxy never sees the final step's result because no further request carries it, whereas a transcript is complete.
 
@@ -99,6 +99,21 @@ An eval log's events restore what messages lose. `ModelEvent` carries `input`, `
 Events also restore `input` exactly, from `ModelEvent.input`, and let an accumulated as-sent view of an agent's run (related to AISI R10) be rebuilt per agent; it is not `history`, the scaffold's list. Walk the `ModelEvent`s and `CompactionEvent`s that share one `conversation` id in order, accumulating what each generate added and marking each compaction. That id is what `sentinel.md` asks core to record; without it the link between a pre- and a post-compaction event is a guess, because a span identifies the innermost scope rather than the agent, and a sample with several agents interleaves their events. That guess is the reconstruction difficulty the current approval-based monitor runs into, and it is why the id is a requirement rather than a convenience.
 
 `steps_from_events()` is therefore an *enrichment* of the messages reconstruction rather than a second algorithm: it walks the same message sequence and attaches the matching event's fields where one exists. That keeps step identity (below) independent of whether events were available, which is what lets one validation set serve both kinds of source.
+
+### Reconstructing `history` in replay
+
+Noted 2026-10-13 with the maintainer, alongside making `step.history` optional (`None` when the host can't provide the caller's list: replay from a log, proxy hosts, steps with no scaffold conversation).
+
+`history` is the scaffold's list *at that step*. An eval log holds only the list at the end of the sample (`sample.messages`) and, per model call, what the model was sent (`ModelEvent.input`, already `step.input`). For an append-only scaffold the step's history is a prefix of `sample.messages`, cut at the step's anchor (tool stages: the assistant message holding the call; generate stages: the last message of the call's input), found by message id.
+
+`react` keeps `state.messages` uncompacted: compaction shapes a copy for each model call, so a compaction does not break the prefix. `react` does change its list in two places: `_remove_submit_tool` at the end (default `keep_in_messages=False`) strips the submit call and result, and `on_continue` returning an `AgentState` can replace the list. Multi-solver chains, handoffs and custom solvers can also rewrite it, and bridged agents' `sample.messages` is not the CLI's conversation. Replay therefore has to verify a prefix, not assume it.
+
+Options:
+
+1. **Cross-check the log (works on existing logs).** For the agent instance, every `ModelEvent` output message and every tool result must appear in `sample.messages` with the same id, in order, with the same content, up to the step's anchor; outputs are never compacted, so this holds through compaction. If it does, the prefix is the step's history; steps after a divergence (e.g. the final submit turn) get `None`. Heuristic: an edit to a message that is neither a model output nor a tool result (a user message a custom solver rewrote) is not detected.
+2. **Record a history fingerprint at run time (exact, any scaffold).** Each `SentinelEvent` stores `history_len` and a hash of the step's history (tens of bytes, never the messages). Replay takes the first `history_len` messages of `sample.messages` and compares hashes: equal means exactly what the live step saw, otherwise `None`. Needs two fields on inspect_ai's `SentinelEvent` and a canonical message serialization for the hash.
+
+Proposed: 2 for logs written after the fields exist, 1 as the fallback for older logs. Not built; part of workstream 10 / R7.
 
 ### `Context`, `Host` and `Store` in replay
 
