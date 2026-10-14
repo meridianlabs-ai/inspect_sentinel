@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.15"]
+        python-version: ["3.11", "3.14"]
     env:
       # .python-version pins the dev interpreter; without this uv uses it
       # rather than the matrix version
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.15"]
+        python-version: ["3.11", "3.14"]
     env:
       # .python-version pins the dev interpreter; without this uv uses it
       # rather than the matrix version
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.15"]
+        python-version: ["3.11", "3.14"]
     env:
       # .python-version pins the dev interpreter; without this uv uses it
       # rather than the matrix version
