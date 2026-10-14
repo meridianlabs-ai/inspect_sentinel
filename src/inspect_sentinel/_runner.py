@@ -131,7 +131,7 @@ async def run_sentinel(
 
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.
-        host_context: The top layer's context, whose `path` is empty, the recorder and the sample store.
+        host_context: The host, the recorder and the sample store.
         step: The step being examined.
     """
     if isinstance(protocol, Group):
@@ -318,10 +318,6 @@ async def _run_child(
 ) -> None:
     info, _ = check_child(child, kind)
     if root:
-        if context.path != "":
-            raise ValueError(
-                f"The root runs at the top layer, whose path is empty; got path {context.path!r}."
-            )
         child_name = registry_unqualified_name(info)
     else:
         child_name = validate_instance_name(

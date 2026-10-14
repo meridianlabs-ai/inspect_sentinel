@@ -159,7 +159,7 @@ def test_host_context_requires_a_complete_recorder() -> None:
 
     with pytest.raises(TypeError, match="cancelled"):
         HostContext(
-            context=host_context().context,
+            host=FakeHost(),
             recorder=cast(Any, RecordOnly()),
             store=Store(),
         )

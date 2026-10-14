@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NamedTuple, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
@@ -258,13 +258,13 @@ class Recorder(TypingProtocol):
 
 @dataclass(frozen=True, kw_only=True)
 class HostContext:
-    """What the host passes to `run_sentinel`: the top layer's `Context`, where the runner records reports, and the sample store.
+    """What the host passes to `run_sentinel`: its `HostNative`, where the runner records reports, and the sample store.
 
-    The host builds the `Context` with an empty `path`. Monitors and protocols reach the store only through `Context.store_as()`, which namespaces it by their `path`.
+    It builds the top layer's `Context` from the host, with an empty `path` and a `Host` wrapping it. Monitors and protocols reach the store only through `Context.store_as()`, which namespaces it by their `path`.
     """
 
-    context: Context
-    """The top layer's context, as monitors and protocols will read it."""
+    host: HostNative
+    """The host's own implementation of the eval, inference and asking a person."""
 
     recorder: Recorder
     """Where the runner records reports, failures and cancellations."""
@@ -272,7 +272,14 @@ class HostContext:
     store: Store
     """The sample store that `Context.store_as()` reads and writes while the step runs."""
 
+    context: Context = field(init=False)
+    """The top layer's context, as monitors and protocols will read it."""
+
     def __post_init__(self) -> None:
+        # _context imports this module
+        from ._context import Context
+
+        object.__setattr__(self, "context", Context(path="", host=Host(self.host)))
         # a runtime check for hosts that are not type-checked against Recorder
         if not isinstance(cast(object, self.recorder), Recorder):
             raise TypeError(
