@@ -19,6 +19,7 @@ from ._protocols import (
 from ._report import (
     Action,
     Decision,
+    Escalations,
     Failed,
     Observation,
     Report,
@@ -67,6 +68,7 @@ __all__ = [
     "Context",
     "Decision",
     "Decisions",
+    "Escalations",
     "EvalContext",
     "Failed",
     "Host",

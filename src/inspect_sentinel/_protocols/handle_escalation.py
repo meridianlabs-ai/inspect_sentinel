@@ -4,7 +4,7 @@ from typing import Literal
 
 from .._context import Context
 from .._decorators import answers_escalations, protocol
-from .._report import Decision, Reported
+from .._report import Decision, Escalations
 from .._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall
 from .._types import ProtocolGroup
 
@@ -30,28 +30,28 @@ def handle_escalation(action: Literal["terminate", "proceed"]) -> ProtocolGroup:
     async def tool_call(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return _handle(action, escalations)
 
     async def tool_result(
         context: Context,
         step: AfterToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return _handle(action, escalations)
 
     async def model_input(
         context: Context,
         step: BeforeGenerate,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return _handle(action, escalations)
 
     async def model_output(
         context: Context,
         step: AfterGenerate,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return _handle(action, escalations)
 
@@ -64,7 +64,7 @@ def handle_escalation(action: Literal["terminate", "proceed"]) -> ProtocolGroup:
 
 
 def _handle(
-    action: Literal["terminate", "proceed"], escalations: tuple[Reported[Decision], ...]
+    action: Literal["terminate", "proceed"], escalations: Escalations
 ) -> Decision | None:
     if not escalations:
         return None

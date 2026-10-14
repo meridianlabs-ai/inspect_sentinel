@@ -20,7 +20,7 @@ from inspect_sentinel._decorators import (
     step_types,
 )
 from inspect_sentinel._protocols import concurrent
-from inspect_sentinel._report import Decision, Observation, Reported
+from inspect_sentinel._report import Decision, Escalations, Observation
 from inspect_sentinel._runner import (
     run_monitors,
     run_sentinel,
@@ -60,7 +60,7 @@ def after_monitor() -> Monitor:
 @protocol
 def any_stage_protocol() -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return None
 
@@ -72,7 +72,7 @@ def no_curl() -> Protocol:
     async def decide(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         if "curl" in str(step.call.arguments):
             return Decision.reject("network access is not allowed")
@@ -173,7 +173,7 @@ def test_protocol_returning_observations_is_rejected_at_configuration() -> None:
     async def observes_not_decides(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Observation | None:
         return None
 
@@ -261,7 +261,7 @@ async def _two_parameters(
 async def _three_parameters(
     context: Context,
     step: BeforeToolCall,
-    escalations: tuple[Reported[Decision], ...],
+    escalations: Escalations,
 ) -> Observation | Decision | None:
     return None
 
@@ -270,7 +270,7 @@ async def _keyword_only_escalations(
     context: Context,
     step: BeforeToolCall,
     *,
-    escalations: tuple[Reported[Decision], ...],
+    escalations: Escalations,
 ) -> Decision | None:
     return None
 
@@ -368,7 +368,7 @@ def test_protocol_annotating_every_stage_explicitly_is_step() -> None:
         async def decide(
             context: Context,
             step: BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall,
-            escalations: tuple[Reported[Decision], ...],
+            escalations: Escalations,
         ) -> Decision | None:
             return None
 
@@ -447,7 +447,7 @@ _unannotated.__annotations__.pop("step")
 
 
 async def _decide(
-    context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+    context: Context, step: Step, escalations: Escalations
 ) -> Decision | None:
     return None
 
@@ -508,14 +508,14 @@ def bare_call_protocol() -> ProtocolGroup:
     async def first(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return None
 
     async def second(
         context: Context,
         step: AfterToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return None
 
@@ -568,7 +568,7 @@ def test_variadic_parameters_may_use_an_entry_key() -> None:
         async def decide(
             context: Context,
             step: BeforeToolCall,
-            escalations: tuple[Reported[Decision], ...],
+            escalations: Escalations,
         ) -> Decision | None:
             return None
 
@@ -600,7 +600,7 @@ def calls_directly(child: Monitor) -> Protocol:
     async def decide(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         await cast(Callable[..., Any], child)(context, step)
         return None
@@ -613,7 +613,7 @@ def calls_through_runner(child: Monitor) -> Protocol:
     async def decide(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         observations = await run_monitors(child, context, step)
         return Decision.reject() if observations.max_suspicion() else None
@@ -644,7 +644,7 @@ async def test_a_direct_call_outside_a_run_is_allowed() -> None:
 def test_a_monitor_and_a_protocol_cannot_share_a_name() -> None:
     def factory() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             return None
 

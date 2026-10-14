@@ -15,7 +15,12 @@ from inspect_sentinel._integration import (
     sentinel_from_config,
 )
 from inspect_sentinel._protocols import concurrent
-from inspect_sentinel._report import Action, Decision, Observation, Reported
+from inspect_sentinel._report import (
+    Action,
+    Decision,
+    Escalations,
+    Observation,
+)
 from inspect_sentinel._runner import run_protocols, run_sentinel
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup, Sentinels
@@ -39,7 +44,7 @@ def _seen(store: Store) -> dict[str, list[tuple[str, ...]]]:
 @protocol
 def seq_link(action: Action = "proceed", explanation: str | None = None) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         seen = context.store_as(Seen)
         seen.escalations = [
@@ -54,7 +59,7 @@ def seq_link(action: Action = "proceed", explanation: str | None = None) -> Prot
 @protocol
 def seq_abstains() -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return None
 
@@ -66,7 +71,7 @@ def seq_after_only() -> Protocol:
     async def decide(
         context: Context,
         step: AfterToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return Decision.terminate("after")
 
@@ -78,7 +83,7 @@ def seq_pair() -> ProtocolGroup:
     async def first(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         context.store_as(PairSaw).first = len(escalations)
         return Decision.escalate("first")
@@ -86,7 +91,7 @@ def seq_pair() -> ProtocolGroup:
     async def second(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         context.store_as(PairSaw).second = len(escalations)
         return Decision.escalate("second")
@@ -99,14 +104,14 @@ def seq_mixed(first_action: Action, second_action: Action) -> ProtocolGroup:
     async def first(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return Decision(action=first_action, explanation="first")
 
     async def second(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return Decision(action=second_action, explanation="second")
 
@@ -118,7 +123,7 @@ def seq_final() -> Protocol:
     async def decide(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         decide_final(Decision.reject("final"))
 
@@ -128,7 +133,7 @@ def seq_final() -> Protocol:
 @protocol
 def seq_forward(child: Protocol) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         decisions = await run_protocols(child, context, step, escalations=escalations)
         strongest = decisions.strongest()

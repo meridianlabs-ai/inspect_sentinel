@@ -17,8 +17,8 @@ from pydantic import BaseModel, ConfigDict
 
 from corp_helpers import Verdict, parse_verdict
 from inspect_sentinel import (
-    AfterToolCall, BeforeToolCall, Context, Decision, Monitor, MonitorGroup, Monitors,
-    Observation, Protocol, ProtocolGroup, Reported, Sentinels, call_text, concurrent, monitor,
+    AfterToolCall, BeforeToolCall, Context, Decision, Escalations, Monitor, MonitorGroup, Monitors,
+    Observation, Protocol, ProtocolGroup, Sentinels, call_text, concurrent, monitor,
     observe_only, protocol, run_children, run_monitors, sequential, threshold, find_words,
 )
 
@@ -95,7 +95,7 @@ def keyword(words: Sequence[str] = ()) -> Monitor:
 @protocol
 def escalating(monitors: Monitor | MonitorGroup | Monitors, settings: Mapping[str, float] | None = None) -> Protocol:
     cfg = Settings(**(settings or {}))
-    async def decide(context: Context, step: BeforeToolCall, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def decide(context: Context, step: BeforeToolCall, escalations: Escalations) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None
@@ -110,11 +110,11 @@ def escalating(monitors: Monitor | MonitorGroup | Monitors, settings: Mapping[st
 # 20 ProtocolGroup factory, before + after
 @protocol
 def two_stage(monitors: Monitors) -> ProtocolGroup:
-    async def before(context: Context, step: BeforeToolCall, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def before(context: Context, step: BeforeToolCall, escalations: Escalations) -> Decision | None:
         await run_monitors(monitors, context, step)
         return Decision.proceed()
 
-    async def after(context: Context, step: AfterToolCall, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def after(context: Context, step: AfterToolCall, escalations: Escalations) -> Decision | None:
         await run_monitors(monitors, context, step)
         return None
 
@@ -124,7 +124,7 @@ def two_stage(monitors: Monitors) -> ProtocolGroup:
 # 21 run_children over sentinels, heapq top-k
 @protocol
 def top_k(children: Sentinels, k: int = 2) -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def decide(context: Context, step: BeforeToolCall, escalations: Escalations) -> Decision | None:
         reports = await run_children(children, context, step)
         best = heapq.nlargest(k, (str(r) for r in reports))
         if len(best) > 100:

@@ -12,8 +12,8 @@ from inspect_sentinel import (
     BeforeToolCall,
     Context,
     Decision,
+    Escalations,
     Protocol,
-    Reported,
     call_text,
     find_words,
     protocol,
@@ -29,7 +29,7 @@ def no_network() -> Protocol:
     async def decide(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         if step.call.function != "bash":
             return None

@@ -89,7 +89,7 @@ class Host(typing.Protocol):
         config: GenerateConfig | None = None,
     ) -> ModelOutput: ...
     async def ask_human(
-        self, step: Step, escalations: tuple[Reported[Decision], ...], choices: Sequence[str]
+        self, step: Step, escalations: Escalations, choices: Sequence[str]
     ) -> HumanAnswer: ...
     """Ask a person about the step, rendered by its type with the escalations that led to it; a proxy might use a review queue.
     A person who ends the prompt without an offered choice yields `reject` if offered, otherwise `terminate`."""

@@ -30,7 +30,7 @@ from inspect_sentinel._protocols import (
     sequential,
     threshold,
 )
-from inspect_sentinel._report import Decision, Observation, Reported
+from inspect_sentinel._report import Decision, Escalations, Observation
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import (
     Monitor,
@@ -81,7 +81,7 @@ def cfg_pair() -> MonitorGroup:
 @protocol
 def cfg_bundle(**groups: Monitors) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return None
 
@@ -93,7 +93,7 @@ def cfg_rule(reason: str = "no") -> Protocol:
     async def decide(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return Decision.reject(reason)
 
@@ -562,7 +562,7 @@ def test_an_exact_name_wins_over_the_package_fallback() -> None:
     @protocol
     def observe_only(monitors: Monitors) -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             return None
 
@@ -596,7 +596,7 @@ def cfg_versioned_rule() -> Protocol:
     async def decide(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return Decision.reject("no")
 

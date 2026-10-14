@@ -54,6 +54,7 @@ def test_author_facing_names_are_exported() -> None:
         "threshold",
         "decide_final",
         "PortabilityError",
+        "Escalations",
     }
     assert expected <= set(inspect_sentinel.__all__)
     for name in expected:

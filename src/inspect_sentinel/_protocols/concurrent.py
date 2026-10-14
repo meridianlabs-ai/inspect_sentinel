@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .._context import Context
 from .._decorators import forwards, protocol
-from .._report import Decision, Reported
+from .._report import Decision, Escalations, Reported
 from .._results import warn_failed
 from .._runner import run_children
 from .._step import Step
@@ -35,7 +35,7 @@ def concurrent(
         return reported.name
 
     async def run(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         reports = await run_children(snapshot, context, step)
         warn_failed(reports.observations.failed)

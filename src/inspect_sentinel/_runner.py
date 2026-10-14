@@ -15,7 +15,7 @@ from ._context import Context, validate_instance_name
 from ._decorators import invoke, members
 from ._final import Final, Origin
 from ._host import HostContext, enter_layer, layer, running_step
-from ._report import Decision, Failed, Observation, Report, Reported
+from ._report import Decision, Escalations, Failed, Observation, Report, Reported
 from ._results import Decisions, Observations, Reports
 from ._step import Step
 from ._types import (
@@ -241,7 +241,7 @@ async def _run_named(
     named: Sequence[tuple[str, Sentinel]],
     context: Context,
     step: Step,
-    escalations: tuple[Reported[Decision], ...],
+    escalations: Escalations,
     caller: str,
 ) -> Reports:
     recorder = layer(context, caller).recorder
@@ -330,7 +330,7 @@ async def _run_child(
     report_type: type[R],
     context: Context,
     step: Step,
-    escalations: tuple[Reported[Decision], ...],
+    escalations: Escalations,
     name: str | None,
     found: list[Reported[R]],
     failed: list[Failed],
@@ -392,7 +392,7 @@ async def _run_member(
     report_type: type[R],
     child_context: Context,
     step: Step,
-    escalations: tuple[Reported[Decision], ...],
+    escalations: Escalations,
     child_name: str,
     grouped: bool,
 ) -> Reported[R] | Failed | None:

@@ -100,7 +100,7 @@ A monitor and a protocol are each an async function, produced by a registered fa
 ``` python
 @protocol
 def no_curl() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def decide(context: Context, step: BeforeToolCall, escalations: Escalations) -> Decision | None:
         """A rule: a protocol with no monitors. Called before a tool call executes."""
         if step.call.function == "bash" and "curl" in step.call.arguments.get("cmd", ""):
             return Decision.reject("uses curl", message="network access is out of bounds")
@@ -215,7 +215,7 @@ A monitor never annotates `Step`, since [its annotation is what selects the stag
 
 #### Escalations are a protocol's parameter, not a field of the step {#escalations-are-a-parameter}
 
-The payloads hold only facts about the conversation that the host provides and that read the same live and in replay. What earlier links of a `sequential` decided at this step is not such a fact: it is the chain's own state. So a protocol is `async def decide(context, step, escalations)`, where `escalations: tuple[Reported[Decision], ...]` holds the escalations of the links before it in an [ordered composition](#two-compositions-concurrent-and-ordered), in order, so a human at the end of the `sequential` sees who is asking and why. It is empty everywhere else: the root and every composition but `sequential` hand their children none, so escalations do not cross layers. A monitor takes `(context, step)` and is never handed them. That is enforced by the signature rather than by stripping a field at run time, and it keeps monitors independent: a `threshold` escalation carries every monitor's score and explanation in `metadata["observations"]`, which a monitor after it in a chain would otherwise read (AISI's R4 narrowing kept protocol decisions and other monitors' observations out of a monitor's view for the same reason). The reports are protocol-authored rather than agent-authored, but they may quote agent text in their explanations, so a protocol rendering them, as `human()` does through the host, labels them as prior verdicts rather than as instructions. Approval's equivalent is a block appended to `view.context`, which exists only on the tool stages and is absent under a proxy. Decided by the maintainer on 2026-10-14, replacing a `step.escalations` field that `sequential` set with `replace()`; a `ProtocolContext` with `.escalations` (it would break `Context`'s constant-for-a-sample invariant), a context variable (hidden state) and an `oversight` sub-object on the step were rejected. This is the one positional parameter added after release, while the package had almost no users, and there is no two-argument form.
+The payloads hold only facts about the conversation that the host provides and that read the same live and in replay. What earlier links of a `sequential` decided at this step is not such a fact: it is the chain's own state. So a protocol is `async def decide(context, step, escalations)`, where `escalations: Escalations` (an exported alias of `tuple[Reported[Decision], ...]`) holds the escalations of the links before it in an [ordered composition](#two-compositions-concurrent-and-ordered), in order, so a human at the end of the `sequential` sees who is asking and why. It is empty everywhere else: the root and every composition but `sequential` hand their children none, so escalations do not cross layers. A monitor takes `(context, step)` and is never handed them. That is enforced by the signature rather than by stripping a field at run time, and it keeps monitors independent: a `threshold` escalation carries every monitor's score and explanation in `metadata["observations"]`, which a monitor after it in a chain would otherwise read (AISI's R4 narrowing kept protocol decisions and other monitors' observations out of a monitor's view for the same reason). The reports are protocol-authored rather than agent-authored, but they may quote agent text in their explanations, so a protocol rendering them, as `human()` does through the host, labels them as prior verdicts rather than as instructions. Approval's equivalent is a block appended to `view.context`, which exists only on the tool stages and is absent under a proxy. Decided by the maintainer on 2026-10-14, replacing a `step.escalations` field that `sequential` set with `replace()`; a `ProtocolContext` with `.escalations` (it would break `Context`'s constant-for-a-sample invariant), a context variable (hidden state) and an `oversight` sub-object on the step were rejected. This is the one positional parameter added after release, while the package had almost no users, and there is no two-argument form.
 
 #### Two histories: `input` and `history` {#two-histories}
 
@@ -738,7 +738,7 @@ All of which is ordinary code, not framework surface — see [The runner](#the-r
 ``` python
 @protocol
 def resample(monitors: Monitor | MonitorGroup | Monitors, threshold: float, n: int = 3) -> Protocol:
-    async def decide(context: Context, step: AfterGenerate, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def decide(context: Context, step: AfterGenerate, escalations: Escalations) -> Decision | None:
         reports = await run_monitors(monitors, context, step)
         score = reports.max_suspicion()
         if score is None or score < threshold:
@@ -793,7 +793,7 @@ def threshold(
         ("escalate", thresholds(escalate_at)),
     ]
 
-    async def decide(context: Context, step: Step, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def decide(context: Context, step: Step, escalations: Escalations) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None
@@ -835,7 +835,7 @@ Protocols: TypeAlias = Mapping[str, Protocol | ProtocolGroup] | Sequence[Protoco
 Sentinel: TypeAlias = Monitor | MonitorGroup | Protocol | ProtocolGroup
 Sentinels: TypeAlias = Sentinel | Mapping[str, Sentinel] | Sequence[Sentinel]
 
-Escalations = tuple[Reported[Decision], ...]   # shorthand here, not exported
+Escalations: TypeAlias = tuple[Reported[Decision], ...]   # exported: a protocol's third parameter
 
 Protocol: TypeAlias = (
     Callable[[Context, Step, Escalations], Awaitable[Decision | None]]
@@ -989,7 +989,7 @@ def sequential(children: Sentinels) -> Protocol:
     if not named:
         raise ValueError("sequential needs at least one child.")
 
-    async def run(context: Context, step: Step, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def run(context: Context, step: Step, escalations: Escalations) -> Decision | None:
         handed: list[Reported[Decision]] = []   # starts empty, ignoring `escalations`: they do not cross layers
         participated = False
         for name, child in named:
@@ -1020,7 +1020,7 @@ Three properties fall out of writing it as ordinary code. A monitor in a `sequen
 ``` python
 @protocol
 def concurrent(children: Sentinels) -> Protocol:
-    async def run(context: Context, step: Step, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def run(context: Context, step: Step, escalations: Escalations) -> Decision | None:
         reports = await run_children(children, context, step)    # hands its children no escalations
         warn_failed(reports.observations.failed)
         voters = reports.decisions
@@ -1164,7 +1164,7 @@ The parameter annotation says *where* a function runs; the decorator says *what 
 
 ``` python
 @monitor  ...  async def judge(context: Context, step: BeforeToolCall) -> Observation | None: ...
-@protocol ...  async def no_curl(context: Context, step: BeforeToolCall, escalations: tuple[Reported[Decision], ...]) -> Decision | None: ...
+@protocol ...  async def no_curl(context: Context, step: BeforeToolCall, escalations: Escalations) -> Decision | None: ...
 ```
 
 An earlier draft had one decorator and read the kind off the return annotation, so that the same `@monitor` could produce a scorer or a decider. That was rejected in favour of two decorators, and the reasoning that once argued *for* reading annotations still holds here — a `@monitor(kind="scorer")` argument was rejected because a second vocabulary can contradict what the function returns. Two decorators are not a second vocabulary. The decorator is the registry type, and mypy checks the body against it: a `return Decision(...)` inside a function annotated `-> Observation | None` is an ordinary type error, and a factory returning that function does not satisfy `Callable[P, Monitor]`.

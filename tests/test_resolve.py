@@ -11,7 +11,7 @@ from inspect_sentinel._decorators import (
     protocol,
 )
 from inspect_sentinel._protocols import concurrent, observe_only, threshold
-from inspect_sentinel._report import Decision, Observation, Reported
+from inspect_sentinel._report import Decision, Escalations, Observation
 from inspect_sentinel._resolve import resolve_sentinel
 from inspect_sentinel._runner import (
     run_protocols,
@@ -57,7 +57,7 @@ def watches_both() -> MonitorGroup:
 @protocol
 def blocks() -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return Decision.reject("no")
 
@@ -67,12 +67,12 @@ def blocks() -> Protocol:
 @protocol
 def pair() -> ProtocolGroup:
     async def one(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return Decision.proceed()
 
     async def two(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return Decision.reject("no")
 

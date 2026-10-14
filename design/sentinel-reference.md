@@ -40,7 +40,7 @@ The smallest protocol is a rule with no monitors:
 ```python
 @protocol
 def no_curl() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def decide(context: Context, step: BeforeToolCall, escalations: Escalations) -> Decision | None:
         if step.call.function == "bash" and "curl" in step.call.arguments.get("cmd", ""):
             return Decision.reject("uses curl", message="network access is out of bounds")
         return None
@@ -203,7 +203,7 @@ Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCal
 
 Everything in `step` except `conversation` and `truncated` was written or shaped by the agent under observation and can carry prompt injection. Nothing in `context` came from the agent. Treat `step` as evidence and `context` as instructions.
 
-Escalations are not on the step: the payloads hold only facts about the conversation that the host provides, the same live and in replay. A protocol takes them as its third parameter, `async def decide(context, step, escalations)`, with `escalations: tuple[Reported[Decision], ...]`. It is filled only inside a `sequential()`: when an earlier link returns `escalate`, its report is handed to the next link's protocols here, so a human at the end sees who is asking and why. It is empty everywhere else. A monitor takes `(context, step)` and never sees them, so it cannot read another monitor's score through a `threshold` escalation's `metadata["observations"]`. The reports are written by protocols, but their explanations may quote agent text, so label them as prior verdicts if you render them into a prompt. See `sentinel.md`, "Escalations are a protocol's parameter".
+Escalations are not on the step: the payloads hold only facts about the conversation that the host provides, the same live and in replay. A protocol takes them as its third parameter, `async def decide(context, step, escalations)`, with `escalations: Escalations`, the exported alias of `tuple[Reported[Decision], ...]`. It is filled only inside a `sequential()`: when an earlier link returns `escalate`, its report is handed to the next link's protocols here, so a human at the end sees who is asking and why. It is empty everywhere else. A monitor takes `(context, step)` and never sees them, so it cannot read another monitor's score through a `threshold` escalation's `metadata["observations"]`. The reports are written by protocols, but their explanations may quote agent text, so label them as prior verdicts if you render them into a prompt. See `sentinel.md`, "Escalations are a protocol's parameter".
 
 `input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. At the tool stages `input` is `None` when no model call produced the call or the event that recorded it is no longer available (inspect_ai finds it through the transcript's bounded-memory history); it is never approximated from `history`. `history` is `None` when the host cannot know the scaffold's list: a proxy, which sees only the request; a replay from a log that cannot establish the list at that step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`. A monitor that reads it checks for `None` and says the history is unavailable rather than judging an empty list. The tool stages also carry that request's `tools`, `None` exactly when `input` is, and `AfterToolCall.truncated` is the host's cut to the result as `ToolEvent.truncated` records it: a `Truncation` (original size and limit, in bytes) for a cut, `False` for none, `None` when the host cannot tell (proxy, replay from messages). Monitors read it rather than the forgeable "output was too long" notice in `result`; a sandbox output-limit or timeout cut is reported by `result.error` instead. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
 
@@ -604,7 +604,7 @@ def threshold(
         ("escalate", thresholds(escalate_at)),
     ]
 
-    async def decide(context: Context, step: Step, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def decide(context: Context, step: Step, escalations: Escalations) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None
@@ -626,7 +626,8 @@ def threshold(
 It holds the constants a monitor must not, validates them and its children when it is configured, reads its children's scores through the runner, and returns a decision. Each threshold is a floor, at or above which the step gets at least that action, and the strongest action reached decides. A decision is explained for the log: `explain` names the highest score that reached its threshold and carries its monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`; the decision carries every reporting monitor's references, and `metadata["observations"]` lists each monitor's score and explanation, so they reach a person reviewing an escalation through the `escalations` a `human()` after it is handed; inspect_ai's approval card shows them once its renderer lists them ([pr-series.md](pr-series.md), Deferred, "inspect_ai's human view shows every score"). None sets `message`, so the agent gets the host's default "not approved" text and learns nothing about what the monitors saw, which matters where the agent is the adversary.
 
 ```python
-Escalations = tuple[Reported[Decision], ...]   # shorthand here, not exported
+
+Escalations: TypeAlias = tuple[Reported[Decision], ...]   # exported: a protocol's third parameter
 
 Protocol: TypeAlias = (
     Callable[[Context, Step, Escalations], Awaitable[Decision | None]]
@@ -789,7 +790,7 @@ def sequential(children: Sentinels) -> Protocol:
     if not named:
         raise ValueError("sequential needs at least one child.")
 
-    async def run(context: Context, step: Step, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def run(context: Context, step: Step, escalations: Escalations) -> Decision | None:
         handed: list[Reported[Decision]] = []   # starts empty for each run, ignoring `escalations`
         participated = False
         for name, child in named:
@@ -832,7 +833,7 @@ class HumanAnswer:
 
 class Host(Protocol):
     async def ask_human(
-        self, step: Step, escalations: tuple[Reported[Decision], ...], choices: Sequence[str]
+        self, step: Step, escalations: Escalations, choices: Sequence[str]
     ) -> HumanAnswer: ...
 ```
 
@@ -936,7 +937,7 @@ threshold(
 ```python
 @protocol
 def resample(monitors: Monitor | MonitorGroup | Monitors, threshold: float, n: int = 3) -> Protocol:
-    async def decide(context: Context, step: AfterGenerate, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def decide(context: Context, step: AfterGenerate, escalations: Escalations) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         score = observations.max_suspicion()
         if score is None or score < threshold:

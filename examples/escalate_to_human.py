@@ -12,8 +12,8 @@ from inspect_sentinel import (
     BeforeToolCall,
     Context,
     Decision,
+    Escalations,
     Protocol,
-    Reported,
     call_text,
     find_words,
     human,
@@ -32,7 +32,7 @@ def triage() -> Protocol:
     async def decide(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         if not tool_matches(step.call, "bash", "python"):
             return Decision.proceed()

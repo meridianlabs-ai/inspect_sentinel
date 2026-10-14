@@ -192,6 +192,10 @@ class Reported(Generic[R_co]):
     """The `__name__` of the function that produced the report, which tells apart the functions of an instance whose factory returned several."""
 
 
+Escalations: TypeAlias = tuple[Reported[Decision], ...]
+"""The escalations a protocol is handed as its third parameter: those of the links before it in a `sequential()`, in the order they escalated, each with the escalating instance's name and its decision. Empty anywhere else, since escalations do not cross layers. A monitor is never handed them."""
+
+
 @dataclass(frozen=True)
 class Failed:
     """A monitor function that raised instead of reporting, with the identity of its configured instance."""

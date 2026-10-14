@@ -16,7 +16,12 @@ from inspect_sentinel._integration import (
     sentinel_from_config,
 )
 from inspect_sentinel._protocols import concurrent
-from inspect_sentinel._report import Action, Decision, Observation, Reported
+from inspect_sentinel._report import (
+    Action,
+    Decision,
+    Escalations,
+    Observation,
+)
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import AfterGenerate, AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup
@@ -43,7 +48,7 @@ def hum_rule(action: Action = "escalate") -> Protocol:
     async def decide(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return Decision(action=action, explanation=f"rule says {action}")
 
@@ -55,7 +60,7 @@ def hum_turn_rule() -> Protocol:
     async def decide(
         context: Context,
         step: AfterGenerate,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return Decision(action="escalate", explanation="turn deletes files")
 

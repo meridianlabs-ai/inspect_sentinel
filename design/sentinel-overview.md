@@ -21,7 +21,7 @@ There are two registerable types. A **monitor** observes: it returns an `Observa
 ``` python
 @protocol
 def no_curl() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def decide(context: Context, step: BeforeToolCall, escalations: Escalations) -> Decision | None:
         if "curl" in str(step.call.arguments):
             return Decision.reject("uses curl", message="network access is not allowed")
         return None
@@ -168,7 +168,7 @@ def threshold(
         ("escalate", thresholds(escalate_at)),
     ]
 
-    async def decide(context: Context, step: Step, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def decide(context: Context, step: Step, escalations: Escalations) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None

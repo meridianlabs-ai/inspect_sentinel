@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TypeAlias, cast, final
 
 from ._context import Context
-from ._report import Decision, Observation, Report, Reported
+from ._report import Decision, Escalations, Observation, Report
 from ._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 
 Monitor: TypeAlias = (
@@ -16,23 +16,21 @@ Monitor: TypeAlias = (
 """A monitor: observes a step at one stage and reports a suspicion score, or abstains."""
 
 Protocol: TypeAlias = (
-    Callable[
-        [Context, Step, tuple[Reported[Decision], ...]], Awaitable[Decision | None]
-    ]
+    Callable[[Context, Step, Escalations], Awaitable[Decision | None]]
     | Callable[
-        [Context, BeforeGenerate, tuple[Reported[Decision], ...]],
+        [Context, BeforeGenerate, Escalations],
         Awaitable[Decision | None],
     ]
     | Callable[
-        [Context, AfterGenerate, tuple[Reported[Decision], ...]],
+        [Context, AfterGenerate, Escalations],
         Awaitable[Decision | None],
     ]
     | Callable[
-        [Context, BeforeToolCall, tuple[Reported[Decision], ...]],
+        [Context, BeforeToolCall, Escalations],
         Awaitable[Decision | None],
     ]
     | Callable[
-        [Context, AfterToolCall, tuple[Reported[Decision], ...]],
+        [Context, AfterToolCall, Escalations],
         Awaitable[Decision | None],
     ]
 )

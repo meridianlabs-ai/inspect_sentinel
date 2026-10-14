@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .._context import Context
 from .._decorators import forwards, protocol
-from .._report import Decision, Reported
+from .._report import Decision, Escalations, Reported
 from .._results import warn_failed
 from .._runner import run_children
 from .._step import Step
@@ -29,7 +29,7 @@ def sequential(
         raise ValueError("sequential needs at least one child.")
 
     async def run(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         # the chain's own, not the ones it was handed: escalations do not cross layers
         handed: list[Reported[Decision]] = []

@@ -8,7 +8,7 @@ from inspect_ai.scorer import Reference
 
 from .._context import Context
 from .._decorators import members, protocol
-from .._report import Action, Decision, Observation, Reported
+from .._report import Action, Decision, Escalations, Observation, Reported
 from .._results import Observations
 from .._runner import describe, run_monitors
 from .._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
@@ -98,28 +98,28 @@ def threshold(
     async def tool_call(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return await decide(context, step)
 
     async def tool_result(
         context: Context,
         step: AfterToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return await decide(context, step)
 
     async def model_input(
         context: Context,
         step: BeforeGenerate,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return await decide(context, step)
 
     async def model_output(
         context: Context,
         step: AfterGenerate,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return await decide(context, step)
 

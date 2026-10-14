@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from .._context import Context
 from .._decorators import protocol
 from .._host import HumanAnswer
-from .._report import Decision, Reported
+from .._report import Decision, Escalations
 from .._step import AfterGenerate, AfterToolCall, BeforeToolCall, Step
 from .._types import Protocol, ProtocolGroup
 
@@ -57,7 +57,7 @@ def human(
     async def ask(
         context: Context,
         step: Step,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
         stage: str,
     ) -> Decision:
         answer = await context.host.ask_human(step, escalations, offered[stage])
@@ -66,21 +66,21 @@ def human(
     async def tool_call(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return await ask(context, step, escalations, "tool_call")
 
     async def tool_result(
         context: Context,
         step: AfterToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return await ask(context, step, escalations, "tool_result")
 
     async def model_output(
         context: Context,
         step: AfterGenerate,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return await ask(context, step, escalations, "model_output")
 

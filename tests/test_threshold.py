@@ -14,7 +14,13 @@ from inspect_sentinel._protocols import (
     sequential,
     threshold,
 )
-from inspect_sentinel._report import Action, Decision, Observation, Reported, Suspicion
+from inspect_sentinel._report import (
+    Action,
+    Decision,
+    Escalations,
+    Observation,
+    Suspicion,
+)
 from inspect_sentinel._runner import run_protocols
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol, ProtocolGroup
@@ -101,7 +107,7 @@ def th_before_and_after() -> MonitorGroup:
 @protocol
 def th_says() -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return Decision.proceed()
 

@@ -17,7 +17,7 @@ from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._final import decide_final
 from inspect_sentinel._integration import Sentinels, resolve_sentinel, run_sentinel
-from inspect_sentinel._report import Decision, Observation, Reported
+from inspect_sentinel._report import Decision, Escalations, Observation
 from inspect_sentinel._runner import run_protocols
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup
@@ -35,7 +35,7 @@ def ue_score() -> Monitor:
 @protocol
 def ue_escalates(explanation: str | None = "unsure") -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         cite = f"[{explanation}]"
         return Decision.escalate(
@@ -48,7 +48,7 @@ def ue_escalates(explanation: str | None = "unsure") -> Protocol:
 @protocol
 def ue_final() -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         decide_final(Decision.escalate("final"))
 
@@ -146,7 +146,7 @@ def _child_ref() -> Reference:
 @protocol
 def ue_child(reason: str = "child reason") -> Protocol:
     async def run(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return Decision.escalate(reason, references=[_child_ref()])
 
@@ -160,13 +160,13 @@ def ue_group(forwards: bool) -> ProtocolGroup:
     configured = ue_child()
 
     async def nested(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         decisions = await run_protocols({"child": configured}, context, step)
         return decisions[0].report if forwards else Decision.proceed("child handled")
 
     async def independent(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return Decision.escalate(
             "independent reason",
@@ -211,7 +211,7 @@ def ue_consults(returns: Returns) -> Protocol:
     configured = ue_child()
 
     async def run(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         decisions = await run_protocols({"child": configured}, context, step)
         child = decisions[0].report
@@ -273,7 +273,7 @@ def ue_above(forwards: bool) -> Protocol:
     configured = ue_consults("own")
 
     async def run(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         decisions = await run_protocols({"middle": configured}, context, step)
         if forwards:
@@ -313,7 +313,7 @@ def ue_over_votes(forwards: bool) -> Protocol:
     votes = concurrent({"rule": ue_escalates(), "llm": _limit()})
 
     async def run(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         decisions = await run_protocols({"votes": votes}, context, step)
         return decisions[0].report if forwards else Decision.escalate("own reason")
@@ -349,7 +349,7 @@ class Calls(StoreModel):
 @protocol
 def ue_counts() -> Protocol:
     async def run(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         calls = context.store_as(Calls)
         calls.count += 1
@@ -363,7 +363,7 @@ def ue_twice() -> Protocol:
     configured = ue_counts()
 
     async def run(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         await run_protocols({"again": configured}, context, step)
         decisions = await run_protocols({"again": configured}, context, step)
@@ -386,7 +386,7 @@ async def test_each_invocation_at_one_path_is_named() -> None:
 @protocol
 def ue_inner() -> Protocol:
     async def run(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return Decision.escalate(
             "inner reason",
@@ -401,7 +401,7 @@ def ue_outer(results: list[Decision | None], spawn: bool) -> Protocol:
     # runs another sentinel for its step, awaited or from a task it starts,
     # then escalates on its own
     async def run(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         async def inner() -> None:
             results.append(

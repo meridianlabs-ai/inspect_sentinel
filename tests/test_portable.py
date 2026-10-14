@@ -743,11 +743,11 @@ def test_what_a_reference_resolved_to_is_described(
 def test_a_protocol_is_checked(load: Load) -> None:
     source = """
 import os
-from inspect_sentinel import Context, Decision, Protocol, Reported, Step, protocol
+from inspect_sentinel import Context, Decision, Escalations, Protocol, Step, protocol
 
 @protocol
 def decides_portably() -> Protocol:
-    async def decide(context: Context, step: Step, escalations: tuple[Reported[Decision], ...]) -> Decision | None:
+    async def decide(context: Context, step: Step, escalations: Escalations) -> Decision | None:
         os.getenv("A")
         return None
 

@@ -25,7 +25,7 @@ How to write a protocol: a `@protocol` factory returning a function that takes a
 - Taking children as a parameter, and naming them
 - The boundary check: shape errors raised before a decision takes effect
 - Running at every stage with `Step`
-- Reading `escalations`, the third parameter: the escalations of the links before a protocol in a `sequential()`, each a `Reported[Decision]` with the escalating instance's name and its explanation, empty anywhere else; a monitor never receives them. Handing them on to children with `run_protocols(..., escalations=...)` or `run_children(..., escalations=...)`
+- Reading `escalations`, the third parameter, annotated `Escalations`: the escalations of the links before a protocol in a `sequential()`, each a `Reported[Decision]` with the escalating instance's name and its explanation, empty anywhere else; a monitor never receives them. Handing them on to children with `run_protocols(..., escalations=...)` or `run_children(..., escalations=...)`
 - Shipping protocols in a package
 
 ## Helpers for Rules
@@ -46,8 +46,8 @@ from inspect_sentinel import (
     BeforeToolCall,
     Context,
     Decision,
+    Escalations,
     Protocol,
-    Reported,
     call_text,
     find_words,
     protocol,
@@ -62,7 +62,7 @@ def installs() -> Protocol:
     async def decide(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         if not tool_matches(step.call, "bash", case_sensitive=False):
             return None

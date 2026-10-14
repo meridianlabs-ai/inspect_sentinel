@@ -11,7 +11,7 @@ from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
 from inspect_ai.tool import ToolCall, ToolChoice, ToolInfo
 from inspect_ai.util import Store
 
-from ._report import Decision, Failed, Report, Reported
+from ._report import Decision, Escalations, Failed, Report, Reported
 from ._step import Step
 
 if TYPE_CHECKING:
@@ -65,7 +65,7 @@ class Host(TypingProtocol):
     async def ask_human(
         self,
         step: Step,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
         choices: Sequence[str],
     ) -> HumanAnswer:
         """Ask a person to decide about a step, and wait for the answer.

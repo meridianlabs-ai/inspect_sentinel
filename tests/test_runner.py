@@ -15,7 +15,13 @@ from inspect_sentinel._decorators import (
 )
 from inspect_sentinel._final import Final, decide_final
 from inspect_sentinel._protocols import concurrent
-from inspect_sentinel._report import Action, Decision, Observation, Reported
+from inspect_sentinel._report import (
+    Action,
+    Decision,
+    Escalations,
+    Observation,
+    Reported,
+)
 from inspect_sentinel._resolve import resolve_sentinel
 from inspect_sentinel._results import (
     Decisions,
@@ -145,7 +151,7 @@ def after_only() -> Monitor:
 @protocol
 def raises() -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         raise RuntimeError("protocol exploded")
 
@@ -155,7 +161,7 @@ def raises() -> Protocol:
 @protocol
 def decides(action: Action = "proceed") -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return Decision(
             action=action,
@@ -172,7 +178,7 @@ def decides(action: Action = "proceed") -> Protocol:
 @protocol
 def finalizes(action: Action = "reject") -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         decide_final(Decision(action=action))
 
@@ -182,7 +188,7 @@ def finalizes(action: Action = "reject") -> Protocol:
 @protocol
 def wrapper(child: Protocol) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         await run_protocols(child, context, step)
         return Decision.proceed()
@@ -193,7 +199,7 @@ def wrapper(child: Protocol) -> Protocol:
 @protocol
 def records_path() -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return Decision(action="proceed", explanation=context.path)
 
@@ -257,7 +263,7 @@ async def test_run_monitors_rejects_a_single_protocol() -> None:
 @protocol
 def keeps_context(kept: list[Context]) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         kept.append(context)
         return None
@@ -282,7 +288,7 @@ async def test_running_children_after_the_step_is_an_error(
 @protocol
 def hands_in(path: str) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         await run_monitors([scores()], replace(context, path=path), step)
         return None
@@ -299,7 +305,7 @@ async def test_a_context_from_outside_the_running_step_is_an_error() -> None:
 @protocol
 def runs_twice(first: Monitor, second: Monitor) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         await run_monitors({"judge": first}, context, step)
         await run_monitors({"judge": second}, context, step)
@@ -327,7 +333,7 @@ async def test_two_factories_under_one_path_in_a_step_is_an_error(
 
 def _waits_then_monitors(mine: anyio.Event, other: anyio.Event) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         mine.set()
         await other.wait()
@@ -367,7 +373,7 @@ async def test_concurrent_siblings_record_under_their_own_layers() -> None:
 @protocol
 def fans_out_itself() -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         async with anyio.create_task_group() as tg:
             tg.start_soon(run_children, {"x": scores(0.1)}, context, step)
@@ -402,7 +408,7 @@ def nests_a_step() -> Monitor:
 @protocol
 def runs_after_a_nested_step() -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         await run_monitors({"n": nests_a_step()}, context, step)
         await run_monitors({"after": scores()}, context, step)
@@ -423,7 +429,7 @@ async def test_a_nested_step_leaves_the_outer_step_running() -> None:
 @protocol
 def waits_forever() -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         await anyio.sleep_forever()
         return None
@@ -453,7 +459,7 @@ class Sample(StoreModel):
 @protocol
 def per_sample(label: str, mine: anyio.Event, other: anyio.Event) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         context.store_as(Sample).seen = label
         mine.set()
@@ -570,7 +576,7 @@ async def test_terminate_cancels_siblings() -> None:
     @protocol
     def slow() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             started.set()
             await anyio.sleep_forever()
@@ -582,7 +588,7 @@ async def test_terminate_cancels_siblings() -> None:
     @protocol
     def terminates() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await started.wait()
             return Decision(action="terminate")
@@ -732,7 +738,7 @@ async def test_a_raising_child_surfaces_while_a_sibling_is_mid_await() -> None:
     @protocol
     def waits() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             started.set()
             await anyio.sleep_forever()
@@ -743,7 +749,7 @@ async def test_a_raising_child_surfaces_while_a_sibling_is_mid_await() -> None:
     @protocol
     def explodes_after_start() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await started.wait()
             raise RuntimeError("boom")
@@ -802,7 +808,7 @@ async def test_terminate_keeps_results_collected_before_it() -> None:
     @protocol
     def quick() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             return Decision(action="proceed")
 
@@ -811,7 +817,7 @@ async def test_terminate_keeps_results_collected_before_it() -> None:
     @protocol
     def slow() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             started.set()
             await anyio.sleep_forever()
@@ -822,7 +828,7 @@ async def test_terminate_keeps_results_collected_before_it() -> None:
     @protocol
     def terminates() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await started.wait()
             return Decision(action="terminate")
@@ -864,7 +870,7 @@ async def test_a_child_exception_keeps_its_own_cause() -> None:
     @protocol
     def chained() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             raise RuntimeError("wrapped") from KeyError("inner")
 
@@ -888,7 +894,7 @@ async def test_a_recorder_failure_during_cancellation_fails_loud() -> None:
     @protocol
     def slow() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             started.set()
             await anyio.sleep_forever()
@@ -899,7 +905,7 @@ async def test_a_recorder_failure_during_cancellation_fails_loud() -> None:
     @protocol
     def terminates() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await started.wait()
             return Decision(action="terminate")
@@ -938,7 +944,7 @@ async def test_terminate_cancels_monitors_at_their_next_await() -> None:
     @protocol
     def terminates() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await started.wait()
             return Decision(action="terminate")
@@ -980,7 +986,7 @@ async def test_a_child_error_alongside_a_cancellation_surfaces_on_both_backends(
     @protocol
     def converts_cancellation() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             entered.set()
             try:
@@ -994,7 +1000,7 @@ async def test_a_child_error_alongside_a_cancellation_surfaces_on_both_backends(
     @protocol
     def hangs_on() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await anyio.sleep_forever()
             return None
@@ -1076,7 +1082,7 @@ async def test_final_ends_the_step_past_every_layer_above() -> None:
     @protocol
     def slow() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             started.set()
             await anyio.sleep_forever()
@@ -1087,7 +1093,7 @@ async def test_final_ends_the_step_past_every_layer_above() -> None:
     @protocol
     def leaf() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await started.wait()
             decide_final(Decision.reject("a person said no"))
@@ -1145,7 +1151,7 @@ async def test_the_loser_of_a_final_race_is_recorded_as_superseded() -> None:
     @protocol
     def opens() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await waiting.wait()
             gate.set()
@@ -1156,7 +1162,7 @@ async def test_the_loser_of_a_final_race_is_recorded_as_superseded() -> None:
     @protocol
     def follows() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             waiting.set()
             await gate.wait()
@@ -1191,7 +1197,7 @@ async def test_an_error_beside_a_final_decision_is_not_hidden_by_it() -> None:
     @protocol
     def opens() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await waiting.wait()
             gate.set()
@@ -1202,7 +1208,7 @@ async def test_an_error_beside_a_final_decision_is_not_hidden_by_it() -> None:
     @protocol
     def explodes() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             waiting.set()
             await gate.wait()
@@ -1245,7 +1251,7 @@ async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -
     @protocol
     def slow() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             started.set()
             await anyio.sleep_forever()
@@ -1256,7 +1262,7 @@ async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -
     @protocol
     def leaf() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await started.wait()
             decide_final(Decision.reject("fanned out"))
@@ -1266,7 +1272,7 @@ async def test_a_final_inside_a_protocols_own_task_group_still_ends_the_step() -
     @protocol
     def custom() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             async with anyio.create_task_group() as tg:
                 tg.start_soon(run_protocols, slow(), context, step)
@@ -1297,7 +1303,7 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
     @protocol
     def opens() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await waiting.wait()
             gate.set()
@@ -1308,7 +1314,7 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
     @protocol
     def follows() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             waiting.set()
             await gate.wait()
@@ -1319,7 +1325,7 @@ async def test_a_final_race_inside_a_protocols_own_task_group_records_one_decisi
     @protocol
     def custom() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             async with anyio.create_task_group() as tg:
                 tg.start_soon(run_protocols, opens(), context, step)
@@ -1400,7 +1406,7 @@ async def test_run_sentinel_checks_the_roots_decision_shape() -> None:
     @protocol
     def illegal() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             return Decision(action="modify")
 
@@ -1435,7 +1441,7 @@ async def test_an_error_beside_a_protocols_own_final_in_its_task_group_surfaces(
     @protocol
     def custom() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             async with anyio.create_task_group() as tg:
                 tg.start_soon(finals_now)
@@ -1459,7 +1465,7 @@ async def test_an_error_beside_a_claimed_final_in_a_protocols_own_group_surfaces
     @protocol
     def leaf() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await waiting.wait()
             gate.set()
@@ -1475,7 +1481,7 @@ async def test_an_error_beside_a_claimed_final_in_a_protocols_own_group_surfaces
     @protocol
     def custom() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             async with anyio.create_task_group() as tg:
                 tg.start_soon(run_protocols, leaf(), context, step)
@@ -1502,7 +1508,7 @@ async def test_an_illegal_own_final_supersedes_the_claimed_finals_beside_it() ->
     @protocol
     def leaf() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await waiting.wait()
             gate.set()
@@ -1518,7 +1524,7 @@ async def test_an_illegal_own_final_supersedes_the_claimed_finals_beside_it() ->
     @protocol
     def custom() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             async with anyio.create_task_group() as tg:
                 tg.start_soon(run_protocols, leaf(), context, step)
@@ -1544,7 +1550,7 @@ async def test_a_monitors_own_final_supersedes_the_claimed_finals_beside_it() ->
     @protocol
     def leaf() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await waiting.wait()
             gate.set()
@@ -1606,7 +1612,7 @@ async def test_an_ill_shaped_own_final_supersedes_nothing_it_made_itself(
     @protocol
     def twice() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             async def valid() -> None:
                 decide_final(Decision.terminate())
@@ -1791,14 +1797,14 @@ async def test_a_group_member_calling_final_ends_the_step() -> None:
         async def screen(
             context: Context,
             step: BeforeToolCall,
-            escalations: tuple[Reported[Decision], ...],
+            escalations: Escalations,
         ) -> Decision | None:
             decide_final(Decision.reject("screened"))
 
         async def later(
             context: Context,
             step: BeforeToolCall,
-            escalations: tuple[Reported[Decision], ...],
+            escalations: Escalations,
         ) -> Decision | None:
             ran.append("later")
             return Decision.proceed()
@@ -1836,7 +1842,7 @@ async def test_a_cancelled_group_is_recorded_once() -> None:
     @protocol
     def terminates() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await started.wait()
             return Decision.terminate()
@@ -1864,12 +1870,12 @@ async def test_the_root_is_one_function() -> None:
     @protocol
     def pair() -> ProtocolGroup:
         async def one(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             return None
 
         async def two(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             return None
 
@@ -1889,7 +1895,7 @@ async def test_a_members_terminate_stops_the_group() -> None:
         async def stop(
             context: Context,
             step: BeforeToolCall,
-            escalations: tuple[Reported[Decision], ...],
+            escalations: Escalations,
         ) -> Decision | None:
             await started.wait()
             return Decision.terminate()
@@ -1897,7 +1903,7 @@ async def test_a_members_terminate_stops_the_group() -> None:
         async def overrule(
             context: Context,
             step: BeforeToolCall,
-            escalations: tuple[Reported[Decision], ...],
+            escalations: Escalations,
         ) -> Decision | None:
             ran.append("overrule")
             decide_final(Decision.reject("overruled"))
@@ -1907,7 +1913,7 @@ async def test_a_members_terminate_stops_the_group() -> None:
     @protocol
     def slow() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             started.set()
             await anyio.sleep_forever()
@@ -1959,14 +1965,14 @@ async def test_a_group_members_error_names_its_function() -> None:
         async def fine(
             context: Context,
             step: AfterToolCall,
-            escalations: tuple[Reported[Decision], ...],
+            escalations: Escalations,
         ) -> Decision | None:
             return None
 
         async def rejects(
             context: Context,
             step: AfterToolCall,
-            escalations: tuple[Reported[Decision], ...],
+            escalations: Escalations,
         ) -> Decision | None:
             return Decision.reject()
 
@@ -2011,7 +2017,7 @@ async def test_records_and_cancellations_name_the_factory_apart_from_the_instanc
     @protocol
     def terminates() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await started.wait()
             return Decision.terminate()
@@ -2076,7 +2082,7 @@ async def test_superseded_decisions_name_the_factory() -> None:
     @protocol
     def opens() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             await waiting.wait()
             gate.set()
@@ -2087,7 +2093,7 @@ async def test_superseded_decisions_name_the_factory() -> None:
     @protocol
     def follows() -> Protocol:
         async def decide(
-            context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+            context: Context, step: Step, escalations: Escalations
         ) -> Decision | None:
             waiting.set()
             await gate.wait()

@@ -12,8 +12,8 @@ from inspect_sentinel import (
     AfterGenerate,
     Context,
     Decision,
+    Escalations,
     Protocol,
-    Reported,
     call_text,
     find_words,
     human,
@@ -32,7 +32,7 @@ def turn_triage() -> Protocol:
     async def decide(
         context: Context,
         step: AfterGenerate,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         if not step.output.choices:
             return Decision.proceed()

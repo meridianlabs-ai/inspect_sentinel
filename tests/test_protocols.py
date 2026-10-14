@@ -20,7 +20,13 @@ from inspect_sentinel._integration import (
     sentinel_from_config,
 )
 from inspect_sentinel._protocols import concurrent, observe_only, sequential, threshold
-from inspect_sentinel._report import Action, Decision, Observation, Reported, Suspicion
+from inspect_sentinel._report import (
+    Action,
+    Decision,
+    Escalations,
+    Observation,
+    Suspicion,
+)
 from inspect_sentinel._runner import (
     run_protocols,
     run_sentinel,
@@ -68,7 +74,7 @@ def afterwards() -> Monitor:
 @protocol
 def says(action: Action = "proceed", explanation: str | None = None) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return Decision(action=action, explanation=explanation)
 
@@ -78,7 +84,7 @@ def says(action: Action = "proceed", explanation: str | None = None) -> Protocol
 @protocol
 def rewrites(explanation: str | None = None) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return Decision(
             action="modify",
@@ -94,7 +100,7 @@ def rewrites(explanation: str | None = None) -> Protocol:
 @protocol
 def wrapper(child: Protocol) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         await run_protocols(child, context, step)
         return Decision.proceed()
@@ -243,7 +249,7 @@ def panel(children: Protocols) -> Protocol:
     async def decide(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         votes = await run_protocols(children, context, step)
         rejects = sum(v.report.action == "reject" for v in votes)
@@ -404,14 +410,14 @@ def rules() -> ProtocolGroup:
     async def lenient(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return Decision.proceed()
 
     async def strict(
         context: Context,
         step: BeforeToolCall,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
     ) -> Decision | None:
         return Decision.reject("strict")
 
@@ -438,7 +444,7 @@ def _edits(first: Action, second: Action) -> ProtocolGroup:
         async def rewrite(
             context: Context,
             step: BeforeToolCall,
-            escalations: tuple[Reported[Decision], ...],
+            escalations: Escalations,
         ) -> Decision | None:
             return Decision(
                 action=first, modified=modified if first == "modify" else None
@@ -447,7 +453,7 @@ def _edits(first: Action, second: Action) -> ProtocolGroup:
         async def audit(
             context: Context,
             step: BeforeToolCall,
-            escalations: tuple[Reported[Decision], ...],
+            escalations: Escalations,
         ) -> Decision | None:
             return Decision(
                 action=second, modified=modified if second == "modify" else None
@@ -526,7 +532,7 @@ def _add(container: Any, late: object) -> None:
 @protocol
 def stops() -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return Decision.terminate("late")
 
@@ -626,7 +632,7 @@ _GIVEN = "given"
 @protocol
 def keeps(options: Mapping[str, float]) -> Protocol:
     async def decide(
-        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+        context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return None
 

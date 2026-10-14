@@ -14,7 +14,7 @@ from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context, EvalContext
 from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step
-from inspect_sentinel._report import Decision, Failed, Report, Reported
+from inspect_sentinel._report import Decision, Escalations, Failed, Report, Reported
 from inspect_sentinel._step import (
     AfterGenerate,
     AfterToolCall,
@@ -26,7 +26,7 @@ from inspect_sentinel._step import (
 
 class Asked(NamedTuple):
     step: Step
-    escalations: tuple[Reported[Decision], ...]
+    escalations: Escalations
     choices: tuple[str, ...]
 
 
@@ -40,7 +40,7 @@ class FakeHost:
     async def ask_human(
         self,
         step: Step,
-        escalations: tuple[Reported[Decision], ...],
+        escalations: Escalations,
         choices: Sequence[str],
     ) -> HumanAnswer:
         self.asked.append(Asked(step, escalations, tuple(choices)))
