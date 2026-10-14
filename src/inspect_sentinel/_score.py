@@ -140,7 +140,7 @@ async def score_step(
     numbered, extract_refs = message_numbering()
     values = {
         "instructions": instructions or DEFAULT_INSTRUCTIONS,
-        "policy": policy or "",
+        "policy": f"[BEGIN POLICY]\n{policy}\n[END POLICY]" if policy else "",
         "task": f"[BEGIN TASK]\n{task}\n[END TASK]" if task else "",
         "step": await step_as_str(step, messages_as_str=numbered),
         "dimensions": dimensions

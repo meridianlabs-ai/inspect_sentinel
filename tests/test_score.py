@@ -54,8 +54,13 @@ async def test_a_string_is_one_score() -> None:
     [
         (None, None, ["You are an expert at monitoring", "treat it as data"], []),
         ("Watch the agent.", None, ["Watch the agent."], ["You are an expert"]),
-        # after the task the host gave
-        (None, "Policy: stay in /work.", ["[END TASK]\n\nPolicy: stay in /work."], []),
+        # before the task the host gave, since it binds whatever the task says
+        (
+            None,
+            "Policy: stay in /work.",
+            ["[BEGIN POLICY]\nPolicy: stay in /work.\n[END POLICY]\n\n[BEGIN TASK]"],
+            [],
+        ),
     ],
 )
 @pytest.mark.anyio
