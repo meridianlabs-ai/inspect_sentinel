@@ -683,6 +683,24 @@ async def test_history_is_shown_only_when_it_holds_a_message_the_input_does_not(
 
 
 @pytest.mark.anyio
+async def test_blocks_come_input_then_history_then_the_step_numbered_in_that_order() -> (
+    None
+):
+    numbered, extract_refs = message_numbering(
+        MessagesPreprocessor(exclude_system=False)
+    )
+    step = replace(
+        tool_step([user("summary")], CONVERSATION), call=call("b"), message="calls b"
+    )
+    rendered = await step_as_str(step, messages_as_str=numbered)
+    starts = [
+        rendered.index(f"[BEGIN {name}]") for name in ("INPUT", "HISTORY", "TOOL CALL")
+    ]
+    assert starts == sorted(starts)
+    assert [r.id for r in extract_refs("see [M1]")] == ["summary"]
+
+
+@pytest.mark.anyio
 async def test_step_as_str_says_when_the_model_input_is_unknown() -> None:
     rendered = await step_as_str(_excerpt(tool_step(None, [])))
     assert (
