@@ -10,8 +10,11 @@ from ._report import Decision, Reported
 
 
 @dataclass(frozen=True)
-class EarlierDecision:
-    """A decision a person made through `human()` at an earlier step of the agent's conversation. `earlier_decisions` on a step holds them."""
+class HumanDecision:
+    """A decision a person made through `human()` at an earlier step of the agent's conversation. `human_decisions` on a step holds them, and `human_decision_for()` finds the one covering a call.
+
+    Use it to annotate the past call it covers when rendering the conversation into a prompt, such as "reviewed by a person: approved", so a monitor does not flag already-reviewed history again. It is not a standing permission: never lower suspicion of a new call because it resembles one a person approved. The same command can mean something else once the state has changed (an `rm -rf build/` approved in one working directory deletes something else after a `cd`), and an agent can get a benign call approved and then issue a similar harmful one.
+    """
 
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
     """The stage of the step it was made at, as `SentinelEvent.stage` records it: `tool_call`, `tool_result` or `model_output`, the stages `human()` asks at."""
@@ -23,7 +26,13 @@ class EarlierDecision:
     """The tool calls the decision covered: the step's call at a tool stage, and every call the turn makes at `model_output` (none for a turn without calls). How a prompt says which calls a person approved."""
 
     decided: Reported[Decision]
-    """The `human()` instance that asked (`name`, `path`, `function`) and a detached copy of its decision, which carries nothing of the step it was made at beyond its own fields: `approve` is a `proceed`, with no explanation, and on a `reject` or `terminate` the person's reason is the `explanation` (and, for a `reject`, the `message`). It is what the person decided, not what happened to the step: beside other protocols in a `concurrent()`, a peer's `reject` outranks the person's `approve`."""
+    """The `human()` instance that asked (`name`, `path`, `function`) and a detached copy of its decision, which carries nothing of the step it was made at beyond its own fields: `approve` is a `proceed`, with no explanation, and on a `reject` or `terminate` the person's reason is the `explanation` (and, for a `reject`, the `message`). The reason is untrusted text, which can quote the agent, so quote it when rendering it into a prompt.
+
+    It is what the person decided, not what happened to the step: beside other protocols in a `concurrent()`, a peer's `reject` outranks the person's `approve`, so a call a person approved may not have run. Mark only calls that ran, which have a result in the history.
+    """
+
+    dismissed: bool
+    """True when the person closed the prompt without choosing, and the host answered `reject` or `terminate` so the step failed closed (`HumanAnswer.dismissed`). Then `decided` is not a judgment by the person: do not render it as one."""
 
 
 @dataclass(frozen=True)
@@ -45,10 +54,10 @@ class BeforeGenerate:
     history: list[ChatMessage] | None
     """The caller's message list: the conversation as the caller passed it to the model. For a scaffold that compacts its conversation this is the compacted conversation. `None` when the host cannot know the caller's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the caller's list at each step; or at a step with no caller conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the caller's own list; monitors must not mutate it."""
 
-    earlier_decisions: tuple[EarlierDecision, ...] | None = field(
+    human_decisions: tuple[HumanDecision, ...] | None = field(
         default=None, kw_only=True
     )
-    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, for annotating the past calls a person already reviewed when rendering the conversation, so a monitor does not flag them again; `human_decision_for()` finds the one covering a call. Not a standing permission: mark the exact call, and never lower suspicion of a new call that resembles an approved one (see `HumanDecision`). A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     tools: list[ToolInfo]
     """The tools the model is offered, after `tool_choice` filtering. In-process these are the host's own objects; monitors must not mutate them."""
@@ -82,10 +91,10 @@ class AfterGenerate:
     history: list[ChatMessage] | None
     """The caller's message list, or `None`, as for `BeforeGenerate`; monitors must not mutate it."""
 
-    earlier_decisions: tuple[EarlierDecision, ...] | None = field(
+    human_decisions: tuple[HumanDecision, ...] | None = field(
         default=None, kw_only=True
     )
-    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, for annotating the past calls a person already reviewed when rendering the conversation, so a monitor does not flag them again; `human_decision_for()` finds the one covering a call. Not a standing permission: mark the exact call, and never lower suspicion of a new call that resembles an approved one (see `HumanDecision`). A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     tools: list[ToolInfo]
     """The tools the model was offered; monitors must not mutate them."""
@@ -136,10 +145,10 @@ class BeforeToolCall:
     history: list[ChatMessage] | None
     """The scaffold's message list: its full conversation, pre-compaction turns included. `None` when the host cannot know the scaffold's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or at a step with no scaffold conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the scaffold's own list; monitors must not mutate it."""
 
-    earlier_decisions: tuple[EarlierDecision, ...] | None = field(
+    human_decisions: tuple[HumanDecision, ...] | None = field(
         default=None, kw_only=True
     )
-    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, for annotating the past calls a person already reviewed when rendering the conversation, so a monitor does not flag them again; `human_decision_for()` finds the one covering a call. Not a standing permission: mark the exact call, and never lower suspicion of a new call that resembles an approved one (see `HumanDecision`). A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
@@ -176,10 +185,10 @@ class AfterToolCall:
     history: list[ChatMessage] | None
     """The scaffold's message list: its full conversation, pre-compaction turns included. `None` when the host cannot know the scaffold's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or at a step with no scaffold conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the scaffold's own list; monitors must not mutate it."""
 
-    earlier_decisions: tuple[EarlierDecision, ...] | None = field(
+    human_decisions: tuple[HumanDecision, ...] | None = field(
         default=None, kw_only=True
     )
-    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, for annotating the past calls a person already reviewed when rendering the conversation, so a monitor does not flag them again; `human_decision_for()` finds the one covering a call. Not a standing permission: mark the exact call, and never lower suspicion of a new call that resembles an approved one (see `HumanDecision`). A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
@@ -193,3 +202,18 @@ class AfterToolCall:
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall
 """The union, for code that handles any stage: a protocol, or a host."""
+
+
+def human_decision_for(step: Step, call_id: str) -> HumanDecision | None:
+    """The latest decision a person made through `human()` that covers the tool call `call_id`, from `step.human_decisions`.
+
+    A call can be decided about more than once: its turn at `model_output` covers each of its calls, then the call itself before it runs and its result after, so the latest is the most specific. None when no decision covers the call, and also when `step.human_decisions` is None because the host cannot tell; check that field to tell the two apart. Use the result to annotate that exact call, not to judge a new call that resembles it (see `HumanDecision`).
+
+    Args:
+        step: The step being examined.
+        call_id: The id of a tool call earlier in the conversation, as `ToolCall.id`.
+    """
+    for decision in reversed(step.human_decisions or ()):
+        if call_id in decision.call_ids:
+            return decision
+    return None

@@ -9,10 +9,11 @@ from inspect_ai.model._model_output import ChatCompletionChoice
 from inspect_ai.tool import ToolCall
 
 from inspect_sentinel import (
-    EarlierDecision,
     HumanAnswer,
+    HumanDecision,
     decide_final,
     human,
+    human_decision_for,
     run_protocols,
     sequential,
 )
@@ -20,7 +21,7 @@ from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._integration import (
     Sentinels,
-    earlier_decision,
+    kept_human_decision,
     resolve_sentinel,
     run_sentinel,
     supersedes,
@@ -68,7 +69,7 @@ def escalates() -> Protocol:
 
 async def _kept(
     spec: Sentinels, step: Step, *answers: HumanAnswer
-) -> list[EarlierDecision]:
+) -> list[HumanDecision]:
     # what a host keeps for later steps from every report the runner recorded
     recorder = ListRecorder()
     context = host_context(recorder=recorder, host=FakeHost(*answers))
@@ -76,11 +77,11 @@ async def _kept(
     return _settled(recorder)
 
 
-def _settled(recorder: ListRecorder) -> list[EarlierDecision]:
+def _settled(recorder: ListRecorder) -> list[HumanDecision]:
     # what a host publishes once the step settles: the kept decisions, less the
     # ones a supersession withdrew
     found = (
-        earlier_decision(r.factory, r.step, "step_1", r.reported)
+        kept_human_decision(r.factory, r.step, "step_1", r.reported)
         for r in recorder.records
     )
     kept = [record for record in found if record is not None]
@@ -320,3 +321,75 @@ def _reachable_metadata(decision: Decision) -> list[object]:
         for node in nodes
         if node.decided is not None and node.decided.report.metadata
     ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("answer", "dismissed"),
+    [
+        (HumanAnswer("terminate", reason="stop"), False),
+        (HumanAnswer("terminate", reason="closed", dismissed=True), True),
+        (HumanAnswer("reject", reason="closed", dismissed=True), True),
+    ],
+)
+async def test_a_dismissal_is_told_apart_from_the_persons_choice(
+    answer: HumanAnswer, dismissed: bool
+) -> None:
+    [kept] = await _kept(human(stages=["tool_call"]), before_step(), answer)
+    assert kept.dismissed is dismissed
+    assert kept.decided.report.action == answer.decision
+    assert kept.decided.report.metadata == ({"dismissed": True} if dismissed else None)
+
+
+@pytest.mark.anyio
+async def test_a_dismissal_must_fail_closed() -> None:
+    with pytest.raises(ValueError, match="dismissed prompt"):
+        await _kept(
+            human(stages=["tool_call"]),
+            before_step(),
+            HumanAnswer("approve", dismissed=True),
+        )
+
+
+def _decision(stage: str, step_id: str, *call_ids: str, action: str) -> HumanDecision:
+    return HumanDecision(
+        stage=cast(Any, stage),
+        step_id=step_id,
+        call_ids=call_ids,
+        decided=Reported(
+            name="human",
+            path="human",
+            report=Decision(action=cast(Any, action)),
+            function="tool_call",
+        ),
+        dismissed=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("call_id", "found"),
+    [
+        # the call's own decision is later than its turn's
+        ("a", ("tool_call", "proceed")),
+        # covered only by its turn
+        ("b", ("model_output", "proceed")),
+        ("c", None),
+    ],
+)
+def test_the_latest_decision_covering_a_call_is_found(
+    call_id: str, found: tuple[str, str] | None
+) -> None:
+    decisions = (
+        _decision("model_output", "m1", "a", "b", action="proceed"),
+        _decision("tool_call", "x", "x", action="reject"),
+        _decision("tool_call", "a", "a", action="proceed"),
+    )
+    step = replace(after_step(), human_decisions=decisions)
+    decision = human_decision_for(step, call_id)
+    assert (
+        None if decision is None else (decision.stage, decision.decided.report.action)
+    ) == found
+
+
+def test_nothing_is_found_when_the_host_cannot_tell() -> None:
+    assert human_decision_for(after_step(), "call_1") is None

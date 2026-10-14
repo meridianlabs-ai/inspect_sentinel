@@ -34,7 +34,7 @@ def human(
 ) -> Protocol | ProtocolGroup:
     """Ask a person to decide, every time the step reaches this protocol.
 
-    The person is asked through `Host.ask_human`, which is handed the step and shows it with `step.escalations`, so at the end of a `sequential()` the person sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call. After a generate, the person sees the whole assistant turn, its text and every tool call it makes, before any of the calls run. The answer maps to a decision: `approve` to `proceed`, `reject` to `reject` with the person's reason as both the `message` the agent reads and the `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
+    The person is asked through `Host.ask_human`, which is handed the step and shows it with `step.escalations`, so at the end of a `sequential()` the person sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call. After a generate, the person sees the whole assistant turn, its text and every tool call it makes, before any of the calls run. When the person ends the prompt without choosing, the host fails closed with a dismissed answer (`HumanAnswer.dismissed`), which this records as `metadata={"dismissed": True}` so later steps can tell it from a person's choice (`HumanDecision.dismissed`). The answer maps to a decision: `approve` to `proceed`, `reject` to `reject` with the person's reason as both the `message` the agent reads and the `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
 
     The answer is an ordinary decision: it ends a `sequential()` as any link's decision does, and beside other protocols in a `concurrent()` it is one vote, so another protocol's `reject` outranks the person's `approve`.
 
@@ -105,13 +105,25 @@ def _decision(answer: HumanAnswer, choices: tuple[str, ...]) -> Decision:
         raise ValueError(
             f"The host answered {answer.decision!r} with a modified call; only a 'modify' carries one."
         )
+    if answer.dismissed and answer.decision not in ("reject", "terminate"):
+        raise ValueError(
+            f"The host answered {answer.decision!r} for a dismissed prompt; a dismissal fails closed, as 'reject' or 'terminate'."
+        )
     reason = answer.reason or None
     match answer.decision:
         case "approve":
-            return Decision.proceed()
+            decision = Decision.proceed()
         case "reject":
-            return Decision.reject(reason, message=reason)
+            decision = Decision.reject(reason, message=reason)
         case "terminate":
-            return Decision.terminate(reason)
+            decision = Decision.terminate(reason)
         case _:
-            return Decision(action="modify", modified=answer.modified)
+            decision = Decision(action="modify", modified=answer.modified)
+    if answer.dismissed:
+        decision.metadata = {DISMISSED_KEY: True}
+    return decision
+
+
+# the metadata key that marks a decision the person did not make: they closed
+# the prompt and the host failed closed
+DISMISSED_KEY = "dismissed"
