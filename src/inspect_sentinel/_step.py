@@ -23,7 +23,7 @@ class EarlierDecision:
     """The tool calls the decision covered: the step's call at a tool stage, and every call the turn makes at `model_output` (none for a turn without calls). How a prompt says which calls a person approved."""
 
     decided: Reported[Decision]
-    """The `human()` instance that asked (`name`, `path`, `function`) and its decision: `approve` is a `proceed`, with no explanation, and on a `reject` or `terminate` the person's reason is the `explanation` (and, for a `reject`, the `message`). It is what the person decided, not what happened to the step: beside other protocols in a `concurrent()`, a peer's `reject` outranks the person's `approve`."""
+    """The `human()` instance that asked (`name`, `path`, `function`) and a detached copy of its decision, which carries nothing of the step it was made at beyond its own fields: `approve` is a `proceed`, with no explanation, and on a `reject` or `terminate` the person's reason is the `explanation` (and, for a `reject`, the `message`). It is what the person decided, not what happened to the step: beside other protocols in a `concurrent()`, a peer's `reject` outranks the person's `approve`."""
 
 
 @dataclass(frozen=True)
@@ -48,7 +48,7 @@ class BeforeGenerate:
     earlier_decisions: tuple[EarlierDecision, ...] | None = field(
         default=None, kw_only=True
     )
-    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions recorded before this step began that took effect (one a sibling's `decide_final()` superseded is dropped), never one from this step, and never a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     tools: list[ToolInfo]
     """The tools the model is offered, after `tool_choice` filtering. In-process these are the host's own objects; monitors must not mutate them."""
@@ -85,7 +85,7 @@ class AfterGenerate:
     earlier_decisions: tuple[EarlierDecision, ...] | None = field(
         default=None, kw_only=True
     )
-    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions recorded before this step began that took effect (one a sibling's `decide_final()` superseded is dropped), never one from this step, and never a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     tools: list[ToolInfo]
     """The tools the model was offered; monitors must not mutate them."""
@@ -139,7 +139,7 @@ class BeforeToolCall:
     earlier_decisions: tuple[EarlierDecision, ...] | None = field(
         default=None, kw_only=True
     )
-    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions recorded before this step began that took effect (one a sibling's `decide_final()` superseded is dropped), never one from this step, and never a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
@@ -179,7 +179,7 @@ class AfterToolCall:
     earlier_decisions: tuple[EarlierDecision, ...] | None = field(
         default=None, kw_only=True
     )
-    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions recorded before this step began that took effect (one a sibling's `decide_final()` superseded is dropped), never one from this step, and never a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
