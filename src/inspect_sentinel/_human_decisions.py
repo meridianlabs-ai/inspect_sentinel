@@ -4,7 +4,7 @@ from typing import Literal
 
 from inspect_ai._util.registry import registry_info
 
-from ._protocols.human import DISMISSED_KEY, human
+from ._protocols.human import human
 from ._report import Decision, Report, Reported
 from ._step import (
     AfterGenerate,
@@ -40,7 +40,6 @@ def kept_human_decision(
         report=Decision.model_validate(reported.report.model_dump()),
         function=reported.function,
     )
-    dismissed = (reported.report.metadata or {}).get(DISMISSED_KEY) is True
     if isinstance(step, AfterGenerate):
         message = step.output.message if step.output.choices else None
         calls = (message.tool_calls if message is not None else None) or []
@@ -49,7 +48,6 @@ def kept_human_decision(
             step_id=step_id,
             call_ids=tuple(call.id for call in calls),
             decided=decision,
-            dismissed=dismissed,
         )
     if isinstance(step, BeforeGenerate):
         return HumanDecision(
@@ -57,7 +55,6 @@ def kept_human_decision(
             step_id=step_id,
             call_ids=(),
             decided=decision,
-            dismissed=dismissed,
         )
     stage: Literal["tool_call", "tool_result"] = (
         "tool_result" if isinstance(step, AfterToolCall) else "tool_call"
@@ -67,7 +64,6 @@ def kept_human_decision(
         step_id=step_id,
         call_ids=(step.call.id,),
         decided=decision,
-        dismissed=dismissed,
     )
 
 

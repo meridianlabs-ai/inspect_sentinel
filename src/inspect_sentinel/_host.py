@@ -31,9 +31,6 @@ class HumanAnswer:
     modified: ToolCall | None = None
     """The replacement call, when the person chose `modify` at a tool stage."""
 
-    dismissed: bool = False
-    """True when the person did not choose: they closed, cancelled or dismissed the prompt, and the host answered `reject` or `terminate` to fail closed, so the answer is not the person's judgment. Set it whenever the person did not choose, also when the fail-closed answer is one of the choices offered (a surface that answers a cancellation with `reject`, say), and never for an answer the person selected. `human()` records it in its decision's metadata, and `HumanDecision.dismissed` reports it to later steps."""
-
 
 class Host(TypingProtocol):
     """What a monitor or protocol may do to the outside world. Author-facing.
@@ -68,7 +65,7 @@ class Host(TypingProtocol):
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
         """Ask a person to decide about a step, and wait for the answer.
 
-        The host is handed the step itself and renders it by its type: before a tool call the call, its view, the conversation and `step.escalations` (who escalated and why); after a call the same with the result the model is about to receive; after a generate the whole assistant turn, its text and every tool call it makes, with `step.escalations`. A host raises a clear error for a stage it cannot render. When the person ends the prompt without one of the `choices`, the host answers `reject` if it was offered and `terminate` otherwise, with `dismissed=True`, so the step fails closed; it sets `dismissed=True` too when a surface's own answer to a cancellation happens to be one of the `choices`; `human()` accepts that `terminate` even when it was not offered. It notifies the person and marks the sample as awaiting a person while it waits. `human()` calls this; most protocols never need to.
+        The host is handed the step itself and renders it by its type: before a tool call the call, its view, the conversation and `step.escalations` (who escalated and why); after a call the same with the result the model is about to receive; after a generate the whole assistant turn, its text and every tool call it makes, with `step.escalations`. A host raises a clear error for a stage it cannot render. When the person ends the prompt without one of the `choices`, the host answers `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered. It notifies the person and marks the sample as awaiting a person while it waits. `human()` calls this; most protocols never need to.
 
         Args:
             step: The step to decide about.

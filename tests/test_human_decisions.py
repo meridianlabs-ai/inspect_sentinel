@@ -323,34 +323,6 @@ def _reachable_metadata(decision: Decision) -> list[object]:
     ]
 
 
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("answer", "dismissed"),
-    [
-        (HumanAnswer("terminate", reason="stop"), False),
-        (HumanAnswer("terminate", reason="closed", dismissed=True), True),
-        (HumanAnswer("reject", reason="closed", dismissed=True), True),
-    ],
-)
-async def test_a_dismissal_is_told_apart_from_the_persons_choice(
-    answer: HumanAnswer, dismissed: bool
-) -> None:
-    [kept] = await _kept(human(stages=["tool_call"]), before_step(), answer)
-    assert kept.dismissed is dismissed
-    assert kept.decided.report.action == answer.decision
-    assert kept.decided.report.metadata == ({"dismissed": True} if dismissed else None)
-
-
-@pytest.mark.anyio
-async def test_a_dismissal_must_fail_closed() -> None:
-    with pytest.raises(ValueError, match="dismissed prompt"):
-        await _kept(
-            human(stages=["tool_call"]),
-            before_step(),
-            HumanAnswer("approve", dismissed=True),
-        )
-
-
 def _decision(stage: str, step_id: str, *call_ids: str, action: str) -> HumanDecision:
     return HumanDecision(
         stage=cast(Any, stage),
@@ -362,7 +334,6 @@ def _decision(stage: str, step_id: str, *call_ids: str, action: str) -> HumanDec
             report=Decision(action=cast(Any, action)),
             function="tool_call",
         ),
-        dismissed=False,
     )
 
 
