@@ -135,6 +135,8 @@ Repository: `inspect_ai`. Depends on: nothing. Each can be its own pull request,
 - Chat Completions converters that read a custom tool call, as the Responses converters do.
 - An Anthropic converter that reads every block of a document whose source is a list of blocks.
 - A public function that writes a message in Anthropic's format.
+- Public functions that read the tools, the tool choice and the generation settings from a request, in each provider's format.
+- A public function that describes a tool as the model is offered it, as a `ToolInfo`.
 - A public function for each provider that turns stream events into a `ModelOutput`.
 - A public way to obtain the running sample's uuid and attempt id before its first model call.
 - A public way to make the default view of a tool call.
