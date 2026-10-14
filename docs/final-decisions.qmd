@@ -31,19 +31,25 @@ from inspect_sentinel import human, sequential
 Task(..., sentinel=sequential([triage(), human(stages=["tool_call"])]))
 ```
 
-`stages` is required: `"tool_call"` asks before a call, `"tool_result"` after it, with the result the model is about to receive, and you can name both. `human()` asks whenever it is reached, so here the person is asked only about the calls `triage` escalated, and sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call, like Inspect's human approver. `examples/escalate_to_human.py` is the full task:
+`stages` is required: `"tool_call"` asks before a call, `"tool_result"` after it, with the result the model is about to receive, and `"model_output"` after the agent's model returns a turn, before the agent acts on it. You can name several. `human()` asks whenever it is reached, so here the person is asked only about the calls `triage` escalated, and sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call, like Inspect's human approver. `examples/escalate_to_human.py` is the full task:
 
 ```{.bash filename="Terminal"}
 inspect eval examples/escalate_to_human.py --model openai/gpt-5-mini
 ```
 
-The person chooses from `choices`: by default approve, reject or terminate before a call, and approve or terminate after it. Before a call you can also offer `"modify"`, to edit the call's arguments, where the host supports it. The reason that comes with the answer is what the agent is told on a reject, and is recorded as the decision's explanation.
+The person chooses from `choices`: by default approve, reject or terminate before a call, and approve or terminate after a call and at `"model_output"`, where reject and modify are not offered and asking for them is an error when `human()` is called. Before a call you can also offer `"modify"`, to edit the call's arguments, where the host supports it. The reason that comes with the answer is what the agent is told on a reject, and is recorded as the decision's explanation.
 
 The answer is an ordinary decision. At the end of a `sequential()` it decides for the chain, as any link's decision does, and the layers above vote on it as usual. Beside other protocols in a `concurrent()` group, which is what a list or mapping passed to `Task(sentinel=)` becomes, the person is one vote: another protocol's `reject` outranks the person's `approve`, and the person's `reject` or `terminate` wins over a weaker vote.
 
 A `human()` in a `concurrent()` group asks about every call it is reached on. To ask only about what the rules escalate, put it at the end of a `sequential()`.
 
-In Inspect, the person is asked through the human approval surfaces: an attached ACP client, the approval panel in the full-screen display, or the console otherwise. The prompt shows the call, the escalations above it, and, after a call, its result. Two limits for now:
+At `"model_output"` the person decides about the whole assistant turn at once: its text and every tool call it makes, before any of them runs. Use it when a monitor judges a turn as a whole, because the combined effect of parallel calls matters. Approve lets the turn proceed unchanged; terminate ends the sample. `examples/escalate_turn_to_human.py` escalates a turn whose calls delete files:
+
+```python
+Task(..., sentinel=sequential([turn_triage(), human(stages=["model_output"])]))
+```
+
+In Inspect, the person is asked through the human approval surfaces: an attached ACP client, the approval panel in the full-screen display, or the console otherwise. The prompt shows the call, the escalations above it, and, after a call, its result. At `"model_output"` it shows the turn's text, the escalations, how many calls the turn makes, and then each call as a numbered code block, in one prompt: the person approves or terminates the turn as a whole, not call by call. The calls' arguments come from the agent, so each call is shown only inside its own code block, where its markdown cannot hide or pass for another call, and the count is in the prompt's title too. Characters that act rather than show, such as terminal escape sequences, bidi overrides and zero-width characters, are shown as a marker of their code point, such as `‹U+001B›` for an escape character, wherever the agent's text appears in the prompt, and the prompt says so when it has any. The marker is not a backslash escape, so code always reads exactly as written except at a marker. An ACP client shows the turn as one permission card of its own, and the turn's text and reasoning in the conversation above it, as it does for a call; the Inspect ACP TUI marks control characters there too, and so does `--display conversation` (what `--trace` uses), which prints the turn just before the prompt. Limits for now: what a tool's viewer makes of a call's own arguments inside its code block is the viewer's, so a call can still garble its own content there, and earlier tool output in the ACP TUI's conversation and in `--display conversation` is still shown as is. Two limits for now:
 
 - The reason is not something the person types: the panel and console give a fixed text (for example, that a human rejected the call), and an ACP client gives none, so on a reject the agent is told only that the call was not approved.
 - `"modify"` is not supported: offering it raises an error when the person would be asked.
