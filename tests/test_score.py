@@ -306,6 +306,9 @@ async def test_the_model_is_offered_only_the_answer_tool_one_call_at_a_time() ->
         ({"explanation": "Why?", "risk": "Risky?"}, {}, "'explanation'"),
         ({"_risk": "Risky?"}, {}, "'_risk'"),
         ({"model_dump": "Dumped?"}, {}, "'model_dump'"),
+        # a provider rejects other tool parameter names
+        ({"data exfiltration": "Leaving?"}, {}, "'data exfiltration'"),
+        ({"x" * 65: "Long?"}, {}, "1 to 64"),
     ],
 )
 @pytest.mark.anyio

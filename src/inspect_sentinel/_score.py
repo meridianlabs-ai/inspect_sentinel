@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -70,6 +71,9 @@ _ATTEMPTS = 3
 # a dimension named this would collide with the answer's own field
 _RESERVED = ("explanation",)
 
+# what providers accept as a tool parameter name (Anthropic rejects others)
+_NAME = re.compile(r"[a-zA-Z0-9_.-]{1,64}")
+
 
 async def score_step(
     host: HostNative,
@@ -120,11 +124,14 @@ async def score_step(
     reserved = [
         name
         for name in names
-        if name.startswith("_") or name in _RESERVED or hasattr(BaseModel, name)
+        if not _NAME.fullmatch(name)
+        or name.startswith("_")
+        or name in _RESERVED
+        or hasattr(BaseModel, name)
     ]
     if reserved:
         raise ValueError(
-            f"score() cannot use {', '.join(map(repr, reserved))} as a dimension name: a name must not start with '_', and must not be 'explanation' or an attribute of pydantic's BaseModel."
+            f"score() cannot use {', '.join(map(repr, reserved))} as a dimension name: a name is 1 to 64 letters, digits, '_', '.' or '-', must not start with '_', and must not be 'explanation' or an attribute of pydantic's BaseModel."
         )
     # explanation first, so the model reasons before it scores
     fields: dict[str, Any] = {

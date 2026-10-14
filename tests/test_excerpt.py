@@ -42,7 +42,6 @@ from inspect_sentinel import (
     step_as_str,
 )
 from inspect_sentinel._decorators import monitor, protocol
-from inspect_sentinel._excerpt import _excerpt
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._runner import run_monitors, run_protocols, run_sentinel
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
@@ -138,7 +137,8 @@ def parallel_after_b() -> Step:
 def test_a_tool_steps_history_ends_before_the_message_holding_its_call(
     step: Step, history: list[str]
 ) -> None:
-    assert texts(_excerpt(step).history) == history
+    # an excerpt from any window shows the cut
+    assert texts(keep_history(step).history) == history
 
 
 REPLIED = ["sys", "task", "reply 1"]
@@ -165,7 +165,7 @@ def test_before_a_generate_conversations_end_at_the_last_reply(
     kept_input: list[str],
     kept_history: list[str],
 ) -> None:
-    cut = _excerpt(replace(before_generate_step(), input=input, history=history))
+    cut = keep_history(replace(before_generate_step(), input=input, history=history))
     assert (texts(cut.input), texts(cut.history)) == (kept_input, kept_history)
 
 
@@ -479,24 +479,20 @@ def test_new_since_last_report_outside_the_runner_raises() -> None:
         # the same conversation as the input, so not shown even when kept
         (keep_history(windowed()), ["HISTORY"], "TOOL CALL", ["cmd: ls"]),
         (
-            _excerpt(after_tool_call("bash", "out.txt", cmd="ls")),
+            after_tool_call("bash", "out.txt", cmd="ls"),
             ["HISTORY"],
             "TOOL CALL AND RESULT",
             ["cmd: ls", "out.txt"],
         ),
         (
-            _excerpt(replace(before_generate_step(), input=GO, history=GO)),
+            replace(before_generate_step(), input=GO, history=GO),
             ["HISTORY", "INPUT"],
             "MODEL REQUEST",
             ["go"],
         ),
-        (_excerpt(after_generate_step()), [], "MODEL REPLY", ["ASSISTANT:\ndone"]),
+        (after_generate_step(), [], "MODEL REPLY", ["ASSISTANT:\ndone"]),
         (
-            _excerpt(
-                replace(
-                    after_generate_step(), output=ModelOutput(model="m", choices=[])
-                )
-            ),
+            replace(after_generate_step(), output=ModelOutput(model="m", choices=[])),
             [],
             "MODEL REPLY",
             ["ASSISTANT:"],
@@ -505,7 +501,7 @@ def test_new_since_last_report_outside_the_runner_raises() -> None:
 )
 @pytest.mark.anyio
 async def test_step_as_str_renders_each_kept_part_in_a_block(
-    cut: Excerpt[Step], absent: list[str], block: str, shown: list[str]
+    cut: Step | Excerpt[Step], absent: list[str], block: str, shown: list[str]
 ) -> None:
     rendered = await step_as_str(cut)
     assert not any(f"[BEGIN {name}]" in rendered for name in absent)
@@ -519,7 +515,7 @@ async def test_step_as_str_renders_each_kept_part_in_a_block(
 async def test_a_request_ending_in_a_prefill_has_no_step_block() -> None:
     prefilled = [user("task"), asks("prefill")]
     rendered = await step_as_str(
-        _excerpt(replace(before_generate_step(), input=prefilled, history=prefilled))
+        replace(before_generate_step(), input=prefilled, history=prefilled)
     )
     assert "[AGENT STEP - BEGIN MODEL REQUEST]" not in rendered
     assert "prefill" in rendered.split("[BEGIN INPUT]")[1]
@@ -816,7 +812,7 @@ async def test_a_history_the_host_could_not_provide_is_named_where_it_would_show
 
 @pytest.mark.anyio
 async def test_step_as_str_says_when_the_model_input_is_unknown() -> None:
-    rendered = await step_as_str(_excerpt(tool_step(None, [])))
+    rendered = await step_as_str(tool_step(None, []))
     assert (
         "[BEGIN INPUT]\nThe model input for this call is not available.\n[END INPUT]"
         in rendered

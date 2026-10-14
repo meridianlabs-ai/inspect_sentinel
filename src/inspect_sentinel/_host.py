@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
@@ -148,7 +148,7 @@ class Host(HostNative):
 
         Args:
             step: The step to score, whole, or an excerpt of it from a windowing function.
-            dimensions: What to score and how. A string is the prompt text for a single score, and the observation's `suspicion` is one float. A mapping is each dimension's name to its prompt text, and `suspicion` is a dict keyed by name; a name must not start with `_` or be `explanation` or an attribute of pydantic's `BaseModel`.
+            dimensions: What to score and how. A string is the prompt text for a single score, and the observation's `suspicion` is one float. A mapping is each dimension's name to its prompt text, and `suspicion` is a dict keyed by name; a name is 1 to 64 letters, digits, `_`, `.` or `-` (what providers accept as a tool parameter name), must not start with `_`, and must not be `explanation` or an attribute of pydantic's `BaseModel`.
             instructions: The monitor's own instructions, such as its role and the agent's setting, in place of the default instructions.
             policy: The policy the agent must follow whatever its task says, such as which files it may change; shown before the task.
             template: A replacement for the default prompt template, a Jinja template.
@@ -272,19 +272,20 @@ class HostContext:
     store: Store
     """The sample store that `Context.store_as()` reads and writes while the step runs."""
 
-    context: Context = field(init=False)
-    """The top layer's context, as monitors and protocols will read it."""
-
     def __post_init__(self) -> None:
-        # _context imports this module
-        from ._context import Context
-
-        object.__setattr__(self, "context", Context(path="", host=Host(self.host)))
         # a runtime check for hosts that are not type-checked against Recorder
         if not isinstance(cast(object, self.recorder), Recorder):
             raise TypeError(
                 f"Recorder {type(self.recorder).__name__} must implement record(), failed(), cancelled(), bypassed() and superseded()."
             )
+
+    @property
+    def context(self) -> Context:
+        """The top layer's context, as monitors and protocols will read it: an empty `path` and a `Host` around `host`."""
+        # _context imports this module
+        from ._context import Context
+
+        return Context(path="", host=Host(self.host))
 
 
 @dataclass(frozen=True)

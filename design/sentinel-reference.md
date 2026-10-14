@@ -273,9 +273,12 @@ The host (inspect_ai's dispatcher, or a proxy) implements `HostNative` (`sentine
 ```python
 @dataclass(frozen=True, kw_only=True)
 class HostContext:
-    context: Context      # the top layer's context
+    host: HostNative      # what the host implements
     recorder: Recorder
     store: Store          # the sample store store_as() namespaces into
+
+    @property
+    def context(self) -> Context: ...  # the top layer's: Context(path="", host=Host(host))
 
 
 async def run_sentinel(protocol: Protocol, host_context: HostContext, step: Step) -> Decision | None: ...
