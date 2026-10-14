@@ -48,6 +48,11 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project.optional-dependencies]
+# The sidecar reads a provider's traffic with that provider's SDK, as
+# inspect-ai does, so each is installed only where it is wanted. The floors
+# are inspect-ai's own.
+anthropic = ["anthropic>=1.0.0"]
+openai = ["openai>=3.4.0"]
 dev = [
     "ruff",
     "pytest",
@@ -60,6 +65,8 @@ dev = [
     # not a runtime dependency until message rendering settles (it is to move
     # from Scout into inspect_ai, design/pr-series.md)
     "inspect-scout",
+    # the sidecar's tests read recorded Anthropic and OpenAI traffic
+    "inspect_sentinel[anthropic,openai]",
     "inspect_sentinel[doc]",
 ]
 doc = [
