@@ -58,8 +58,10 @@ class Context:
     host: Host
     """Inference through the host's models, and asking a person. See `Host`."""
 
-    eval: EvalContext | None
-    """The task and sample being run, in an Inspect eval. None outside an eval, for example when a proxy runs the sentinel on requests that have no task, sample or epoch."""
+    @property
+    def eval(self) -> EvalContext | None:
+        """The task and sample being run, in an Inspect eval: the host's `Host.eval`. None outside an eval, for example when a proxy runs the sentinel on requests that have no task, sample or epoch."""
+        return self.host.eval
 
     def store_as(self, model_cls: type[SMT]) -> SMT:
         """Typed view of this instance's state, namespaced by `path`.

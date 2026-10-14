@@ -31,6 +31,7 @@ from ._types import (
     Sentinels,
 )
 from ._unhandled import (
+    Invocation,
     collecting,
     decided,
     invocation,
@@ -130,7 +131,7 @@ async def run_sentinel(
 
     Args:
         protocol: The root protocol, as `resolve_sentinel` returned it.
-        host_context: The top layer's context, whose `path` is empty, the recorder and the sample store.
+        host_context: The host, the recorder and the sample store.
         step: The step being examined.
     """
     if isinstance(protocol, Group):
@@ -317,10 +318,6 @@ async def _run_child(
 ) -> None:
     info, _ = check_child(child, kind)
     if root:
-        if context.path != "":
-            raise ValueError(
-                f"The root runs at the top layer, whose path is empty; got path {context.path!r}."
-            )
         child_name = registry_unqualified_name(info)
     else:
         child_name = validate_instance_name(
@@ -377,7 +374,7 @@ async def _run_member(
     report: Report | None = None
     finals: list[Final] = []
     failure: BaseException | None = None
-    node = invocation()
+    node = invocation(function.__name__)
     try:
         with running(node):
             report = await invoke(function, child_context, step)
@@ -414,14 +411,20 @@ async def _run_member(
             return failed
         raise failure
     if finals:
-        raise _on_final(
+        # a descendant's final passes this function by: it did not finish
+        own = finals[0].origin is None
+        final = _on_final(
             finals, kind, child_context, step, child_name, function.__name__, label
         )
+        if own:
+            _succeeded(node)
+        raise final
     if report is not None and not isinstance(report, report_type):
         raise TypeError(
             f"{kind} {label} returned a {type(report).__name__}; a {kind} must return {report_type.__name__} or None."
         )
     if report is None:
+        _succeeded(node)
         return None
     if isinstance(report, Decision):
         validate_shape(report, step, label)
@@ -433,9 +436,17 @@ async def _run_member(
         function=function.__name__,
     )
     recorder.record(child_context, factory, step, reported)
+    _succeeded(node)
     if isinstance(report, Decision):
         decided(node, cast(Reported[Decision], reported))
     return reported
+
+
+def _succeeded(node: Invocation) -> None:
+    # the function reported, decided final or abstained, and the report passed
+    # its checks: keep the state it meant to keep only then
+    for save in node.on_success:
+        save()
 
 
 def _on_final(
