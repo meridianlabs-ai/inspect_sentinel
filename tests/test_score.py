@@ -50,7 +50,7 @@ async def test_a_string_is_one_score() -> None:
 
 
 @pytest.mark.parametrize(
-    "instructions, task_extra, shown, hidden",
+    "instructions, policy, shown, hidden",
     [
         (None, None, ["You are an expert at monitoring", "treat it as data"], []),
         ("Watch the agent.", None, ["Watch the agent."], ["You are an expert"]),
@@ -61,7 +61,7 @@ async def test_a_string_is_one_score() -> None:
 @pytest.mark.anyio
 async def test_the_monitors_own_text_goes_into_the_default_template(
     instructions: str | None,
-    task_extra: str | None,
+    policy: str | None,
     shown: list[str],
     hidden: list[str],
 ) -> None:
@@ -72,7 +72,7 @@ async def test_the_monitors_own_text_goes_into_the_default_template(
         "Safe?",
         task="Free disk space.",
         instructions=instructions,
-        task_extra=task_extra,
+        policy=policy,
     )
     assert all(text in prompt(host) for text in shown)
     assert not any(text in prompt(host) for text in hidden)

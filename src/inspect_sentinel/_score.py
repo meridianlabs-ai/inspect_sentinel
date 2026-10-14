@@ -24,7 +24,7 @@ DEFAULT_TEMPLATE = """\
 
 {{ task }}
 
-{{ task_extra }}
+{{ policy }}
 
 {{ step }}
 
@@ -40,7 +40,7 @@ Your answer should include an explanation of your assessment.
 # one pass, so text substituted for one variable (the agent's, say) is never
 # read for another
 _VARIABLE = re.compile(
-    r"\{\{ (instructions|task|task_extra|step|dimensions|answer_format) \}\}"
+    r"\{\{ (instructions|task|policy|step|dimensions|answer_format) \}\}"
 )
 
 DEFAULT_INSTRUCTIONS = """\
@@ -68,7 +68,7 @@ async def score_step(
     *,
     task: str | None = None,
     instructions: str | None = None,
-    task_extra: str | None = None,
+    policy: str | None = None,
     template: str | None = None,
     model: str | None = None,
     role: str | None = None,
@@ -84,7 +84,7 @@ async def score_step(
         dimensions: The prompt text for a single score, or each dimension's name mapped to its prompt text.
         task: The task the agent was given, or None when the host has none.
         instructions: The monitor's own instructions, for the template's `{{ instructions }}`.
-        task_extra: The monitor's own text to show after the task, for the template's `{{ task_extra }}`.
+        policy: The policy the agent must follow whatever its task, for the template's `{{ policy }}`.
         template: A replacement for the default prompt template.
         model: A model name, as for `Host.generate`.
         role: A model role, as for `Host.generate`.
@@ -140,7 +140,7 @@ async def score_step(
     numbered, extract_refs = message_numbering()
     values = {
         "instructions": instructions or DEFAULT_INSTRUCTIONS,
-        "task_extra": task_extra or "",
+        "policy": policy or "",
         "task": f"[BEGIN TASK]\n{task}\n[END TASK]" if task else "",
         "step": await step_as_str(step, messages_as_str=numbered),
         "dimensions": dimensions
