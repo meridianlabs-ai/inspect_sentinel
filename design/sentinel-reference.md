@@ -177,6 +177,7 @@ class BeforeToolCall:
     input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage] | None  # the scaffold's full conversation; None when the host cannot know it
     escalations: tuple[Reported[Decision], ...] = ()
+    tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
 
 
 @dataclass(frozen=True)
@@ -190,17 +191,25 @@ class AfterToolCall:
     input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage] | None
     escalations: tuple[Reported[Decision], ...] = ()
+    tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
+    truncated: Truncation | Literal[False] | None = None  # the host's cut; False: not cut; None: can't tell
+
+
+@dataclass(frozen=True)
+class Truncation:
+    original_bytes: int         # size of the tool's output
+    limit_bytes: int            # the limit it was cut to
 
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall
 """The union. Protocols annotate this to run at every stage."""
 ```
 
-Everything in `step` except `conversation` and `escalations` was written or shaped by the agent under observation and can carry prompt injection. Nothing in `context` came from the agent. Treat `step` as evidence and `context` as instructions.
+Everything in `step` except `conversation`, `truncated` and `escalations` was written or shaped by the agent under observation and can carry prompt injection. Nothing in `context` came from the agent. Treat `step` as evidence and `context` as instructions.
 
 `escalations` is filled only inside a `sequential()`: when an earlier link returns `escalate`, its report is handed to the next link here, so a human at the end sees who is asking and why. It is empty everywhere else. The reports are written by protocols, but their explanations may quote agent text, so label them as prior verdicts if you render them into a prompt.
 
-`input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. At the tool stages `input` is `None` when no model call produced the call or the event that recorded it is no longer available (inspect_ai finds it through the transcript's bounded-memory history); it is never approximated from `history`. `history` is `None` when the host cannot know the scaffold's list: a proxy, which sees only the request; a replay from a log that cannot establish the list at that step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`. A monitor that reads it checks for `None` and says the history is unavailable rather than judging an empty list. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
+`input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. At the tool stages `input` is `None` when no model call produced the call or the event that recorded it is no longer available (inspect_ai finds it through the transcript's bounded-memory history); it is never approximated from `history`. `history` is `None` when the host cannot know the scaffold's list: a proxy, which sees only the request; a replay from a log that cannot establish the list at that step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`. A monitor that reads it checks for `None` and says the history is unavailable rather than judging an empty list. The tool stages also carry that request's `tools`, `None` exactly when `input` is, and `AfterToolCall.truncated` is the host's cut to the result as `ToolEvent.truncated` records it: a `Truncation` (original size and limit, in bytes) for a cut, `False` for none, `None` when the host cannot tell (proxy, replay from messages). Monitors read it rather than the forgeable "output was too long" notice in `result`; a sandbox output-limit or timeout cut is reported by `result.error` instead. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
 
 `BeforeToolCall` and `AfterToolCall` are the `Approver` and `Reviewer` payloads with the same fields. `view` and `output` are optional under a proxy, which has no registered tool definitions to render a view from, and `history` is `None` there, since a proxy sees only the request.
 
@@ -506,13 +515,14 @@ Which surfaces exist where:
 | Briefing (`context.eval`) | yes | **no**: `eval` is None | from transcript info | instruction |
 | The subject: call, assistant message, or request | yes | yes | yes | evidence |
 | Tool result as the model saw it | yes | next request only, lossy | yes | evidence |
+| Whether the host truncated the result (`step.truncated`) | yes | no: `None` (unknown) | exact from `ToolEvent.truncated` in a log new enough to record it; else `None` | framework |
 | Untruncated tool output | yes | no | no | evidence |
 | `ToolCallView` | yes | no | from events only | evidence |
 | Exact model input (`step.input`) | yes | yes, the request | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
 | Full history, pre-compaction turns included (`step.history`) | yes | proxy: no, `None`; bridged in-process: yes | only where replay can establish it; else `None` | evidence |
 | Reasoning | provider-dependent | whatever the wire carries | as logged | evidence |
 | System prompt, as the model saw it (`step.input[0]` when present) | yes | yes, but written by the scaffold under observation | from events only | evidence |
-| Tool definitions, config | yes | yes | from events only | evidence |
+| Tool definitions (`step.tools`; at a tool stage the producing call's), config | yes | yes | from events only; `None` at a tool stage without one | evidence |
 | Media | yes | yes | yes | evidence |
 | `target` | yes | never | yes | instruction |
 
@@ -530,7 +540,7 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 | `message_numbering()` | `[M1]`-style numbering plus `extract_refs` for citations in explanations |
 | `last_turn`, `last_n`, `new_since_last_report` | windows over `step.history`, `None` for `None`; the last uses the monitor's store so an incremental monitor never re-reads what it already judged |
 | `call_as_str(call, view=None)` | the Python-call rendering approvers use, honouring a `ToolCallView` |
-| `result_as_str(result, truncated=None)` | a tool result with the truncation point marked |
+| `result_as_str(result, truncated=None)` | a tool result with the truncation (`step.truncated`) marked: that the model saw a cut, and how much was cut |
 | `briefing_as_str(context)`, `step_as_str(step, ...)` | the instruction and evidence sections; an absent surface is named in a fixed phrase, not omitted |
 | `monitor_prompt(context, step, *, question, answer=...)` | the analogue of Scout's `scanner_prompt`: briefing, delimited evidence envelope, escalations as prior verdicts, the question |
 
@@ -802,9 +812,9 @@ def sequential(children: Sentinels) -> Protocol:
 
 `human(stages, choices=None)` is a rule (a protocol with no children) that asks a person whenever it is reached at a stage it watches:
 
-- `stages` is required: `"tool_call"` and/or `"tool_result"`. Leaving it out, an empty list, or an unknown or unsupported stage (`"model_input"`, `"model_output"`) is a configuration error when the factory is called. One function per chosen stage, a `ProtocolGroup` when both.
+- `stages` is required: any of `"tool_call"`, `"tool_result"` and `"model_output"`. Leaving it out, an empty list, or an unknown or unsupported stage (`"model_input"`) is a configuration error when the factory is called. One function per chosen stage, a `ProtocolGroup` when several.
 - No escalation filter: inside a `sequential` it is reached only when every earlier link watching the stage escalated; alone, `human(stages=["tool_call"])` asks about every call.
-- `choices` use inspect's approval words. Default before a call `approve`, `reject`, `terminate` (`modify` may be offered); after a call `approve`, `terminate`, and `reject` or `modify` there is a configuration error.
+- `choices` use inspect's approval words. Default before a call `approve`, `reject`, `terminate` (`modify` may be offered); after a call and after a generate `approve`, `terminate`, and `reject` or `modify` there is a configuration error.
 - The answer maps `approve` to `proceed`, `reject` to `reject` with the person's reason as both `message` and `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
 - The answer is an ordinary decision. Inside a `sequential` it ends that chain; above the chain the usual vote applies, so beside other protocols in a `concurrent()` it is one vote: a peer's `reject` outranks the person's `approve`, and the person's `reject` or `terminate` is not weakened. Human surfaces queue requests, so two `sequential`s that both end in a person prompt one after the other and both answers vote; a `terminate` cancels the other prompt.
 
@@ -821,7 +831,7 @@ class Host(Protocol):
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
 ```
 
-The host is handed the step and renders it by its type: the call, its view, the conversation and `step.escalations`, plus the result after a call. It notifies the person, marks the sample as awaiting a person, and raises a clear error for a stage it cannot render. When the person ends the prompt without one of the choices, the host answers `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered. inspect_ai renders the tool stages with its human approval surfaces; a proxy implements the same method, e.g. as a review queue.
+The host is handed the step and renders it by its type: the call, its view, the conversation and `step.escalations`, plus the result after a call; after a generate the whole assistant turn, its text and every tool call it makes, with `step.escalations`. It notifies the person, marks the sample as awaiting a person, and raises a clear error for a stage it cannot render. When the person ends the prompt without one of the choices, the host answers `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered. inspect_ai renders the tool stages and `AfterGenerate` with its human approval surfaces, a turn as one view; a proxy implements the same method, e.g. as a review queue.
 
 ### Static checking
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 from inspect_ai.model import ChatMessage, ChatMessageTool, GenerateConfig, ModelOutput
 from inspect_ai.tool import ToolCall, ToolCallView, ToolChoice, ToolInfo, ToolResult
@@ -77,6 +77,17 @@ class AfterGenerate:
 
 
 @dataclass(frozen=True)
+class Truncation:
+    """A cut the host made to a tool's output before the model saw it: `AfterToolCall.truncated` when there was one."""
+
+    original_bytes: int
+    """The size of the tool's output, in UTF-8 bytes of its text."""
+
+    limit_bytes: int
+    """The limit the output was cut to, in bytes."""
+
+
+@dataclass(frozen=True)
 class BeforeToolCall:
     """A tool call about to execute."""
 
@@ -101,6 +112,9 @@ class BeforeToolCall:
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
+    tools: list[ToolInfo] | None = None
+    """The tool definitions offered to the model call that produced the call, as the transcript's `ModelEvent` recorded them, after any model hooks (so they can differ from that call's `AfterGenerate.tools` when a hook changed them): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""
+
 
 @dataclass(frozen=True)
 class AfterToolCall:
@@ -116,7 +130,7 @@ class AfterToolCall:
     """The call as executed, after any `modify`."""
 
     result: ChatMessageTool
-    """What the model will see, after truncation."""
+    """What the model will see, after truncation; `truncated` says whether it was cut."""
 
     output: ToolResult
     """The tool's untruncated return value."""
@@ -132,6 +146,12 @@ class AfterToolCall:
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
+
+    tools: list[ToolInfo] | None = None
+    """The tool definitions offered to the model call that produced the call, as the transcript's `ModelEvent` recorded them, after any model hooks (so they can differ from that call's `AfterGenerate.tools` when a hook changed them): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""
+
+    truncated: Truncation | Literal[False] | None = None
+    """Whether the host cut the tool's output before the model saw it in `result`. A `Truncation` when it did; `False` when it did not, which is always so for structured content; `None` when this host cannot tell (a proxy, a replay from messages alone, or a log older than the record of cuts). `if step.truncated:` is true only for a cut. It is built from the value the transcript's `ToolEvent.truncated` records (`Truncation(*event.truncated)` when that is set), so a monitor reads the same answer live and from a log. A cut made before the host's limit applies, by a sandbox output limit or a timeout, is not reported here: `result.error` reports it, with type `"limit"` or `"timeout"`. Use this field, not the "output was too long" notice in `result`, to tell whether the host cut the result: that notice is text a tool's output can contain, so it can be forged."""
 
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall
