@@ -19,6 +19,7 @@ def test_author_facing_names_are_exported() -> None:
     expected = {
         "BeforeToolCall",
         "AfterToolCall",
+        "Truncation",
         "Step",
         "Observation",
         "Decision",
@@ -49,6 +50,7 @@ def test_author_facing_names_are_exported() -> None:
         "concurrent",
         "sequential",
         "human",
+        "handle_escalation",
         "threshold",
         "decide_final",
         "PortabilityError",
@@ -95,12 +97,13 @@ def test_integration_module_exports_the_host_surface() -> None:
         "validate_instance_name",
         "resolve_sentinel",
         "step_types",
+        "watched_stages",
         "run_sentinel",
     }
 
 
 def test_wire_types_come_from_inspect_ai() -> None:
-    from inspect_ai.core import SentinelAction, SentinelSuspicion
+    from inspect_ai.event import SentinelAction, SentinelSuspicion
 
     assert inspect_sentinel.Action is SentinelAction
     assert inspect_sentinel.Suspicion is SentinelSuspicion

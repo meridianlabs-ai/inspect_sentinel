@@ -19,13 +19,13 @@ Inspect Sentinel is under active development, and its API may change. The design
 
 ## Installation
 
-Install Inspect Sentinel from GitHub:
+Install Inspect Sentinel from PyPI:
 
 ```{.bash filename="Terminal"}
-pip install git+https://github.com/meridianlabs-ai/inspect_sentinel
+pip install inspect-sentinel
 ```
 
-This also installs `inspect_ai` from its `feature/sentinel` branch, which adds `Task(sentinel=...)` and the transcript events and viewer support that sentinels use, until that branch is merged.
+It requires `inspect-ai` 0.3.278 or later, the first release with `Task(sentinel=...)` and the transcript events and viewer support that sentinels use.
 
 The example below uses an OpenAI model for the agent and an Anthropic model for the monitor, so install those providers' packages and set their API keys:
 
@@ -328,7 +328,7 @@ Save it as `examples/combined.py` and run it:
 inspect eval examples/combined.py --model openai/gpt-5-mini --model-role monitor=anthropic/claude-haiku-4-5
 ```
 
-A mapping (or a list) that contains a protocol runs under `concurrent()`: before each call both the rule and the threshold run, at the same time, and the strongest decision wins (`terminate` over `reject` over `modify` over `escalate` over `continue`). Writing `concurrent({...})` yourself is the same thing, and is how to nest a group inside another. The keys become *paths* in the log: the rule reports at `network`, the threshold at `llm`, its monitor at `llm/suspicion`, and `concurrent()`'s own decision, the one that takes effect, at the top.
+A mapping (or a list) that contains a protocol runs under `concurrent()`: before each call both the rule and the threshold run, at the same time, and the strongest decision wins (`terminate` over `reject` over `modify` over `escalate` over `proceed`). Writing `concurrent({...})` yourself is the same thing, and is how to nest a group inside another. The keys become *paths* in the log: the rule reports at `network`, the threshold at `llm`, its monitor at `llm/suspicion`, and `concurrent()`'s own decision, the one that takes effect, at the top.
 
 When a decision must not be weakened by anything above it, a protocol calls `decide_final()` instead of returning the decision. It ends the step at once: protocols above it are skipped, and checks still running beside it are cancelled. `examples/nested.py` shows it with a rule for protected paths:
 
@@ -336,7 +336,7 @@ When a decision must not be weakened by anything above it, a protocol calls `dec
 inspect eval examples/nested.py --model openai/gpt-5-mini --model-role monitor=anthropic/claude-haiku-4-5
 ```
 
-To ask a person about what a rule cannot settle, put the rule and `human()` in a `sequential()`: the rule rejects or proceeds where it is sure and escalates the rest, and only the escalated calls reach the person. `examples/escalate_to_human.py` does this for commands that delete files; it waits for your answer in the approval panel.
+To ask a person about what a rule cannot settle, put the rule and `human()` in a `sequential()`: the rule rejects or proceeds where it is sure and escalates the rest, and only the escalated calls reach the person. `examples/escalate_to_human.py` does this for commands that delete files; it waits for your answer in the approval panel. An escalation with nothing after it to answer it ends the sample; to apply a fixed policy instead of asking, end the `sequential()` with `handle_escalation("terminate")` or `handle_escalation("proceed")`.
 
 See [Composition](composition.qmd#sequential) and [Final Decisions and Humans](final-decisions.qmd).
 
@@ -350,7 +350,7 @@ inspect view
 
 Open a sample and look at its tool calls. Each call a sentinel checked carries the checks inside its card:
 
-- **The summary row.** At the top of the call's input, one row names the result that took effect: a verdict (*Continued*, *Rejected*, *Terminated*, ...), the path of the check it came from when that was a nested one, the score where there is one, and the explanation. A rejected call is tinted, so the steps where the sentinel acted stand out as you scroll.
+- **The summary row.** At the top of the call's input, one row names the result that took effect: a verdict (*Proceeded*, *Rejected*, *Terminated*, ...), the path of the check it came from when that was a nested one, the score where there is one, and the explanation. A rejected call is tinted, so the steps where the sentinel acted stand out as you scroll.
 
 - **The checks.** When more than one function reported on the call, the summary row ends in an *N checks* pill. Expand it for the tree of every check by path (`network`, `llm`, `llm/suspicion`, and the top-level decision), each with its decision or score. Click a row for its full explanation. Checks that did not run to completion are labelled: *cancelled* when a sibling's decision cut them short, *bypassed* for the protocols a `decide_final()` skipped.
 

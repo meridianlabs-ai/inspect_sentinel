@@ -18,9 +18,16 @@ from inspect_sentinel._integration import (
 from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import Action, Decision, Observation
 from inspect_sentinel._runner import run_sentinel
-from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
+from inspect_sentinel._step import AfterGenerate, AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup
-from tests._fakes import FakeHost, ListRecorder, after_step, before_step, host_context
+from tests._fakes import (
+    FakeHost,
+    ListRecorder,
+    after_generate_step,
+    after_step,
+    before_step,
+    host_context,
+)
 
 
 @monitor
@@ -35,6 +42,14 @@ def hum_score() -> Monitor:
 def hum_rule(action: Action = "escalate") -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         return Decision(action=action, explanation=f"rule says {action}")
+
+    return decide
+
+
+@protocol
+def hum_turn_rule() -> Protocol:
+    async def decide(context: Context, step: AfterGenerate) -> Decision | None:
+        return Decision(action="escalate", explanation="turn deletes files")
 
     return decide
 
@@ -55,20 +70,22 @@ async def _root(
 
 @pytest.mark.parametrize(
     "stages",
-    [[], ["model_input"], ["model_output"], ["tool_call", "bogus"], "tool_call"],
+    [[], ["model_input"], ["tool_call", "bogus"], "tool_call"],
 )
-def test_stages_must_name_tool_stages(stages: Sequence[str]) -> None:
-    with pytest.raises(ValueError, match="'tool_call'.*'tool_result'"):
+def test_stages_must_name_supported_stages(stages: Sequence[str]) -> None:
+    with pytest.raises(ValueError, match="'tool_call'.*'tool_result'.*'model_output'"):
         human(stages=stages)
 
 
 def test_one_function_per_chosen_stage() -> None:
     before = human(stages=["tool_call"])
     after = human(stages=["tool_result"])
+    turn = human(stages=["model_output"])
     both = human(stages=["tool_call", "tool_result"])
     assert not isinstance(before, ProtocolGroup)
     assert step_types(before) == {BeforeToolCall}
     assert step_types(after) == {AfterToolCall}
+    assert step_types(turn) == {AfterGenerate}
     assert isinstance(both, ProtocolGroup)
     assert step_types(both) == {BeforeToolCall, AfterToolCall}
 
@@ -78,6 +95,7 @@ def test_one_function_per_chosen_stage() -> None:
     [
         ("tool_call", before_step(), ("approve", "reject", "terminate")),
         ("tool_result", after_step(), ("approve", "terminate")),
+        ("model_output", after_generate_step(), ("approve", "terminate")),
     ],
 )
 @pytest.mark.anyio
@@ -105,6 +123,9 @@ async def test_custom_choices_are_offered() -> None:
         (["tool_call"], ["approve", "escalate"], "'escalate'"),
         (["tool_result"], ["approve", "reject"], "'reject'.*after a tool call"),
         (["tool_call", "tool_result"], ["approve", "modify"], "'modify'"),
+        (["model_output"], ["approve", "reject"], "'reject'.*after a generate"),
+        (["model_output"], ["modify"], "'modify'.*after a generate"),
+        (["tool_call", "model_output"], ["approve", "reject"], "after a generate"),
     ],
 )
 def test_invalid_choices_are_a_configuration_error(
@@ -183,14 +204,14 @@ async def test_the_answer_ends_only_its_chain() -> None:
     tree = concurrent(
         {
             "chain": sequential([hum_rule(), human(stages=["tool_call"])]),
-            "peer": hum_rule("continue"),
+            "peer": hum_rule("proceed"),
         }
     )
     decision, _, recorder = await _root(tree, HumanAnswer("reject", reason="no"))
     assert decision is not None and decision.action == "reject"
     assert decision.message == "no"
     assert recorder.bypassed_layers == []
-    assert decision.explanation == "no (chain: reject; peer: continue)"
+    assert decision.explanation == "no (chain: reject; peer: proceed)"
 
 
 @pytest.mark.anyio
@@ -249,10 +270,40 @@ async def test_after_a_call_the_person_sees_the_result() -> None:
 
 
 @pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        (HumanAnswer("approve"), Decision.proceed()),
+        (
+            HumanAnswer("terminate", reason="deletes the repo"),
+            Decision.terminate("deletes the repo"),
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_after_a_generate_the_person_decides_about_the_whole_turn(
+    answer: HumanAnswer, expected: Decision
+) -> None:
+    step = after_generate_step()
+    decision, host, _ = await _root(
+        sequential([hum_turn_rule(), human(stages=["model_output"])]),
+        answer,
+        step=step,
+    )
+    assert decision == expected
+    [asked] = host.asked
+    assert asked.choices == ("approve", "terminate")
+    assert isinstance(asked.step, AfterGenerate)
+    assert asked.step.output is step.output
+    assert [(e.name, e.report.explanation) for e in asked.step.escalations] == [
+        ("hum_turn_rule", "turn deletes files")
+    ]
+
+
+@pytest.mark.parametrize(
     "spec",
     [
-        [hum_rule("continue"), human(stages=["tool_call"])],
-        {"rule": hum_rule("continue"), "person": human(stages=["tool_call"])},
+        [hum_rule("proceed"), human(stages=["tool_call"])],
+        {"rule": hum_rule("proceed"), "person": human(stages=["tool_call"])},
         [hum_score(), human(stages=["tool_call"])],
     ],
 )

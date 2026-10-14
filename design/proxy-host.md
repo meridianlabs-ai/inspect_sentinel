@@ -25,7 +25,7 @@ Needed:
 
 | Decision | Before a generate | After a generate, or before a tool call |
 |---|---|---|
-| `continue` | pass the request | pass the response |
+| `proceed` | pass the request | pass the response |
 | `modify` | rewrite the request body | rewrite the response, e.g. a `tool_use` block |
 | `reject` | pending the generate stages (sentinel #42); the design makes it "do not run this generate, tell the agent why" (`sentinel.md`, "One vocabulary across stages") | rewrite the response so the agent does not run the call: the `tool_use` replaced by the decision's `message` as text, or a refusal. There is no tool-result channel here, so the exact shape needs design. |
 | `terminate` | an error response, plus an optional out-of-band signal to whatever owns the session (who owns it is open; deployment doc, open question 3) | same |

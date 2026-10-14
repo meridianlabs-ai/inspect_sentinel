@@ -1,5 +1,6 @@
 from typing import get_args
 
+import pytest
 from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
@@ -11,7 +12,14 @@ from inspect_ai.model import (
 from inspect_ai.tool import ToolCall, ToolCallView, ToolResult
 
 from inspect_sentinel._report import Decision, Reported
-from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
+from inspect_sentinel._step import (
+    AfterGenerate,
+    AfterToolCall,
+    BeforeGenerate,
+    BeforeToolCall,
+    Step,
+    Truncation,
+)
 
 
 def _call() -> ToolCall:
@@ -97,5 +105,46 @@ def test_after_tool_call_output_may_be_structured_content() -> None:
     assert step.output == output
 
 
-def test_step_union_covers_tool_stages() -> None:
-    assert set(get_args(Step)) == {BeforeToolCall, AfterToolCall}
+def test_tool_steps_default_to_no_tools_and_no_truncation() -> None:
+    before = BeforeToolCall(
+        conversation="conv",
+        message="ok",
+        call=_call(),
+        view=ToolCallView(),
+        input=None,
+        history=_history(),
+    )
+    after = AfterToolCall(
+        conversation="conv",
+        message="ok",
+        call=_call(),
+        result=ChatMessageTool(content="out", tool_call_id="c1"),
+        output="out",
+        view=ToolCallView(),
+        input=None,
+        history=_history(),
+    )
+    assert before.tools is None
+    assert after.tools is None
+    assert after.truncated is None
+
+
+@pytest.mark.parametrize(
+    "truncated,cut",
+    [
+        (Truncation(original_bytes=100, limit_bytes=10), True),
+        (False, False),
+        (None, False),
+    ],
+)
+def test_only_a_cut_is_truthy(truncated: Truncation | bool | None, cut: bool) -> None:
+    assert bool(truncated) is cut
+
+
+def test_step_union_covers_every_stage() -> None:
+    assert set(get_args(Step)) == {
+        BeforeGenerate,
+        AfterGenerate,
+        BeforeToolCall,
+        AfterToolCall,
+    }

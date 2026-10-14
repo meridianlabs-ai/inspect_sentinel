@@ -5,7 +5,7 @@
 Inspect Sentinel is a package for defining, developing, and deploying sentinels: functions that watch agents and intervene in their execution. Key design elements include:
 
 1.  A single interface that encompasses monitoring tool calls and model generations, with execution either before or after model generations and tool calls.
-2.  A division between monitors, which observe and report a suspicion score, and protocols, which decide on an action similar to the current Inspect tool call approval interface (e.g. continue, modify, reject, escalate, terminate). A protocol with no monitors is a simple rule.
+2.  A division between monitors, which observe and report a suspicion score, and protocols, which decide on an action similar to the current Inspect tool call approval interface (e.g. proceed, modify, reject, escalate, terminate). A protocol with no monitors is a simple rule.
 3.  Support for layering control protocols (thresholds, audit budgets, resampling, human review, etc.) on top of monitors.
 4.  Core interfaces decoupled from the Inspect runtime so that monitors can be deployed elsewhere (e.g. in network proxies).
 5.  Development tools for validating, calibrating, and backtesting monitors on test or production transcripts.
@@ -43,7 +43,7 @@ def suspicion_monitor(model: str | None = None) -> Monitor:
 Task(sentinel=threshold(suspicion_monitor(), reject_at=0.8))
 ```
 
-Both run before the tool call executes (the `step` they take is `BeforeToolCall`). There are four stages, the step types a monitor or protocol could choose to target; the two tool stages are built, and the generate stages are designed but not yet built:
+Both run before the tool call executes (the `step` they take is `BeforeToolCall`). There are four stages, the step types a monitor or protocol could choose to target; the two tool stages are built, and the generate stages are built (with `proceed`, `escalate` and `terminate`; `reject` and `modify` come later):
 
 | Stage | Fires |
 |------------------------------------|------------------------------------|
@@ -54,7 +54,7 @@ Both run before the tool call executes (the `step` they take is `BeforeToolCall`
 
 Each function handles one stage and never dispatches on the payload type; a protocol that only forwards the step, such as `concurrent`, annotates `Step` to run at every stage.
 
-Every step carries both `input`, exactly what the model was sent for that generate, and `history`, the scaffold's full conversation including turns a compaction has folded away, since scaffolds edit what they send and neither list is derivable from the other. Each step also carries a `conversation` id, shared with the loop's `ModelEvent`s and `CompactionEvent`s, that links one agent's steps across compactions when several agents share a sample.
+Every step carries both `input`, exactly what the model was sent for that generate (at the tool stages `None` when no model call produced the call or its record is gone), and `history`, the conversation as the scaffold holds it: at the tool stages the scaffold's full list, pre-compaction turns included; at the generate stages the caller's messages, which may already be compacted. Scaffolds edit what they send, so neither list is derivable from the other. A view of everything the model was sent over an agent's run is a separate query, deferred (AISI R10). The tool stages also carry the `tools` that producing call offered, `None` exactly when `input` is, and `AfterToolCall.truncated`, the cut the host made to the result as the log's `ToolEvent` records it: a `Truncation`, `False` for no cut, or `None` when the host cannot tell (AISI R3). Each step also carries a `conversation` id, shared with the loop's `ModelEvent`s and `CompactionEvent`s, that links one agent's steps across compactions when several agents share a sample.
 
 The sentinel API will include a variety of view functions that help with presenting task context and agent actions to the monitor (e.g. like the `messages_as_str()` function in Inspect Scout).
 
@@ -64,7 +64,7 @@ A protocol's `Decision` carries one of the following actions:
 
 | Action      | Effect                                                       |
 |------------------------------------|------------------------------------|
-| `continue`  | No change to the exchange                                    |
+| `proceed`  | No change to the exchange                                    |
 | `modify`    | Replace the step's subject with `modified`                   |
 | `reject`    | Reject the action, notifying the agent that it was rejected. |
 | `terminate` | End the sample                                               |
@@ -85,7 +85,7 @@ class EvalContext:
     """Task name."""
 
     task_description: str | None
-    """What agents in this setting are asked to do. None until inspect_ai has `Task(description=)`."""
+    """What agents in this setting are asked to do: the task's `description`. None when the task sets none or the host does not provide it."""
 
     sample_id: str | int
     """Dataset sample identifier."""
@@ -94,7 +94,7 @@ class EvalContext:
     """Epoch of the sample: 1 unless the task runs several."""
 
     sample_description: str | None
-    """What is distinctive about this instance. None until inspect_ai has `Sample(description=)`."""
+    """What is distinctive about this instance: the sample's `description`. None when the sample sets none or the host does not provide it."""
 
     sample_input: str | list[ChatMessage]
     """The sample's input: the assignment the agent was given."""
@@ -137,11 +137,11 @@ Built-in protocols cover the common compositions and basic control scenarios. `c
 
 | Protocol | Description |
 |------------------------|------------------------------------------------|
-| `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `escalate` \> `continue`). What a list containing a protocol resolves to. Use for independent guards that must all be satisfied. |
+| `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `escalate` \> `proceed`). What a list containing a protocol resolves to. Use for independent guards that must all be satisfied. |
 | `sequential()` | Runs children in order until one decides; first non-`escalate` wins, and escalations are handed to the next link so a human at the end sees who asked and why. Use for a cheap rule ahead of an expensive judge. |
 | `observe_only()` | Records every observation and acts on none. How monitors run with nothing acting, since `Task(sentinel=)` takes no bare monitors, and how a benign score distribution gets collected. |
-| `threshold()` | Acts on scores: `reject` at or above one threshold, `terminate` at or above another, each one number or a mapping per dimension (`{"audit.sabotage": 0.6, "*": 0.9}`). The smallest protocol, and the one calibration feeds. |
-| `human()` | Asks a person whenever it is reached, at the stages named in its required `stages` (`tool_call`, `tool_result`), through `Host.ask_human(step, choices)`. The answer is an ordinary decision: it ends a `sequential()`, and beside other protocols in a `concurrent()` it is one vote; a reject's typed reason is the `message` the agent reads. Put it at the end of a `sequential()` to ask only on escalation. |
+| `threshold()` | Acts on scores: `escalate_at`, `reject_at` and `terminate_at` are floors, and the strongest action any score reaches decides; each is one number or a mapping per dimension (`{"audit.sabotage": 0.6, "*": 0.9}`). Escalations carry every monitor's score to `human()` through `step.escalations`. The smallest protocol, and the one calibration feeds. |
+| `human()` | Asks a person whenever it is reached, at the stages named in its required `stages` (`tool_call`, `tool_result`, `model_output`), through `Host.ask_human(step, choices)`. The answer is an ordinary decision: it ends a `sequential()`, and beside other protocols in a `concurrent()` it is one vote; a reject's typed reason is the `message` the agent reads. Put it at the end of a `sequential()` to ask when the links before it escalate, or abstain, as a `threshold()` does when none of its monitors reported. |
 | `resample()` | Above a threshold, draws further completions, scores each, and executes the least suspicious; escalates if none clears. |
 
 ### Writing a Protocol
@@ -154,23 +154,35 @@ For example, `threshold`, the smallest shipped protocol: it reads its children's
 @protocol
 def threshold(
     monitors: Monitor | MonitorGroup | Monitors,
-    reject_at: float | Mapping[str, float],
+    *,
+    escalate_at: float | Mapping[str, float] | None = None,
+    reject_at: float | Mapping[str, float] | None = None,
     terminate_at: float | Mapping[str, float] | None = None,
-) -> Protocol:
-    rejects = thresholds(reject_at)  # a float is {"*": float}
-    terminates = thresholds(terminate_at)
+) -> Protocol | ProtocolGroup:
+    # strongest first; a float is {"*": float}; the ones not given are left out
+    levels = [
+        ("terminate", thresholds(terminate_at)),
+        ("reject", thresholds(reject_at)),
+        ("escalate", thresholds(escalate_at)),
+    ]
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(context: Context, step: Step) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None
-        if crossed := crossing(observations, terminates):
-            return Decision.terminate(crossed.explain(), references=crossed.references)
-        if crossed := crossing(observations, rejects):
-            return Decision.reject(crossed.explain(), references=crossed.references)
+        for action, limits in levels:
+            if crossed := crossing(observations, limits):
+                return Decision(
+                    action=action,
+                    explanation=crossed.explain(),
+                    references=references(observations),
+                    metadata={"observations": scores(observations)},
+                )
         return Decision.proceed()
 
-    return decide
+    # one function per stage its monitors watch; before tool calls only, with
+    # reject_at
+    return per_stage(decide, monitors)
 ```
 
 ## Deployment

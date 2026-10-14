@@ -8,7 +8,14 @@ from ._decorators import monitor, protocol
 from ._final import decide_final
 from ._host import Host, HumanAnswer
 from ._portable import PortabilityError
-from ._protocols import concurrent, human, observe_only, sequential, threshold
+from ._protocols import (
+    concurrent,
+    handle_escalation,
+    human,
+    observe_only,
+    sequential,
+    threshold,
+)
 from ._report import (
     Action,
     Decision,
@@ -26,7 +33,14 @@ from ._rules import (
     tool_matches,
 )
 from ._runner import run_children, run_monitors, run_protocols
-from ._step import AfterToolCall, BeforeToolCall, Step
+from ._step import (
+    AfterGenerate,
+    AfterToolCall,
+    BeforeGenerate,
+    BeforeToolCall,
+    Step,
+    Truncation,
+)
 from ._types import (
     Monitor,
     MonitorGroup,
@@ -46,7 +60,9 @@ except ImportError:
 
 __all__ = [
     "Action",
+    "AfterGenerate",
     "AfterToolCall",
+    "BeforeGenerate",
     "BeforeToolCall",
     "Context",
     "Decision",
@@ -72,10 +88,12 @@ __all__ = [
     "Sentinels",
     "Step",
     "Suspicion",
+    "Truncation",
     "call_text",
     "concurrent",
     "decide_final",
     "find_words",
+    "handle_escalation",
     "human",
     "monitor",
     "observe_only",

@@ -43,7 +43,7 @@ DOCS = Path(__file__).parent.parent / "docs"
 ENVIRONMENT = "a portable function has no environment variables"
 PROCESSES = "a portable function cannot start processes or threads"
 NETWORK = "a portable function has no network access"
-INSPECT = "inspect_ai is portable only through `inspect_ai.core`"
+INSPECT = "inspect_ai is portable only through a fixed list of its message, model output, config, tool and content types, such as `ChatMessage` and `ToolCall`"
 
 HEADER = """\
 from inspect_sentinel import BeforeToolCall, Context, Monitor, Observation, monitor
@@ -147,7 +147,7 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         ),
     ],
 )
-def test_inspect_ai_outside_core_fails(
+def test_inspect_ai_beyond_its_data_types_fails(
     load: Load, setup: str, body: str, reference: str, resolved: str
 ) -> None:
     message = refused(load, body, setup)
@@ -365,11 +365,6 @@ def test_pydantic_core_passes(load: Load) -> None:
     "setup,body",
     [
         (
-            "from inspect_ai.core import ChatMessageUser, ToolCall",
-            "ChatMessageUser(content='a')\nToolCall",
-        ),
-        ("import inspect_ai.core", "inspect_ai.core.ModelOutput"),
-        (
             "from inspect_ai.model import ChatMessage, ChatMessageUser, GenerateConfig, StopReason",
             "ChatMessage\nChatMessageUser\nGenerateConfig()\nStopReason",
         ),
@@ -382,9 +377,7 @@ def test_pydantic_core_passes(load: Load) -> None:
         ("from inspect_ai.tool import ToolCall", "ToolCall"),
     ],
 )
-def test_inspect_ai_core_and_its_aliases_pass(
-    load: Load, setup: str, body: str
-) -> None:
+def test_inspect_ai_data_types_pass(load: Load, setup: str, body: str) -> None:
     configure(load(monitor_source(body, setup)))
 
 
@@ -605,7 +598,6 @@ def test_an_import_inside_the_factory_is_judged(
     "body",
     [
         "import json\njson.dumps({})",
-        "from inspect_ai.core import ToolCall",
         "from inspect_ai.model import ChatMessageUser",
         "import os\nos.path.join('a', 'b')",
     ],
@@ -949,6 +941,7 @@ def modules_from(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[Path], N
         ("no_network", "network_rule"),
         ("trajectory", "trajectory"),
         ("escalate_to_human", "escalate_to_human"),
+        ("escalate_turn_to_human", "escalate_turn_to_human"),
         ("llm_suspicion", "llm_suspicion"),
         ("nested", "nested"),
     ],

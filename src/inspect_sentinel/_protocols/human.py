@@ -6,16 +6,24 @@ from .._context import Context
 from .._decorators import protocol
 from .._host import HumanAnswer
 from .._report import Decision
-from .._step import AfterToolCall, BeforeToolCall, Step
+from .._step import AfterGenerate, AfterToolCall, BeforeToolCall, Step
 from .._types import Protocol, ProtocolGroup
 
+_CHOICES = ("approve", "reject", "terminate", "modify")
 _LEGAL = {
-    "tool_call": ("approve", "reject", "terminate", "modify"),
+    "tool_call": _CHOICES,
     "tool_result": ("approve", "terminate"),
+    "model_output": ("approve", "terminate"),
 }
 _DEFAULTS = {
     "tool_call": ("approve", "reject", "terminate"),
     "tool_result": ("approve", "terminate"),
+    "model_output": ("approve", "terminate"),
+}
+# why a choice the person may pick before a call is not legal at the stage
+_NOT_LEGAL = {
+    "tool_result": "after a tool call, since the call has already run",
+    "model_output": "after a generate, since reject and modify are not legal at the generate stages yet",
 }
 
 
@@ -26,13 +34,13 @@ def human(
 ) -> Protocol | ProtocolGroup:
     """Ask a person to decide, every time the step reaches this protocol.
 
-    The person is asked through `Host.ask_human`, which is handed the step and shows it with `step.escalations`, so at the end of a `sequential()` the person sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call. The answer maps to a decision: `approve` to `continue`, `reject` to `reject` with the person's reason as both the `message` the agent reads and the `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
+    The person is asked through `Host.ask_human`, which is handed the step and shows it with `step.escalations`, so at the end of a `sequential()` the person sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call. After a generate, the person sees the whole assistant turn, its text and every tool call it makes, before any of the calls run. The answer maps to a decision: `approve` to `proceed`, `reject` to `reject` with the person's reason as both the `message` the agent reads and the `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
 
     The answer is an ordinary decision: it ends a `sequential()` as any link's decision does, and beside other protocols in a `concurrent()` it is one vote, so another protocol's `reject` outranks the person's `approve`.
 
     Args:
-        stages: The stages to ask at, as `SentinelEvent.stage` records them: `"tool_call"` (before a tool call) and/or `"tool_result"` (after it, with the result the model is about to receive).
-        choices: What the person may pick, from `approve`, `reject`, `terminate` and `modify`. Defaults to `approve`, `reject` and `terminate` before a call and `approve` and `terminate` after it, where `reject` and `modify` are not legal.
+        stages: The stages to ask at, as `SentinelEvent.stage` records them: `"tool_call"` (before a tool call), `"tool_result"` (after it, with the result the model is about to receive) and `"model_output"` (after a generate by the agent's model, before its output reaches the agent).
+        choices: What the person may pick, from `approve`, `reject`, `terminate` and `modify`. Defaults to `approve`, `reject` and `terminate` before a call, and `approve` and `terminate` after a call and after a generate, where `reject` and `modify` are not legal.
     """
     valid = ", ".join(repr(stage) for stage in _LEGAL)
     if isinstance(stages, str) or not stages:
@@ -56,9 +64,13 @@ def human(
     async def tool_result(context: Context, step: AfterToolCall) -> Decision | None:
         return await ask(context, step, "tool_result")
 
+    async def model_output(context: Context, step: AfterGenerate) -> Decision | None:
+        return await ask(context, step, "model_output")
+
     functions: dict[str, Protocol] = {
         "tool_call": tool_call,
         "tool_result": tool_result,
+        "model_output": model_output,
     }
     if len(stages) == 1:
         return functions[stages[0]]
@@ -70,16 +82,16 @@ def _choices(stage: str, choices: Sequence[str] | None) -> tuple[str, ...]:
         return _DEFAULTS[stage]
     if isinstance(choices, str) or not choices:
         raise ValueError(
-            f"human needs at least one choice, from {', '.join(repr(c) for c in _LEGAL['tool_call'])}; got {choices!r}."
+            f"human needs at least one choice, from {', '.join(repr(c) for c in _CHOICES)}; got {choices!r}."
         )
     for choice in choices:
-        if choice not in _LEGAL["tool_call"]:
+        if choice not in _CHOICES:
             raise ValueError(
-                f"human cannot offer {choice!r}; the choices are {', '.join(repr(c) for c in _LEGAL['tool_call'])}."
+                f"human cannot offer {choice!r}; the choices are {', '.join(repr(c) for c in _CHOICES)}."
             )
         if choice not in _LEGAL[stage]:
             raise ValueError(
-                f"human cannot offer {choice!r} after a tool call, since the call has already run; the choices there are {', '.join(repr(c) for c in _LEGAL[stage])}."
+                f"human cannot offer {choice!r} {_NOT_LEGAL[stage]}; the choices there are {', '.join(repr(c) for c in _LEGAL[stage])}."
             )
     return tuple(choices)
 

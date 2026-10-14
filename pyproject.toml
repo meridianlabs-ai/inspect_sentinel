@@ -25,9 +25,7 @@ dependencies = [
     # The git ref never reaches PyPI: release-pin-deps.yml rewrites it to a
     # `>=<latest>` floor on the Release Please release PR, and
     # release-dep-guard.yml blocks the release if it is still a git ref.
-    # Currently the feature/sentinel branch, which carries the "monitor" and
-    # "protocol" registry types; back to main when it merges.
-    "inspect-ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@feature/sentinel",
+    "inspect-ai>=0.3.279",
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.
     "pydantic>=2.0",
@@ -52,7 +50,7 @@ inspect_sentinel = "inspect_sentinel._entrypoint"
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
     "ruff",
     "pytest",
@@ -63,7 +61,7 @@ dev = [
     "exceptiongroup>=1.0",
     # async tests run on both anyio backends (tests/conftest.py)
     "trio",
-    {include-group = "doc"},
+    "inspect_sentinel[doc]",
 ]
 doc = [
     "jupyter",
@@ -76,6 +74,10 @@ doc = [
     "quarto-cli>=1.9.36",
 ]
 dist = ["twine", "build"]
+
+# lets `uv sync --group dev` keep working; the lists live in the extras above
+[dependency-groups]
+dev = ["inspect_sentinel[dev]"]
 
 [tool.hatch.build]
 only-packages = true

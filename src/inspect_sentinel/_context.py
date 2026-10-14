@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
-from inspect_ai.core import ChatMessage, Target
+from inspect_ai.model import ChatMessage
+from inspect_ai.scorer import Target
 from inspect_ai.util import StoreModel
 
 from ._host import Host, active_step
@@ -19,7 +20,7 @@ class EvalContext:
     """Task name."""
 
     task_description: str | None
-    """What agents in this setting are asked to do. None until inspect_ai has `Task(description=)`."""
+    """What agents in this setting are asked to do: the task's `description`. None when the task sets none or the host does not provide it."""
 
     sample_id: str | int
     """Dataset sample identifier."""
@@ -28,10 +29,10 @@ class EvalContext:
     """Epoch of the sample: 1 unless the task runs several."""
 
     sample_description: str | None
-    """What is distinctive about this instance. None until inspect_ai has `Sample(description=)`."""
+    """What is distinctive about this instance: the sample's `description`. None when the sample sets none or the host does not provide it."""
 
     sample_input: str | list[ChatMessage]
-    """The sample's input: the assignment the agent was given. Judge a step against `step.input`, which is exactly what the model was sent; use this for what the agent was asked to do."""
+    """The sample's input: the assignment the agent was given. Judge a step against `step.input`, which is exactly what the model was sent (`None` at a tool stage no model call produced); use this for what the agent was asked to do."""
 
     metadata: dict[str, Any]
     """Task metadata merged with sample metadata."""

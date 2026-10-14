@@ -19,6 +19,7 @@ from inspect_sentinel import (
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._report import Action, Decision, Observation
+from inspect_sentinel._resolve import resolve_sentinel
 from inspect_sentinel._runner import run_monitors, run_sentinel
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
@@ -44,7 +45,7 @@ def scores(value: float = 0.5) -> Monitor:
 
 
 @protocol
-def says(action: Action = "continue") -> Protocol:
+def says(action: Action = "proceed") -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(action=action)
 
@@ -298,7 +299,9 @@ async def test_a_failed_monitor_under_threshold_fails_the_step() -> None:
     recorder = ListRecorder()
     with pytest.raises(MonitorFailedError, match="'broken'.*model unavailable"):
         await run_sentinel(
-            threshold({"broken": fails(), "ok": scores(0.1)}, reject_at=0.5),
+            resolve_sentinel(
+                threshold({"broken": fails(), "ok": scores(0.1)}, reject_at=0.5)
+            ),
             host_context(recorder=recorder),
             before_step(),
         )
@@ -327,7 +330,7 @@ async def test_concurrent_records_a_failed_monitor_and_still_votes(
     ("links", "expected"),
     [
         ({"sequential_flaky": fails(), "rule": says("reject")}, "reject"),
-        ({"sequential_alone": fails()}, "continue"),
+        ({"sequential_alone": fails()}, "proceed"),
     ],
 )
 async def test_sequential_records_a_failed_monitor_and_falls_through(
@@ -364,7 +367,7 @@ def tolerant(monitors: dict[str, Monitor], reject_at: float) -> Protocol:
     ("monitors", "expected"),
     [
         ({"broken": fails(), "high": scores(0.9)}, "reject"),
-        ({"broken": fails(), "low": scores(0.1)}, "continue"),
+        ({"broken": fails(), "low": scores(0.1)}, "proceed"),
         ({"broken": fails()}, "escalate"),
     ],
 )
@@ -372,10 +375,11 @@ async def test_a_protocol_can_decide_from_the_monitors_that_did_not_fail(
     monitors: dict[str, Monitor], expected: Action
 ) -> None:
     recorder = ListRecorder()
-    decision = await run_sentinel(
+    await run_sentinel(
         tolerant(monitors, reject_at=0.5),
         host_context(recorder=recorder),
         before_step(),
     )
-    assert decision is not None and decision.action == expected
+    [decided] = [r.reported.report for r in recorder.records if not r.reported.path]
+    assert isinstance(decided, Decision) and decided.action == expected
     assert [f.name for f in recorder.failures] == ["broken"]

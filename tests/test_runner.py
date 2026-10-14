@@ -78,11 +78,11 @@ def test_max_suspicion_over_scalars_and_dicts() -> None:
 @pytest.mark.parametrize(
     ("actions", "expected"),
     [
-        (["continue", "reject", "modify"], "reject"),
+        (["proceed", "reject", "modify"], "reject"),
         (["modify", "terminate", "reject"], "terminate"),
-        (["continue", "modify"], "modify"),
-        (["continue"], "continue"),
-        (["continue", "escalate", "continue"], "escalate"),
+        (["proceed", "modify"], "modify"),
+        (["proceed"], "proceed"),
+        (["proceed", "escalate", "proceed"], "escalate"),
         (["escalate", "reject"], "reject"),
         (["modify", "escalate"], "modify"),
         (["escalate", "escalate"], "escalate"),
@@ -102,9 +102,7 @@ def test_strongest_prefers_the_first_on_ties() -> None:
 
 
 def test_reports_holds_both_families() -> None:
-    reports = Reports(
-        Observations([_obs("a", 0.1)]), Decisions([_dec("d", "continue")])
-    )
+    reports = Reports(Observations([_obs("a", 0.1)]), Decisions([_dec("d", "proceed")]))
     assert reports.observations.max_suspicion() == 0.1
     assert reports.decisions.strongest() is not None
 
@@ -153,7 +151,7 @@ def raises() -> Protocol:
 
 
 @protocol
-def decides(action: Action = "continue") -> Protocol:
+def decides(action: Action = "proceed") -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         return Decision(
             action=action,
@@ -187,7 +185,7 @@ def wrapper(child: Protocol) -> Protocol:
 @protocol
 def records_path() -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
-        return Decision(action="continue", explanation=context.path)
+        return Decision(action="proceed", explanation=context.path)
 
     return decide
 
@@ -435,7 +433,7 @@ def per_sample(label: str, mine: anyio.Event, other: anyio.Event) -> Protocol:
         mine.set()
         await other.wait()
         await run_monitors({"m": scores()}, context, step)
-        return Decision(action="continue", explanation=context.store_as(Sample).seen)
+        return Decision(action="proceed", explanation=context.store_as(Sample).seen)
 
     return decide
 
@@ -549,7 +547,7 @@ async def test_terminate_cancels_siblings() -> None:
             started.set()
             await anyio.sleep_forever()
             finished.set()
-            return Decision(action="continue")
+            return Decision(action="proceed")
 
         return decide
 
@@ -608,7 +606,7 @@ async def test_run_children_unpacks_into_observations_and_decisions() -> None:
 @pytest.mark.anyio
 async def test_wrong_report_type_at_runtime_is_an_error() -> None:
     async def lies(context: Context, step: BeforeToolCall) -> Observation | None:
-        return cast(Any, Decision(action="continue"))
+        return cast(Any, Decision(action="proceed"))
 
     def factory() -> Any:
         return lies
@@ -635,7 +633,7 @@ async def test_run_children_keeps_configuration_order_per_family() -> None:
     with in_step() as context:
         reports = await run_children(
             {
-                "p1": decides("continue"),
+                "p1": decides("proceed"),
                 "m1": scores(0.1),
                 "p2": decides("modify"),
                 "m2": scores(0.2),
@@ -770,7 +768,7 @@ async def test_terminate_keeps_results_collected_before_it() -> None:
     @protocol
     def quick() -> Protocol:
         async def decide(context: Context, step: Step) -> Decision | None:
-            return Decision(action="continue")
+            return Decision(action="proceed")
 
         return decide
 
@@ -1322,18 +1320,6 @@ async def test_run_sentinel_records_the_roots_own_decision_at_the_empty_path() -
 
 
 @pytest.mark.anyio
-async def test_run_sentinel_returns_an_escalate_with_nobody_to_hand_it_to() -> None:
-    recorder = ListRecorder()
-    decision = await run_sentinel(
-        decides("escalate"), host_context(recorder=recorder), before_step()
-    )
-    assert decision == Decision(action="escalate")
-    assert [(r.reported.name, r.reported.path) for r in recorder.records] == [
-        ("decides", "")
-    ]
-
-
-@pytest.mark.anyio
 async def test_run_sentinel_checks_the_roots_decision_shape() -> None:
     @protocol
     def illegal() -> Protocol:
@@ -1505,14 +1491,14 @@ async def test_a_monitors_own_final_supersedes_the_claimed_finals_beside_it() ->
 async def test_a_terminate_outrun_by_a_siblings_final_is_superseded(
     terminate_first: bool,
 ) -> None:
-    children = {"t": decides("terminate"), "f": finalizes("continue")}
+    children = {"t": decides("terminate"), "f": finalizes("proceed")}
     if not terminate_first:
         children = {"f": children["f"], "t": children["t"]}
     recorder = ListRecorder()
     decision = await run_sentinel(
         concurrent(children), host_context(recorder=recorder), before_step()
     )
-    assert decision == Decision(action="continue")
+    assert decision == Decision(action="proceed")
     recorded = sorted(r.reported.path for r in recorder.records)
     superseded = [r.reported.path for r in recorder.supersessions]
     cancelled = [path for path, _ in recorder.cancellations]
@@ -1995,7 +1981,7 @@ async def test_superseded_decisions_name_the_factory() -> None:
 async def test_a_terminate_superseded_by_a_final_names_its_factory() -> None:
     recorder = ListRecorder()
     await run_sentinel(
-        concurrent({"t": decides("terminate"), "f": finalizes("continue")}),
+        concurrent({"t": decides("terminate"), "f": finalizes("proceed")}),
         host_context(recorder=recorder),
         before_step(),
     )

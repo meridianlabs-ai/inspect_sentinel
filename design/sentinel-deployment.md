@@ -43,7 +43,7 @@ Plus a payload restriction from the same file: there is **no `ToolCallView`** �
 
 | Action | As an edit | Portable |
 |----|----|----|
-| `continue` | no edit | ✓ |
+| `proceed` | no edit | ✓ |
 | `modify` | rewrite the body (arguments only, for a call) | ✓ |
 | `reject` | append and regenerate, bounded | ✓ |
 | `escalate` | defer to the next filter in the chain | ✓ |
@@ -283,7 +283,7 @@ Where deserialization cost *does* dominate is a pure heuristic monitor whose own
 
 | `ProcessingResponse` | Action                                        |
 |----------------------|-----------------------------------------------|
-| no mutation          | `continue`                                    |
+| no mutation          | `proceed`                                     |
 | `body_mutation`      | `modify`                                      |
 | `immediate_response` | `reject`, and the `terminate` wire convention |
 

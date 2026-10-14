@@ -1,4 +1,4 @@
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 import pytest
 from inspect_ai._util.registry import registry_info
@@ -37,7 +37,7 @@ def _seen(store: Store) -> dict[str, list[tuple[str, ...]]]:
 
 
 @protocol
-def seq_link(action: Action = "continue", explanation: str | None = None) -> Protocol:
+def seq_link(action: Action = "proceed", explanation: str | None = None) -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         seen = context.store_as(Seen)
         seen.escalations = [
@@ -121,6 +121,16 @@ async def _root(
     return _Rooted(decision, recorder, store)
 
 
+def _decided(rooted: _Rooted) -> Decision | None:
+    # the chain's own decision, as recorded at the root; run_sentinel returns a
+    # terminate in place of an escalate there
+    recorded = [
+        r.reported.report for r in rooted.recorder.records if not r.reported.path
+    ]
+    assert len(recorded) <= 1
+    return cast(Decision, recorded[0]) if recorded else None
+
+
 def _paths(recorder: ListRecorder) -> list[str]:
     return [r.reported.path for r in recorder.records]
 
@@ -148,7 +158,7 @@ async def test_escalations_are_handed_forward_link_by_link() -> None:
             {
                 "a": seq_link("escalate"),
                 "b": seq_link("escalate"),
-                "c": seq_link("continue"),
+                "c": seq_link("proceed"),
             }
         )
     )
@@ -209,7 +219,7 @@ async def test_a_link_at_its_own_stage_decides() -> None:
             {"a": seq_link("escalate", "a?"), "b": seq_link("escalate", "b?")},
             ("escalate", "b?"),
         ),
-        ({"watch": seq_watch()}, ("continue", None)),
+        ({"watch": seq_watch()}, ("proceed", None)),
         ({"quiet": seq_abstains(), "later": seq_after_only()}, None),
     ],
 )
@@ -217,7 +227,7 @@ async def test_a_link_at_its_own_stage_decides() -> None:
 async def test_what_a_chain_returns_when_no_link_decides(
     children: Sentinels, expected: tuple[Action, str | None] | None
 ) -> None:
-    decision, _, _ = await _root(sequential(children))
+    decision = _decided(await _root(sequential(children)))
     if expected is None:
         assert decision is None
     else:
@@ -232,7 +242,7 @@ async def test_a_group_link_runs_in_one_call_and_sees_the_step_before_its_escala
     decision, recorder, store = await _root(
         sequential({"pair": seq_pair(), "next": seq_link()})
     )
-    assert decision is not None and decision.action == "continue"
+    assert decision is not None and decision.action == "proceed"
     saw = PairSaw(store=store, instance="pair")
     assert (saw.first, saw.second) == (0, 0)
     assert _seen(store) == {"next": [("pair", "pair")]}
@@ -242,17 +252,17 @@ async def test_a_group_link_runs_in_one_call_and_sees_the_step_before_its_escala
 @pytest.mark.parametrize(
     ("first", "second", "expected"),
     [
-        ("continue", "terminate", ("terminate", "second")),
-        ("continue", "reject", ("reject", "second")),
-        ("reject", "continue", ("reject", "first")),
-        ("escalate", "continue", ("escalate", "first")),
+        ("proceed", "terminate", ("terminate", "second")),
+        ("proceed", "reject", ("reject", "second")),
+        ("reject", "proceed", ("reject", "first")),
+        ("escalate", "proceed", ("escalate", "first")),
     ],
 )
 @pytest.mark.anyio
 async def test_a_group_link_decides_by_its_strongest_decision(
     first: Action, second: Action, expected: tuple[Action, str]
 ) -> None:
-    decision, _, _ = await _root(sequential({"pair": seq_mixed(first, second)}))
+    decision = _decided(await _root(sequential({"pair": seq_mixed(first, second)})))
     assert decision is not None
     assert (decision.action, decision.explanation) == expected
 
@@ -260,9 +270,9 @@ async def test_a_group_link_decides_by_its_strongest_decision(
 @pytest.mark.anyio
 async def test_a_group_link_that_escalates_hands_forward() -> None:
     decision, _, store = await _root(
-        sequential({"pair": seq_mixed("escalate", "continue"), "next": seq_link()})
+        sequential({"pair": seq_mixed("escalate", "proceed"), "next": seq_link()})
     )
-    assert decision is not None and decision.action == "continue"
+    assert decision is not None and decision.action == "proceed"
     # only the escalating function's decision is handed forward
     assert _seen(store) == {"next": [("pair",)]}
 

@@ -2,7 +2,7 @@
 
 Areas of sentinel that can be owned separately, as of 2026-10-06. Each names its design document, its scope, and what it touches, so two people can work in parallel without colliding. Sections are in priority order, decided by the maintainer on 2026-10-02: high priority (1 to 6), next (7 to 11), lower priority (12 to 14), then done; 5 and 6 were added on 2026-10-05. Smaller agreed items that wait on something are in [pr-series.md](pr-series.md), "Deferred". AISI's sync-monitor requirements (R1 to R10, 2026-10-08) are mapped onto these workstreams in [requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md).
 
-Work on your own branches and open PRs into `feature/sentinel`, in inspect_ai and in ts-mono alike. Pushing directly to the shared branch collides.
+inspect_ai #5514 and ts-mono #716 merged on 2026-10-08, so open inspect_ai and ts-mono PRs against `main`.
 
 ## 1. inspect_core
 
@@ -22,13 +22,13 @@ Touches modules that sentinel, Scout and inspect_ai all import. Agree up front w
 
 ## 2. Generate stages
 
-**Priority:** high. **Owner:** cteague. **Design:** [sentinel.md](sentinel.md), the payloads and "One vocabulary across stages".
+**Priority:** high. **Owner:** cteague. **Design:** [generate-stages.md](generate-stages.md), with [sentinel.md](sentinel.md), the payloads and "One vocabulary across stages". Built: monitors observe both stages and protocols may `proceed`, `escalate` or `terminate`; `reject` and `modify` are part 2.
 
 `BeforeGenerate` and `AfterGenerate`: the payload types, the dispatcher hooks around model generation in inspect_ai, and the decision about what a generate-stage `modify` may replace (a message, the request, or nothing). That decision unblocks `Decision.modify(step, ...)`, deferred until then.
 
 Lives in inspect_ai's model path and sentinel's step types. Best after inspect_core, or at least not overlapping its moves in `model/`.
 
-AISI requirements that depend on it ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)): R1, `escalate` and `human()` at `AfterGenerate`; R5 at `AfterGenerate`; R2 and R3, recording each generate's input and tools when it finishes; R10, the history as each agent instance sent it, built from that record and the `conversation` id on events.
+AISI requirements that depend on it ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)): R1, `escalate` and `human()` at `AfterGenerate` (built, sentinel #42 and #89); R5 at `AfterGenerate` (built, in `threshold`); R2 and R3, the producing model call's input and tools at the tool stages (built: found in the transcript, not a separate record; [pr-series.md](pr-series.md), Deferred); R10, the history as each agent instance sent it, its own PR ([pr-series.md](pr-series.md), "Generate stages landing").
 
 ## 3. LLM affordances for monitors
 
@@ -72,8 +72,8 @@ Decide first, as a short review of the public surface:
 Then land, in order:
 
 1. The open sentinel PRs, and any renames the review decides.
-2. ts-mono `feature/sentinel` (#716) into ts-mono `main`.
-3. inspect_ai #5514: point the submodule at the merged ts-mono commit and rebuild the viewer (the land-ts-mono flow), un-dark-launch it (the `--sentinel` option visible, the experimental notes on the API revisited, the sentinel docs pages and a CHANGELOG entry), and merge.
+2. Done 2026-10-08: ts-mono #716 and inspect_ai #5514 merged, dark-launched.
+3. Un-dark-launch in inspect_ai: the `--sentinel` option visible, the experimental notes on the API revisited, the sentinel docs pages and a CHANGELOG entry.
 4. Release inspect_ai with the sentinel hooks, so sentinel can depend on a released version.
 5. Release inspect_sentinel: replace the git dependency on inspect_ai with a version floor (release-pin-deps.yml does this on the Release Please PR, and release-dep-guard.yml blocks a git ref), unpause Release Please, publish to PyPI, and publish the docs.
 6. In inspect_ai, replace the temporary pinned `--no-deps` CI install of sentinel with the released package.
@@ -105,7 +105,7 @@ Many small, independent tasks, good for onboarding:
 - Views: helpers that give a monitor author views of the messages and the step, such as the last six messages (maintainer, 2026-10-02).
 - A helper that renders a call's arguments as text, and similar conveniences that make rules shorter (maintainer, 2026-10-02). The first set is done (`call_text`, `tool_matches`, `find_words` and `result_text`; [pr-series.md](pr-series.md), "Helpers for rules"); `urls_in`, `host_matches` and `secrets_in` follow. The path helpers are workstream 14.
 - The prompt helpers, such as `monitor_prompt`, unless they move to workstream 3.
-- A protocol that escalates or terminates on scores without a reject threshold, at every stage that allows it, explaining every contributing score (AISI R5, [requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md); pr-series.md, Deferred).
+- *Done:* a protocol that escalates or terminates on scores without a reject threshold, at every stage that allows it, explaining every contributing score (AISI R5, [requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)): `threshold(escalate_at=...)` (pr-series.md, "threshold escalates and terminates without reject").
 
 ## 8. Auto-mode approvers
 
@@ -113,7 +113,7 @@ Many small, independent tasks, good for onboarding:
 
 Support approvers in inspect modelled on the auto modes of Claude Code and Codex, in which a model decides whether each tool call may run without asking a person. Scope to establish first: how each auto mode decides (its inputs, policy and outputs) and what of that can be reproduced or reused. Then offer it in Inspect both as an `@approver`, for `Task(approval=)` users, and as a sentinel protocol, so it composes with monitors and `threshold`.
 
-Open questions: which model judges by default, and how its policy is configured; whether the result is a binary allow/deny or a score that `threshold` calibrates; how it maps to approval's vocabulary (`approve`) and sentinel's (`continue`); and, where an existing product's prompt or policy is reused, whether its terms allow that.
+Open questions: which model judges by default, and how its policy is configured; whether the result is a binary allow/deny or a score that `threshold` calibrates; how it maps to approval's vocabulary (`approve`) and sentinel's (`proceed`); and, where an existing product's prompt or policy is reused, whether its terms allow that.
 
 ## 9. Bridged agents and deployment
 

@@ -10,7 +10,7 @@ from typing import Annotated, Literal, TypeAlias
 from pydantic import Field, FiniteFloat
 
 SentinelAction: TypeAlias = Literal[
-    "continue", "modify", "reject", "terminate", "escalate"
+    "proceed", "modify", "reject", "terminate", "escalate"
 ]
 SentinelSuspicion: TypeAlias = (
     FiniteFloat | Annotated[dict[str, FiniteFloat], Field(min_length=1)]
