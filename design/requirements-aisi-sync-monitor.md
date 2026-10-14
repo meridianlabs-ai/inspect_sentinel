@@ -118,7 +118,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 | 8.8 | tool definitions | not met |
 | 8.9 | withheld messages | partly met |
 | R9 | `human()` routed to a team's review tool | not met |
-| R10 | the history as sent to the model, per agent instance | decided 2026-10-12: met by `history` itself (generate-stages decision 15); not built |
+| R10 | the history as sent to the model, per agent instance | met live (2026-10-14): `await context.host.sent(step)`; replay not built (R7) |
 
 **R1.** Only the tool stages are wired ([pr-series.md](pr-series.md), Decisions, "Tool stages only, for now"). The generate-stages prototype, sentinel #42 (draft), allows only `continue` and `terminate` at `BeforeGenerate` and `AfterGenerate`; its decision 16 enables `escalate` next, with the tool stages' root behaviour. `human(stages=)` accepts only `tool_call` and `tool_result` (`_protocols/human.py`; [sentinel.md](sentinel.md), "Humans in the loop", open question 14). inspect_ai's `Host.ask_human` passes one `step.call` to `human_approver` (`_sentinel/_dispatch.py`), so there is no rendering of a whole turn. Gap: `escalate` at `AfterGenerate`, `human(stages=["model_output"])`, and a host rendering of a turn's tool calls with `step.escalations`.
 
@@ -148,7 +148,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 
 **R9.** `Host.ask_human` in inspect_ai always calls `human_approver` (`_dispatch.py`), so the approval panel, ACP or the console. Nothing routes `human()` to another surface. Workstream 13 decided remote surfaces go through a message queue that other tools consume ([workstreams.md](workstreams.md)); [proxy-host.md](proxy-host.md) maps `ask_human` to an audit queue.
 
-**R10** (decided 2026-10-12: `history` itself becomes the model's view of the agent's run, generate-stages.md decision 15, built with #42's recording; no separate field). Before: `step.history` was the scaffold's message list (`_step.py`), and `step.input` is the as-sent input of the current call only. Nothing live accumulates what one agent instance has sent across calls. [sentinel-development.md](sentinel-development.md), "From events", designs the same reconstruction for replay from `ModelEvent`s and `CompactionEvent`s sharing a `conversation` id, which core does not record yet. Gap: a step field (for example `sent`) built per agent instance from each generate's recorded input (the R2 record), the `conversation` id on events, the same field in replay, and a rule for messages edited after they were sent.
+**R10** (built live 2026-10-14; the 2026-10-12 ruling that `history` itself would become the model's view was revised the same day, generate-stages.md decision 15: `history` keeps its meaning). `await context.host.sent(step)` returns every message the step's agent instance has sent to the model, in the order sent, or `None` when the host cannot produce the whole list (a proxy; an earlier call's record gone). AISI's answer of 2026-10-14 said the opening prompts as the model saw them would do for now (ControlArena replaces the opening system and user messages to build an attack policy, which a Sentinel monitor should see), and that the full list would likely be wanted later; the full list was built ([pr-series.md](pr-series.md), "The history as sent"). Edits: each version is kept in the order sent. Scoping: the instance's agent turns, by the generate stages' scope test, indexed in memory by inspect_ai; sub-agents, parallel agents, compaction summaries, scorers and monitors are not mixed in, a model call the scaffold makes inside its agent loop is, and sub-agents inside one bridged CLI share its conversation. Gap: replay (R7), which needs agent turns recorded in the log, since the live index is not written (pr-series.md, Deferred, "Replaying the history as sent").
 
 ## Where each requirement sits in the plan
 
@@ -163,7 +163,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 | R7 | Workstream 10; [sentinel-development.md](sentinel-development.md) | workstream 10 note: pre-Sentinel logs, step subsets | R2 and R3 recorded in the log; `conversation` on events; inspect_core if replay moves into sentinel |
 | R8 | Deferred, "Shared message rendering"; workstream 3 (views) | the uncovered sub-needs on that entry; workstream 3 note | the inspect_ai and Scout PRs in that entry; R3 for 8.4; R4 for 8.5 |
 | R9 | Workstream 13 (remote human surfaces); `Host.ask_human` | workstream 13 note; Deferred, Later: routing `human()` | R1 for `AfterGenerate` |
-| R10 | [sentinel-development.md](sentinel-development.md), "From events" (replay only) | Deferred, tool-stage completeness: the history as sent; workstream 2 and 10 notes | the R2 record of each generate's input; `conversation` on `ModelEvent` and `CompactionEvent` |
+| R10 | pr-series.md, "The history as sent" (built live 2026-10-14); [sentinel-development.md](sentinel-development.md), "From events" (replay) | Deferred, "Replaying the history as sent"; workstream 2 and 10 notes | replay: agent turns recorded on `ModelEvent` (R7) |
 
 ## Conflicts with recorded decisions
 
@@ -175,7 +175,7 @@ AISI's follow-up resolves or narrows each conflict listed on 2026-10-08. R6 was 
 4. **R4 and monitor independence.** Resolved: only earlier protocol decisions (in practice `human()` approvals) at earlier steps, never monitor observations, so [sentinel.md](sentinel.md) "The surfaces" stands. To decide: how a monitor reads them (a `Context` or `Host` read keyed by step id) and whether every protocol decision or only `human()`'s is exposed.
 5. **R7 and concurrent compaction segments.** Dissolves for AISI with R10: their only cross-step state is the opening prompts as sent, which R10 provides. The general question, open question 8 of [sentinel-development.md](sentinel-development.md), stays open for other stateful monitors.
 6. **R1 and `human()` asking without escalation.** Not a conflict: `human()` asks whenever reached (pr-series, "human()"), and inside a `sequential` that means after an escalation, which is what R1 needs.
-7. **R10 and edited messages.** New, not a conflict: how the as-sent history shows a message the scaffold edits after sending it. AISI suggests keeping each version in the order sent.
+7. **R10 and edited messages.** Resolved 2026-10-14 as AISI suggested: each version is kept in the order sent ([pr-series.md](pr-series.md), "The history as sent").
 
 ## Suggested priority
 
@@ -185,7 +185,7 @@ A suggestion for the maintainer, not a decision. Updated after AISI's follow-up,
 2. **R2 and R3.** One mechanism: record each generate's input and tools when it finishes, keyed by the assistant message, plus an explicit unavailable signal and a truncation field. R7 and R10 build on it.
 3. **R5.** Unblocks their tool-stage configurations without a custom protocol; the scores reach `human()` through `step.escalations`. The `AfterGenerate` part follows R1.
 4. **R1.** Rides on the generate-stages workstream, already high priority; adds `escalate` there and a turn rendering for `human()`.
-5. **R10**, with the `conversation` id on `ModelEvent` and `CompactionEvent` that R4 and R7 also need. Built on R2's record; removes the cross-step state that made R7 hard.
+5. **R10**, with the `conversation` id on `ModelEvent` and `CompactionEvent` that R4 and R7 also need. Built on R2's record; removes the cross-step state that made R7 hard. *Built live 2026-10-14 without either: an in-memory index of agent turns and the transcript's model events ([pr-series.md](pr-series.md), "The history as sent").*
 6. **R8, security sub-needs first (8.1, 8.4, 8.7), then the rest.** Large and shared with Scout; the security items protect every LLM monitor, the others are configuration.
 7. **R7.** Depends on R2, R3 and R10 being recorded; workstream 10.
 8. **R4.** Narrowed to earlier protocol decisions; needs the `conversation` id and R7 for replay.

@@ -91,6 +91,8 @@ class Host(typing.Protocol):
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
     """Ask a person about the step, rendered by its type; a proxy might use a review queue.
     A person who ends the prompt without an offered choice yields `reject` if offered, otherwise `terminate`."""
+    async def sent(self, step: Step) -> list[ChatMessage] | None: ...
+    """Every message the step's agent instance has sent to the model, in order sent; None when the host cannot produce the whole list."""
     async def fetch(
         self,
         endpoint: str,                      # a NAME, not a URL — see below
@@ -115,7 +117,7 @@ class HostResponse(typing.Protocol):
     def text(self) -> str: ...
 ```
 
-Only `generate` and `ask_human` are built; `fetch`, `get`/`put` and `terminate` are planned.
+Only `generate`, `ask_human` and `sent` are built; `fetch`, `get`/`put` and `terminate` are planned.
 
 `ask_human` answers one of the offered choices, or, when the person ends the prompt without one, `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered.
 
@@ -203,7 +205,7 @@ A proxy has no ContextVar, no sample identity and no `Store`. It passes `Context
 
 **A keyed store in the proxy layer.** A session header plus a local store, carrying what the conversation does not: the monitor's own accumulated judgment.
 
-The request is `step.input` exactly, which is the one place a proxy beats an eval: nothing sits between the scaffold and the wire. What the request stops carrying once the agent compacts is the pre-compaction history. A proxy never sees the scaffold's list, so `step.history` under a proxy is `None`. The keyed store can accumulate what each request added for that session, with the session key doubling as the step's `conversation` id; that is an as-sent view (cf. AISI R10), not `history`. A monitor that needs the full trajectory needs that accumulated view and should declare it, so that a storeless deployment refuses it at configuration time rather than running it on a truncated view.
+The request is `step.input` exactly, which is the one place a proxy beats an eval: nothing sits between the scaffold and the wire. What the request stops carrying once the agent compacts is the pre-compaction history. A proxy never sees the scaffold's list, so `step.history` under a proxy is `None`. The keyed store can accumulate what each request added for that session, with the session key doubling as the step's `conversation` id; that is an as-sent view (cf. AISI R10), not `history`. Until a proxy host builds it, `Host.sent` returns `None` there. A monitor that needs the full trajectory needs that accumulated view and should declare it, so that a storeless deployment refuses it at configuration time rather than running it on a truncated view.
 
 ### The store is not merely a convenience
 
