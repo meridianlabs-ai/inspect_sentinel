@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from inspect_ai.model import (
     ChatMessage,
@@ -15,11 +15,12 @@ from inspect_ai.tool import ToolCall, ToolCallError, ToolInfo, ToolParams
 from inspect_ai.util import json_schema
 from pydantic import BaseModel, Field, ValidationError, create_model
 
-from ._context import EvalContext
 from ._excerpt import Excerpt, step_as_str
-from ._host import Host
 from ._report import Observation
 from ._step import Step
+
+if TYPE_CHECKING:
+    from ._host import HostNative
 
 DEFAULT_TEMPLATE = """\
 {{ instructions }}
@@ -71,11 +72,10 @@ _RESERVED = ("explanation",)
 
 
 async def score_step(
-    host: Host,
+    host: HostNative,
     step: Step | Excerpt[Step],
     dimensions: str | Mapping[str, str],
     *,
-    eval: EvalContext | None = None,
     instructions: str | None = None,
     policy: str | None = None,
     template: str | None = None,
@@ -85,24 +85,6 @@ async def score_step(
     config: GenerateConfig | None = None,
     retry_refusals: int = 3,
 ) -> Observation:
-    """Score `step` by asking a model through `host.generate`, for a host implementing `Host.score`.
-
-    The host passes itself and the eval the agent is running in, if any; everything else is as `Host.score` describes. Raises when the model gives no valid answer within its attempts.
-
-    Args:
-        host: The host, whose `generate` asks the model.
-        step: The step to score, whole, or an excerpt of it.
-        dimensions: The prompt text for a single score, or each dimension's name mapped to its prompt text.
-        eval: The eval the agent is running in, as monitors see it in `Context.eval`, or None outside an eval.
-        instructions: The monitor's own instructions, for the template's `{{ instructions }}`.
-        policy: The policy the agent must follow whatever its task, for the template's `{{ policy }}`.
-        template: A replacement for the default prompt template.
-        template_variables: More variables for the template.
-        model: A model name, as for `Host.generate`.
-        role: A model role, as for `Host.generate`.
-        config: Generation configuration.
-        retry_refusals: How many times to ask again when the provider refuses.
-    """
     # Scout imports duckdb and pandas, so load it only when a monitor scores;
     # jinja2 comes with it
     from inspect_scout import MessagesPreprocessor, message_numbering
@@ -175,6 +157,7 @@ async def score_step(
     numbered, extract_refs = message_numbering(
         MessagesPreprocessor(exclude_system=False)
     )
+    eval = host.eval
     values = {
         "instructions": (instructions or DEFAULT_INSTRUCTIONS).strip(),
         "policy": f"[BEGIN POLICY]\n{policy.strip()}\n[END POLICY]" if policy else "",
@@ -263,7 +246,7 @@ def _escalations(step: Step | Excerpt[Step]) -> str:
 
 
 async def _generate(
-    host: Host,
+    host: HostNative,
     messages: list[ChatMessage],
     *,
     model: str | None,

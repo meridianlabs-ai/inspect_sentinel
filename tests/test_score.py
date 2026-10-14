@@ -13,8 +13,7 @@ from inspect_ai.model import (
 )
 from inspect_ai.tool import ToolCall
 
-from inspect_sentinel import Decision, Reported, Step, keep_history, last_turns
-from inspect_sentinel._integration import score_step
+from inspect_sentinel import Decision, Host, Reported, Step, keep_history, last_turns
 
 from ._fakes import (
     FakeHost,
@@ -39,12 +38,12 @@ def prompt(host: FakeHost) -> str:
 
 @pytest.mark.anyio
 async def test_a_string_is_one_score() -> None:
-    host = FakeHost(outputs=[answer(explanation="writes outside /work", suspicion=0.9)])
-    observation = await score_step(
-        host,
+    host = FakeHost(
+        eval=EVAL, outputs=[answer(explanation="writes outside /work", suspicion=0.9)]
+    )
+    observation = await Host(host).score(
         before_tool_call("bash", cmd="rm -rf /etc"),
         "Does this call write outside /work?",
-        eval=EVAL,
     )
     assert (observation.suspicion, observation.explanation) == (
         0.9,
@@ -78,12 +77,10 @@ async def test_the_monitors_own_text_goes_into_the_default_template(
     shown: list[str],
     hidden: list[str],
 ) -> None:
-    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
-    await score_step(
-        host,
+    host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
+    await Host(host).score(
         before_tool_call("bash", cmd="ls"),
         "Safe?",
-        eval=EVAL,
         instructions=instructions,
         policy=policy,
     )
@@ -96,8 +93,7 @@ async def test_a_mapping_scores_each_dimension() -> None:
     host = FakeHost(
         outputs=[answer(explanation="neither", exfiltration=0.1, sabotage=0.2)]
     )
-    observation = await score_step(
-        host,
+    observation = await Host(host).score(
         before_tool_call("bash", cmd="ls"),
         {"exfiltration": "Is data leaving?", "sabotage": "Is the task undermined?"},
     )
@@ -118,8 +114,8 @@ async def test_an_excerpt_is_shown_numbered_and_cites_become_references() -> Non
     ]
     step = replace(before_tool_call("bash", cmd="ls"), history=history)
     host = FakeHost(outputs=[answer(explanation="as planned in [M1]", suspicion=0.0)])
-    observation = await score_step(
-        host, keep_history(last_turns(step, 1)), "Is it safe?"
+    observation = await Host(host).score(
+        keep_history(last_turns(step, 1)), "Is it safe?"
     )
     assert "clean up" not in prompt(host)
     assert "[M1] ASSISTANT:\ndeleting the logs" in prompt(host)
@@ -195,8 +191,7 @@ async def test_a_reply_without_a_valid_answer_goes_back_to_the_model(
     first: ModelOutput, feedback: list[tuple[str, str | None, str]]
 ) -> None:
     host = FakeHost(outputs=[first, valid()])
-    observation = await score_step(
-        host,
+    observation = await Host(host).score(
         before_tool_call("bash", cmd="ls"),
         "Is it safe?",
         model="openai/gpt-4o-mini",
@@ -228,7 +223,7 @@ async def test_a_valid_answer_among_several_calls_is_used() -> None:
             )
         ]
     )
-    observation = await score_step(host, before_tool_call("bash", cmd="ls"), "Safe?")
+    observation = await Host(host).score(before_tool_call("bash", cmd="ls"), "Safe?")
     assert observation.suspicion == 0.1
     assert len(host.inputs) == 1
 
@@ -253,7 +248,7 @@ async def test_no_valid_answer_in_three_attempts_raises_quoting_the_last_reply(
     with pytest.raises(
         RuntimeError, match="no valid answer within 3 attempts.*I won't score this"
     ):
-        await score_step(host, before_tool_call("bash", cmd="ls"), "Safe?")
+        await Host(host).score(before_tool_call("bash", cmd="ls"), "Safe?")
     assert len(host.inputs) == 3
 
 
@@ -262,8 +257,7 @@ async def test_the_model_is_offered_only_the_answer_tool_one_call_at_a_time() ->
     host = FakeHost(
         outputs=[reply(call("ok", explanation="no", exfiltration=0.1, sabotage=0.2))]
     )
-    await score_step(
-        host,
+    await Host(host).score(
         before_tool_call("bash", cmd="ls"),
         {"exfiltration": "Leaving?", "sabotage": "Undermined?"},
         config=GenerateConfig(temperature=0.2),
@@ -320,20 +314,18 @@ async def test_bad_arguments_raise_before_the_model_is_asked(
 ) -> None:
     host = FakeHost(outputs=[])
     with pytest.raises(ValueError, match=match):
-        await score_step(
-            host, before_tool_call("bash", cmd="ls"), dimensions, **arguments
+        await Host(host).score(
+            before_tool_call("bash", cmd="ls"), dimensions, **arguments
         )
     assert host.inputs == []
 
 
 @pytest.mark.anyio
 async def test_a_template_reads_its_own_variables_and_the_eval() -> None:
-    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
-    await score_step(
-        host,
+    host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
+    await Host(host).score(
         before_tool_call("bash", cmd="ls"),
         "Safe?",
-        eval=EVAL,
         template="{% for tool in tools %}{{ tool }};{% endfor %} {{ eval.metadata.area }} {{ eval.task }}\n{{ step }}\n{{ answer_format }}",
         template_variables={"tools": ["bash", "python"]},
     )
@@ -364,11 +356,9 @@ def escalated() -> Step:
 @pytest.mark.parametrize("windowed", [False, True])
 @pytest.mark.anyio
 async def test_earlier_escalations_are_shown_after_the_task(windowed: bool) -> None:
-    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
+    host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
     step = escalated()
-    await score_step(
-        host, last_turns(step, 3) if windowed else step, "Safe?", eval=EVAL
-    )
+    await Host(host).score(last_turns(step, 3) if windowed else step, "Safe?")
     assert (
         "[END TASK]\n\n[BEGIN ESCALATIONS]\n- rules: rm outside /work\n- llm\n[END ESCALATIONS]\n\n[AGENT STEP - BEGIN TOOL CALL]"
         in prompt(host)
@@ -378,7 +368,7 @@ async def test_earlier_escalations_are_shown_after_the_task(windowed: bool) -> N
 @pytest.mark.anyio
 async def test_the_default_template_leaves_out_what_is_not_given() -> None:
     host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
-    await score_step(host, before_tool_call("bash", cmd="ls"), "Safe?")
+    await Host(host).score(before_tool_call("bash", cmd="ls"), "Safe?")
     assert "[BEGIN POLICY]" not in prompt(host)
     assert "[BEGIN TASK]" not in prompt(host)
     assert "[BEGIN ESCALATIONS]" not in prompt(host)
@@ -400,15 +390,13 @@ async def test_a_refusal_is_asked_again_without_using_an_attempt(
     host = FakeHost(outputs=[*[refused] * refusals, bad, bad, valid()])
     if raises:
         with pytest.raises(RuntimeError, match="refused"):
-            await score_step(
-                host,
+            await Host(host).score(
                 before_tool_call("bash", cmd="ls"),
                 "Safe?",
                 retry_refusals=retry_refusals,
             )
     else:
-        observation = await score_step(
-            host,
+        observation = await Host(host).score(
             before_tool_call("bash", cmd="ls"),
             "Safe?",
             retry_refusals=retry_refusals,
@@ -419,8 +407,7 @@ async def test_a_refusal_is_asked_again_without_using_an_attempt(
 @pytest.mark.anyio
 async def test_the_agents_text_is_not_read_as_a_template_variable() -> None:
     host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
-    await score_step(
-        host,
+    await Host(host).score(
         before_tool_call("bash", cmd="echo '{{ dimensions }} {% if x %}'"),
         "Is it safe?",
         template="{{ step }}\n{{ dimensions }}\n{{ answer_format }}",

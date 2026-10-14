@@ -12,10 +12,11 @@ from inspect_ai.tool import ToolCall, ToolChoice, ToolInfo
 from inspect_ai.util import Store
 
 from ._report import Decision, Failed, Observation, Report, Reported
+from ._score import score_step
 from ._step import Step
 
 if TYPE_CHECKING:
-    from ._context import Context
+    from ._context import Context, EvalContext
     from ._excerpt import Excerpt
 
 
@@ -33,11 +34,52 @@ class HumanAnswer:
     """The replacement call, when the person chose `modify` at a tool stage."""
 
 
-class Host(TypingProtocol):
+class HostNative(TypingProtocol):
+    """What a host implements: the eval the agent is running in, inference through its models, and asking a person. Host-facing; monitors and protocols reach these through `Host`, which adds what every host shares, such as `Host.score`."""
+
+    @property
+    def eval(self) -> EvalContext | None:
+        """As `Host.eval`."""
+        ...
+
+    async def generate(
+        self,
+        input: str | list[ChatMessage],
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        tools: list[ToolInfo] | None = None,
+        tool_choice: ToolChoice | None = None,
+        config: GenerateConfig | None = None,
+    ) -> ModelOutput:
+        """As `Host.generate`."""
+        ...
+
+    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
+        """As `Host.ask_human`."""
+        ...
+
+
+class Host(HostNative):
     """What a monitor or protocol may do to the outside world. Author-facing.
 
     Inference and asking a person are the only effects for now. Outbound HTTP through named endpoints (`fetch`) is planned. Meanwhile a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()`, if it is declared `portable=False`.
+
+    The host builds it around its `HostNative`; `score` is built on `generate`, so it is the same for every host.
     """
+
+    def __init__(self, native: HostNative) -> None:
+        """Wrap a host's own implementation.
+
+        Args:
+            native: The host's implementation of the eval, inference and asking a person.
+        """
+        self._native = native
+
+    @property
+    def eval(self) -> EvalContext | None:
+        """The task and sample being run, in an Inspect eval; monitors read it as `Context.eval`. None outside an eval, for example when a proxy runs the sentinel on requests that have no task, sample or epoch."""
+        return self._native.eval
 
     async def generate(
         self,
@@ -61,7 +103,14 @@ class Host(TypingProtocol):
             tool_choice: Which of `tools` the model may or must call.
             config: Generation configuration.
         """
-        ...
+        return await self._native.generate(
+            input,
+            model=model,
+            role=role,
+            tools=tools,
+            tool_choice=tool_choice,
+            config=config,
+        )
 
     async def score(
         self,
@@ -79,7 +128,7 @@ class Host(TypingProtocol):
     ) -> Observation:
         """Ask a model to score a step from 0.0 to 1.0, with an explanation.
 
-        The model is asked through `generate`, with the same `model`, `role` and `config`. It is sent a prompt built from `template`, and answers by calling an answer tool whose arguments are checked, so a missing or out-of-range score, or a reply with no answer, goes back to the model to correct. When the model gives no valid answer within three attempts, `score` raises, and the runner records the monitor as failed. A reply the provider refuses (stop reason `content_filter`) is asked again without using an attempt, up to `retry_refusals` times, after which `score` raises. A host implements `score` by calling `score_step` with itself and the eval the agent is running in.
+        The model is asked through `generate`, with the same `model`, `role` and `config`. It is sent a prompt built from `template`, and answers by calling an answer tool whose arguments are checked, so a missing or out-of-range score, or a reply with no answer, goes back to the model to correct. When the model gives no valid answer within three attempts, `score` raises, and the runner records the monitor as failed. A reply the provider refuses (stop reason `content_filter`) is asked again without using an attempt, up to `retry_refusals` times, after which `score` raises.
 
         Pass the step to show the model all of it, or narrow what it sees with the windowing functions, such as `last_turns(step, 6)` or `new_since_last_report(context, step)`.
 
@@ -109,7 +158,19 @@ class Host(TypingProtocol):
             config: Generation configuration.
             retry_refusals: How many times to ask again when the provider refuses to answer.
         """
-        ...
+        return await score_step(
+            self._native,
+            step,
+            dimensions,
+            instructions=instructions,
+            policy=policy,
+            template=template,
+            template_variables=template_variables,
+            model=model,
+            role=role,
+            config=config,
+            retry_refusals=retry_refusals,
+        )
 
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
         """Ask a person to decide about a step, and wait for the answer.
@@ -120,7 +181,7 @@ class Host(TypingProtocol):
             step: The step to decide about.
             choices: What the person may pick, from `approve`, `reject`, `terminate` and `modify`, in the order to present them.
         """
-        ...
+        return await self._native.ask_human(step, choices)
 
 
 @runtime_checkable

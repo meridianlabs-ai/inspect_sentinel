@@ -77,7 +77,9 @@ So there is no `PortableAction` subset — the vocabulary crosses whole, and wha
 The single most useful structural decision: define a monitor as pure logic plus a small declared effect surface. Then the compilation and transport strategy becomes a deployment detail rather than a design constraint.
 
 ``` python
-class Host(typing.Protocol):
+class HostNative(typing.Protocol):
+    @property
+    def eval(self) -> EvalContext | None: ...  # the task and sample; None outside an eval
     async def generate(
         self,
         input: str | list[ChatMessage],
@@ -88,21 +90,6 @@ class Host(typing.Protocol):
         tool_choice: ToolChoice | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput: ...
-    async def score(
-        self,
-        step: Step | Excerpt[Step],  # a step, or what a windowing function kept of it
-        dimensions: str | Mapping[str, str],  # one prompt text, or each dimension's name to its text
-        *,
-        instructions: str | None = None,  # the monitor's own opening, in place of the default
-        policy: str | None = None,  # what binds the agent whatever its task
-        template: str | None = None,  # a Jinja template
-        template_variables: Mapping[str, Any] | None = None,
-        model: str | None = None,
-        role: str | None = None,
-        config: GenerateConfig | None = None,
-        retry_refusals: int = 3,
-    ) -> Observation: ...
-    """Ask a model to score the step from 0.0 to 1.0, with an explanation, through a checked answer tool."""
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
     """Ask a person about the step, rendered by its type; a proxy might use a review queue.
     A person who ends the prompt without an offered choice yields `reject` if offered, otherwise `terminate`."""
@@ -122,6 +109,26 @@ class Host(typing.Protocol):
     """End this session or agent out-of-band. False if unsupported."""
 
 
+class Host(HostNative):
+    """What `Context.host` is: the host's `HostNative`, plus what every host shares."""
+    def __init__(self, native: HostNative) -> None: ...
+    async def score(
+        self,
+        step: Step | Excerpt[Step],  # a step, or what a windowing function kept of it
+        dimensions: str | Mapping[str, str],  # one prompt text, or each dimension's name to its text
+        *,
+        instructions: str | None = None,  # the monitor's own opening, in place of the default
+        policy: str | None = None,  # what binds the agent whatever its task
+        template: str | None = None,  # a Jinja template
+        template_variables: Mapping[str, Any] | None = None,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+        retry_refusals: int = 3,
+    ) -> Observation: ...
+    """Ask a model to score the step from 0.0 to 1.0, with an explanation, through a checked answer tool."""
+
+
 class HostResponse(typing.Protocol):
     status: int
     headers: Mapping[str, str]
@@ -130,9 +137,9 @@ class HostResponse(typing.Protocol):
     def text(self) -> str: ...
 ```
 
-Only `generate`, `score` and `ask_human` are built; `fetch`, `get`/`put` and `terminate` are planned.
+Only `eval`, `generate`, `ask_human` and `Host.score` are built; `fetch`, `get`/`put` and `terminate` are planned.
 
-`score` takes the narrow form of a monitor that asks a model for its judgement: one score or one per named dimension, from 0.0 to 1.0, and an explanation, returned as an `Observation`. The model answers through an answer tool whose arguments pydantic checks, and an invalid answer goes back to it as a tool error; after the last attempt `score` raises, and the runner records the monitor as failed. The prompt, the answer loop and its checks are sentinel code, `score_step` in `inspect_sentinel._integration`, which asks the model only through the host's own `generate`: every model call a monitor makes goes through `generate`, and no sentinel API takes a `Model` (decided by the maintainers on 2026-10-13). A host implements `score` in one line, passing itself and the eval the agent is running in (`Context.eval`) to `score_step`. Templates are Jinja, as Scout's are: a monitor can add its own variables (`template_variables`), read the eval (`{{ eval.metadata.x }}`), and a template that names an unknown variable raises before the model is asked. A provider refusal is asked again, up to `retry_refusals` times. The prompt's `{{ step }}` is `step_as_str()` of the step or excerpt, its messages numbered with Inspect Scout's `message_numbering` so the explanation's cites become `references`; Scout is not yet a dependency of this package, so `score` needs it installed, until message rendering moves from Scout into inspect_ai.
+`score` takes the narrow form of a monitor that asks a model for its judgement: one score or one per named dimension, from 0.0 to 1.0, and an explanation, returned as an `Observation`. The model answers through an answer tool whose arguments pydantic checks, and an invalid answer goes back to it as a tool error; after the last attempt `score` raises, and the runner records the monitor as failed. `score` is sentinel code on `Host`, which wraps the host's `HostNative` (decided by the maintainer on 2026-10-14): the prompt, the answer loop and its checks ask the model only through the host's own `generate`, so a host implements nothing for `score`, and the call does not pass through the host and back: every model call a monitor makes goes through `generate`, and no sentinel API takes a `Model` (decided by the maintainers on 2026-10-13). The host builds `Context(host=Host(native))`; `Context.eval` and the prompt's `{{ eval }}` read the native host's `eval`, so the eval has one source. Templates are Jinja, as Scout's are: a monitor can add its own variables (`template_variables`), read the eval (`{{ eval.metadata.x }}`), and a template that names an unknown variable raises before the model is asked. A provider refusal is asked again, up to `retry_refusals` times. The prompt's `{{ step }}` is `step_as_str()` of the step or excerpt, its messages numbered with Inspect Scout's `message_numbering` so the explanation's cites become `references`; Scout is not yet a dependency of this package, so `score` needs it installed, until message rendering moves from Scout into inspect_ai.
 
 `ask_human` answers one of the offered choices, or, when the person ends the prompt without one, `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered.
 

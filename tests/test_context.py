@@ -20,6 +20,7 @@ from inspect_sentinel import (
 from inspect_sentinel._host import HostContext
 from inspect_sentinel._runner import run_sentinel
 from tests._fakes import (
+    FakeHost,
     ListRecorder,
     before_step,
     eval_context,
@@ -62,8 +63,6 @@ def test_the_context_exposes_no_store_and_cannot_be_reassigned() -> None:
     assert not hasattr(context, "store")
     with pytest.raises(FrozenInstanceError):
         cast(Any, context).path = "elsewhere"
-    with pytest.raises(FrozenInstanceError):
-        cast(Any, context).eval = None
     with pytest.raises(FrozenInstanceError):
         cast(Any, context.eval).task = "other"
 
@@ -137,8 +136,9 @@ async def test_a_monitor_runs_with_and_without_an_eval(
 ) -> None:
     store = Store()
     recorder = ListRecorder()
-    built = host_context(recorder=recorder, store=store)
-    host = replace(built, context=replace(built.context, eval=eval_context_))
+    host = host_context(
+        recorder=recorder, store=store, host=FakeHost(eval=eval_context_)
+    )
     await run_sentinel(observe_only([reads_eval()]), host, before_step())
     [recorded] = recorder.records
     assert recorded.context.eval == eval_context_

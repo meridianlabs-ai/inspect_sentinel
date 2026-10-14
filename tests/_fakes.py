@@ -1,4 +1,4 @@
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import Any, NamedTuple
 
@@ -13,10 +13,14 @@ from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolChoice, T
 from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context, EvalContext
-from inspect_sentinel._excerpt import Excerpt
-from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step
-from inspect_sentinel._report import Decision, Failed, Observation, Report, Reported
-from inspect_sentinel._score import score_step
+from inspect_sentinel._host import (
+    Host,
+    HostContext,
+    HumanAnswer,
+    enter_layer,
+    running_step,
+)
+from inspect_sentinel._report import Decision, Failed, Report, Reported
 from inspect_sentinel._step import (
     AfterGenerate,
     AfterToolCall,
@@ -43,7 +47,9 @@ class FakeHost:
         *answers: HumanAnswer,
         completion: str = "ok",
         outputs: Sequence[ModelOutput] = (),
+        eval: EvalContext | None = None,
     ) -> None:
+        self.eval = eval
         self.answers = list(answers)
         self.asked: list[Asked] = []
         self.completion = completion
@@ -75,34 +81,6 @@ class FakeHost:
             self.outputs.pop(0)
             if self.outputs
             else ModelOutput.from_content(model="fake", content=self.completion)
-        )
-
-    async def score(
-        self,
-        step: Step | Excerpt[Step],
-        dimensions: str | Mapping[str, str],
-        *,
-        instructions: str | None = None,
-        policy: str | None = None,
-        template: str | None = None,
-        template_variables: Mapping[str, Any] | None = None,
-        model: str | None = None,
-        role: str | None = None,
-        config: GenerateConfig | None = None,
-        retry_refusals: int = 3,
-    ) -> Observation:
-        return await score_step(
-            self,
-            step,
-            dimensions,
-            instructions=instructions,
-            policy=policy,
-            template=template,
-            template_variables=template_variables,
-            model=model,
-            role=role,
-            config=config,
-            retry_refusals=retry_refusals,
         )
 
 
@@ -173,7 +151,7 @@ def host_context(
     store: Store | None = None,
 ) -> HostContext:
     return HostContext(
-        context=Context(path=path, host=host or FakeHost(), eval=eval_context()),
+        context=Context(path=path, host=Host(host or FakeHost(eval=eval_context()))),
         recorder=recorder or ListRecorder(),
         store=store or Store(),
     )

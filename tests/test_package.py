@@ -62,6 +62,7 @@ def test_author_facing_names_are_exported() -> None:
 def test_integration_names_are_not_exported() -> None:
     for name in (
         "HostContext",
+        "HostNative",
         "Recorder",
         "step_types",
         "Stage",
@@ -98,7 +99,8 @@ def test_integration_module_exports_the_host_surface() -> None:
         "step_types",
         "watched_stages",
         "run_sentinel",
-        "score_step",
+        "Host",
+        "HostNative",
     }
 
 

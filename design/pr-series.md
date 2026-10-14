@@ -365,7 +365,7 @@ Decided by the maintainer on 2026-10-02, before the first release, so nothing is
 | inspect_ai `_context()` | `_host_context()` | It builds the `HostContext`, and `_context` also names inspect_ai's `_sentinel/_context.py`, which holds the active sentinel. |
 | `Recorder` | kept | It says what it does; the host implements it beside `Host`, so a `Host` prefix adds nothing. |
 | `_runner.py` | kept | It holds the runner (`run_sentinel`, `run_children`, `run_monitors`, `run_protocols`). |
-| `_host.py` | added | It holds what the host implements or builds: `Host`, `HumanAnswer`, `Recorder` and `HostContext`, moved out of `_context.py`, and the runner's private step context variable, which keeps `Context` and `validate_instance_name`. |
+| `_host.py` | added | It holds what the host implements or builds: `Host` (and, since 2026-10-14, `HostNative`, which `Host` wraps), `HumanAnswer`, `Recorder` and `HostContext`, moved out of `_context.py`, and the runner's private step context variable, which keeps `Context` and `validate_instance_name`. |
 | `run_root` | renamed `run_sentinel` | Decided by the maintainer on 2026-10-03. It pairs with `resolve_sentinel`: a host resolves the sentinel once and runs it at each step. The runner's "root" stays off the host surface. |
 | `_integration.py` | kept | It is the contract inspect_ai imports, and re-exports `HostContext` and `Recorder` from `_host.py`. |
 | inspect_ai `_Host`, `_Recorder` | kept | Each is the inspect_ai implementation of the protocol it is named for. |

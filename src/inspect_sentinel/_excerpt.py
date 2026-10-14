@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
-from typing import Generic, Literal, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, TypeAlias, TypeVar
 
 from inspect_ai.model import (
     ChatMessage,
@@ -33,9 +33,11 @@ from inspect_ai.tool import ToolCall
 from inspect_ai.util import StoreModel
 from pydantic import Field
 
-from ._context import Context
 from ._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 from ._unhandled import current_invocation
+
+if TYPE_CHECKING:
+    from ._context import Context
 
 S = TypeVar("S", bound=Step)
 

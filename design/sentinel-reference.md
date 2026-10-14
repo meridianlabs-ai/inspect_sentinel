@@ -2,7 +2,7 @@
 
 A sentinel is what a task runs to watch an agent: a protocol with its monitors, configured with `Task(sentinel=)`. A monitor is a function that watches an agent while it runs and reports what it sees. It attaches to one of four stages, the points in the agent loop before a model call, after a model call, before a tool call, and after a tool call. At every stage it receives the same context object and keeps its state in the same place. A monitor observes: it returns an `Observation` or nothing, and can never act. A protocol decides: it returns a `Decision`, optionally after consulting monitors and other protocols. A protocol with no children is a rule.
 
-Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe_only`, `concurrent`, `sequential`, `threshold`, `human` and `handle_escalation` are implemented (`Host.ask_human` in inspect_ai follows). The [failure policy](#failures) is implemented too. `Host.score` is built (`sentinel-deployment.md`, "The host ABI"), and its inspect_ai implementation follows. The generate stages are built with `proceed`, `escalate` and `terminate`; `reject` and `modify` there are deferred to a follow-up (`generate-stages.md`). `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
+Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe_only`, `concurrent`, `sequential`, `threshold`, `human` and `handle_escalation` are implemented (`Host.ask_human` in inspect_ai follows). The [failure policy](#failures) is implemented too. `Host.score` is built (`sentinel-deployment.md`, "The host ABI"); it is sentinel code on the host's `generate`, so hosts implement nothing for it. The generate stages are built with `proceed`, `escalate` and `terminate`; `reject` and `modify` there are deferred to a follow-up (`generate-stages.md`). `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
 
 Related documents:
 
@@ -250,15 +250,16 @@ class Context:
     """Inference and asking a person today; outbound JSON and keyed storage are planned. See [Effects](#effects)."""
 
     # -- the briefing, in an eval
-    eval: EvalContext | None
-    """The task and sample being run. None outside an Inspect eval, as in a proxy."""
+    @property
+    def eval(self) -> EvalContext | None:
+        """The task and sample being run: `host.eval`. None outside an Inspect eval, as in a proxy."""
 
     # -- memory; there is no `store`: an instance reaches only its own state
     def store_as(self, model_cls: Type[SMT]) -> SMT:
         """Typed view of this instance's per-sample state, namespaced by `path`. Other scopes are planned."""
 ```
 
-The host (inspect_ai's dispatcher, or a proxy) builds the top layer's `Context`, with an empty `path` and, outside an eval, `eval=None`, and passes it to `run_sentinel` in a `HostContext` with its recorder and the sample store. Authors never see a `HostContext`: every monitor and protocol is given a plain `Context`, which has no private fields. For the duration of the step, `run_sentinel` sets a private context variable holding the recorder, the store, and the factory of each layer that has run, keyed by `path`; the runner registers each child's path before invoking it, and tasks a protocol starts inherit the variable. `run_monitors`, `run_protocols` and `run_children` look up the `path` of the context a protocol passes them: called outside a step, for example with a context kept after its protocol returned, they raise `RuntimeError`; given a context whose `path` is not a layer of the running step, `ValueError`. `store_as()` reads the store from the same variable and raises `RuntimeError` outside a step. Two instances with different factories under one `path` in one step are a `ValueError`, since their records and state would be indistinguishable.
+The host (inspect_ai's dispatcher, or a proxy) implements `HostNative` (`sentinel-deployment.md`, "The host ABI"), its `eval` None outside an eval, builds the top layer's `Context` with an empty `path` and `host=Host(native)`, and passes it to `run_sentinel` in a `HostContext` with its recorder and the sample store. Authors never see a `HostContext`: every monitor and protocol is given a plain `Context`, which has no private fields. For the duration of the step, `run_sentinel` sets a private context variable holding the recorder, the store, and the factory of each layer that has run, keyed by `path`; the runner registers each child's path before invoking it, and tasks a protocol starts inherit the variable. `run_monitors`, `run_protocols` and `run_children` look up the `path` of the context a protocol passes them: called outside a step, for example with a context kept after its protocol returned, they raise `RuntimeError`; given a context whose `path` is not a layer of the running step, `ValueError`. `store_as()` reads the store from the same variable and raises `RuntimeError` outside a step. Two instances with different factories under one `path` in one step are a `ValueError`, since their records and state would be indistinguishable.
 
 ```python
 @dataclass(frozen=True, kw_only=True)

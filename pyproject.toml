@@ -25,7 +25,7 @@ dependencies = [
     # The git ref never reaches PyPI: release-pin-deps.yml rewrites it to a
     # `>=<latest>` floor on the Release Please release PR, and
     # release-dep-guard.yml blocks the release if it is still a git ref.
-    "inspect-ai @ git+https://github.com/meridianlabs-ai/inspect_ai@epatey/inspect-ai-host-score",
+    "inspect-ai>=0.3.279",
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.
     "pydantic>=2.0",
@@ -104,13 +104,6 @@ allow-direct-references = true
 
 [tool.uv]
 managed = true
-# TEMPORARY, while inspect-ai points at the fork branch above: the fork lacks
-# inspect_ai's recent version tags, so the branch reports 0.3.239.devN and
-# Scout's inspect-ai floor would pick a Scout too old for score. The override
-# makes every package take the branch. Remove with the git ref.
-override-dependencies = [
-    "inspect-ai @ git+https://github.com/meridianlabs-ai/inspect_ai@epatey/inspect-ai-host-score",
-]
 
 [tool.ruff]
 extend-exclude = ["docs", "design"]
