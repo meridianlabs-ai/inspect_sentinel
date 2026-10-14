@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.2](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.1...0.1.2) (2026-10-14)
+
+
+### Features
+
+* human() can ask a person about a whole assistant turn, before its tool calls run ([#89](https://github.com/meridianlabs-ai/inspect_sentinel/issues/89)) ([a3faeea](https://github.com/meridianlabs-ai/inspect_sentinel/commit/a3faeea182539252abe49cd9f83cc3447d739aab))
+* step.history is None when the host can't provide the caller's message list ([#86](https://github.com/meridianlabs-ai/inspect_sentinel/issues/86)) ([5948f57](https://github.com/meridianlabs-ai/inspect_sentinel/commit/5948f5766365f5f284677ccb81231d291c58492c))
+* tool-stage monitors see the offered tools and whether the result was truncated ([#88](https://github.com/meridianlabs-ai/inspect_sentinel/issues/88)) ([00130a9](https://github.com/meridianlabs-ai/inspect_sentinel/commit/00130a9a26afd4c14434eed522d78011a53e4235))
+
 ## [0.1.1](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.0...0.1.1) (2026-10-12)
 
 
