@@ -11,11 +11,14 @@ The sidecar runs sentinels for two kinds of client.
 - **An Inspect eval.** Inspect makes the model calls, for its own agents and for bridged ones. Inspect can tell the sentinel about the task and the sample, and it can act on what the sidecar answers.
 - **A naked agent.** The agent makes the model calls itself. Examples are Claude Code in a sandbox, and any agent in deployment. The sentinel has only what is in the model traffic, and the sidecar's answer goes to a program that knows nothing about sentinels.
 
-```
-  Inspect eval     Inspect  --->  proxy  --->  provider
-  Naked agent      agent    --->  proxy  --->  provider
-                                    |
-                                 sidecar, running the sentinel
+```mermaid
+flowchart LR
+    I[Inspect eval] --> P
+    A[Naked agent] --> P
+    subgraph gate [Every request and every reply stops here]
+        P[Proxy] <--> S{Sidecar: the sentinel passes, changes or refuses it}
+    end
+    P --> M[Model provider]
 ```
 
 A naked agent needs no change to have its model traffic judged. An Inspect eval says which sample each request belongs to, registers its tasks where that is allowed, and is told what the sentinel decided, as section 9 describes. That part of Inspect is not built yet. Whoever runs the proxy chooses the sentinel.
