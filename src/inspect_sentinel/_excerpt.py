@@ -8,7 +8,8 @@
 #       drop_history(last_turns(step, 6))               # the last 6 turns the model was sent
 #       drop_input(step)                                # the scaffold's conversation only
 #       drop_input(drop_history(step))                  # the step alone
-#       drop_reasoning(drop_system(last_turns(step, 6)))  # without the system prompt or reasoning
+#       drop_reasoning(last_turns(step, 6))             # without the model's reasoning
+#       keep_system(step)                               # with the system prompt, left out by default
 #       new_since_last_report(context, step)            # only what this monitor has not seen
 #       last_turns(new_since_last_report(context, step), 6)  # that, at most 6 turns
 #
@@ -64,8 +65,8 @@ class Excerpt(Generic[S_co]):
     history: list[ChatMessage]
     """The part of `step.history` to show."""
 
-    exclude: frozenset[Exclusion] = frozenset()
-    """What `step_as_str()` leaves out of every block, the step's own part included: `system` messages, `reasoning`, and `tool_usage` (a provider's own tool use, such as web search, recorded in a message). Set by `drop_system()`, `drop_reasoning()` and `drop_tool_usage()`."""
+    exclude: frozenset[Exclusion] = frozenset({"system"})
+    """What `step_as_str()` leaves out of every block, the step's own part included: `system` messages, `reasoning`, and `tool_usage` (a provider's own tool use, such as web search, recorded in a message). System messages are left out by default, as Scout leaves them out; `keep_system()` keeps them, and `drop_reasoning()` and `drop_tool_usage()` add to it."""
 
 
 def drop_input(step: S | Excerpt[S]) -> Excerpt[S]:
@@ -87,13 +88,14 @@ def drop_history(step: S | Excerpt[S]) -> Excerpt[S]:
     return replace(_excerpt(step), history=[])
 
 
-def drop_system(step: S | Excerpt[S]) -> Excerpt[S]:
-    """`step`, excerpted, with system messages left out when it is rendered.
+def keep_system(step: S | Excerpt[S]) -> Excerpt[S]:
+    """`step`, excerpted, with system messages shown when it is rendered; they are left out by default.
 
     Args:
         step: A step, or an excerpt to narrow further.
     """
-    return _leave_out(step, "system")
+    shown = _excerpt(step)
+    return replace(shown, exclude=shown.exclude - {"system"})
 
 
 def drop_reasoning(step: S | Excerpt[S]) -> Excerpt[S]:
@@ -228,7 +230,7 @@ async def step_as_str(
 
     Args:
         step: A step, rendered whole, or an excerpt of one.
-        messages_as_str: Renders a list of messages; pass the first function of Scout's `message_numbering()` to number them so a model's answer can cite them (made with `MessagesPreprocessor(exclude_system=False)`, so that `drop_system()` decides whether system messages show). By default Scout's `messages_as_str`, keeping system messages.
+        messages_as_str: Renders a list of messages; pass the first function of Scout's `message_numbering()` to number them so a model's answer can cite them (made with `MessagesPreprocessor(exclude_system=False)`, so that the excerpt decides whether system messages show). By default Scout's `messages_as_str`, which leaves out only what the excerpt excludes.
     """
     # Scout imports duckdb and pandas, so load it only when a monitor renders
     from inspect_scout import MessagesPreprocessor

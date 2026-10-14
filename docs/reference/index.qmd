@@ -83,9 +83,9 @@ What a monitor shows a model about a step: the windows take a step or an excerpt
 ### Excerpt
 ### drop_input
 ### drop_history
-### drop_system
 ### drop_reasoning
 ### drop_tool_usage
+### keep_system
 ### last_turns
 ### last_messages
 ### new_since_last_report

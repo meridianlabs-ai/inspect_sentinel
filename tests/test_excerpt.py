@@ -31,8 +31,8 @@ from inspect_sentinel import (
     drop_history,
     drop_input,
     drop_reasoning,
-    drop_system,
     drop_tool_usage,
+    keep_system,
     last_messages,
     last_turns,
     new_since_last_report,
@@ -504,10 +504,11 @@ def thoughtful() -> Step:
 @pytest.mark.parametrize(
     "drop, gone, kept",
     [
-        (None, [], ["be helpful", "thinking about", "searched"]),
-        (drop_system, ["be helpful"], ["thinking about", "searched"]),
-        (drop_reasoning, ["thinking about"], ["be helpful", "searched"]),
-        (drop_tool_usage, ["searched"], ["be helpful", "thinking about"]),
+        # system messages are left out by default, as Scout leaves them out
+        (None, ["be helpful"], ["thinking about", "searched"]),
+        (keep_system, [], ["be helpful", "thinking about", "searched"]),
+        (drop_reasoning, ["be helpful", "thinking about"], ["searched"]),
+        (drop_tool_usage, ["be helpful", "searched"], ["thinking about"]),
     ],
 )
 @pytest.mark.anyio
@@ -530,7 +531,7 @@ async def test_drops_compose_with_windows_and_keep_cites() -> None:
         MessagesPreprocessor(exclude_system=False)
     )
     rendered = await step_as_str(
-        drop_reasoning(drop_system(last_turns(thoughtful(), 1))),
+        drop_reasoning(last_turns(thoughtful(), 1)),
         messages_as_str=numbered,
     )
     assert "be helpful" not in rendered and "thinking about" not in rendered
