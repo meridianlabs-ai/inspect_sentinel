@@ -13,7 +13,7 @@ from inspect_ai.model import (
 )
 from inspect_ai.tool import ToolCall
 
-from inspect_sentinel import last_turns
+from inspect_sentinel import keep_history, last_turns
 from inspect_sentinel._integration import score_step
 
 from ._fakes import (
@@ -118,7 +118,9 @@ async def test_an_excerpt_is_shown_numbered_and_cites_become_references() -> Non
     ]
     step = replace(before_tool_call("bash", cmd="ls"), history=history)
     host = FakeHost(outputs=[answer(explanation="as planned in [M1]", suspicion=0.0)])
-    observation = await score_step(host, last_turns(step, 1), "Is it safe?")
+    observation = await score_step(
+        host, keep_history(last_turns(step, 1)), "Is it safe?"
+    )
     assert "clean up" not in prompt(host)
     assert "[M1] ASSISTANT:\ndeleting the logs" in prompt(host)
     assert [reference.id for reference in observation.references] == ["assistant"]

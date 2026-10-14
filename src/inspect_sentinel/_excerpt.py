@@ -3,11 +3,11 @@
 # monitor, which is given its context and the step:
 #
 #   async def check(context: Context, step: BeforeToolCall) -> Observation | None:
-#       last_turns(step, 6)                             # the last 6 turns
+#       last_turns(step, 6)                             # the last 6 turns the model was sent
 #       last_messages(step, 20)                         # the last 20 messages
-#       drop_history(last_turns(step, 6))               # the last 6 turns the model was sent
-#       drop_input(step)                                # the scaffold's conversation only
-#       drop_input(drop_history(step))                  # the step alone
+#       keep_history(last_turns(step, 6))               # and the scaffold's, when it differs
+#       keep_history(drop_input(step))                  # the scaffold's conversation only
+#       drop_input(step)                                # the step alone
 #       drop_reasoning(last_turns(step, 6))             # without the model's reasoning
 #       keep_system(step)                               # with the system prompt, left out by default
 #       new_since_last_report(context, step)            # only what this monitor has not seen
@@ -42,7 +42,7 @@ S = TypeVar("S", bound=Step)
 # an excerpt is frozen, so an Excerpt[BeforeToolCall] is an Excerpt[Step]
 S_co = TypeVar("S_co", bound=Step, covariant=True)
 
-Exclusion: TypeAlias = Literal["system", "reasoning", "tool_usage"]
+Exclusion: TypeAlias = Literal["history", "system", "reasoning", "tool_usage"]
 
 MessagesAsStr: TypeAlias = Callable[[list[ChatMessage]], Awaitable[str]]
 
@@ -65,8 +65,8 @@ class Excerpt(Generic[S_co]):
     history: list[ChatMessage]
     """The part of `step.history` to show."""
 
-    exclude: frozenset[Exclusion] = frozenset({"system"})
-    """What `step_as_str()` leaves out of every block, the step's own part included: `system` messages, `reasoning`, and `tool_usage` (a provider's own tool use, such as web search, recorded in a message). System messages are left out by default, as Scout leaves them out; `keep_system()` keeps them, and `drop_reasoning()` and `drop_tool_usage()` add to it."""
+    exclude: frozenset[Exclusion] = frozenset({"history", "system"})
+    """What `step_as_str()` leaves out: the `history` block, and from every block, the step's own part included, `system` messages, `reasoning`, and `tool_usage` (a provider's own tool use, such as web search, recorded in a message). The history and system messages are left out by default, the latter as Scout leaves them out; `keep_history()` and `keep_system()` keep them, and `drop_reasoning()` and `drop_tool_usage()` add to it."""
 
 
 def drop_input(step: S | Excerpt[S]) -> Excerpt[S]:
@@ -79,13 +79,16 @@ def drop_input(step: S | Excerpt[S]) -> Excerpt[S]:
     return replace(cut, input=None if cut.input is None else [])
 
 
-def drop_history(step: S | Excerpt[S]) -> Excerpt[S]:
-    """`step`, excerpted, with an empty `history`.
+def keep_history(step: S | Excerpt[S]) -> Excerpt[S]:
+    """`step`, excerpted, with the scaffold's conversation shown when it is rendered; it is left out by default, except where the model's input is unknown.
+
+    The history is usually the same conversation as the input, so even when kept it is shown only when it holds a message the input does not, such as turns before a compaction.
 
     Args:
         step: A step, or an excerpt to narrow further.
     """
-    return replace(_excerpt(step), history=[])
+    shown = _excerpt(step)
+    return replace(shown, exclude=shown.exclude - {"history"})
 
 
 def keep_system(step: S | Excerpt[S]) -> Excerpt[S]:
@@ -226,7 +229,7 @@ async def step_as_str(
 ) -> str:
     """Render `step`, or an excerpt of it, for a monitor's prompt.
 
-    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it has nothing to show: `INPUT`, `HISTORY`, then the step's own part (see `Excerpt`), in a block marked `[AGENT STEP - BEGIN ...]` and `[AGENT STEP - END ...]` and named for the stage: `TOOL CALL` before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` (the messages the model is about to answer) before a generate, and `MODEL REPLY` after one. The history is usually the same conversation as the input, so `HISTORY` is shown, whole, only when it holds a message the input does not, such as turns before a compaction; messages are matched by id, counting the ones a merged message was made from. When a tool step has no model input, the `INPUT` block says so, even after `drop_input()`. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
+    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it has nothing to show: `INPUT`, `HISTORY`, then the step's own part (see `Excerpt`), in a block marked `[AGENT STEP - BEGIN ...]` and `[AGENT STEP - END ...]` and named for the stage: `TOOL CALL` before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` (the messages the model is about to answer) before a generate, and `MODEL REPLY` after one. `HISTORY` is shown only after `keep_history()`, or in place of an unknown input; even then, since it is usually the same conversation as the input, it is shown, whole, only when it holds a message the input does not, such as turns before a compaction; messages are matched by id, counting the ones a merged message was made from. When a tool step has no model input, the `INPUT` block says so, even after `drop_input()`. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
 
     Args:
         step: A step, rendered whole, or an excerpt of one.
@@ -260,9 +263,17 @@ async def step_as_str(
             if input is None
             else await text(input),
         ),
-        # usually the same conversation as the input, so shown only when it
-        # holds a message the input does not, such as turns before a compaction
-        ("", "HISTORY", await text(history) if _adds(history, input or []) else ""),
+        # opt-in, or in place of an unknown input; usually the same
+        # conversation as the input, so shown only when it holds a message the
+        # input does not, such as turns before a compaction
+        (
+            "",
+            "HISTORY",
+            await text(history)
+            if (input is None or "history" not in shown.exclude)
+            and _adds(history, input or [])
+            else "",
+        ),
         (
             "AGENT STEP - ",
             _step_block(shown.step),

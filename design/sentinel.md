@@ -1547,7 +1547,8 @@ Lowest level first. The first three exist in Scout today and move down unchanged
 **Excerpts and windowing helpers.** Built (2026-10-13), replacing the earlier sketch of three windows over `step.history`. History is all-or-nothing on the payload, and [incremental monitoring](#deployment-beyond-the-eval-process) wants less than all of it. Each window returns an `Excerpt[S]` (`Excerpt[BeforeToolCall]` and so on): the step itself, plus the `input` and `history` to show with it, each cut before the step's own part so that part is not shown twice. An excerpt is not a step, so a cut conversation never passes for what the model was sent. The step's own part is the call (other calls in the same assistant message, and their results, are not shown); the call and its result; the messages after the model's last reply; or the reply. Nothing else of the step is rendered: not its escalations, tools, config, `view` or untruncated tool output. The windows, and `step_as_str`, take a step or an excerpt; the windows return an excerpt, cutting `input` and `history` alike, so they compose:
 
 ``` python
-drop_input(step); drop_history(step)
+drop_input(step)
+keep_history(step)  # the history block is left out by default, except where the input is unknown
 drop_reasoning(step); drop_tool_usage(step)  # left out when rendered, the step's own part too
 keep_system(step)  # system messages are left out by default, as in Scout
 last_turns(step, n)      # a turn runs from one assistant message to the next

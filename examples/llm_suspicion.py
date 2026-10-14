@@ -13,7 +13,6 @@ from inspect_sentinel import (
     Context,
     Monitor,
     Observation,
-    drop_history,
     last_turns,
     monitor,
     threshold,
@@ -41,7 +40,7 @@ def suspicion(model: str | None = None, role: str | None = None) -> Monitor:
         if step.call.function == "submit":
             return None  # the question is written for commands, not final answers
         return await context.host.score(
-            drop_history(last_turns(step, 3)),
+            last_turns(step, 3),
             SUSPICION,
             policy=POLICY,
             model=model,

@@ -31,10 +31,10 @@ from inspect_sentinel import (
     Step,
     concurrent,
     decide_final,
-    drop_history,
     drop_input,
     drop_reasoning,
     drop_tool_usage,
+    keep_history,
     keep_system,
     last_messages,
     last_turns,
@@ -213,9 +213,8 @@ def test_a_negative_window_raises(
         window(windowed(), -1)
 
 
-def test_drops_empty_a_source_and_unknown_input_stays_unknown() -> None:
+def test_drop_input_empties_it_and_an_unknown_input_stays_unknown() -> None:
     assert texts(drop_input(windowed()).input) == []
-    assert texts(drop_history(windowed()).history) == []
     unknown = _excerpt(tool_step(None, CONVERSATION))
     assert drop_input(unknown).input is None
     assert last_turns(unknown, 1).input is None
@@ -408,7 +407,7 @@ async def test_step_as_str_leaves_out_empty_parts_whatever_the_renderer() -> Non
 
     prefilled = [user("task"), asks("prefill")]
     step = replace(before_generate_step(), input=prefilled, history=prefilled)
-    rendered = await step_as_str(drop_history(step), messages_as_str=as_json)
+    rendered = await step_as_str(step, messages_as_str=as_json)
     assert "[BEGIN HISTORY]" not in rendered
     assert "[AGENT STEP - BEGIN MODEL REQUEST]" not in rendered
 
@@ -422,7 +421,8 @@ def test_new_since_last_report_outside_the_runner_raises() -> None:
     "cut, absent, block, shown",
     [
         (windowed(), [], "TOOL CALL", ["cmd: ls"]),
-        (drop_history(windowed()), ["HISTORY"], "TOOL CALL", ["cmd: ls"]),
+        # the same conversation as the input, so not shown even when kept
+        (keep_history(windowed()), ["HISTORY"], "TOOL CALL", ["cmd: ls"]),
         (
             _excerpt(after_tool_call("bash", "out.txt", cmd="ls")),
             ["HISTORY"],
@@ -556,6 +556,7 @@ def many_messages(step: Step | Excerpt[Step]) -> Excerpt[Step]:
 
 EXCERPTING: list[Callable[[Step | Excerpt[Step]], Excerpt[Step]]] = [
     keep_system,
+    keep_history,
     drop_reasoning,
     drop_tool_usage,
     two_turns,
@@ -580,10 +581,13 @@ async def test_a_chain_gives_the_same_excerpt_in_any_order(
     rendered = await step_as_str(chained)
     assert rendered == await step_as_str(
         drop_input(
-            two_turns(drop_tool_usage(drop_reasoning(keep_system(thoughtful()))))
+            two_turns(
+                drop_tool_usage(drop_reasoning(keep_history(keep_system(thoughtful()))))
+            )
         )
     )
-    assert "be helpful" in rendered
+    # the input is dropped, so the kept history shows, system message included
+    assert "be helpful" in rendered.split("[END HISTORY]")[0]
     assert not any(
         text in rendered for text in ["thinking about", "searched", "[BEGIN INPUT]"]
     )
@@ -593,7 +597,7 @@ async def test_a_chain_gives_the_same_excerpt_in_any_order(
     "excerpting",
     [
         drop_input,
-        drop_history,
+        keep_history,
         two_turns,
         many_messages,
         drop_reasoning,
@@ -611,7 +615,7 @@ def test_every_function_keeps_what_earlier_ones_excluded_or_kept(
 
 
 def test_keep_system_twice_is_keep_system_once() -> None:
-    assert keep_system(keep_system(thoughtful())).exclude == frozenset()
+    assert keep_system(keep_system(thoughtful())).exclude == {"history"}
 
 
 @monitor
@@ -637,7 +641,7 @@ async def test_keep_system_holds_before_or_after_new_since_last_report(
             {"judge": keeps_system(first=first)}, context, thoughtful()
         )
     [seen] = [o.report.explanation for o in observations.succeeded]
-    assert json.loads(seen or "") == []
+    assert json.loads(seen or "") == ["history"]
 
 
 def merged() -> ChatMessage:
@@ -647,24 +651,37 @@ def merged() -> ChatMessage:
     )
 
 
+def history_only(step: Step | Excerpt[Step]) -> Excerpt[Step]:
+    return keep_history(drop_input(step))
+
+
+def with_system(step: Step | Excerpt[Step]) -> Excerpt[Step]:
+    return keep_system(keep_history(step))
+
+
 @pytest.mark.parametrize(
     "excerpting, input, history, shows_history",
     [
-        # the common case: the same conversation, shown once
-        (None, CONVERSATION, CONVERSATION, False),
-        # turns before a compaction are only in history: all of it is shown
-        (None, [user("summary")], CONVERSATION, True),
-        (None, [merged()], [user("task"), user("more")], False),
+        # left out unless kept
+        (None, [user("summary")], CONVERSATION, False),
+        # in place of an unknown input, kept or not
         (None, None, CONVERSATION, True),
-        (drop_input, CONVERSATION, CONVERSATION, True),
-        (None, CONVERSATION, [unnamed("no id")], True),
+        # kept: the same conversation is shown once
+        (keep_history, CONVERSATION, CONVERSATION, False),
+        # kept: turns before a compaction are only in history, so all of it shows
+        (keep_history, [user("summary")], CONVERSATION, True),
+        (keep_history, [merged()], [user("task"), user("more")], False),
+        (keep_history, CONVERSATION, [unnamed("no id")], True),
+        (history_only, CONVERSATION, CONVERSATION, True),
+        # a dropped input is not an unknown one
+        (drop_input, CONVERSATION, CONVERSATION, False),
         # only hidden messages are extra
-        (None, CONVERSATION[1:], CONVERSATION, False),
-        (keep_system, CONVERSATION[1:], CONVERSATION, True),
+        (keep_history, CONVERSATION[1:], CONVERSATION, False),
+        (with_system, CONVERSATION[1:], CONVERSATION, True),
     ],
 )
 @pytest.mark.anyio
-async def test_history_is_shown_only_when_it_holds_a_message_the_input_does_not(
+async def test_history_is_kept_by_choice_and_shown_when_it_adds_to_the_input(
     excerpting: Callable[[Step | Excerpt[Step]], Excerpt[Step]] | None,
     input: list[ChatMessage] | None,
     history: list[ChatMessage],
@@ -678,7 +695,7 @@ async def test_history_is_shown_only_when_it_holds_a_message_the_input_does_not(
         assert all(
             m.text in rendered.split("[END HISTORY]")[0]
             for m in history
-            if m.role != "system" or excerpting is keep_system
+            if m.role != "system" or excerpting is with_system
         )
 
 
@@ -692,7 +709,7 @@ async def test_blocks_come_input_then_history_then_the_step_numbered_in_that_ord
     step = replace(
         tool_step([user("summary")], CONVERSATION), call=call("b"), message="calls b"
     )
-    rendered = await step_as_str(step, messages_as_str=numbered)
+    rendered = await step_as_str(keep_history(step), messages_as_str=numbered)
     starts = [
         rendered.index(marker)
         for marker in (
@@ -717,7 +734,9 @@ async def test_step_as_str_says_when_the_model_input_is_unknown() -> None:
 @pytest.mark.anyio
 async def test_numbered_citations_resolve_to_the_agents_messages() -> None:
     numbered, extract_refs = message_numbering()
-    rendered = await step_as_str(_excerpt(parallel_after_b()), messages_as_str=numbered)
+    rendered = await step_as_str(
+        keep_history(parallel_after_b()), messages_as_str=numbered
+    )
     step_block = rendered.split("[AGENT STEP - BEGIN TOOL CALL AND RESULT]")[1]
     assert "cmd: b" in step_block and "cmd: a" not in step_block
     # history's task is [M1]; the step's message holding the call is [M2]
