@@ -1,8 +1,8 @@
-# Host in a proxy: the sidecar
+# The sidecar: a sentinel beside a model proxy
 
-Status: design, 2026-10-14. A claim marked **measured** was run and observed. Measurements are kept where they are the reason for a design choice. Section 9 defines how Inspect and the sidecar exchange task facts, decisions and records. This document builds on the deployment design in [sentinel-deployment.md](sentinel-deployment.md) and on the spikes in [proxy-host.md](proxy-host.md), and it does not repeat either of them.
+This document describes the sidecar: a Python program that runs a sentinel beside an HTTP proxy in front of a model provider's API, such as LiteLLM or Middleman. The proxy hands the sidecar each model request and each reply. The sidecar finds in them the steps a sentinel judges, including the steps before and after each tool call, runs the sentinel, and carries out each decision on the request or reply it holds. It serves agents that make their own model calls, such as Claude Code, and Inspect evals. An eval is also told what was decided, so that it records the same as when its sentinel runs in its own process.
 
-The sidecar is a program that runs sentinels beside an HTTP proxy, where the proxy sits in front of a model provider's API. The proxy hands the sidecar each model request and each reply. The sidecar also runs the steps before and after each tool call, from the tool calls in a reply and the tool results in the next request, and tells an Inspect client what it decided. The sidecar turns these inputs into the steps a sentinel judges, runs the same monitors and protocols that run inside an eval, and returns decisions to whoever must apply them. The code is the package `inspect_sentinel.sidecar`.
+It builds on [sentinel-deployment.md](sentinel-deployment.md). [sidecar-plan.md](sidecar-plan.md) is the plan for building it.
 
 ## Two kinds of client
 
@@ -33,6 +33,7 @@ When the sentinel runs in a sidecar, Inspect talks to it through `RemoteSentinel
 - **Conversation.** The list of messages that a model request carries.
 - **Run.** One sample in one epoch, identified by the uuid the eval log gives the sample, or one session of a naked agent. A run can hold more than one conversation. A sample that Inspect retries after an error keeps its uuid, so it is the same run. Whether its state starts again or carries on is not designed.
 - **Proxy hook.** Code of ours that a proxy runs, which forwards the proxy's model traffic to the sidecar. `MiddlemanHook` is one. It is not the proxy's own mechanism for running such code, which Middleman calls its passthrough hook. It is not an Inspect hook either, which is code that an eval runs.
+- **Measured.** A claim marked **measured** was run and observed. Measurements are kept where they are the reason for a design choice.
 
 ## Goals
 
@@ -154,7 +155,7 @@ Not yet checked:
 - Gemini
 - the cost of reading under load, and on Linux
 
-## 3. From traffic and client calls to steps
+## 3. From traffic to steps
 
 A proxy sees one model request and its reply at a time. It never sees a tool execute, so the sidecar finds the tool-call steps in the traffic on either side of it. All four stages are judged through the endpoint for proxies:
 
