@@ -42,7 +42,7 @@ The host interface after sentinel #47 is `HostContext(context, recorder, store)`
 - **`Host.ask_human`**: the audit queue; ties into workstream 13's message queue.
 - **`Recorder`**: `SentinelEvent`s to a sink (structured logs, OpenTelemetry, or files a viewer or workstream 12 can read).
 - **The store**: a keyed store, keyed by a session header verified against a fingerprint of the conversation's start (deployment doc, "Making the key trustworthy"), behind `store_as()`.
-- **`step.history`** across compaction, from the keyed store's accumulation for the conversation.
+- **`step.history`** is `None`: a proxy sees only the request, never the scaffold's list. The keyed store's accumulation of what each request added is an as-sent view across compaction (cf. AISI R10), not `history`.
 - **Files**: read-only access to files bundled with the monitor (a read-only preopened bundle data directory, or `importlib.resources`) and nothing else by default; arbitrary host paths are never granted. State goes in the store, since a write is per instance and lost. Decided by the maintainer on 2026-10-06 (deployment doc, "What the guest can reach").
 - **New host methods**: `fetch` through named endpoints (designed in the deployment doc, not built), and possibly an out-of-band `terminate()`.
 

@@ -45,7 +45,14 @@ from ._rules import (
     tool_matches,
 )
 from ._runner import run_children, run_monitors, run_protocols
-from ._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
+from ._step import (
+    AfterGenerate,
+    AfterToolCall,
+    BeforeGenerate,
+    BeforeToolCall,
+    Step,
+    Truncation,
+)
 from ._types import (
     Monitor,
     MonitorGroup,
@@ -94,6 +101,7 @@ __all__ = [
     "Sentinels",
     "Step",
     "Suspicion",
+    "Truncation",
     "call_text",
     "concurrent",
     "decide_final",

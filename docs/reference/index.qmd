@@ -12,6 +12,7 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 ### AfterGenerate
 ### BeforeToolCall
 ### AfterToolCall
+### Truncation
 ### Step
 
 ## Report types

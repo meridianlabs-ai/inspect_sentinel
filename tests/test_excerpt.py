@@ -95,7 +95,7 @@ def texts(messages: list[ChatMessage] | None) -> list[str] | None:
 
 
 def tool_step(
-    input: list[ChatMessage] | None, history: list[ChatMessage]
+    input: list[ChatMessage] | None, history: list[ChatMessage] | None
 ) -> BeforeToolCall:
     return replace(before_tool_call("bash", cmd="ls"), input=input, history=history)
 
@@ -720,6 +720,40 @@ async def test_blocks_come_input_then_history_then_the_step_numbered_in_that_ord
     ]
     assert starts == sorted(starts)
     assert [r.id for r in extract_refs("see [M1]")] == ["summary"]
+
+
+def windows(step: Step) -> Excerpt[Step]:
+    return last_messages(last_turns(keep_history(step), 1), 1)
+
+
+UNKNOWN_HISTORY = (
+    "[BEGIN HISTORY]\nThe agent's conversation history is not available.\n[END HISTORY]"
+)
+
+
+# a host that cannot provide the history (a proxy, a replay) passes None
+@pytest.mark.parametrize(
+    "step, excerpting, says_unknown",
+    [
+        (tool_step(CONVERSATION, None), None, False),
+        (tool_step(CONVERSATION, None), keep_history, True),
+        # in place of an unknown input
+        (tool_step(None, None), None, True),
+        # windows keep it unknown rather than empty
+        (tool_step(CONVERSATION, None), windows, True),
+        (replace(before_generate_step(), history=None), keep_history, True),
+        (replace(after_generate_step(), history=None), keep_history, True),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_history_the_host_could_not_provide_is_named_where_it_would_show(
+    step: Step,
+    excerpting: Callable[[Step], Excerpt[Step]] | None,
+    says_unknown: bool,
+) -> None:
+    rendered = await step_as_str(excerpting(step) if excerpting else step)
+    assert (UNKNOWN_HISTORY in rendered) == says_unknown
+    assert "[AGENT STEP - BEGIN" in rendered
 
 
 @pytest.mark.anyio

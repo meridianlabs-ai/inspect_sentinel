@@ -155,7 +155,7 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 | `model` | the requested model, `provider/name` | same |
 | `conversation` | the current agent span id, or the sample uuid outside any agent span | same |
 | `input` | the prepared request: the caller's messages with the configured system message, resolved reasoning history, tool `model_input` handlers, extracted media and merged consecutive messages; what the `ModelEvent` records | the same list |
-| `history` | the messages the caller passed | same |
+| `history` | the messages the caller passed; `None` when the host cannot know them (a proxy, or a replay that cannot establish them) | same |
 | `tools` | `ToolInfo`s sent, after `tool_choice` filtering | same |
 | `tool_choice` | as sent (`"none"` when there are no tools) | same |
 | `config` | the resolved `GenerateConfig`: the task's, the model's and the call's, with `max_tokens` filled | same |
@@ -164,7 +164,7 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 
 `AfterGenerate` repeats the request so that `resample` can regenerate with exactly what the agent was given.
 
-**`history`.** The caller's messages, as at the tool stages, where it is the scaffold's list (decision 15, revised). `Model.generate` sees only the messages it is passed: for the `generate()` solver and for `react` without compaction those are the agent's whole conversation; with compaction they are the compacted conversation, and after `react`'s overflow recovery replaces `state.messages`, the folded turns are gone (pr-series.md, "react overflow recovery rewriting history"). A view of what the model was actually sent over an agent instance's run (AISI R10) is a separate on-demand query, in its own PR, read from the transcript through `TranscriptHistory.find_last` (inspect_ai #5831). Marking the compaction summary call and `score()` from a solver in the transcript, for R10 and replay (R7), is deferred to that work and designed with its viewer and ACP TUI impact, since both handle span types specially; inspect_ai adds no spans for sentinel's sake.
+**`history`.** The caller's messages, as at the tool stages, where it is the scaffold's list (decision 15, revised). It is `None` when the host cannot know the caller's list, under a proxy or in a replay that cannot establish it; in-process Inspect always provides it. `Model.generate` sees only the messages it is passed: for the `generate()` solver and for `react` without compaction those are the agent's whole conversation; with compaction they are the compacted conversation, and after `react`'s overflow recovery replaces `state.messages`, the folded turns are gone (pr-series.md, "react overflow recovery rewriting history"). A view of what the model was actually sent over an agent instance's run (AISI R10) is a separate on-demand query, in its own PR, read from the transcript through `TranscriptHistory.find_last` (inspect_ai #5831). Marking the compaction summary call and `score()` from a solver in the transcript, for R10 and replay (R7), is deferred to that work and designed with its viewer and ACP TUI impact, since both handle span types specially; inspect_ai adds no spans for sentinel's sake.
 
 **`step.input` at the tool stages.** R2 (inspect_ai #5831) finds the `ModelEvent` that produced the call in the transcript history, resident or evicted, and `step.input` is `None` when none exists. Decision 17's recording is not needed.
 
@@ -172,7 +172,7 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 
 ## f. Events and the viewer {#f-events-and-the-viewer}
 
-`SentinelEvent.stage` already declares `model_input` and `model_output` next to `tool_call` and `tool_result`; the dispatcher emits them, so no event schema or generated type changes. The stage names are the ones `human(stages=)` would take.
+`SentinelEvent.stage` already declares `model_input` and `model_output` next to `tool_call` and `tool_result`; the dispatcher emits them, so no event schema or generated type changes. The stage names are the ones `human(stages=)` takes; it supports `model_output`.
 
 `step_id` follows sentinel-development.md, "Step ids":
 
@@ -193,4 +193,4 @@ Built:
 - `threshold` and `handle_escalation` at the generate stages.
 - In inspect_ai: `Model._prepare_input`, the two hooks in `Model.generate`, decision 1's agent-loop rule, the per-stage events and step ids, and the skip for unwatched stages.
 
-Not built: `reject` and `modify` at the generate stages and `Decision.modify` (part 2, decisions 8–13), `human()` at the generate stages (AISI R1, next), and tool-stage sentinels for bridged agents (inspect_ai #5765), and the as-sent view of an agent instance's run (AISI R10, its own PR).
+Built since: `human(stages=["model_output"])` (AISI R1), offering `approve` and `terminate`; inspect_ai shows the person the whole turn as one view. Not built: `reject` and `modify` at the generate stages and `Decision.modify` (part 2, decisions 8–13), `human()` at `BeforeGenerate`, and tool-stage sentinels for bridged agents (inspect_ai #5765), and the as-sent view of an agent instance's run (AISI R10, its own PR).

@@ -64,8 +64,8 @@ class Excerpt(Generic[S_co]):
     input: list[ChatMessage] | None
     """The part of `step.input` to show, None when a tool step has none (no model call produced it, or the record of that call is gone; see `BeforeToolCall.input`)."""
 
-    history: list[ChatMessage]
-    """The part of `step.history` to show."""
+    history: list[ChatMessage] | None
+    """The part of `step.history` to show, None when the host could not provide it (see `BeforeToolCall.history`); every window keeps it None."""
 
     exclude: frozenset[Exclusion] = frozenset({"history", "system"})
     """What `step_as_str()` leaves out: the `history` block, and from every block, the step's own part included, `system` messages, `reasoning`, and `tool_usage` (a provider's own tool use, such as web search, recorded in a message). The history and system messages are left out by default, the latter as Scout leaves them out; `keep_history()` and `keep_system()` keep them, and `drop_reasoning()` and `drop_tool_usage()` add to it."""
@@ -220,7 +220,7 @@ def new_since_last_report(context: Context, step: S | Excerpt[S]) -> Excerpt[S]:
     narrowed = replace(
         cut,
         input=None if cut.input is None else after_mark("input", cut.input),
-        history=after_mark("history", cut.history),
+        history=None if cut.history is None else after_mark("history", cut.history),
     )
     node.on_success.append(lambda: setattr(store, "marks", {**store.marks, **marks}))
     return narrowed
@@ -231,7 +231,7 @@ async def step_as_str(
 ) -> str:
     """Render `step`, or an excerpt of it, for a monitor's prompt.
 
-    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it has nothing to show: `INPUT`, `HISTORY`, then the step's own part (see `Excerpt`), in a block marked `[AGENT STEP - BEGIN ...]` and `[AGENT STEP - END ...]` and named for the stage: `TOOL CALL` before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` (the messages the model is about to answer) before a generate, and `MODEL REPLY` after one. `HISTORY` is shown only after `keep_history()`, or in place of an unknown input; even then, since it is usually the same conversation as the input, it is shown, whole, only when it holds a message the input does not, such as turns before a compaction; messages are matched by id, counting the ones a merged message was made from. When a tool step has no model input, the `INPUT` block says so, even after `drop_input()`. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
+    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it has nothing to show: `INPUT`, `HISTORY`, then the step's own part (see `Excerpt`), in a block marked `[AGENT STEP - BEGIN ...]` and `[AGENT STEP - END ...]` and named for the stage: `TOOL CALL` before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` (the messages the model is about to answer) before a generate, and `MODEL REPLY` after one. `HISTORY` is shown only after `keep_history()`, or in place of an unknown input; even then, since it is usually the same conversation as the input, it is shown, whole, only when it holds a message the input does not, such as turns before a compaction; messages are matched by id, counting the ones a merged message was made from. When a tool step has no model input, the `INPUT` block says so, even after `drop_input()`, and when the host could not provide the history, the `HISTORY` block says so wherever it would be shown. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
 
     Args:
         step: A step, rendered whole, or an excerpt of one.
@@ -254,7 +254,7 @@ async def step_as_str(
         # a renderer may write an empty list as something, such as JSON's []
         return await render(messages) if messages else ""
 
-    history = _without(shown.history, shown.exclude)
+    history = None if shown.history is None else _without(shown.history, shown.exclude)
     input = None if shown.input is None else _without(shown.input, shown.exclude)
     # rendered in this order, so messages are numbered in it too
     blocks = [
@@ -271,9 +271,12 @@ async def step_as_str(
         (
             "",
             "HISTORY",
-            await text(history)
-            if (input is None or "history" not in shown.exclude)
-            and _adds(history, input or [])
+            ""
+            if input is not None and "history" in shown.exclude
+            else "The agent's conversation history is not available."
+            if history is None
+            else await text(history)
+            if _adds(history, input or [])
             else "",
         ),
         (
@@ -314,7 +317,9 @@ def _step_part(step: Step) -> list[ChatMessage]:
         # the agent's own message holds the call, and its id lets a model's
         # answer cite it; when history lacks it, the message gets a new id and
         # a cite of it matches no message. Other calls it holds are not shown
-        holder = next((m for m in reversed(step.history) if _holds(m, step.call)), None)
+        holder = next(
+            (m for m in reversed(step.history or []) if _holds(m, step.call)), None
+        )
         call = ChatMessageAssistant(
             id=holder.id if holder else None,
             content=step.message,
@@ -334,13 +339,19 @@ def _excerpt(step: S | Excerpt[S]) -> Excerpt[S]:
     if isinstance(step, Excerpt):
         return step
     if isinstance(step, BeforeToolCall | AfterToolCall):
-        return Excerpt(step, step.input, _before_call(step.history, step.call))
+        return Excerpt(
+            step,
+            step.input,
+            None if step.history is None else _before_call(step.history, step.call),
+        )
     if isinstance(step, BeforeGenerate):
         new = {m.id for m in _new(step) if m.id is not None}
         return Excerpt(
             step,
             step.input[: _last(step.input, lambda m: m.role == "assistant") + 1],
-            step.history[: _last(step.history, lambda m: m.id not in new) + 1],
+            None
+            if step.history is None
+            else step.history[: _last(step.history, lambda m: m.id not in new) + 1],
         )
     return Excerpt(step, step.input, step.history)
 
@@ -382,7 +393,7 @@ def _window(
     return replace(
         shown,
         input=None if shown.input is None else cut(shown.input),
-        history=cut(shown.history),
+        history=None if shown.history is None else cut(shown.history),
     )
 
 
