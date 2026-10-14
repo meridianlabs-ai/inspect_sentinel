@@ -12,7 +12,7 @@ from inspect_sentinel._protocols import (
     sequential,
     threshold,
 )
-from inspect_sentinel._report import Action, Decision, Observation
+from inspect_sentinel._report import Action, Decision, Observation, Reported
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import (
     AfterGenerate,
@@ -70,7 +70,11 @@ def sees_both_generate_stages() -> MonitorGroup:
 
 @protocol
 def decides(action: Action) -> Protocol:
-    async def decide(context: Context, step: AfterGenerate) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: AfterGenerate,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
         return Decision(action=action)
 
     return decide
@@ -78,7 +82,9 @@ def decides(action: Action) -> Protocol:
 
 @protocol
 def every_stage() -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+    ) -> Decision | None:
         return None
 
     return decide
@@ -86,10 +92,18 @@ def every_stage() -> Protocol:
 
 @protocol
 def tool_stages() -> ProtocolGroup:
-    async def call(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def call(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
         return None
 
-    async def result(context: Context, step: AfterToolCall) -> Decision | None:
+    async def result(
+        context: Context,
+        step: AfterToolCall,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
         return None
 
     return ProtocolGroup(call, result)
@@ -188,10 +202,18 @@ async def test_an_unsupported_generate_decision_fails_the_protocol() -> None:
 
 @protocol
 def escalates_at_generates() -> ProtocolGroup:
-    async def before(context: Context, step: BeforeGenerate) -> Decision | None:
+    async def before(
+        context: Context,
+        step: BeforeGenerate,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
         return Decision.escalate("unsure about the request")
 
-    async def after(context: Context, step: AfterGenerate) -> Decision | None:
+    async def after(
+        context: Context,
+        step: AfterGenerate,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
         return Decision.escalate("unsure about the reply")
 
     return ProtocolGroup(before, after)

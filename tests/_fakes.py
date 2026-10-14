@@ -26,6 +26,7 @@ from inspect_sentinel._step import (
 
 class Asked(NamedTuple):
     step: Step
+    escalations: tuple[Reported[Decision], ...]
     choices: tuple[str, ...]
 
 
@@ -36,8 +37,13 @@ class FakeHost:
         self.completion = completion
         self.models: list[tuple[str | None, str | None]] = []
 
-    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
-        self.asked.append(Asked(step, tuple(choices)))
+    async def ask_human(
+        self,
+        step: Step,
+        escalations: tuple[Reported[Decision], ...],
+        choices: Sequence[str],
+    ) -> HumanAnswer:
+        self.asked.append(Asked(step, escalations, tuple(choices)))
         return self.answers.pop(0)
 
     async def generate(

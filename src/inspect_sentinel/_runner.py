@@ -149,6 +149,7 @@ async def run_sentinel(
                 Decision,
                 host_context.context,
                 step,
+                (),
                 None,
                 found,
                 [],
@@ -189,11 +190,15 @@ async def run_monitors(
         step: The step being examined.
     """
     named = named_children(monitors, "monitor")
-    return (await _run_named(named, context, step, "run_monitors")).observations
+    return (await _run_named(named, context, step, (), "run_monitors")).observations
 
 
 async def run_protocols(
-    protocols: Protocol | ProtocolGroup | Protocols, context: Context, step: Step
+    protocols: Protocol | ProtocolGroup | Protocols,
+    context: Context,
+    step: Step,
+    *,
+    escalations: Sequence[Reported[Decision]] = (),
 ) -> Decisions:
     """Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns `terminate` or calls `decide_final()`.
 
@@ -203,12 +208,21 @@ async def run_protocols(
         protocols: One protocol or `ProtocolGroup`, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.
         context: This layer's context, the one this protocol was given. Call this while the protocol runs; after it returns this raises `RuntimeError`.
         step: The step being examined.
+        escalations: The escalations to hand each protocol, as `sequential` hands a link those of the links before it. Defaults to none: escalations do not cross layers unless a protocol passes them on.
     """
     named = named_children(protocols, "protocol")
-    return (await _run_named(named, context, step, "run_protocols")).decisions
+    return (
+        await _run_named(named, context, step, tuple(escalations), "run_protocols")
+    ).decisions
 
 
-async def run_children(children: Sentinels, context: Context, step: Step) -> Reports:
+async def run_children(
+    children: Sentinels,
+    context: Context,
+    step: Step,
+    *,
+    escalations: Sequence[Reported[Decision]] = (),
+) -> Reports:
     """Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns `terminate` or calls `decide_final()`.
 
     Runs any mix of children; `run_monitors` and `run_protocols` are typed shortcuts for one family. A child cancelled this way is recorded through `Recorder.cancelled`; one that finishes without awaiting is recorded normally.
@@ -217,13 +231,18 @@ async def run_children(children: Sentinels, context: Context, step: Step) -> Rep
         children: One monitor, protocol or group, a sequence of them, or a mapping of instance names to them, named as for `run_monitors`.
         context: This layer's context, the one this protocol was given. Call this while the protocol runs; after it returns this raises `RuntimeError`.
         step: The step being examined.
+        escalations: The escalations to hand each protocol among the children, as for `run_protocols`; a monitor is never handed them. Defaults to none.
     """
     named = named_children(children, None)
-    return await _run_named(named, context, step, "run_children")
+    return await _run_named(named, context, step, tuple(escalations), "run_children")
 
 
 async def _run_named(
-    named: Sequence[tuple[str, Sentinel]], context: Context, step: Step, caller: str
+    named: Sequence[tuple[str, Sentinel]],
+    context: Context,
+    step: Step,
+    escalations: tuple[Reported[Decision], ...],
+    caller: str,
 ) -> Reports:
     recorder = layer(context, caller).recorder
     observations: list[tuple[int, Reported[Observation]]] = []
@@ -249,6 +268,7 @@ async def _run_named(
                     Observation,
                     context,
                     step,
+                    (),
                     name,
                     observed,
                     failed,
@@ -265,6 +285,7 @@ async def _run_named(
                     Decision,
                     context,
                     step,
+                    escalations,
                     name,
                     decided,
                     [],
@@ -309,6 +330,7 @@ async def _run_child(
     report_type: type[R],
     context: Context,
     step: Step,
+    escalations: tuple[Reported[Decision], ...],
     name: str | None,
     found: list[Reported[R]],
     failed: list[Failed],
@@ -343,6 +365,7 @@ async def _run_child(
                 report_type,
                 child_context,
                 step,
+                escalations,
                 child_name,
                 grouped,
             )
@@ -369,6 +392,7 @@ async def _run_member(
     report_type: type[R],
     child_context: Context,
     step: Step,
+    escalations: tuple[Reported[Decision], ...],
     child_name: str,
     grouped: bool,
 ) -> Reported[R] | Failed | None:
@@ -380,7 +404,11 @@ async def _run_member(
     node = invocation()
     try:
         with running(node):
-            report = await invoke(function, child_context, step)
+            # a monitor is never handed the escalations
+            if kind == "monitor":
+                report = await invoke(function, child_context, step)
+            else:
+                report = await invoke(function, child_context, step, escalations)
     except Final as ex:
         finals = [ex]
     except BaseExceptionGroup as ex:

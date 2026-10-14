@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from .._context import Context
 from .._decorators import protocol
 from .._host import HumanAnswer
-from .._report import Decision
+from .._report import Decision, Reported
 from .._step import AfterGenerate, AfterToolCall, BeforeToolCall, Step
 from .._types import Protocol, ProtocolGroup
 
@@ -34,7 +34,7 @@ def human(
 ) -> Protocol | ProtocolGroup:
     """Ask a person to decide, every time the step reaches this protocol.
 
-    The person is asked through `Host.ask_human`, which is handed the step and shows it with `step.escalations`, so at the end of a `sequential()` the person sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call. After a generate, the person sees the whole assistant turn, its text and every tool call it makes, before any of the calls run. The answer maps to a decision: `approve` to `proceed`, `reject` to `reject` with the person's reason as both the `message` the agent reads and the `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
+    The person is asked through `Host.ask_human`, which is handed the step and the escalations this protocol was handed and shows them together, so at the end of a `sequential()` the person sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call. After a generate, the person sees the whole assistant turn, its text and every tool call it makes, before any of the calls run. The answer maps to a decision: `approve` to `proceed`, `reject` to `reject` with the person's reason as both the `message` the agent reads and the `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
 
     The answer is an ordinary decision: it ends a `sequential()` as any link's decision does, and beside other protocols in a `concurrent()` it is one vote, so another protocol's `reject` outranks the person's `approve`.
 
@@ -54,18 +54,35 @@ def human(
         raise ValueError(f"human was given a stage twice: {list(stages)!r}.")
     offered = {stage: _choices(stage, choices) for stage in stages}
 
-    async def ask(context: Context, step: Step, stage: str) -> Decision:
-        answer = await context.host.ask_human(step, offered[stage])
+    async def ask(
+        context: Context,
+        step: Step,
+        escalations: tuple[Reported[Decision], ...],
+        stage: str,
+    ) -> Decision:
+        answer = await context.host.ask_human(step, escalations, offered[stage])
         return _decision(answer, offered[stage])
 
-    async def tool_call(context: Context, step: BeforeToolCall) -> Decision | None:
-        return await ask(context, step, "tool_call")
+    async def tool_call(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
+        return await ask(context, step, escalations, "tool_call")
 
-    async def tool_result(context: Context, step: AfterToolCall) -> Decision | None:
-        return await ask(context, step, "tool_result")
+    async def tool_result(
+        context: Context,
+        step: AfterToolCall,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
+        return await ask(context, step, escalations, "tool_result")
 
-    async def model_output(context: Context, step: AfterGenerate) -> Decision | None:
-        return await ask(context, step, "model_output")
+    async def model_output(
+        context: Context,
+        step: AfterGenerate,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
+        return await ask(context, step, escalations, "model_output")
 
     functions: dict[str, Protocol] = {
         "tool_call": tool_call,

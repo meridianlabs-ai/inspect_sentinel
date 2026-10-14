@@ -4,7 +4,7 @@ from typing import cast
 
 from .._context import Context
 from .._decorators import forwards, protocol
-from .._report import Decision
+from .._report import Decision, Reported
 from .._results import warn_failed
 from .._runner import run_monitors
 from .._step import Step
@@ -31,7 +31,9 @@ def observe_only(monitors: Monitor | MonitorGroup | Monitors) -> Protocol:
     if not snapshot:
         raise ValueError("observe_only needs at least one child.")
 
-    async def run(context: Context, step: Step) -> Decision | None:
+    async def run(
+        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+    ) -> Decision | None:
         observations = await run_monitors(snapshot, context, step)
         warn_failed(observations.failed)
         return None

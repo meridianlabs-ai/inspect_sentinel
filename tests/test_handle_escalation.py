@@ -19,7 +19,9 @@ from tests._fakes import FakeHost, ListRecorder, after_step, before_step, host_c
 def he_rule(
     action: Action | None = "escalate", explanation: str | None = "unsure"
 ) -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+    ) -> Decision | None:
         if action is None:
             return None
         cite = f"[{explanation}]"

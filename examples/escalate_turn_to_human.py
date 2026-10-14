@@ -13,6 +13,7 @@ from inspect_sentinel import (
     Context,
     Decision,
     Protocol,
+    Reported,
     call_text,
     find_words,
     human,
@@ -28,7 +29,11 @@ DELETE_WORDS = ["rm", "rmdir", "-delete", "shutil.rmtree", "os.remove"]
 def turn_triage() -> Protocol:
     """Escalate a turn whose calls delete files, and let the rest proceed."""
 
-    async def decide(context: Context, step: AfterGenerate) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: AfterGenerate,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
         if not step.output.choices:
             return Decision.proceed()
         calls = step.output.message.tool_calls or []

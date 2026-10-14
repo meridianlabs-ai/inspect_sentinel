@@ -6,8 +6,6 @@ from typing import Literal, TypeAlias
 from inspect_ai.model import ChatMessage, ChatMessageTool, GenerateConfig, ModelOutput
 from inspect_ai.tool import ToolCall, ToolCallView, ToolChoice, ToolInfo, ToolResult
 
-from ._report import Decision, Reported
-
 
 @dataclass(frozen=True)
 class BeforeGenerate:
@@ -36,9 +34,6 @@ class BeforeGenerate:
 
     config: GenerateConfig
     """The generation configuration the model is sent, with the task's and the model's settings merged in. In-process this is the host's own object; monitors must not mutate it."""
-
-    escalations: tuple[Reported[Decision], ...] = ()
-    """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
 
 @dataclass(frozen=True)
@@ -71,9 +66,6 @@ class AfterGenerate:
 
     output: ModelOutput
     """What the model returned; the first choice's message is what the agent receives. Some providers return an output with no choices, so check `output.choices` before reading `output.message`. In-process this is the host's own output, which the agent receives; monitors must not mutate it."""
-
-    escalations: tuple[Reported[Decision], ...] = ()
-    """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
 
 @dataclass(frozen=True)
@@ -109,9 +101,6 @@ class BeforeToolCall:
     history: list[ChatMessage] | None
     """The scaffold's message list: its full conversation, pre-compaction turns included. `None` when the host cannot know the scaffold's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or at a step with no scaffold conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the scaffold's own list; monitors must not mutate it."""
 
-    escalations: tuple[Reported[Decision], ...] = ()
-    """Earlier links' escalations, when this step is inside a `sequential` composition."""
-
     tools: list[ToolInfo] | None = None
     """The tool definitions offered to the model call that produced the call, as the transcript's `ModelEvent` recorded them, after any model hooks (so they can differ from that call's `AfterGenerate.tools` when a hook changed them): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""
 
@@ -143,9 +132,6 @@ class AfterToolCall:
 
     history: list[ChatMessage] | None
     """The scaffold's message list: its full conversation, pre-compaction turns included. `None` when the host cannot know the scaffold's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or at a step with no scaffold conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the scaffold's own list; monitors must not mutate it."""
-
-    escalations: tuple[Reported[Decision], ...] = ()
-    """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
     tools: list[ToolInfo] | None = None
     """The tool definitions offered to the model call that produced the call, as the transcript's `ModelEvent` recorded them, after any model hooks (so they can differ from that call's `AfterGenerate.tools` when a hook changed them): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""

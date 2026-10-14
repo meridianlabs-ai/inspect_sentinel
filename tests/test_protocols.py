@@ -20,7 +20,7 @@ from inspect_sentinel._integration import (
     sentinel_from_config,
 )
 from inspect_sentinel._protocols import concurrent, observe_only, sequential, threshold
-from inspect_sentinel._report import Action, Decision, Observation, Suspicion
+from inspect_sentinel._report import Action, Decision, Observation, Reported, Suspicion
 from inspect_sentinel._runner import (
     run_protocols,
     run_sentinel,
@@ -67,7 +67,9 @@ def afterwards() -> Monitor:
 
 @protocol
 def says(action: Action = "proceed", explanation: str | None = None) -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+    ) -> Decision | None:
         return Decision(action=action, explanation=explanation)
 
     return decide
@@ -75,7 +77,9 @@ def says(action: Action = "proceed", explanation: str | None = None) -> Protocol
 
 @protocol
 def rewrites(explanation: str | None = None) -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+    ) -> Decision | None:
         return Decision(
             action="modify",
             modified=ToolCall(
@@ -89,7 +93,9 @@ def rewrites(explanation: str | None = None) -> Protocol:
 
 @protocol
 def wrapper(child: Protocol) -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+    ) -> Decision | None:
         await run_protocols(child, context, step)
         return Decision.proceed()
 
@@ -234,7 +240,11 @@ async def test_concurrent_lists_no_votes_when_all_proceed(
 
 @protocol
 def panel(children: Protocols) -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
         votes = await run_protocols(children, context, step)
         rejects = sum(v.report.action == "reject" for v in votes)
         decide_final(
@@ -391,10 +401,18 @@ def test_a_shipped_protocol_needs_at_least_one_child(
 
 @protocol
 def rules() -> ProtocolGroup:
-    async def lenient(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def lenient(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
         return Decision.proceed()
 
-    async def strict(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def strict(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
         return Decision.reject("strict")
 
     return ProtocolGroup(lenient, strict)
@@ -417,12 +435,20 @@ def _edits(first: Action, second: Action) -> ProtocolGroup:
 
     @protocol
     def edits() -> ProtocolGroup:
-        async def rewrite(context: Context, step: BeforeToolCall) -> Decision | None:
+        async def rewrite(
+            context: Context,
+            step: BeforeToolCall,
+            escalations: tuple[Reported[Decision], ...],
+        ) -> Decision | None:
             return Decision(
                 action=first, modified=modified if first == "modify" else None
             )
 
-        async def audit(context: Context, step: BeforeToolCall) -> Decision | None:
+        async def audit(
+            context: Context,
+            step: BeforeToolCall,
+            escalations: tuple[Reported[Decision], ...],
+        ) -> Decision | None:
             return Decision(
                 action=second, modified=modified if second == "modify" else None
             )
@@ -499,7 +525,9 @@ def _add(container: Any, late: object) -> None:
 
 @protocol
 def stops() -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+    ) -> Decision | None:
         return Decision.terminate("late")
 
     return decide
@@ -597,7 +625,9 @@ _GIVEN = "given"
 
 @protocol
 def keeps(options: Mapping[str, float]) -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: tuple[Reported[Decision], ...]
+    ) -> Decision | None:
         return None
 
     # so the test can see what the factory was given

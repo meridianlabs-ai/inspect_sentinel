@@ -13,6 +13,7 @@ from inspect_sentinel import (
     Context,
     Decision,
     Protocol,
+    Reported,
     call_text,
     find_words,
     human,
@@ -28,7 +29,11 @@ DELETE_WORDS = ["rm", "rmdir", "-delete", "shutil.rmtree", "os.remove"]
 def triage() -> Protocol:
     """Reject calls that mention `/etc`, escalate ones that delete files, and let the rest proceed."""
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: tuple[Reported[Decision], ...],
+    ) -> Decision | None:
         if not tool_matches(step.call, "bash", "python"):
             return Decision.proceed()
         text = call_text(step.call)
