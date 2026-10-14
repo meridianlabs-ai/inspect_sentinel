@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from inspect_ai.scorer import Reference
 
@@ -15,7 +15,13 @@ class Invocation:
     # one call of one protocol function during a step, under the call that ran
     # it; the functions of a group, and repeat calls at one path, are told apart
     parent: Invocation | None
+    function: str
     decided: Reported[Decision] | None = None
+    # run when the function returns or decides final, not when it raises or
+    # is cancelled: state it only means to keep once it has reported
+    on_success: list[Callable[[], None]] = field(
+        default_factory=list[Callable[[], None]]
+    )
 
 
 # the invocation whose function is running, which the runner's children take
@@ -29,8 +35,12 @@ _decided: ContextVar[list[Invocation] | None] = ContextVar(
 )
 
 
-def invocation() -> Invocation:
-    return Invocation(parent=_current.get())
+def invocation(function: str) -> Invocation:
+    return Invocation(parent=_current.get(), function=function)
+
+
+def current_invocation() -> Invocation | None:
+    return _current.get()
 
 
 @contextmanager

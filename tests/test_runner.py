@@ -1417,14 +1417,6 @@ async def test_run_sentinel_checks_the_roots_decision_shape() -> None:
 
 
 @pytest.mark.anyio
-async def test_run_sentinel_needs_the_top_layer_context() -> None:
-    with pytest.raises(ValueError, match="path"):
-        await run_sentinel(
-            resolve_sentinel([decides()]), host_context(path="x"), before_step()
-        )
-
-
-@pytest.mark.anyio
 async def test_an_error_beside_a_protocols_own_final_in_its_task_group_surfaces() -> (
     None
 ):

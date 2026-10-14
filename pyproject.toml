@@ -61,6 +61,10 @@ dev = [
     "exceptiongroup>=1.0",
     # async tests run on both anyio backends (tests/conftest.py)
     "trio",
+    # step_as_str renders with Scout's messages_as_str, imported when called;
+    # not a runtime dependency until message rendering settles (it is to move
+    # from Scout into inspect_ai, design/pr-series.md)
+    "inspect-scout",
     "inspect_sentinel[doc]",
 ]
 doc = [
