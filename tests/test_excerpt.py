@@ -410,7 +410,7 @@ async def test_step_as_str_leaves_out_empty_parts_whatever_the_renderer() -> Non
     step = replace(before_generate_step(), input=prefilled, history=prefilled)
     rendered = await step_as_str(drop_history(step), messages_as_str=as_json)
     assert "[BEGIN HISTORY]" not in rendered
-    assert "[BEGIN AGENT STEP]" not in rendered
+    assert "[BEGIN MODEL REQUEST]" not in rendered
 
 
 def test_new_since_last_report_outside_the_runner_raises() -> None:
@@ -419,21 +419,23 @@ def test_new_since_last_report_outside_the_runner_raises() -> None:
 
 
 @pytest.mark.parametrize(
-    "cut, absent, shown",
+    "cut, absent, block, shown",
     [
-        (windowed(), [], ["cmd: ls"]),
-        (drop_history(windowed()), ["HISTORY"], ["cmd: ls"]),
+        (windowed(), [], "TOOL CALL", ["cmd: ls"]),
+        (drop_history(windowed()), ["HISTORY"], "TOOL CALL", ["cmd: ls"]),
         (
             _excerpt(after_tool_call("bash", "out.txt", cmd="ls")),
             ["HISTORY"],
+            "TOOL CALL AND RESULT",
             ["cmd: ls", "out.txt"],
         ),
         (
             _excerpt(replace(before_generate_step(), input=GO, history=GO)),
             ["HISTORY", "INPUT"],
+            "MODEL REQUEST",
             ["go"],
         ),
-        (_excerpt(after_generate_step()), [], ["ASSISTANT:\ndone"]),
+        (_excerpt(after_generate_step()), [], "MODEL REPLY", ["ASSISTANT:\ndone"]),
         (
             _excerpt(
                 replace(
@@ -441,18 +443,20 @@ def test_new_since_last_report_outside_the_runner_raises() -> None:
                 )
             ),
             [],
+            "MODEL REPLY",
             ["ASSISTANT:"],
         ),
     ],
 )
 @pytest.mark.anyio
 async def test_step_as_str_renders_each_kept_part_in_a_block(
-    cut: Excerpt[Step], absent: list[str], shown: list[str]
+    cut: Excerpt[Step], absent: list[str], block: str, shown: list[str]
 ) -> None:
     rendered = await step_as_str(cut)
     assert not any(f"[BEGIN {name}]" in rendered for name in absent)
-    assert rendered.endswith("[END AGENT STEP]")
-    step_block = rendered.split("[BEGIN AGENT STEP]")[1]
+    # the step's own part comes last, in a block named for its stage
+    assert rendered.endswith(f"[END {block}]")
+    step_block = rendered.split(f"[BEGIN {block}]")[1]
     assert all(text in step_block for text in shown)
 
 
@@ -462,7 +466,7 @@ async def test_a_request_ending_in_a_prefill_has_no_step_block() -> None:
     rendered = await step_as_str(
         _excerpt(replace(before_generate_step(), input=prefilled, history=prefilled))
     )
-    assert "[BEGIN AGENT STEP]" not in rendered
+    assert "[BEGIN MODEL REQUEST]" not in rendered
     assert "prefill" in rendered.split("[BEGIN INPUT]")[1]
 
 
@@ -520,7 +524,7 @@ async def test_drops_leave_content_out_of_every_block(
 ) -> None:
     step = thoughtful()
     rendered = await step_as_str(drop(step) if drop else step)
-    step_block = rendered.split("[BEGIN AGENT STEP]")[1]
+    step_block = rendered.split("[BEGIN MODEL REPLY]")[1]
     assert not any(text in rendered for text in gone)
     assert all(text in rendered for text in kept)
     # the reply's own reasoning goes too, its text stays
@@ -691,7 +695,7 @@ async def test_step_as_str_says_when_the_model_input_is_unknown() -> None:
 async def test_numbered_citations_resolve_to_the_agents_messages() -> None:
     numbered, extract_refs = message_numbering()
     rendered = await step_as_str(_excerpt(parallel_after_b()), messages_as_str=numbered)
-    step_block = rendered.split("[BEGIN AGENT STEP]")[1]
+    step_block = rendered.split("[BEGIN TOOL CALL AND RESULT]")[1]
     assert "cmd: b" in step_block and "cmd: a" not in step_block
     # history's task is [M1]; the step's message holding the call is [M2]
     assert [r.id for r in extract_refs("see [M1] and [M2]")] == ["task", "both"]

@@ -226,7 +226,7 @@ async def step_as_str(
 ) -> str:
     """Render `step`, or an excerpt of it, for a monitor's prompt.
 
-    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it has nothing to show: `HISTORY`, `INPUT`, then `AGENT STEP`, the step's own part (see `Excerpt`). The history is usually the same conversation as the input, so `HISTORY` is shown, whole, only when it holds a message the input does not, such as turns before a compaction; messages are matched by id, counting the ones a merged message was made from. When a tool step has no model input, the `INPUT` block says so, even after `drop_input()`. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
+    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it has nothing to show: `HISTORY`, `INPUT`, then the step's own part (see `Excerpt`), in a block named for the stage: `TOOL CALL` before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` (the messages the model is about to answer) before a generate, and `MODEL REPLY` after one. The history is usually the same conversation as the input, so `HISTORY` is shown, whole, only when it holds a message the input does not, such as turns before a compaction; messages are matched by id, counting the ones a merged message was made from. When a tool step has no model input, the `INPUT` block says so, even after `drop_input()`. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
 
     Args:
         step: A step, rendered whole, or an excerpt of one.
@@ -261,7 +261,10 @@ async def step_as_str(
             if input is None
             else await text(input),
         ),
-        ("AGENT STEP", await text(_without(_step_part(shown.step), shown.exclude))),
+        (
+            _step_block(shown.step),
+            await text(_without(_step_part(shown.step), shown.exclude)),
+        ),
     ]
     return "\n\n".join(
         f"[BEGIN {name}]\n{text}\n[END {name}]" for name, text in blocks if text
@@ -277,6 +280,15 @@ def _adds(history: list[ChatMessage], input: list[ChatMessage]) -> bool:
         for id in (message.metadata or {}).get("combined_from", [])
     }
     return any(message.id is None or message.id not in seen for message in history)
+
+
+def _step_block(step: Step) -> str:
+    # named for what it holds, so the model can tell whether a call has run
+    if isinstance(step, BeforeToolCall):
+        return "TOOL CALL"
+    if isinstance(step, AfterToolCall):
+        return "TOOL CALL AND RESULT"
+    return "MODEL REQUEST" if isinstance(step, BeforeGenerate) else "MODEL REPLY"
 
 
 def _step_part(step: Step) -> list[ChatMessage]:
