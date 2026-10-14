@@ -30,3 +30,7 @@ def test_sidecar_loads_nothing_the_core_does_not() -> None:
     # only this package's own modules. A provider's SDK, and inspect_ai's
     # private modules, are loaded when they are first needed.
     assert not {name for name in added if not name.startswith("inspect_sentinel.")}
+    # nor the endpoint and the server, which only a sidecar that is started
+    # needs
+    assert "inspect_sentinel.sidecar._proxy_endpoint" not in added
+    assert "inspect_sentinel.sidecar._serve" not in added
