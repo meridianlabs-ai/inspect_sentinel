@@ -38,6 +38,7 @@ from ._step import (
     AfterToolCall,
     BeforeGenerate,
     BeforeToolCall,
+    EarlierDecision,
     Step,
     Truncation,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "Context",
     "Decision",
     "Decisions",
+    "EarlierDecision",
     "EvalContext",
     "Failed",
     "Host",

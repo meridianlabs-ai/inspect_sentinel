@@ -1,12 +1,29 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, TypeAlias
 
 from inspect_ai.model import ChatMessage, ChatMessageTool, GenerateConfig, ModelOutput
 from inspect_ai.tool import ToolCall, ToolCallView, ToolChoice, ToolInfo, ToolResult
 
 from ._report import Decision, Reported
+
+
+@dataclass(frozen=True)
+class EarlierDecision:
+    """A decision a person made through `human()` at an earlier step of the agent's conversation. `earlier_decisions` on a step holds them."""
+
+    stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
+    """The stage of the step it was made at, as `SentinelEvent.stage` records it: `tool_call`, `tool_result` or `model_output`, the stages `human()` asks at."""
+
+    step_id: str
+    """The id of the step it was made at, as `SentinelEvent.step_id` records it: the tool call id at a tool stage, the assistant message id at `model_output`."""
+
+    call_ids: tuple[str, ...]
+    """The tool calls the decision covered: the step's call at a tool stage, and every call the turn makes at `model_output` (none for a turn without calls). How a prompt says which calls a person approved."""
+
+    decided: Reported[Decision]
+    """The `human()` instance that asked (`name`, `path`, `function`) and its decision: `approve` is a `proceed`, and the person's reason is the `explanation` (and, for a `reject`, the `message`). It is what the person decided, not what happened to the step: beside other protocols in a `concurrent()`, a peer's `reject` outranks the person's `approve`."""
 
 
 @dataclass(frozen=True)
@@ -27,6 +44,11 @@ class BeforeGenerate:
 
     history: list[ChatMessage] | None
     """The caller's message list: the conversation as the caller passed it to the model. For a scaffold that compacts its conversation this is the compacted conversation. `None` when the host cannot know the caller's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the caller's list at each step; or at a step with no caller conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the caller's own list; monitors must not mutate it."""
+
+    earlier_decisions: tuple[EarlierDecision, ...] | None = field(
+        default=None, kw_only=True
+    )
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions recorded before this step began, never one from this step, and never a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     tools: list[ToolInfo]
     """The tools the model is offered, after `tool_choice` filtering. In-process these are the host's own objects; monitors must not mutate them."""
@@ -59,6 +81,11 @@ class AfterGenerate:
 
     history: list[ChatMessage] | None
     """The caller's message list, or `None`, as for `BeforeGenerate`; monitors must not mutate it."""
+
+    earlier_decisions: tuple[EarlierDecision, ...] | None = field(
+        default=None, kw_only=True
+    )
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions recorded before this step began, never one from this step, and never a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     tools: list[ToolInfo]
     """The tools the model was offered; monitors must not mutate them."""
@@ -109,6 +136,11 @@ class BeforeToolCall:
     history: list[ChatMessage] | None
     """The scaffold's message list: its full conversation, pre-compaction turns included. `None` when the host cannot know the scaffold's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or at a step with no scaffold conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the scaffold's own list; monitors must not mutate it."""
 
+    earlier_decisions: tuple[EarlierDecision, ...] | None = field(
+        default=None, kw_only=True
+    )
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions recorded before this step began, never one from this step, and never a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
+
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
@@ -143,6 +175,11 @@ class AfterToolCall:
 
     history: list[ChatMessage] | None
     """The scaffold's message list: its full conversation, pre-compaction turns included. `None` when the host cannot know the scaffold's list: under a proxy, which sees only the request; in a replay from a log that cannot establish the list at this step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or at a step with no scaffold conversation behind it. It is never approximated from `input`; for what the model saw, use `input`. In-process Inspect always provides it, as the scaffold's own list; monitors must not mutate it."""
+
+    earlier_decisions: tuple[EarlierDecision, ...] | None = field(
+        default=None, kw_only=True
+    )
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, so a monitor can tell which calls a person already approved. A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions recorded before this step began, never one from this step, and never a monitor's observation or another protocol's decision. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""

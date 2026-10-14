@@ -149,6 +149,7 @@ class BeforeGenerate:
     conversation: str           # links this agent's steps across compactions
     input: list[ChatMessage]    # exactly what the model is sent
     history: list[ChatMessage] | None  # the scaffold's full conversation, pre-compaction turns included; None when the host cannot know it
+    earlier_decisions: tuple[EarlierDecision, ...] | None = field(default=None, kw_only=True)  # human() decisions at earlier steps of this conversation
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -161,6 +162,7 @@ class AfterGenerate:
     conversation: str
     input: list[ChatMessage]    # exactly what the model was sent
     history: list[ChatMessage] | None
+    earlier_decisions: tuple[EarlierDecision, ...] | None = field(default=None, kw_only=True)
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -176,6 +178,7 @@ class BeforeToolCall:
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage] | None  # the scaffold's full conversation; None when the host cannot know it
+    earlier_decisions: tuple[EarlierDecision, ...] | None = field(default=None, kw_only=True)
     escalations: tuple[Reported[Decision], ...] = ()
     tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
 
@@ -190,6 +193,7 @@ class AfterToolCall:
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage] | None
+    earlier_decisions: tuple[EarlierDecision, ...] | None = field(default=None, kw_only=True)
     escalations: tuple[Reported[Decision], ...] = ()
     tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
     truncated: Truncation | Literal[False] | None = None  # the host's cut; False: not cut; None: can't tell
@@ -201,13 +205,23 @@ class Truncation:
     limit_bytes: int            # the limit it was cut to
 
 
+@dataclass(frozen=True)
+class EarlierDecision:
+    stage: Literal["model_input", "model_output", "tool_call", "tool_result"]  # as SentinelEvent.stage
+    step_id: str                # as SentinelEvent.step_id
+    call_ids: tuple[str, ...]   # the calls it covered: the call at a tool stage, every call in the turn at model_output
+    decided: Reported[Decision] # the human() instance and its decision; the person's reason is the explanation
+
+
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall
 """The union. Protocols annotate this to run at every stage."""
 ```
 
-Everything in `step` except `conversation`, `truncated` and `escalations` was written or shaped by the agent under observation and can carry prompt injection. Nothing in `context` came from the agent. Treat `step` as evidence and `context` as instructions.
+Everything in `step` except `conversation`, `truncated`, `earlier_decisions` and `escalations` was written or shaped by the agent under observation and can carry prompt injection. Nothing in `context` came from the agent. Treat `step` as evidence and `context` as instructions.
 
 `escalations` is filled only inside a `sequential()`: when an earlier link returns `escalate`, its report is handed to the next link here, so a human at the end sees who is asking and why. It is empty everywhere else. The reports are written by protocols, but their explanations may quote agent text, so label them as prior verdicts if you render them into a prompt.
+
+`earlier_decisions` holds the decisions a person made through `human()` at earlier steps of the same `conversation`, oldest first (AISI R4), so a monitor can mark calls a person already approved. A step is its stage and step id, so a decision before call X is there at X's `AfterToolCall`, and a turn decision at `AfterGenerate` at each of its calls' tool stages (`call_ids`). Never a decision from the step itself, and never another protocol's decision or a monitor's score: a `human()` decision carries only the person's action and reason. It is what the person decided, not the step's outcome. `None` when the host cannot tell (a proxy that keeps no record). A person's reason may quote agent text, so label it as a prior verdict.
 
 `input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. At the tool stages `input` is `None` when no model call produced the call or the event that recorded it is no longer available (inspect_ai finds it through the transcript's bounded-memory history); it is never approximated from `history`. `history` is `None` when the host cannot know the scaffold's list: a proxy, which sees only the request; a replay from a log that cannot establish the list at that step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`. A monitor that reads it checks for `None` and says the history is unavailable rather than judging an empty list. The tool stages also carry that request's `tools`, `None` exactly when `input` is, and `AfterToolCall.truncated` is the host's cut to the result as `ToolEvent.truncated` records it: a `Truncation` (original size and limit, in bytes) for a cut, `False` for none, `None` when the host cannot tell (proxy, replay from messages). Monitors read it rather than the forgeable "output was too long" notice in `result`; a sandbox output-limit or timeout cut is reported by `result.error` instead. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
 
@@ -520,6 +534,7 @@ Which surfaces exist where:
 | `ToolCallView` | yes | no | from events only | evidence |
 | Exact model input (`step.input`) | yes | yes, the request | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
 | Full history, pre-compaction turns included (`step.history`) | yes | proxy: no, `None`; bridged in-process: yes | only where replay can establish it; else `None` | evidence |
+| Earlier `human()` decisions in the conversation (`step.earlier_decisions`) | yes | no: `None`, unless the proxy keeps its own `ask_human` answers | from `SentinelEvent`s | prior verdicts |
 | Reasoning | provider-dependent | whatever the wire carries | as logged | evidence |
 | System prompt, as the model saw it (`step.input[0]` when present) | yes | yes, but written by the scaffold under observation | from events only | evidence |
 | Tool definitions (`step.tools`; at a tool stage the producing call's), config | yes | yes | from events only; `None` at a tool stage without one | evidence |
@@ -530,7 +545,7 @@ Rules:
 
 - **The system prompt is evidence, not instruction.** In an eval the author wrote it; under a proxy the agent's scaffold did. The briefing in `context.eval` is the only instruction-class input, and outside an eval there is none. The helpers exclude the system prompt by default.
 - **Reasoning is rendered at whatever fidelity exists.** `<thinking>`, `<thinking_summary>`, or `<thinking_redacted/>`, so the prompt says which. Exclude it in the preprocessor to score actions without it. A protocol withholds it from a child by transforming `step` before the call.
-- **A monitor never sees** the sandbox itself, other samples, sibling monitors' reports at the same step, the protocol's thresholds or budget, or whether its own explanation was shown.
+- **A monitor never sees** the sandbox itself, other samples, other monitors' reports, at the same step or earlier (`earlier_decisions` holds only a person's `human()` answers), the protocol's thresholds or budget, or whether its own explanation was shown.
 
 The helpers, lowest level first. The first two exist in Scout today and move down to `inspect_sentinel`, with Scout re-exporting them:
 

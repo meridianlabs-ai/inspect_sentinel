@@ -147,6 +147,7 @@ class BeforeGenerate:
     conversation: str           # links this agent's steps across compactions
     input: list[ChatMessage]    # exactly what the model is sent
     history: list[ChatMessage] | None  # the caller's messages, may already be compacted; None when the host cannot know them (as-sent view: R10, deferred)
+    earlier_decisions: tuple[EarlierDecision, ...] | None = field(default=None, kw_only=True)  # human() decisions at earlier steps of this conversation
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -159,6 +160,7 @@ class AfterGenerate:
     conversation: str
     input: list[ChatMessage]    # exactly what the model was sent
     history: list[ChatMessage] | None
+    earlier_decisions: tuple[EarlierDecision, ...] | None = field(default=None, kw_only=True)
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -174,6 +176,7 @@ class BeforeToolCall:
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage] | None  # the scaffold's full conversation; None when the host cannot know it
+    earlier_decisions: tuple[EarlierDecision, ...] | None = field(default=None, kw_only=True)
     escalations: tuple[Reported[Decision], ...] = ()
     tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
 
@@ -188,6 +191,7 @@ class AfterToolCall:
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
     history: list[ChatMessage] | None
+    earlier_decisions: tuple[EarlierDecision, ...] | None = field(default=None, kw_only=True)
     escalations: tuple[Reported[Decision], ...] = ()
     tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
     truncated: Truncation | Literal[False] | None = None  # the host's cut; False: not cut; None: can't tell
@@ -197,6 +201,14 @@ class AfterToolCall:
 class Truncation:
     original_bytes: int         # size of the tool's output
     limit_bytes: int            # the limit it was cut to
+
+
+@dataclass(frozen=True)
+class EarlierDecision:
+    stage: Literal["model_input", "model_output", "tool_call", "tool_result"]  # as SentinelEvent.stage
+    step_id: str                # as SentinelEvent.step_id
+    call_ids: tuple[str, ...]   # the calls it covered: the call at a tool stage, every call in the turn at model_output
+    decided: Reported[Decision] # the human() instance and its decision; the person's reason is the explanation
 
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall
@@ -209,11 +221,13 @@ Which model calls the generate stages check, where the hook sits, and what each 
 
 The tool stages carry the producing request's `input` and `tools` (AISI R3), found by the same lookup (see [Two histories](#two-histories)) and `None` under the same conditions, because what a tool does changes how suspicious a call to it is and the tools a call was chosen from are the ones the model was offered, not the ones registered now. They are the tools as the `ModelEvent` recorded them, after any model hooks, so they can differ from that call's `AfterGenerate.tools` when a hook changed them. `AfterToolCall.truncated` says whether the host cut the result: a `Truncation` (the output's size and the limit it was cut to, in bytes) when it did, `False` when it did not, and `None` when the host cannot tell, as under a proxy or in a replay from messages alone. That follows the convention that `None` on a step means the host cannot provide the value (as for `input` and `history`), so a host that does not set the field says "unknown", never "not cut". It is built from the value `ToolEvent.truncated` records, so live and replay read one field from one source. A cut made earlier, by a sandbox output limit or a timeout, is reported by `result.error` (type `"limit"` or `"timeout"`), not here. Monitors use it rather than the "output was too long" notice in `result`, which is text a tool's output can contain. Live, `result` against `output` shows the cut too, but the log does not hold the untruncated `output`.
 
+Every payload carries `earlier_decisions` (AISI R4): the decisions a person made through `human()` at earlier steps of the same `conversation`, oldest first, so a monitor can tell which calls a person already approved and not flag them again in isolation, and a protocol can avoid asking the person again. A step is its stage and its step id, so a decision before call X is there at X's `AfterToolCall`, and a decision about a turn at `AfterGenerate` is there at each of its calls' tool stages, `call_ids` naming the calls a decision covered. It holds what was recorded before the step began, never a decision from the step itself, so monitors running beside a `human()` at the same step do not see its answer. Only `human()`'s decisions are kept: other protocols' decisions are left out because a `threshold()` decision carries its monitors' scores (`metadata["observations"]` and the explanation), and passing them on would break monitor independence (see [The surfaces](#the-surfaces)); a `human()` decision carries only the person's action and reason. The record is what the person decided, not what happened to the step: beside other protocols in a `concurrent()` a peer's `reject` outranks the person's `approve`. Live, inspect_ai's recorder keeps each `human()` decision as it records it (`earlier_decision()` in the integration module decides what is kept) and snapshots the conversation's list when it builds a step; replay reads the same records from the log's `SentinelEvent`s ([sentinel-development.md](sentinel-development.md), "Earlier decisions in replay"). `None` means the host cannot tell, as under a proxy that keeps no record of its `ask_human` answers. It is keyword-only so that it can sit beside `history`, as a fact about the conversation, ahead of fields that have no default.
+
 A monitor never annotates `Step`, since [its annotation is what selects the stage](#the-stage-comes-from-the-annotation). The alias exists for the layer above, which does see all four.
 
 **Everything in `step` is agent-influenced; nothing in `context` is.** `call`, `message`, `history`, `view`, `result` and `output` are all written or shaped by the agent under observation and are therefore injection-bearing; the briefing is author-written, the store is the monitor's own, the host is the framework's. Splitting them across two arguments makes that boundary structural rather than a matter of field ordering, which is the most useful thing the framework can do about injection (see [It is the only input the agent did not write](#it-is-the-only-input-the-agent-did-not-write)). Which of these fields a given monitor is actually shown, and how they are rendered into its prompt, is the monitor's [view](#views).
 
-`conversation`, `truncated` and `escalations` are the exceptions. The first two are framework-computed and carry no text. The last is worth naming as such. It is filled by an [ordered composition](#two-compositions-concurrent-and-ordered): when an earlier link in a `sequential` returns `escalate`, its report is handed to the next link here, so a human at the end of the `sequential` sees who is asking and why. The reports are protocol-authored rather than agent-authored, but they may quote agent text in their explanations, so a monitor rendering them into its own prompt should label them as prior verdicts rather than as instructions. The field is per-step, which is why it lives on the payload and not on `Context`, and it is empty everywhere except inside a `sequential`. Approval's equivalent is a block appended to `view.context`; a first-class field is used instead because `view` exists only on the tool stages and is absent under a proxy.
+`conversation`, `truncated`, `earlier_decisions` and `escalations` are the exceptions. The first two are framework-computed and carry no text. `earlier_decisions` is framework-computed too, from a person's answers; a person's typed reason may quote agent text, so a monitor rendering it should label it as a prior verdict. The last is worth naming as such. It is filled by an [ordered composition](#two-compositions-concurrent-and-ordered): when an earlier link in a `sequential` returns `escalate`, its report is handed to the next link here, so a human at the end of the `sequential` sees who is asking and why. The reports are protocol-authored rather than agent-authored, but they may quote agent text in their explanations, so a monitor rendering them into its own prompt should label them as prior verdicts rather than as instructions. The field is per-step, which is why it lives on the payload and not on `Context`, and it is empty everywhere except inside a `sequential`. Approval's equivalent is a block appended to `view.context`; a first-class field is used instead because `view` exists only on the tool stages and is absent under a proxy.
 
 `BeforeToolCall` and `AfterToolCall` are the `Approver` and `Reviewer` payloads. `AfterToolCall` is a faithful dataclass-ification of the merged `Reviewer.__call__`, which takes exactly `message`, `call`, `result`, `output`, `view` and `history` — this document predicted the shape from the PR and it survived contact with the merged code unchanged. The before/after naming earns its keep here: `BeforeToolCall` carries a `call: ToolCall` and `AfterGenerate` an `output: ModelOutput`, so a payload named for the object it wraps would collide with a field inside itself.
 
@@ -1538,6 +1552,7 @@ What a monitor can be shown, where each thing comes from, and where it is availa
 | Tool definitions, generate config | `step.tools`, `step.config` (tool stages: `step.tools` only, the producing call's) | yes | yes | from events only; `None` at a tool stage without a producing `ModelEvent` | evidence |
 | Media (images, audio, documents) | content parts | yes | yes | yes | evidence |
 | Prior escalations | `step.escalations` | yes | yes | recorded | prior verdicts |
+| Earlier `human()` decisions in the conversation | `step.earlier_decisions` | yes | **no**: `None`, unless the proxy keeps its own `ask_human` answers | from `SentinelEvent`s | prior verdicts |
 | Expected answer | `context.eval.target` | yes | **never** | yes | instruction |
 | Own accumulated state | `context.store_as()` | yes | keyed store | per-transcript | own |
 
@@ -1547,7 +1562,7 @@ Two rows deserve a note.
 
 **Reasoning fidelity is not the monitor's to choose.** A monitor can render reasoning, but a provider may only return a summary or a redacted block, and a proxy only sees what the wire carries. The helpers render whatever is there — `<thinking>`, `<thinking_summary>`, `<thinking_redacted/>` — so the prompt says which it was. This settles [open question 9](#open-questions): reasoning is visible by default, at whatever fidelity exists, and a monitor that wants to score actions without it excludes it in the preprocessor. A protocol that wants to withhold it from an untrusted child transforms `step` before the call, as it would for paraphrasing.
 
-Things a monitor never sees at any view, so that nobody designs around them: the sandbox itself (only what came back through a tool), other samples, sibling monitors' reports at the same step (independence is a [safety property](#concurrency-is-a-safety-property-not-just-a-latency-one)), the protocol's thresholds and remaining budget, and whether its own explanation was shown to anyone.
+Things a monitor never sees at any view, so that nobody designs around them: the sandbox itself (only what came back through a tool), other samples, other monitors' reports, at the same step or earlier (independence is a [safety property](#concurrency-is-a-safety-property-not-just-a-latency-one); `earlier_decisions` holds only a person's `human()` answers, never a score), the protocol's thresholds and remaining budget, and whether its own explanation was shown to anyone.
 
 ### The helpers
 

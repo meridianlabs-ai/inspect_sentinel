@@ -54,6 +54,8 @@ In Inspect, the person is asked through the human approval surfaces: an attached
 - The reason is not something the person types: the panel and console give a fixed text (for example, that a human rejected the call), and an ACP client gives none, so on a reject the agent is told only that the call was not approved.
 - `"modify"` is not supported: offering it raises an error when the person would be asked.
 
+Later steps of the same agent see the answer in `step.earlier_decisions`, so a monitor can mark the calls a person approved rather than flag them again in isolation, and a protocol can decide not to ask again. Each `EarlierDecision` has the `stage` and `step_id` it was made at, the `call_ids` it covered (the call, or every call in an approved turn) and the decision with the person's reason in `decided`. An approval before a call is there after the call; an answer is never there at the step it was given at, and other protocols' decisions and monitors' scores are never there. It is what the person decided: beside other protocols in a `concurrent()`, a peer's `reject` can still have stopped the call.
+
 An eval with a `human()` waits for an answer, so run it where someone can answer.
 
 ## Unhandled Escalations
