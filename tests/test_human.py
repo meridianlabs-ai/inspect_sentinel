@@ -156,6 +156,11 @@ MODIFIED = ToolCall(id="call_1", function="bash", arguments={"cmd": "ls -a"})
     [
         (HumanAnswer("approve"), Decision.proceed()),
         (
+            HumanAnswer("approve", reason="the staging host is expected"),
+            Decision.proceed("the staging host is expected"),
+        ),
+        (HumanAnswer("approve", reason=""), Decision.proceed()),
+        (
             HumanAnswer("reject", reason="use the staging host"),
             Decision.reject("use the staging host", message="use the staging host"),
         ),

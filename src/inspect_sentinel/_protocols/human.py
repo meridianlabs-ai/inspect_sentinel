@@ -34,7 +34,7 @@ def human(
 ) -> Protocol | ProtocolGroup:
     """Ask a person to decide, every time the step reaches this protocol.
 
-    The person is asked through `Host.ask_human`, which is handed the step and the escalations this protocol was handed and shows them together, so at the end of a `sequential()` the person sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call. After a generate, the person sees the whole assistant turn, its text and every tool call it makes, before any of the calls run. The answer maps to a decision: `approve` to `proceed`, `reject` to `reject` with the person's reason as both the `message` the agent reads and the `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
+    The person is asked through `Host.ask_human`, which is handed the step and the escalations this protocol was handed and shows them together, so at the end of a `sequential()` the person sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call. After a generate, the person sees the whole assistant turn, its text and every tool call it makes, before any of the calls run. The answer maps to a decision: `approve` to `proceed` explained by the person's reason, so the log records why the step went ahead, `reject` to `reject` with the person's reason as both the `message` the agent reads and the `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
 
     The answer is an ordinary decision: it ends a `sequential()` as any link's decision does, and beside other protocols in a `concurrent()` it is one vote, so another protocol's `reject` outranks the person's `approve`.
 
@@ -125,7 +125,7 @@ def _decision(answer: HumanAnswer, choices: tuple[str, ...]) -> Decision:
     reason = answer.reason or None
     match answer.decision:
         case "approve":
-            return Decision.proceed()
+            return Decision.proceed(reason)
         case "reject":
             return Decision.reject(reason, message=reason)
         case "terminate":

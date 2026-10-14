@@ -819,7 +819,7 @@ def sequential(children: Sentinels) -> Protocol:
 - `stages` is required: any of `"tool_call"`, `"tool_result"` and `"model_output"`. Leaving it out, an empty list, or an unknown or unsupported stage (`"model_input"`) is a configuration error when the factory is called. One function per chosen stage, a `ProtocolGroup` when several.
 - No escalation filter: inside a `sequential` it is reached only when every earlier link watching the stage escalated; alone, `human(stages=["tool_call"])` asks about every call.
 - `choices` use inspect's approval words. Default before a call `approve`, `reject`, `terminate` (`modify` may be offered); after a call and after a generate `approve`, `terminate`, and `reject` or `modify` there is a configuration error.
-- The answer maps `approve` to `proceed`, `reject` to `reject` with the person's reason as both `message` and `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
+- The answer maps `approve` to `proceed` explained by the person's reason, `reject` to `reject` with the person's reason as both `message` and `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
 - The answer is an ordinary decision. Inside a `sequential` it ends that chain; above the chain the usual vote applies, so beside other protocols in a `concurrent()` it is one vote: a peer's `reject` outranks the person's `approve`, and the person's `reject` or `terminate` is not weakened. Human surfaces queue requests, so two `sequential`s that both end in a person prompt one after the other and both answers vote; a `terminate` cancels the other prompt.
 
 It asks through the host:
