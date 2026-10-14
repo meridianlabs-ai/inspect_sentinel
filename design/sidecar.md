@@ -69,7 +69,7 @@ A request or a reply reaches the sidecar from a proxy. The handler works out wha
 - **A proxy hook** is what a proxy runs, where the proxy can load code. It turns what that proxy hands over into the sidecar's messages, sends them, and carries out the answer in that proxy's terms. It knows nothing about sentinels or about model providers. Each proxy hook is a small package of its own, under `src/proxies`. LiteLLM's is `LiteLLMGuardrail`. Middleman's is `MiddlemanHook`, which is written and is kept out of this repository until Middleman has its passthrough hook.
 - **The endpoint for proxies** is the same for every proxy hook. A proxy hook puts each request and each reply to it, and is answered with pass, replace or refuse. The endpoint for proxies uses JSON-RPC 2.0, at `POST /proxy/v1`, with the methods `judge_request` and `judge_reply`. JSON-RPC was chosen to be consistent with the endpoint for evals. The methods and their results are described by `proxy_endpoint.schema.json`, which is written from the endpoint's own models and kept beside it. A proxy hook is tested against that file.
 - **A shim** is for a proxy that can run no code of ours, which today means Envoy. It speaks that proxy's own protocol, inside the sidecar. Its dependencies are an optional extra, so only a deployment behind that proxy installs them. No shim is built yet.
-- **The handler** is the same for every proxy. The endpoint for proxies, or a shim, gives the handler a `Request` or a `Reply`, and the handler returns one of three answers: `Pass`, `Replace` or `Refuse`. The answer says what was decided. It does not say how the proxy should carry that out, because that is the proxy hook's job, or the shim's. A `Refuse` holds what the client is told: the status, the message and the response headers. Those are passed on in the proxy's own form and are not read on the way. A `Pass` or a `Replace` can also name response headers, which the proxy adds to a reply that goes through. The handler names none on those answers today.
+- **The handler** is the same for every proxy. The endpoint for proxies, or a shim, gives the handler a `Request` or a `Reply`, and the handler returns one of three answers: `Pass`, `Replace` or `Refuse`. The answer says what was decided. It does not say how the proxy should carry that out, because that is the proxy hook's job, or the shim's. A `Refuse` holds what the client is told: the status, the message, the response headers and, for an Inspect client, the `sentinel` field (section 9). The proxy hook puts all of them into the error it sends the client, in the proxy's own form, and does not read them on the way. The `sentinel` field on a generate reply that goes through is put in by the handler, because a proxy hook knows nothing of provider formats and cannot put it in itself. So for an Inspect client the handler never answers a reply with `Pass`: it answers with `Replace`, whose body is the reply with the field added.
 - **The sentinel runner** is the core package's `run_sentinel` function, unchanged. Today it runs in the sidecar's process. Only steps and decisions pass between the handler and the runner, as plain data, so the runner can be moved to a process of its own later. Reasons to move it would be throughput, keeping a sentinel that fails away from the traffic, or running beside a proxy that is not written in Python.
 
 Two rules keep the handler from being limited to what the least capable proxy can do. First, the handler is designed around what a sentinel needs, and not around what one proxy can supply. Second, when a proxy cannot do something, its proxy hook or its shim says so, and the capability stays in the handler for the other proxies.
@@ -105,8 +105,13 @@ With each request, the proxy hook tells the sidecar the provider, the model's pu
 - **LiteLLM's notes on the caller are not sent.** LiteLLM keeps the hash of the caller's key and every request header in the same dictionary as the request. The guardrail sends the sidecar only the fields of the request itself, and only the headers that name the run or that the operator has listed. It never sends a credential header.
 - **Which requests are judged is LiteLLM's own setting.** `default_on` judges every request. Without it, LiteLLM calls the guardrail only for a request or a key that names it.
 - **A sidecar that gives no usable answer is judged by LiteLLM's own setting for a guardrail**, `unreachable_fallback`. `fail_closed` refuses the call and `fail_open` lets it through. There is no time limit on the sidecar's answer unless the operator sets one.
-- **LiteLLM writes the error a caller is sent**, so its form is LiteLLM's and differs by route (**measured**, LiteLLM 1.105). A refusal has the sentinel's message and status on every route but one: a streamed `/responses` reply is answered with status 200 and a `response.failed` event that holds the message. With LiteLLM 1.83, a refused streamed reply is answered with a 500 that does not hold the message (**measured**). Whether the `sentinel` field (section 9) reaches the caller intact on each route, on replies and on refusals, streamed and not, is not yet checked. Where it does not, Inspect falls back to asking the sidecar.
+- **LiteLLM writes the error a caller is sent**, so its form is LiteLLM's and differs by route (**measured**, LiteLLM 1.105). A refusal has the sentinel's message and status on every route but one: a streamed `/responses` reply is answered with status 200 and a `response.failed` event that holds the message. With LiteLLM 1.83, a refused streamed reply is answered with a 500 that does not hold the message (**measured**). The `sentinel` field (section 9) reaches the caller on every route, on replies and on refusals, streamed and not (**measured**, LiteLLM 1.105). Three cases need the guardrail to do more than hand LiteLLM an object:
+  - **A streamed `/chat/completions` reply.** LiteLLM writes stream chunks in a way that drops a field added to a chunk, so the guardrail writes the last chunk itself, as `data: {...}`, which LiteLLM sends on as it is.
+  - **A streamed `/responses` refusal.** LiteLLM answers it with status 200 and a `response.failed` event, and writes the guardrail's error into that event as text, so the guardrail sends its own `response.failed` event with the field, instead of raising an error.
+  - **A refusal that is not streamed.** LiteLLM keeps the field, but puts it inside the error, at `error.provider_specific_fields.sentinel`. Inspect looks for it there as well as at the top of the body.
 - **A replaced reply is handed back in LiteLLM's own classes**, because LiteLLM goes on to read its own notes from the reply. This is tested with LiteLLM's classes and has not been run through a LiteLLM proxy, because the sidecar does not replace a reply today.
+
+**The guardrail serves `/sentinel/*` itself (section 9).** When LiteLLM builds the guardrail, the guardrail adds a route for `/sentinel/{path}` to LiteLLM's own web app, at the front of its routes, behind LiteLLM's own key check, as LiteLLM does for the pass-through routes in its config. The route sends each call to the sidecar byte for byte and sends the sidecar's answer back the same way. An operator configures nothing for it. LiteLLM's configured pass-through routes are not used, because they remove from a JSON body every top-level key that has the name of one of LiteLLM's own parameters, and `id`, which every JSON-RPC call carries, is one of those (**measured**, LiteLLM 1.105). The route depends on parts of LiteLLM that are not documented for plugins, so it is tested against each LiteLLM version the guardrail supports.
 
 Not yet run: LiteLLM's pass-through routes, such as `/anthropic/v1/messages`. LiteLLM's source shows no call that lets a guardrail hold a streamed reply on a pass-through route.
 
@@ -305,10 +310,12 @@ In an eval, the sidecar cannot work that out from the conversation. A fingerprin
   | `sample_uuid` | the uuid the eval log gives the sample. It stays the same when Inspect retries a sample after an error |
   | `attempt` | Inspect's id for this attempt at the sample (`sample_active().id`). A retry has a new one. Hawk's `x-inspect-sample-uuid` header carries this id |
 
-  The proxy hook reads `sample_uuid` and passes it as the call's `run`, so a run is one sample in one epoch, across its retries. The sample's input and metadata are not in the header. They are too long for a header, and the metadata can be private, so they reach the sidecar only through registration. Registration is per task (section 9), and the sidecar finds a sample's registered facts by the header's `eval_id`, `task` and `sample_id`. Inspect's existing `x-irid` header stays the id of a single model request. Reading the header and checking it against registration are not built yet.
+  Inspect writes the JSON with every character outside ASCII escaped, because a header value must be ASCII and a sample id can be any string.
+
+  The proxy hook passes the header to the sidecar without reading it, and the sidecar takes `sample_uuid` from it as the run. A run is therefore one sample in one epoch, across its retries. A proxy hook never needs to understand Inspect's headers. `judge_request`'s `run` parameter is only for a proxy that names runs in its own way. The sample's input and metadata are not in the header. They are too long for a header, and the metadata can be private, so they reach the sidecar only through registration. Registration is per task (section 9), and the sidecar finds a sample's registered facts by the header's `eval_id`, `task` and `sample_id`. Inspect's existing `x-irid` header stays the id of a single model request. Reading the header and checking it against registration are not built yet.
 - **A run that the proxy names is one run, however many conversations it holds.** A subagent's conversation belongs to the same run. Rejected turns are still kept separately for each conversation within the run.
 - **Scans and graders use the same proxy.** The model calls of a Scout scan, and of an eval's grader, pass through Middleman as an agent's calls do. They reach the sidecar unless the proxy is configured to keep them from it. The job's type is among the headers a sentinel is given (section 8), so a sentinel can tell a scan from an eval. Nothing marks a grader's calls.
-- **Headers carry compact context, not the sample's fuller details.** The proxy passes `x-inspect-context` and `x-irid` to the sidecar in the RPC body and removes them before contacting the provider. A sample's input and private metadata reach the sidecar through registration (section 9), and are never put into the provider request.
+- **Headers carry compact context, not the sample's fuller details.** Every proxy hook passes `x-inspect-context` and `x-irid` to the sidecar, among the request's headers in `judge_request`, and removes both from the request before it goes to the provider. A sample's input and private metadata reach the sidecar through registration (section 9), and are never put into the provider request.
 - **When no header names the run, the key is how the conversation opens.** This is the production case, where two conversations rarely open with the same text.
 - **A naked agent's name for its run is trusted, for now.** With a naked agent, the headers are set by something inside what is being watched. A model in control of the agent could change the name and start again with a clean tally, and with a run that is no longer ended. A check can be added later. The check would be that a run's name first appears at the start of a conversation, because a swapped name would turn up on a conversation that already has model turns behind it.
 - **A tally can be kept at more than one level.** One level is the sample: one tally for each run, which is what `context.store_as()` gives in an eval today. Another level is the task: one tally shared by every sample. How a sentinel says which level it wants is not yet designed.
@@ -363,9 +370,9 @@ None of this is built in Inspect. `examples/always_sunny` has an Inspect hook th
 
 ### Finding the sidecar
 
-Inspect knows only the base URL of the model API it is configured to use. By default, the endpoint for evals is reached at that same URL: the operator has the proxy forward the path `/sentinel`, and everything under it, to the sidecar.
+Inspect knows only the base URL of the model API it is configured to use. By default, the endpoint for evals is reached at that same URL: the operator has the proxy forward the path `/sentinel`, and everything under it, to the sidecar. Those paths get the same access control as the proxy's model calls, whatever the operator has set up, which may be none. Inspect sends with them whatever it sends with a model call. Each proxy hook's README says how to set up that forwarding in its proxy.
 
-At task init, Inspect sends a probe there: `GET /sentinel/probe`, at the proxy's base URL. It checks two things: that a live sentinel is behind the proxy, and that it speaks a version of the methods Inspect knows. The probe's own path has no version, because the probe is how Inspect learns which versions there are. Inspect then uses the highest version both sides know, such as `/sentinel/v1`. The sidecar answers:
+At task init, Inspect sends a probe there: `GET /sentinel/info`, at the proxy's base URL. It checks two things: that a live sentinel is behind the proxy, and that it speaks a version of the methods Inspect knows. The probe's own path has no version, because the probe is how Inspect learns which versions there are. Inspect then uses the highest version both sides know, such as `/sentinel/v1`. The sidecar answers:
 
 ```json
 {
@@ -375,8 +382,6 @@ At task init, Inspect sends a probe there: `GET /sentinel/probe`, at the proxy's
 ```
 
 If the answer is not this, or no answer comes, Inspect runs the task with no sentinel in a sidecar: it sends no `x-inspect-context` and registers nothing. A proxy with no sidecar behind it answers with an error, or passes the path on to the provider, which answers with one.
-
-The probe asks for no credential, and its answer holds nothing that needs one.
 
 ### Registering a task
 
@@ -424,7 +429,7 @@ Registration at task init can fail because the endpoint for evals is down, canno
 
 With `optional`, the sidecar sees requests for samples that were never registered. It treats them like this:
 
-- **The run is still keyed by the sample.** The proxy hook passes `sample_uuid` as the run, as it does when registration succeeds. Tallies are kept for each sample, and the `sentinel` field is sent as usual.
+- **The run is still keyed by the sample.** The sidecar takes `sample_uuid` from the header as the run, as it does when registration succeeds. Tallies are kept for each sample, and the `sentinel` field is sent as usual.
 - **`context.eval` is None.** The sample's input and metadata are not in the header, and the sidecar does not invent them.
 - **The header's fields are given to the sentinel as `context.proxy.inspect`.** This is the eval id, the task, the sample id, the epoch, the sample's uuid and the attempt. They are unverified, like everything else in `context.proxy`, because the caller set the header. A monitor that needs only the task's name or the epoch reads them there.
 - **Registration that arrives later is accepted.** If Inspect retries the registration once the endpoint is back, the sidecar stores it, and later steps are given `context.eval`. Steps already judged are not judged again.
@@ -433,9 +438,29 @@ The setting does not apply where tasks are registered beforehand. There, Inspect
 
 The `optional` setting may be removed later, if deployments turn out not to need it.
 
-### One model exchange
+### The flow, scenario by scenario
 
-Inspect makes one model request and gets one response. While that request is open, the proxy calls the sidecar twice: `judge_request` before the provider is called, and `judge_reply` before anything of the reply is released.
+Each diagram shows one scenario from start to finish. The proxy hook calls the sidecar's endpoint for proxies, at `/proxy/v1`, with `judge_request` for a request and `judge_reply` for a reply. Inspect calls the endpoint for evals, at `/sentinel/v1`, through the proxy.
+
+**1. Task init.** Inspect finds the sidecar and registers the task.
+
+```mermaid
+sequenceDiagram
+    participant I as Inspect
+    participant P as Proxy
+    participant S as Sidecar
+    I->>P: GET /sentinel/info
+    P->>S: Forward, under the proxy's usual access control
+    S-->>P: service inspect_sentinel, versions [1]
+    P-->>I: Probe answer
+    I->>P: register_task: facts, samples, tools, keep_for
+    P->>S: Forward, under the proxy's usual access control
+    Note over S: Store the task's facts under eval_id and task
+    S-->>P: Registered
+    P-->>I: Registered
+```
+
+**2. A turn that goes on.** Every step proceeds.
 
 ```mermaid
 sequenceDiagram
@@ -443,19 +468,110 @@ sequenceDiagram
     participant P as Proxy
     participant S as Sidecar
     participant M as Provider
-    I->>P: Model request + x-inspect-context + x-irid
+    I->>P: Model request, with x-inspect-context and x-irid
     P->>S: judge_request
+    Note over S: First request of the run: take the sample's facts
     Note over S: AfterToolCall for each new tool result, then BeforeGenerate
     S-->>P: pass
-    P->>M: Provider request, without Inspect's headers
-    M-->>P: Model reply
+    P->>M: Request, without Inspect's headers
+    M-->>P: Reply
+    Note over P: Hold the whole reply
     P->>S: judge_reply
-    Note over S: AfterGenerate, then BeforeToolCall for each tool call
-    S-->>P: the reply to send, with the sentinel field
-    P-->>I: One response, with the sentinel field
+    Note over S: AfterGenerate, then BeforeToolCall for each call
+    S-->>P: Reply, with the sentinel field
+    P-->>I: Reply, with the sentinel field
+    Note over I: Record the steps, and the agent runs the calls
 ```
 
-The diagram shows a sample that goes on. Whatever is decided, Inspect receives one response:
+**3. One call rejected.** The call is taken out of the reply, and put back for the model on the next request.
+
+```mermaid
+sequenceDiagram
+    participant I as Inspect
+    participant P as Proxy
+    participant S as Sidecar
+    participant M as Provider
+    I->>P: Model request
+    P->>S: judge_request
+    S-->>P: pass
+    P->>M: Request
+    M-->>P: Reply: run ls, run curl
+    P->>S: judge_reply
+    Note over S: BeforeToolCall rejects curl
+    S-->>P: Reply without curl, with the sentinel field
+    P-->>I: Reply: run ls, with the sentinel field
+    Note over I: Put curl back with its rejection, and the agent runs ls
+    I->>P: Next request, with the result of ls
+    P->>S: judge_request
+    Note over S: Put curl and its rejection back, if Inspect has not
+    S-->>P: Request to send
+    P->>M: Request, with curl and its rejection
+```
+
+A modified call goes the same way: the client is sent the changed call, and the model's original call is put back on the next request.
+
+**4. A run ended at the request.** A `terminate` at `AfterToolCall` or `BeforeGenerate`.
+
+```mermaid
+sequenceDiagram
+    participant I as Inspect
+    participant P as Proxy
+    participant S as Sidecar
+    participant M as Provider
+    I->>P: Model request
+    P->>S: judge_request
+    Note over S: AfterToolCall decides terminate
+    S-->>P: refuse, with the sentinel field
+    Note over P,M: The provider is not called
+    P-->>I: Error, with the sentinel field
+    Note over I: End the sample, then score it
+```
+
+**5. A turn refused at the reply.** A `terminate` at `AfterGenerate` or `BeforeToolCall`, or every call in the reply rejected.
+
+```mermaid
+sequenceDiagram
+    participant I as Inspect
+    participant P as Proxy
+    participant S as Sidecar
+    participant M as Provider
+    I->>P: Model request
+    P->>S: judge_request
+    S-->>P: pass
+    P->>M: Request
+    M-->>P: Reply
+    P->>S: judge_reply
+    Note over S: AfterGenerate decides terminate
+    S-->>P: refuse, with the sentinel field
+    Note over P: The reply is withheld
+    P-->>I: Error, with the sentinel field
+    Note over I: On terminate, end the sample. If every call was rejected, add the rejections and call the model again
+```
+
+**6. The end of a sample.** Inspect fetches the run's state, scores the sample, and ends the run.
+
+```mermaid
+sequenceDiagram
+    participant I as Inspect
+    participant P as Proxy
+    participant S as Sidecar
+    I->>P: run_result
+    P->>S: Forward
+    S-->>P: The store, and whether the run was ended
+    P-->>I: The store, and whether the run was ended
+    Note over I: Copy the store into the sample's store, then score
+    I->>P: end_run
+    P->>S: Forward
+    Note over S: Drop the run's state
+    S-->>P: Ended
+    P-->>I: Ended
+```
+
+### One model exchange
+
+Inspect makes one model request and gets one response. While that request is open, the proxy calls the sidecar twice: `judge_request` before the provider is called, and `judge_reply` before anything of the reply is released.
+
+Whatever is decided, Inspect receives one response:
 
 | What the sidecar decides | What Inspect receives |
 |---|---|
@@ -476,7 +592,7 @@ In more detail:
    x-inspect-context: {"version":1,"eval_id":"eval_789","task":"philadelphia","sample_id":1,"epoch":2,"sample_uuid":"sample_123","attempt":"attempt_1"}
    ```
 
-2. **The proxy hook puts the request to the sidecar.** It sets `run` from the header's `sample_uuid`, and passes on `x-inspect-context` and `x-irid` among the request's headers, never a credential:
+2. **The proxy hook puts the request to the sidecar.** It passes on `x-inspect-context` and `x-irid` among the request's headers, without reading them, and never a credential:
 
    ```text
    POST <sidecar>/proxy/v1
@@ -484,7 +600,6 @@ In more detail:
    JSON-RPC method: judge_request
    params:
      id: proxy_exchange_id
-     run: "sample_123"
      provider: "openai"
      format: "openai-chat"
      model: requested_model
@@ -494,7 +609,7 @@ In more detail:
 
    The proxy's exchange id ties `judge_request` to the later `judge_reply`. It is not Inspect's `x-irid`.
 
-3. **The sidecar judges the request.** It finds the sample's registered facts by the header's `eval_id`, `task` and `sample_id`, and gives them to the sentinel as `context.eval`. It judges `AfterToolCall` for each tool result the run has not seen before, then `BeforeGenerate`. If either ends the run, the sidecar answers `refuse`, with the `sentinel` field for the error body, and the provider is not called. Otherwise it answers `pass`, and the proxy sends the request on, without Inspect's two headers.
+3. **The sidecar judges the request.** It takes the run from the header's `sample_uuid`, and finds the sample's registered facts by the header's `eval_id`, `task` and `sample_id`, and gives them to the sentinel as `context.eval`. It judges `AfterToolCall` for each tool result the run has not seen before, then `BeforeGenerate`. If either ends the run, the sidecar answers the proxy hook's `judge_request` with `refuse`, carrying the `sentinel` field, and the provider is not called. The proxy hook puts the field into the error it sends Inspect. Otherwise the sidecar answers `pass`, or `replace` when it has put back calls it took out of an earlier reply (section 4), and the proxy sends the request on, without Inspect's two headers.
 
 4. **The proxy hook puts the reply to the sidecar**, whole, once the provider has finished:
 
@@ -514,7 +629,7 @@ In more detail:
 
    The exchange id brings back the request, its `x-irid` and the run.
 
-5. **The sidecar judges the reply.** It judges `AfterGenerate`, then `BeforeToolCall` for each tool call in the reply. It carries out the decisions as section 4 describes, and answers with the reply to send, with the `sentinel` field added, or with `refuse`.
+5. **The sidecar judges the reply.** It judges `AfterGenerate`, then `BeforeToolCall` for each tool call in the reply, and carries out the decisions as section 4 describes. It answers the proxy hook's `judge_reply` in one of two ways. With `replace`, whose body is the generate reply to send Inspect: the provider's reply, with any calls taken out or changed, and with the `sentinel` field added. The sidecar answers `replace` even when every step proceeded, because the field has to be added and the proxy hook cannot add it. Or with `refuse`, carrying the `sentinel` field, when the reply is withheld.
 
 6. **The proxy completes Inspect's request** with what the sidecar answered. Inspect reads the `sentinel` field before the agent is given anything.
 
@@ -597,7 +712,55 @@ And this is a refusal, after a sentinel ended the run at a tool result in the re
 - **Only a rejection's `message` is meant for the agent.** Inspect never shows the agent anything else in the field.
 - **On a stream, the field goes in the last event that the provider's SDK reads**: Anthropic's `message_delta`, the last chunk of an OpenAI Chat Completions stream, or the Responses API's `response.completed`. An event of a new type would not do, because the Anthropic SDK drops event types it does not know.
 - **With `--no-eval-results`**, each step keeps only what Inspect acts on: the stage, the call, `original`, and the decision's action, `message` and modified call. The explanation, the references, the metadata and `recorded` are left out, and the field says so.
-- **Where a proxy does not carry the field to the client**, Inspect asks the sidecar instead, with `request_result` and the request's `x-irid`. Each proxy hook's README says which of its routes those are.
+- **Inspect never reads a missing field as `proceed`.** It asks the sidecar what happened (below).
+
+**When the field is missing.** Inspect cannot tell from the reply why the field is missing, so it always asks the sidecar with `request_result`, by the request's `x-irid`. The sidecar's answer says what happened:
+
+| The sidecar's answer to `request_result` | What happened | What Inspect does |
+|---|---|---|
+| `held`, with a decision | the sidecar judged the request, and the proxy dropped the field on the way to Inspect | applies and records the decision, as if the field had arrived |
+| `not_judged`, with a reason | the sidecar saw the request but could not decide, and the proxy let the call through | records the request as not judged, with the reason |
+| `unknown`, or no answer at all | the proxy could not reach the sidecar, and let the call through | records the request as not judged, because the sidecar could not be reached |
+
+A proxy drops the field only on the routes its proxy hook's README lists. A proxy lets a call through unjudged only when its operator has set it to.
+
+**A proxy drops the field:**
+
+```mermaid
+sequenceDiagram
+    participant I as Inspect
+    participant P as Proxy
+    participant S as Sidecar
+    I->>P: Model request, with x-inspect-context and x-irid
+    P->>S: judge_request, then judge_reply
+    S-->>P: Reply, with the sentinel field
+    P-->>I: Reply, rewritten by the proxy without the field
+    I->>P: request_result, by x-irid
+    P->>S: Forward
+    S-->>P: held, with the records and outcome
+    P-->>I: held, with the records and outcome
+    Note over I: Apply and record, as if the field had arrived
+```
+
+**The sidecar gave no answer, and the proxy lets the call through:**
+
+```mermaid
+sequenceDiagram
+    participant I as Inspect
+    participant P as Proxy
+    participant S as Sidecar
+    participant M as Provider
+    I->>P: Model request, with x-inspect-context and x-irid
+    P-xS: judge_request fails
+    P->>M: Request, sent on unjudged
+    M-->>P: Reply
+    P-->>I: Reply, with no field
+    I->>P: request_result, by x-irid
+    P->>S: Forward
+    S-->>P: unknown, or no answer
+    P-->>I: unknown, or an error
+    Note over I: Record the request as not judged
+```
 
 ### Tool views
 
@@ -626,15 +789,15 @@ When a sentinel runs inside an eval, its records appear in the eval's log, its s
 The sidecar serves two endpoints:
 
 - **The endpoint for proxies**, at `POST /proxy/v1`. A proxy hook sends each request and each reply here to be judged.
-- **The endpoint for evals**, at `POST /sentinel/v1`, with the probe at `GET /sentinel/probe`.
+- **The endpoint for evals**, at `POST /sentinel/v1`, with the probe at `GET /sentinel/info`.
 
-**By default, the sidecar serves both on one port, 8900, and only the proxy reaches it.** Inspect reaches the endpoint for evals through the proxy, at the model API's base URL, and the proxy forwards `/sentinel` to the sidecar. Inspect presents the same credential it uses for the model API, and the proxy checks it before forwarding, as it does for a model call. Nothing new is configured in Inspect.
+**By default, the sidecar serves both on one port, 8900, and only the proxy reaches it.** Inspect reaches the endpoint for evals through the proxy, at the model API's base URL, and the proxy forwards `/sentinel` to the sidecar. The proxy applies to `/sentinel` the same access control it applies to model calls, and Inspect sends with these calls whatever it sends with a model call. Nothing new is configured in Inspect.
 
-**As an advanced option, the endpoint for evals has a port of its own**, 8901 unless set otherwise, and a token of its own, read from the `INSPECT_SENTINEL_EVAL_TOKEN` environment variable. This is for a deployment where something other than the eval can use the eval's credential for the model API, such as an agent that makes its own model calls ("A client that can't be trusted" below). Inspect is then configured with that port's URL and the token, and sends the token as a bearer credential, in the `Authorization` header. A call without the right token is answered with HTTP 401.
+**As an advanced option, the endpoint for evals has a port of its own**, 8901 unless set otherwise, and a token of its own, read from the `INSPECT_SENTINEL_EVAL_TOKEN` environment variable. This is for a deployment where something other than the eval can make model calls through the proxy, such as an agent that makes its own model calls ("A client that can't be trusted" below). Inspect is then configured with that port's URL and the token, and sends the token as a bearer credential, in the `Authorization` header. A call without the right token is answered with HTTP 401.
 
 The endpoint for evals uses JSON-RPC 2.0. JSON-RPC was chosen to be consistent with inspect_ai, which already uses it to talk to the tools it runs in a sandbox and so already has the client code. Every call is a POST to one path, `/sentinel/v1`, and the body names the method. The `v1` in the path is the version of the methods. The methods are `register_task`, `request_result`, `run_result` and `end_run`. None of them is needed for the sidecar to make a decision. The JSON Schema file, `src/inspect_sentinel/sidecar/eval_endpoint.schema.json`, is generated from the models in the code, and a test fails if it is out of date. `register_task` is not built, and is not in the file yet.
 
-A call that can be read is always answered with HTTP 200, and the body says whether it succeeded, as JSON-RPC defines.
+A call that can be read is always answered with HTTP 200, and the body says whether it succeeded, as JSON-RPC defines. A call may be as large as `--max-body-bytes` allows, 64 MiB unless set otherwise, the same limit as for the endpoint for proxies. A larger call is answered with HTTP 413. A `register_task` for a large dataset may need the limit raised, and so may any limit of the proxy's, or of a load balancer in front of it, which is the operator's to set.
 
 **`register_task`.** Inspect sends a task's facts at task init, where the deployment allows it. "Registering a task" above shows the call. The result says what the sidecar stored:
 
@@ -761,7 +924,7 @@ A run that is never ended, such as a naked agent's session or an eval that stopp
 
 Suppose an agent takes over the process that runs an eval. It then holds the eval's credential and can call the endpoint for evals. It can also run tools directly, without asking a model. No proxy sees those tool runs, and containing them is the sandbox's job. The endpoint for evals cannot prevent that. Its obligation is to give a compromised client no additional power.
 
-The same holds for anything else that has the eval's credential for the model API, such as an agent that makes its own model calls. By default, that credential is what the proxy checks before it forwards a call to the endpoint for evals. A deployment where that matters gives the endpoint for evals a port and a token of its own ("The methods" above).
+By default, the same holds for anything else that can make model calls through the proxy, such as an agent that makes its own model calls, because the endpoint for evals has the same access control as the proxy's model calls. A deployment where that matters gives the endpoint for evals a port and a token of its own ("The methods" above).
 
 Four rules follow.
 
@@ -800,7 +963,7 @@ Considered and not taken:
   A sidecar that runs as several processes needs those processes to share this state, because a run's requests, and the calls to the endpoint for evals, may each reach a different process. A run that outlasts a restart needs it kept. The plan is to put the state behind one interface, with the in-memory version as the default. Possible later implementations are one on Valkey and one on S3. The interface is not designed or built. A run's state is dropped when the eval calls `end_run`, or once no request has named the run for a day, which `--run-expiry` sets (section 9). Records are kept for a limited window. A task's registration made by Inspect is dropped a day after the last request that names the task, or later if the registration asked for longer; a task an admin registered is kept (section 9). Not designed: the tallies kept at the task level, shared by every sample of a task (section 7).
 - **A record log that can't be rewritten**, not yet designed. Records are to leave the sidecar as they are made, to somewhere neither the sidecar nor a client can change them afterwards. What the sidecar keeps is then a copy for the result methods of section 9, and not the record itself.
 - **A health check is answered at `GET /health`, on each port the sidecar listens on.** The answer is `ok` with status 200. The route asks for no credential, on the endpoint for evals as well, and it checks nothing. The sidecar loads its sentinel before it listens, so an answer means the sidecar is ready to judge, and a sidecar whose sentinel can't be loaded stops without ever listening. The route is for whatever runs the sidecar to probe, so that a sidecar that has stopped answering is restarted. A proxy does not call it, and it is not part of the messages a proxy and the sidecar exchange. Health checks are left out of the sidecar's access log, which would otherwise gain a line for every probe.
-- **Access is the operator's to control.** The port a proxy sends requests and replies to is protected by where the sidecar listens: an operator makes it reachable by the proxy alone, and uses `https` unless the two run side by side. By default, the endpoint for evals is reached only through the proxy, which checks the caller's credential. As an advanced option, it has a port and a token of its own (section 9). Other forms of authentication, such as a credential on what a proxy sends, may be supported later.
+- **Access is the operator's to control.** The port a proxy sends requests and replies to is protected by where the sidecar listens: an operator makes it reachable by the proxy alone, and uses `https` unless the two run side by side. By default, the endpoint for evals is reached only through the proxy, with the same access control as the proxy's model calls. As an advanced option, it has a port and a token of its own (section 9). Other forms of authentication, such as a credential on what a proxy sends, may be supported later.
 - **What `MiddlemanHook` adds to a model call** is two round trips to the sidecar: one for the request and one for the reply. The time they add has not been measured.
 
 ## 11. Testing
@@ -828,12 +991,10 @@ Considered and not taken:
 | Delivery | a whole turn held, then passed or refused | keepalives while holding; releasing text early; delivering a decision that takes hours |
 | Operations | in-memory state, in one process; a size limit on what is read from a proxy; an optional time limit on a sentinel | an interface for a run's state, with implementations that share it and keep it (possibly Valkey and S3); a lasting record log, streamed out as it is written; the queue of cases for a person to review; limits on a hold for a proxy that does not hold the reply itself |
 
-One difference from section 2: OpenAI replies are validated strictly today. A value that the installed SDK does not know makes the turn unreadable, where the rule in section 2 says the turn should be read.
-
 ## Asked of inspect_ai
 
 - **A public function for each provider that turns stream events into a `ModelOutput`.** Each inspect_ai provider has this logic inside it, with its repairs for SDK defects. Making it callable on a stream that is not the provider's own would put the private Anthropic accumulator behind inspect_ai's API, and would cover Gemini.
-- **Converters that parse a dict as leniently as the SDK does.**
+- **Public converters that read a dict as leniently as the SDK does.** `inspect_ai.model.model_output_from_openai` and `model_output_from_openai_responses` run pydantic's strict `model_validate` when they are given a dict. A value that the installed OpenAI SDK does not know yet, such as a new `finish_reason`, then raises an error, and the sidecar has to treat the turn as unreadable. inspect_ai's own providers are not affected, because they pass these functions objects that the SDK has already built leniently. Only a caller that decodes raw JSON, as the sidecar does, is.
 - **A converter that says so when it meets a block it does not recognise, or a Beta type.** Today the Anthropic converter returns less than it was given, with no error.
 - **A public function that writes a message in Anthropic's format**, as there is for OpenAI's format.
 - **The JSON request context on each provider call.** Inspect sends `x-inspect-context` with the fields listed in section 7: the version, the eval id, the task, the sample id, the epoch, the sample's uuid and the attempt. It sends the sample input and private metadata through registration.
