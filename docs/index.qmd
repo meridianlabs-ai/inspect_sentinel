@@ -27,10 +27,10 @@ pip install inspect-sentinel
 
 It requires `inspect-ai` 0.3.278 or later, the first release with `Task(sentinel=...)` and the transcript events and viewer support that sentinels use.
 
-The example below uses an OpenAI model for the agent and an Anthropic model for the monitor, so install those providers' packages and set their API keys:
+The example below uses an OpenAI model for the agent and an Anthropic model for the monitor, so install those providers' packages and set their API keys. Its LLM monitor also needs `inspect-scout`, which renders the agent's step for the monitor's model and is not yet a dependency of this package:
 
 ```{.bash filename="Terminal"}
-pip install openai anthropic
+pip install openai anthropic inspect-scout
 export OPENAI_API_KEY=...     # the agent
 export ANTHROPIC_API_KEY=...  # the monitor
 ```
@@ -236,9 +236,9 @@ def suspicion(model: str | None = None, role: str | None = None) -> Monitor: # <
 ```
 
 1. An LLM monitor takes `model=` and `role=` and passes them on, so a task can point it elsewhere without editing it. `role` is a model role such as `trusted`, `model` a model name such as `openai/gpt-5-mini`. A configured role wins, then `model`; with neither, the role is `monitor`. An unconfigured role with no `model` falls back to the agent's own model, with a warning.
-2. `context.host.score()` asks the model through `context.host.generate()`, which resolves the model, records the call apart from the agent's, and does not charge it to the agent's limits. Its prompt shows the model the task the agent was given, which the monitor can trust, then the step, which it should not: everything in `step` was written by or shown to the agent under observation and may try to talk the monitor out of flagging it. Given a mapping of dimensions, the model answers through an answer tool with a score for each, checked to be from 0 to 1, and `score()` returns them as an `Observation` with the model's explanation. Given a single question as a string, it returns one score.
-3. What the model sees of the step: here the last three turns of what the agent's model was sent, then the agent's message and call. `last_turns()`, `keep_history()` and the other excerpt functions take a step and narrow it; pass `step` alone to show all of it.
-4. `score()` builds the prompt from a default template: its instructions to the model, then the `policy`, which binds the agent whatever its task says, then the task the agent was given, what the model sees of the step, the question, and the instruction to answer through the answer tool. Pass `instructions=` to replace the default instructions, or `template=` for a prompt of your own.
+2. `context.host.score()` asks the model through `context.host.generate()`, which resolves the model, records the call apart from the agent's, and does not charge it to the agent's limits. Its prompt shows the model the task the agent was given, which the monitor can trust, then the step, which it should not: everything in `step` was written by or shown to the agent under observation and may try to talk the monitor out of flagging it. Given a mapping of dimensions, the model answers through an answer tool with a score for each, checked to be from 0 to 1, and `score()` returns them as an `Observation` with the model's explanation. Given a single question as a string, it returns one score. The step's messages are numbered for the model, and the messages its explanation cites become the observation's `references`. When the model gives no valid answer in three attempts, `score()` raises and the monitor is recorded as failed.
+3. What the model sees of the step: here the last three turns of what the agent's model was sent, then the agent's message and call. `last_turns()`, `keep_history()` and the other excerpt functions take a step and choose what the model sees of it; pass `step` alone to show all of it.
+4. `score()` builds the prompt from a default template: its instructions to the model, then the `policy`, which binds the agent whatever its task says, then the task the agent was given, any escalations from earlier links of a `sequential()`, what the model sees of the step, the question, and the instruction to answer through the answer tool. Pass `instructions=` to replace the default instructions, or `template=` for a prompt of your own.
 
 A monitor only reports, so on its own it changes nothing. To act on its scores, wrap it in a protocol. `threshold()` rejects the call when a score reaches `reject_at`, taking the highest dimension of a score with several:
 

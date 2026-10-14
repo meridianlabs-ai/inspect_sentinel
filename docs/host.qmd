@@ -10,7 +10,7 @@ This page is an outline: a summary and the sections planned for it, not yet the 
 
 ## Overview
 
-How a monitor or protocol calls a model. Covers `context.host.generate()` and why it is used instead of `get_model()`, the `model=` and `role=` convention for LLM monitors, the `monitor` model role and its fallback, how monitor usage is recorded and kept off the agent's limits, and structured output. Outbound HTTP through `fetch` is planned.
+How a monitor or protocol calls a model. Covers `context.host.generate()` and why it is used instead of `get_model()`, `context.host.score()` to have a model score a step, the `model=` and `role=` convention for LLM monitors, the `monitor` model role and its fallback, how monitor usage is recorded and kept off the agent's limits, and structured output. Outbound HTTP through `fetch` is planned.
 
 ## Planned Sections
 
@@ -18,6 +18,8 @@ How a monitor or protocol calls a model. Covers `context.host.generate()` and wh
 - `model=` and `role=` on an LLM monitor's factory: `model` is a model name, `role` a model role; a configured role wins, then `model`, and with neither the role is `monitor`
 - The `monitor` role: `--model-role monitor=...` and `Task(model_roles=...)`, and the fallback to the agent's model
 - `context.host.score()`: a score from 0.0 to 1.0 for the step, or one per named dimension, with an explanation; the default template and custom templates; narrowing what the model sees with the windowing functions, such as `last_turns(step, 6)`, its messages numbered so the explanation can cite them
+- `score()`'s prompt: `instructions=`, `policy=`, the task, escalations from earlier links of a `sequential()`, and `template=` with `template_variables=`
+- `score()`'s answer: a checked answer tool, three attempts before it raises and the monitor is recorded as failed, `retry_refusals=` for provider refusals, and `inspect_scout` needed for now
 - Structured output with `ResponseSchema`
 - Usage: monitor calls recorded separately and not charged to the agent's limits
 - Treating agent text as untrusted in prompts
