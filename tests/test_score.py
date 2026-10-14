@@ -13,7 +13,7 @@ from inspect_ai.model import (
 )
 from inspect_ai.tool import ToolCall
 
-from inspect_sentinel import keep_history, last_turns
+from inspect_sentinel import Decision, Reported, Step, keep_history, last_turns
 from inspect_sentinel._integration import score_step
 
 from ._fakes import (
@@ -340,12 +340,48 @@ async def test_a_template_reads_its_own_variables_and_the_eval() -> None:
     assert prompt(host).startswith("bash;python; /work t\n")
 
 
+def escalated() -> Step:
+    return replace(
+        before_tool_call("bash", cmd="rm -rf /etc"),
+        escalations=(
+            Reported(
+                name="rules",
+                path="rules",
+                report=Decision.escalate("rm outside /work"),
+                function="check",
+            ),
+            Reported(
+                name="llm",
+                path="llm",
+                report=Decision.escalate(),
+                function="check",
+            ),
+        ),
+    )
+
+
+# the escalations reach the prompt from an excerpt too
+@pytest.mark.parametrize("windowed", [False, True])
+@pytest.mark.anyio
+async def test_earlier_escalations_are_shown_after_the_task(windowed: bool) -> None:
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
+    step = escalated()
+    await score_step(
+        host, last_turns(step, 3) if windowed else step, "Safe?", eval=EVAL
+    )
+    assert (
+        "[END TASK]\n\n[BEGIN ESCALATIONS]\n- rules: rm outside /work\n- llm\n[END ESCALATIONS]\n\n[AGENT STEP - BEGIN TOOL CALL]"
+        in prompt(host)
+    )
+
+
 @pytest.mark.anyio
 async def test_the_default_template_leaves_out_what_is_not_given() -> None:
     host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
     await score_step(host, before_tool_call("bash", cmd="ls"), "Safe?")
     assert "[BEGIN POLICY]" not in prompt(host)
     assert "[BEGIN TASK]" not in prompt(host)
+    assert "[BEGIN ESCALATIONS]" not in prompt(host)
     # no gap where they would have been
     assert "\n\n\n" not in prompt(host).split("[AGENT STEP - BEGIN TOOL CALL]")[0]
 

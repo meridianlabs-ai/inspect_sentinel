@@ -53,7 +53,7 @@ class Excerpt(Generic[S_co]):
 
     A step's conversations start whole, each cut before the step's own part so that part is not shown twice: `history` before the assistant message that holds the call at a tool stage, and before a generate `input` after the model's last reply and `history` before the messages that follow it, matched by id. Where the host gave those messages new ids in the request (inspect_ai does when a provider merges consecutive messages, or a tool rewrites its result for the model), `history` keeps them and they show twice.
 
-    `step_as_str()` renders the conversations and the step's own part: the assistant's message and the call before a tool call, those and the result after one (other calls the same message holds, and their results, are not shown), the messages after the model's last reply before a generate (none when the request ends with an assistant message, such as a prefill, which then shows in `input`), and the reply after one. Nothing else of the step is rendered, such as its escalations, tools, config, `view` or untruncated tool output.
+    `step_as_str()` renders the conversations and the step's own part: the assistant's message and the call before a tool call, those and the result after one (other calls the same message holds, and their results, are not shown), the messages after the model's last reply before a generate (none when the request ends with an assistant message, such as a prefill, which then shows in `input`), and the reply after one. Nothing else of the step is rendered, such as its tools, config, `view` or untruncated tool output, nor its escalations, which are not the agent's: `Host.score` shows those in a block of their own.
     """
 
     step: S_co
