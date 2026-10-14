@@ -85,9 +85,11 @@ class FakeHost:
         instructions: str | None = None,
         policy: str | None = None,
         template: str | None = None,
+        template_variables: Mapping[str, Any] | None = None,
         model: str | None = None,
         role: str | None = None,
         config: GenerateConfig | None = None,
+        retry_refusals: int = 3,
     ) -> Observation:
         return await score_step(
             self,
@@ -96,9 +98,11 @@ class FakeHost:
             instructions=instructions,
             policy=policy,
             template=template,
+            template_variables=template_variables,
             model=model,
             role=role,
             config=config,
+            retry_refusals=retry_refusals,
         )
 
 

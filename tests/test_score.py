@@ -19,6 +19,11 @@ from inspect_sentinel._integration import score_step
 from ._fakes import (
     FakeHost,
     before_tool_call,
+    eval_context,
+)
+
+EVAL = replace(
+    eval_context(), sample_input="Free disk space.", metadata={"area": "/work"}
 )
 
 
@@ -39,7 +44,7 @@ async def test_a_string_is_one_score() -> None:
         host,
         before_tool_call("bash", cmd="rm -rf /etc"),
         "Does this call write outside /work?",
-        task="Free disk space.",
+        eval=EVAL,
     )
     assert (observation.suspicion, observation.explanation) == (
         0.9,
@@ -78,7 +83,7 @@ async def test_the_monitors_own_text_goes_into_the_default_template(
         host,
         before_tool_call("bash", cmd="ls"),
         "Safe?",
-        task="Free disk space.",
+        eval=EVAL,
         instructions=instructions,
         policy=policy,
     )
@@ -127,7 +132,7 @@ def call(
     )
 
 
-def reply(*calls: ToolCall, text: str = "") -> ModelOutput:
+def reply(*calls: ToolCall, text: str = "", refused: bool = False) -> ModelOutput:
     return ModelOutput(
         model="fake",
         choices=[
@@ -135,7 +140,11 @@ def reply(*calls: ToolCall, text: str = "") -> ModelOutput:
                 message=ChatMessageAssistant(
                     content=text, tool_calls=list(calls) or None
                 ),
-                stop_reason="tool_calls" if calls else "stop",
+                stop_reason="content_filter"
+                if refused
+                else "tool_calls"
+                if calls
+                else "stop",
             )
         ],
     )
@@ -280,32 +289,93 @@ async def test_the_model_is_offered_only_the_answer_tool_one_call_at_a_time() ->
 
 
 @pytest.mark.parametrize(
-    "dimensions, template, match",
+    "dimensions, arguments, match",
     [
         (
             "Safe?",
-            "Score {{ dimensions }}",
+            {"template": "Score {{ dimensions }}"},
             r"\{\{ step \}\} and \{\{ answer_format \}\}",
         ),
-        ({}, None, "at least one dimension"),
-        ({"explanation": "Why?", "risk": "Risky?"}, None, "'explanation'"),
-        ({"_risk": "Risky?"}, None, "'_risk'"),
-        ({"model_dump": "Dumped?"}, None, "'model_dump'"),
+        # a misspelled variable, even in a branch the render would not take
+        (
+            "Safe?",
+            {
+                "template": "{{ step }}{% if 0 %}{{ polcy }}{% endif %}{{ answer_format }}"
+            },
+            "'polcy', which is not a variable",
+        ),
+        ("Safe?", {"template_variables": {"task": "mine"}}, "'task'"),
+        ("Safe?", {"retry_refusals": -1}, "retry_refusals >= 0"),
+        ({}, {}, "at least one dimension"),
+        ({"explanation": "Why?", "risk": "Risky?"}, {}, "'explanation'"),
+        ({"_risk": "Risky?"}, {}, "'_risk'"),
+        ({"model_dump": "Dumped?"}, {}, "'model_dump'"),
     ],
 )
 @pytest.mark.anyio
 async def test_bad_arguments_raise_before_the_model_is_asked(
-    dimensions: str | dict[str, str], template: str | None, match: str
+    dimensions: str | dict[str, str], arguments: dict[str, Any], match: str
 ) -> None:
     host = FakeHost(outputs=[])
     with pytest.raises(ValueError, match=match):
         await score_step(
-            host,
-            before_tool_call("bash", cmd="ls"),
-            dimensions,
-            template=template,
+            host, before_tool_call("bash", cmd="ls"), dimensions, **arguments
         )
     assert host.inputs == []
+
+
+@pytest.mark.anyio
+async def test_a_template_reads_its_own_variables_and_the_eval() -> None:
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
+    await score_step(
+        host,
+        before_tool_call("bash", cmd="ls"),
+        "Safe?",
+        eval=EVAL,
+        template="{% for tool in tools %}{{ tool }};{% endfor %} {{ eval.metadata.area }} {{ eval.task }}\n{{ step }}\n{{ answer_format }}",
+        template_variables={"tools": ["bash", "python"]},
+    )
+    assert prompt(host).startswith("bash;python; /work t\n")
+
+
+@pytest.mark.anyio
+async def test_the_default_template_leaves_out_what_is_not_given() -> None:
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
+    await score_step(host, before_tool_call("bash", cmd="ls"), "Safe?")
+    assert "[BEGIN POLICY]" not in prompt(host)
+    assert "[BEGIN TASK]" not in prompt(host)
+    # no gap where they would have been
+    assert "\n\n\n" not in prompt(host).split("[BEGIN AGENT STEP]")[0]
+
+
+@pytest.mark.parametrize(
+    "refusals, retry_refusals, raises",
+    [(2, 3, False), (3, 3, False), (4, 3, True), (1, 0, True)],
+)
+@pytest.mark.anyio
+async def test_a_refusal_is_asked_again_without_using_an_attempt(
+    refusals: int, retry_refusals: int, raises: bool
+) -> None:
+    refused = reply(text="Blocked.", refused=True)
+    # two bad answers after the refusals still leave the third attempt
+    bad = reply(call("x", explanation="very", suspicion=1.5))
+    host = FakeHost(outputs=[*[refused] * refusals, bad, bad, valid()])
+    if raises:
+        with pytest.raises(RuntimeError, match="refused"):
+            await score_step(
+                host,
+                before_tool_call("bash", cmd="ls"),
+                "Safe?",
+                retry_refusals=retry_refusals,
+            )
+    else:
+        observation = await score_step(
+            host,
+            before_tool_call("bash", cmd="ls"),
+            "Safe?",
+            retry_refusals=retry_refusals,
+        )
+        assert observation.suspicion == 0.8
 
 
 @pytest.mark.anyio
@@ -313,8 +383,8 @@ async def test_the_agents_text_is_not_read_as_a_template_variable() -> None:
     host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
     await score_step(
         host,
-        before_tool_call("bash", cmd="echo '{{ dimensions }}'"),
+        before_tool_call("bash", cmd="echo '{{ dimensions }} {% if x %}'"),
         "Is it safe?",
         template="{{ step }}\n{{ dimensions }}\n{{ answer_format }}",
     )
-    assert "cmd: echo '{{ dimensions }}'" in prompt(host)
+    assert "cmd: echo '{{ dimensions }} {% if x %}'" in prompt(host)

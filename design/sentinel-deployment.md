@@ -93,10 +93,14 @@ class Host(typing.Protocol):
         step: Step | Excerpt[Step],  # a step, or what a windowing function kept of it
         dimensions: str | Mapping[str, str],  # one prompt text, or each dimension's name to its text
         *,
-        template: str | None = None,
+        instructions: str | None = None,  # the monitor's own opening, in place of the default
+        policy: str | None = None,  # what binds the agent whatever its task
+        template: str | None = None,  # a Jinja template
+        template_variables: Mapping[str, Any] | None = None,
         model: str | None = None,
         role: str | None = None,
         config: GenerateConfig | None = None,
+        retry_refusals: int = 3,
     ) -> Observation: ...
     """Ask a model to score the step from 0.0 to 1.0, with an explanation, through a checked answer tool."""
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
@@ -128,7 +132,7 @@ class HostResponse(typing.Protocol):
 
 Only `generate`, `score` and `ask_human` are built; `fetch`, `get`/`put` and `terminate` are planned.
 
-`score` takes the narrow form of a monitor that asks a model for its judgement: one score or one per named dimension, from 0.0 to 1.0, and an explanation, returned as an `Observation`. The model answers through an answer tool whose arguments pydantic checks, and an invalid answer goes back to it as a tool error; after the last attempt `score` raises, and the runner records the monitor as failed. The prompt, the answer loop and its checks are sentinel code, `score_step` in `inspect_sentinel._integration`, which asks the model only through the host's own `generate`: every model call a monitor makes goes through `generate`, and no sentinel API takes a `Model` (decided by the maintainers on 2026-10-13). A host implements `score` in one line, passing itself and the task the agent was given to `score_step`. The prompt's `{{ step }}` is `step_as_str()` of the step or excerpt, its messages numbered with Inspect Scout's `message_numbering` so the explanation's cites become `references`; Scout is not yet a dependency of this package, so `score` needs it installed, until message rendering moves from Scout into inspect_ai.
+`score` takes the narrow form of a monitor that asks a model for its judgement: one score or one per named dimension, from 0.0 to 1.0, and an explanation, returned as an `Observation`. The model answers through an answer tool whose arguments pydantic checks, and an invalid answer goes back to it as a tool error; after the last attempt `score` raises, and the runner records the monitor as failed. The prompt, the answer loop and its checks are sentinel code, `score_step` in `inspect_sentinel._integration`, which asks the model only through the host's own `generate`: every model call a monitor makes goes through `generate`, and no sentinel API takes a `Model` (decided by the maintainers on 2026-10-13). A host implements `score` in one line, passing itself and the eval the agent is running in (`Context.eval`) to `score_step`. Templates are Jinja, as Scout's are: a monitor can add its own variables (`template_variables`), read the eval (`{{ eval.metadata.x }}`), and a template that names an unknown variable raises before the model is asked. A provider refusal is asked again, up to `retry_refusals` times. The prompt's `{{ step }}` is `step_as_str()` of the step or excerpt, its messages numbered with Inspect Scout's `message_numbering` so the explanation's cites become `references`; Scout is not yet a dependency of this package, so `score` needs it installed, until message rendering moves from Scout into inspect_ai.
 
 `ask_human` answers one of the offered choices, or, when the person ends the prompt without one, `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered.
 

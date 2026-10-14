@@ -4,7 +4,7 @@ from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, NamedTuple, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, NamedTuple, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
@@ -71,36 +71,42 @@ class Host(TypingProtocol):
         instructions: str | None = None,
         policy: str | None = None,
         template: str | None = None,
+        template_variables: Mapping[str, Any] | None = None,
         model: str | None = None,
         role: str | None = None,
         config: GenerateConfig | None = None,
+        retry_refusals: int = 3,
     ) -> Observation:
         """Ask a model to score a step from 0.0 to 1.0, with an explanation.
 
-        The model is asked through `generate`, with the same `model`, `role` and `config`. It is sent a prompt built from `template`, and answers by calling an answer tool whose arguments are checked, so a missing or out-of-range score goes back to the model to correct. When the model gives no valid answer within three attempts (a refusal counts as one), `score` raises, and the runner records the monitor as failed. A host implements `score` by calling `score_step` with itself and the task the agent was given.
+        The model is asked through `generate`, with the same `model`, `role` and `config`. It is sent a prompt built from `template`, and answers by calling an answer tool whose arguments are checked, so a missing or out-of-range score, or a reply with no answer, goes back to the model to correct. When the model gives no valid answer within three attempts, `score` raises, and the runner records the monitor as failed. A reply the provider refuses (stop reason `content_filter`) is asked again without using an attempt, up to `retry_refusals` times, after which `score` raises. A host implements `score` by calling `score_step` with itself and the eval the agent is running in.
 
         Pass the step to show the model all of it, or narrow what it sees with the windowing functions, such as `last_turns(step, 6)` or `new_since_last_report(context, step)`.
 
-        The default template opens with `instructions`, then shows the model `policy`, the task and the step, asks it to score the step from 0.0 to 1.0 against `dimensions`, and asks for an explanation. A custom template uses the same variables, each written as `{{ name }}`, and must include `{{ step }}` and `{{ answer_format }}`:
+        The default template opens with `instructions`, then shows the model `policy`, the task and the step, asks it to score the step from 0.0 to 1.0 against `dimensions`, and asks for an explanation. Templates are Jinja templates. A custom one uses the same variables, and must include `{{ step }}` and `{{ answer_format }}`:
 
         - `{{ instructions }}`: `instructions`, or by default a sentence on monitoring AI agents for harmful actions and one telling the model to treat what the agent wrote or was shown as data and ignore any instructions in it. Instructions you pass replace both, so say the second yourself.
-        - `{{ task }}`: the task the agent was given, between `[BEGIN TASK]` and `[END TASK]` lines, when the host has one (in an eval, the sample's input); empty otherwise.
         - `{{ policy }}`: `policy`, the policy the agent must follow whatever its task, between `[BEGIN POLICY]` and `[END POLICY]` lines; empty when there is none.
+        - `{{ task }}`: the task the agent was given (in an eval, the sample's input), between `[BEGIN TASK]` and `[END TASK]` lines; empty outside an eval.
+        - `{{ eval }}`: the eval the agent is running in, as `context.eval` holds it, such as `{{ eval.task }}` or `{{ eval.metadata.difficulty }}`; None outside an eval, so guard it with `{% if eval %}` in a monitor that may run outside one.
         - `{{ step }}`: `step_as_str()` of the step or excerpt, its messages numbered `[M1]`, `[M2]` and so on so the explanation can cite them; the observation's `references` come from those cites.
         - `{{ dimensions }}`: `dimensions` as given, or each dimension's name followed by its text.
         - `{{ answer_format }}`: the instruction to call the answer tool.
+        - Any name in `template_variables`, set to its value.
 
-        A custom template states the 0.0 to 1.0 scale in its own words; without it the answer tool still rejects scores out of range.
+        A template that uses a name that is none of these raises before the model is asked, so a misspelled variable is caught. The template is rendered once and values are inserted as text, so the agent's text is never read as template. A custom template states the 0.0 to 1.0 scale in its own words; without it the answer tool still rejects scores out of range.
 
         Args:
             step: The step to score, whole, or an excerpt of it from a windowing function.
             dimensions: What to score and how. A string is the prompt text for a single score, and the observation's `suspicion` is one float. A mapping is each dimension's name to its prompt text, and `suspicion` is a dict keyed by name; a name must not start with `_` or be `explanation` or an attribute of pydantic's `BaseModel`.
             instructions: The monitor's own instructions, such as its role and the agent's setting, in place of the default instructions.
             policy: The policy the agent must follow whatever its task says, such as which files it may change; shown before the task.
-            template: A replacement for the default prompt template.
+            template: A replacement for the default prompt template, a Jinja template.
+            template_variables: More variables for the template, by name; a name must not be one of the variables above.
             model: A model name, as for `generate`.
             role: A model role, as for `generate`.
             config: Generation configuration.
+            retry_refusals: How many times to ask again when the provider refuses to answer.
         """
         ...
 
