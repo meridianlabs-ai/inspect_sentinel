@@ -1,6 +1,9 @@
 import json
 from collections.abc import Callable
 from dataclasses import replace
+from functools import reduce
+from itertools import permutations
+from typing import cast
 
 import anyio
 import pytest
@@ -536,6 +539,101 @@ async def test_drops_compose_with_windows_and_keep_cites() -> None:
     )
     assert "be helpful" not in rendered and "thinking about" not in rendered
     assert [r.id for r in extract_refs("see [M1]")] == ["earlier"]
+
+
+def two_turns(step: Step | Excerpt[Step]) -> Excerpt[Step]:
+    # keeps the whole conversation, system message included
+    return last_turns(step, 2)
+
+
+def many_messages(step: Step | Excerpt[Step]) -> Excerpt[Step]:
+    return last_messages(step, 50)
+
+
+EXCERPTING: list[Callable[[Step | Excerpt[Step]], Excerpt[Step]]] = [
+    keep_system,
+    drop_reasoning,
+    drop_tool_usage,
+    two_turns,
+    drop_input,
+]
+
+
+@pytest.mark.parametrize(
+    "order",
+    list(permutations(EXCERPTING)),
+    ids=lambda order: "-".join(f.__name__ for f in order),
+)
+@pytest.mark.anyio
+async def test_a_chain_gives_the_same_excerpt_in_any_order(
+    order: tuple[Callable[[Step | Excerpt[Step]], Excerpt[Step]], ...],
+) -> None:
+    chained = reduce(
+        lambda shown, f: f(shown), order, cast(Step | Excerpt[Step], thoughtful())
+    )
+    assert isinstance(chained, Excerpt)
+    assert chained.exclude == {"reasoning", "tool_usage"}
+    rendered = await step_as_str(chained)
+    assert rendered == await step_as_str(
+        drop_input(
+            two_turns(drop_tool_usage(drop_reasoning(keep_system(thoughtful()))))
+        )
+    )
+    assert "be helpful" in rendered
+    assert not any(
+        text in rendered for text in ["thinking about", "searched", "[BEGIN INPUT]"]
+    )
+
+
+@pytest.mark.parametrize(
+    "excerpting",
+    [
+        drop_input,
+        drop_history,
+        two_turns,
+        many_messages,
+        drop_reasoning,
+        drop_tool_usage,
+        keep_system,
+    ],
+)
+def test_every_function_keeps_what_earlier_ones_excluded_or_kept(
+    excerpting: Callable[[Step | Excerpt[Step]], Excerpt[Step]],
+) -> None:
+    earlier = drop_tool_usage(keep_system(thoughtful()))
+    # a later function must not put back the default of leaving system out
+    assert {"tool_usage"} <= excerpting(earlier).exclude
+    assert "system" not in excerpting(earlier).exclude
+
+
+def test_keep_system_twice_is_keep_system_once() -> None:
+    assert keep_system(keep_system(thoughtful())).exclude == frozenset()
+
+
+@monitor
+def keeps_system(first: bool = True) -> Monitor:
+    async def check(context: Context, step: AfterGenerate) -> Observation | None:
+        shown = (
+            new_since_last_report(context, keep_system(step))
+            if first
+            else keep_system(new_since_last_report(context, step))
+        )
+        return Observation.score(0.0, json.dumps(sorted(shown.exclude)))
+
+    return check
+
+
+@pytest.mark.parametrize("first", [True, False])
+@pytest.mark.anyio
+async def test_keep_system_holds_before_or_after_new_since_last_report(
+    first: bool,
+) -> None:
+    with in_step(store=Store()) as context:
+        observations = await run_monitors(
+            {"judge": keeps_system(first=first)}, context, thoughtful()
+        )
+    [seen] = [o.report.explanation for o in observations.succeeded]
+    assert json.loads(seen or "") == []
 
 
 @pytest.mark.anyio
