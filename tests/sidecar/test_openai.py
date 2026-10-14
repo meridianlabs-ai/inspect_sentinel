@@ -1,10 +1,27 @@
 import json
-from typing import Any
+import logging
+from typing import Any, cast
 
 import pytest
 from inspect_ai.model import ContentReasoning
 
-from inspect_sentinel.sidecar import UnreadableError, read_reply, read_request
+from inspect_sentinel._context import Context
+from inspect_sentinel._decorators import protocol
+from inspect_sentinel._report import Decision
+from inspect_sentinel._step import AfterToolCall, BeforeGenerate, BeforeToolCall
+from inspect_sentinel._types import Protocol, ProtocolGroup
+from inspect_sentinel.sidecar import (
+    Handler,
+    Pass,
+    Refuse,
+    Replace,
+    Reply,
+    Request,
+    UnreadableError,
+    _inspect_ai,
+    read_reply,
+    read_request,
+)
 from tests.sidecar._traffic import (
     DATA,
     JSON,
@@ -13,6 +30,8 @@ from tests.sidecar._traffic import (
     openai_ran,
     openai_recorded,
     openai_request,
+    storm_rule,
+    weather_rule,
 )
 
 
@@ -273,3 +292,219 @@ async def test_request_is_read(body: dict[str, Any], roles: list[str]) -> None:
 async def test_request_that_cannot_be_read(body: dict[str, Any], match: str) -> None:
     with pytest.raises(UnreadableError, match=match):
         await read_request("openai", json.dumps(body | {"model": "gpt-test"}).encode())
+
+
+def _request(api: str, id: str = "x", then: Any = (), **fields: Any) -> Request:
+    return Request(
+        id=id,
+        provider="openai",
+        model="gpt-test",
+        user="user-1",
+        body=json.dumps(openai_request(api, then=then) | fields).encode(),
+    )
+
+
+def _reply(name: str, id: str = "x") -> Reply:
+    content_type, body = openai_recorded(name)
+    return Reply(
+        id=id,
+        provider="openai",
+        model="gpt-test",
+        user="user-1",
+        status=200,
+        content_type=content_type,
+        body=body,
+    )
+
+
+def _conversation(api: str, body: bytes) -> list[dict[str, Any]]:
+    return cast(
+        "list[dict[str, Any]]",
+        json.loads(body)["messages" if api == "chat" else "input"],
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("api", "kinds", "told"),
+    [
+        (
+            "chat",
+            ["assistant", "tool", "tool", "tool"],
+            # OpenAI's formats have no flag for a failed call, so inspect_ai
+            # says it in the text
+            [
+                "Error: " + text
+                for text in ("not run", "Tokyo is not allowed.", "not run")
+            ],
+        ),
+        (
+            "responses",
+            ["reasoning", *["function_call"] * 3, *["function_call_output"] * 3],
+            ["not run", "Tokyo is not allowed.", "not run"],
+        ),
+    ],
+)
+async def test_rejection_is_added_in_the_format_of_the_request(
+    api: str, kinds: list[str], told: list[str]
+) -> None:
+    handler = Handler(weather_rule("reject", "Tokyo"), reject_status=503)
+    first = _request(api, "a")
+    await handler.request(first)
+
+    refused = await handler.reply(_reply(api, "a"))
+    again = await handler.request(_request(api, "b"))
+
+    assert refused == Refuse(
+        503, "A sentinel rejected the call to get_weather: Tokyo is not allowed."
+    )
+    assert isinstance(again, Replace)
+    sent, added = _conversation(api, first.body), _conversation(api, again.body)
+    assert added[: len(sent)] == sent
+    entries = added[len(sent) :]
+    assert [entry.get("type") or entry["role"] for entry in entries] == kinds
+    results = [entry.get("content") or entry.get("output") for entry in entries][-3:]
+    not_run = (
+        "This call was not run, because another call in the same turn was rejected."
+    )
+    assert results == [text.replace("not run", not_run) for text in told]
+    # everything else in the request is as the client sent it
+    field = "messages" if api == "chat" else "input"
+    assert {k: v for k, v in json.loads(again.body).items() if k != field} == {
+        k: v for k, v in json.loads(first.body).items() if k != field
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("api", ["chat", "responses"])
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (
+            "storm",
+            Refuse(
+                400,
+                "A sentinel ended this run at the result of the call to get_weather.",
+            ),
+        ),
+        ("rain", Pass()),
+    ],
+)
+async def test_result_is_judged(api: str, result: str, expected: Pass | Refuse) -> None:
+    handler = Handler(storm_rule())
+
+    answer = await handler.request(_request(api, then=openai_ran(api, result)))
+
+    assert answer == expected
+
+
+@protocol
+def reports_tools() -> Protocol:
+    async def decide(context: Context, step: BeforeGenerate) -> Decision | None:
+        return Decision.proceed(
+            f"{[tool.name for tool in step.tools]}|{step.config.max_tokens}"
+        )
+
+    return decide
+
+
+_FUNCTION = {
+    "name": "get_weather",
+    "description": "Look up the weather.",
+    "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("api", "fields", "expected"),
+    [
+        (
+            "chat",
+            {"tools": [{"type": "function", "function": _FUNCTION}], "max_tokens": 64},
+            "['get_weather']|64",
+        ),
+        (
+            "responses",
+            {
+                "tools": [
+                    {"type": "function", **_FUNCTION},
+                    # a tool whose input is free text, which Codex uses
+                    {
+                        "type": "custom",
+                        "name": "apply_patch",
+                        "description": "Apply a patch.",
+                        "format": {"type": "text"},
+                    },
+                    # a tool the provider runs
+                    {"type": "web_search"},
+                ],
+                "max_output_tokens": 64,
+            },
+            "['get_weather', 'apply_patch', 'web_search']|64",
+        ),
+    ],
+)
+async def test_generate_stage_is_given_the_tools_the_request_offers(
+    api: str, fields: dict[str, Any], expected: str
+) -> None:
+    handler = Handler(reports_tools())
+
+    await handler.request(_request(api, **fields))
+
+    records = await handler.records("x")
+    assert records is not None
+    assert [cast(Any, record.detail).report.explanation for record in records] == [
+        expected
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_chat_custom_tool_is_left_out_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # inspect_ai's Chat Completions reader has no form for a custom tool
+    monkeypatch.setattr(_inspect_ai, "_warned", set[str]())
+    tools = [
+        {"type": "function", "function": _FUNCTION},
+        {"type": "custom", "custom": {"name": "apply_patch"}},
+    ]
+    handler = Handler(reports_tools())
+
+    with caplog.at_level(logging.WARNING):
+        assert await handler.request(_request("chat", tools=tools)) == Pass()
+
+    records = await handler.records("x")
+    assert records is not None
+    assert [cast(Any, record.detail).report.explanation for record in records] == [
+        "['get_weather']|None"
+    ]
+    assert "openai-chat custom" in caplog.text
+
+
+@protocol
+def rejects_tokyo_and_ends_at_any_result() -> ProtocolGroup:
+    async def before(context: Context, step: BeforeToolCall) -> Decision | None:
+        if step.call.arguments.get("location") == "Tokyo":
+            return Decision.reject("Tokyo", message="Tokyo is not allowed.")
+        return Decision.proceed()
+
+    async def after(context: Context, step: AfterToolCall) -> Decision | None:
+        return Decision.terminate("a result")
+
+    return ProtocolGroup(before, after)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("api", ["chat", "responses"])
+async def test_what_the_model_is_told_of_a_rejection_is_not_judged_as_a_result(
+    api: str,
+) -> None:
+    handler = Handler(rejects_tokyo_and_ends_at_any_result())
+    await handler.request(_request(api, "a"))
+    await handler.reply(_reply(api, "a"))
+
+    again = await handler.request(_request(api, "b"))
+
+    assert isinstance(again, Replace)
+    assert await handler.records("b") == []

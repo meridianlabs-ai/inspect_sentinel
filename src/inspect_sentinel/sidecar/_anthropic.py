@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Sequence
 from typing import Any, cast
 
 from inspect_ai.model import (
     ChatMessage,
+    ChatMessageAssistant,
+    ChatMessageTool,
     ModelOutput,
     messages_from_anthropic,
     model_output_from_anthropic,
 )
 
+from ._inspect_ai import anthropic_message
 from ._wire import UnreadableError, json_object, stream_events
 
 # The content kinds that inspect_ai's Anthropic converter reads, in a reply or
@@ -69,6 +73,40 @@ async def read_request(request: dict[str, Any]) -> list[ChatMessage]:
     except Exception as ex:
         # the converter raises errors of many kinds on content it can't read
         raise UnreadableError("The request holds a message that can't be read.") from ex
+
+
+async def rejected_turn(
+    message: ChatMessageAssistant, results: Sequence[ChatMessageTool]
+) -> list[Any]:
+    # written by inspect_ai, so a thinking block keeps its signature and a call
+    # its id
+    blocks: list[Any] = []
+    for result in results:
+        blocks.extend(cast("list[Any]", (await anthropic_message(result))["content"]))
+    return [await anthropic_message(message), {"role": "user", "content": blocks}]
+
+
+def settled(entry: object) -> object:
+    # inspect_ai's Anthropic provider moves its cache marks to the latest
+    # messages on every request, which writes a text it marks as a block
+    if not isinstance(entry, dict):
+        return entry
+    message = cast("dict[str, Any]", entry)
+    content: object = message.get("content")
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    elif isinstance(content, list):
+        content = [
+            {
+                key: value
+                for key, value in cast("dict[str, Any]", block).items()
+                if key != "cache_control"
+            }
+            if isinstance(block, dict)
+            else block
+            for block in cast("list[object]", content)
+        ]
+    return {**message, "content": content}
 
 
 def _kind(block: object) -> object:

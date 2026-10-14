@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, cast
 
 from inspect_ai.model import (
     ChatMessage,
+    ChatMessageAssistant,
     ChatMessageSystem,
+    ChatMessageTool,
     ModelOutput,
     messages_from_openai,
     messages_from_openai_responses,
+    messages_to_openai,
+    messages_to_openai_responses,
     model_output_from_openai,
     model_output_from_openai_responses,
 )
@@ -98,6 +103,20 @@ async def read_responses_request(request: dict[str, Any]) -> list[ChatMessage]:
     if isinstance(instructions, str) and instructions:
         return [ChatMessageSystem(content=instructions), *messages]
     return messages
+
+
+async def chat_rejected_turn(
+    message: ChatMessageAssistant, results: Sequence[ChatMessageTool]
+) -> list[Any]:
+    return cast("list[Any]", await messages_to_openai([message, *results]))
+
+
+async def responses_rejected_turn(
+    message: ChatMessageAssistant, results: Sequence[ChatMessageTool]
+) -> list[Any]:
+    # written by inspect_ai, so a reasoning item goes back with the calls it
+    # led to
+    return cast("list[Any]", await messages_to_openai_responses([message, *results]))
 
 
 def _check_calls(calls: object) -> None:

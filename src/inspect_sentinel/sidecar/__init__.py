@@ -1,8 +1,27 @@
-"""Read model traffic that a proxy hands over into Inspect's types.
+"""Run a sentinel beside a model proxy, on the traffic the proxy hands over.
 
-The first part of the sidecar described in `design/sidecar.md`: a request or a reply in a provider's own format, as it crossed the wire, read into the messages the model is sent or the output it gave. Each provider's SDK is an optional extra (`anthropic`, `openai`), imported the first time a body in its format is read.
+The sidecar described in `design/sidecar.md`. A proxy hands over each model request and reply in the provider's own format, as it crossed the wire. The sidecar reads it into Inspect's types, finds the steps a sentinel judges in it, and answers what the proxy should do: pass it on, replace it, or refuse it. Each provider's SDK is an optional extra (`anthropic`, `openai`), imported the first time a body in its format is read.
 """
 
+from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request
+from ._handler import Handler, TimeLimitError
+from ._host import Record, SidecarHost, Stage
 from ._wire import Format, UnreadableError, read_reply, read_request
 
-__all__ = ["Format", "UnreadableError", "read_reply", "read_request"]
+__all__ = [
+    "Answer",
+    "Format",
+    "Handler",
+    "Pass",
+    "Record",
+    "Refuse",
+    "Replace",
+    "Reply",
+    "Request",
+    "SidecarHost",
+    "Stage",
+    "TimeLimitError",
+    "UnreadableError",
+    "read_reply",
+    "read_request",
+]

@@ -1,0 +1,490 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Sequence
+
+import anyio
+from inspect_ai.model import (
+    ChatMessage,
+    ChatMessageAssistant,
+    ChatMessageTool,
+)
+from inspect_ai.tool import ToolCall
+
+from .._host import HostNative
+from .._integration import HostContext, resolve_sentinel, run_sentinel
+from .._report import Decision
+from .._step import (
+    AfterGenerate,
+    AfterToolCall,
+    BeforeGenerate,
+    BeforeToolCall,
+    Step,
+)
+from .._types import Sentinels
+from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request
+from ._host import Record, SidecarHost
+from ._inspect_ai import tool_call_view
+from ._state import Conversation, Held, Made, MemoryState, Rejected, Run, State
+from ._wire import (
+    UnreadableError,
+    add_rejections,
+    offered,
+    read_reply,
+    read_request,
+    request_marks,
+)
+
+# rejected turns in a row before the run is ended, as inspect_ai's bridge has
+# it: a model that keeps proposing rejected calls would otherwise never stop
+_MAX_CONSECUTIVE_REJECTIONS = 3
+
+_REJECTED = "This call was rejected."
+_NOT_RUN = "This call was not run, because another call in the same turn was rejected."
+
+
+class TimeLimitError(TimeoutError):
+    """The sentinel didn't finish judging a request or a reply within the handler's time limit, and was cancelled."""
+
+
+class Handler:
+    """Judges what a proxy hands over with a sentinel, and answers what the proxy should do.
+
+    It knows nothing of any proxy, nor of how it is reached. The endpoint for proxies turns each message it is sent into a `Request` or a `Reply`, and turns the `Answer` back into what it answers with.
+
+    The four steps are found in the traffic. A request carries the results of the tool calls the client ran, judged as `AfterToolCall`, and is judged as `BeforeGenerate` before it goes to the provider. A reply is judged as `AfterGenerate`, and each tool call in it as `BeforeToolCall`, before the client is handed any of it.
+    """
+
+    def __init__(
+        self,
+        sentinel: Sentinels,
+        *,
+        host: HostNative | None = None,
+        state: State | None = None,
+        reject_status: int = 400,
+        time_limit: float | None = None,
+    ) -> None:
+        """Create a handler.
+
+        Args:
+            sentinel: One protocol, or a sequence or mapping of monitors and protocols, as a task's `sentinel=` takes.
+            host: What the sentinel may do to the outside world. Defaults to a `SidecarHost` with no model roles.
+            state: Where runs are kept. Defaults to this process's memory.
+            reject_status: The HTTP status a rejected turn is refused with. The default, 400, is one a client takes as final. A status a client retries by itself, such as 503, brings the client back with the same request, which then goes on with the rejection added.
+            time_limit: The longest the sentinel may take to judge one request or one reply, in seconds, after which it is cancelled. None, the default, is no limit.
+        """
+        self._protocol = resolve_sentinel(sentinel)
+        self._host: HostNative = host if host is not None else SidecarHost()
+        self._state: State = state if state is not None else MemoryState()
+        self._reject_status = reject_status
+        self._time_limit = time_limit
+
+    async def request(self, request: Request) -> Answer:
+        """Judge a request before the proxy sends it.
+
+        Each tool result in the request that the sentinel hasn't been shown is put to it as an `AfterToolCall` step, in order. A result is shown once, however often the client sends it. The request is then put to the sentinel as a `BeforeGenerate` step. If either ends the run, the request is refused.
+
+        If turns were rejected earlier in the conversation this request continues, they are added where they happened, so the model is still told.
+
+        A request of a run that a sentinel has ended is refused, and the sentinel is not asked again. For a run the proxy didn't name, that is a request which continues the conversation the run was ended in.
+
+        Args:
+            request: The request, as the proxy handed it over.
+
+        Raises:
+            UnreadableError: If the request can't be read, so neither it nor its reply could be judged.
+            TimeLimitError: If the handler has a time limit and the sentinel didn't finish within it.
+        """
+        with anyio.move_on_after(self._time_limit):
+            return await self._request(request)
+        raise self._out_of_time("request", request.id)
+
+    async def reply(self, reply: Reply) -> Answer:
+        """Judge a reply before the proxy passes any of it on.
+
+        The reply is put to the sentinel as an `AfterGenerate` step, then each tool call in it as a `BeforeToolCall` step, in order. The first call that is rejected refuses the whole turn, and the rejection is kept for the later requests of its conversation. The third rejected turn in a row ends the run. A provider's error is passed on unjudged.
+
+        Args:
+            reply: The reply, as the proxy handed it over.
+
+        Raises:
+            UnreadableError: If the reply can't be read, or answers a request this handler was never shown or no longer keeps.
+            NotImplementedError: If the sentinel decides `modify`, which a sidecar can't carry out yet.
+            TimeLimitError: If the handler has a time limit and the sentinel didn't finish within it.
+        """
+        with anyio.move_on_after(self._time_limit):
+            return await self._reply(reply)
+        raise self._out_of_time("reply", reply.id)
+
+    async def records(self, id: str) -> list[Record] | None:
+        """What was recorded while a request and its reply were judged.
+
+        Args:
+            id: The request's id, as the proxy gave it.
+
+        Returns:
+            The records in order, the request's before the reply's, or None if the request was never seen or its records are no longer kept.
+        """
+        return await self._state.records(id)
+
+    async def _request(self, request: Request) -> Answer:
+        messages = await read_request(request.provider, request.body, request.format)
+        sends = offered(request.provider, request.body, request.format)
+        marks = request_marks(request.provider, request.body, request.format)
+        opening = _opening(messages)
+        named = request.run is not None
+        key = request.run if request.run is not None else opening
+        # a conversation is told apart within a named run by how it opens
+        conversation_key = f"{key}/{opening}" if named else key
+        run = await self._state.run(key)
+        refusal = _ended(run, marks)
+        if refusal is not None:
+            # the run has ended, and the sentinel is not asked again
+            return refusal
+        conversation = run.conversations.setdefault(conversation_key, Conversation())
+
+        answer: Answer = Pass()
+        # a point this request doesn't continue from is kept for the requests
+        # that do: a run's key is shared by conversations that open alike
+        told = {
+            rejected.sent: rejected.turns
+            for rejected in conversation.rejected
+            if rejected.sent < len(marks) and marks[rejected.sent] == rejected.mark
+        }
+        if told:
+            body = await add_rejections(
+                request.provider, request.body, told, request.format
+            )
+            messages = await read_request(request.provider, body, request.format)
+            answer = Replace(body)
+        conversation.kept = _kept(conversation.kept, messages)
+
+        held = Held(
+            run=key,
+            conversation=conversation_key,
+            named=named,
+            answered=any(mark in run.answered for mark in marks[:-1]),
+            model=_model(request.provider, request.model),
+            recorder=await self._state.recorder(request.id),
+            input=messages,
+            offered=sends,
+            kept=list(conversation.kept),
+            marks=marks,
+        )
+        ended = await self._results(held, run, conversation)
+        if ended is not None:
+            return ended
+        before = BeforeGenerate(
+            model=held.model,
+            conversation=conversation_key,
+            input=messages,
+            # what the caller passed to generate is the conversation the
+            # request carries
+            history=messages,
+            tools=sends.tools,
+            tool_choice=sends.tool_choice,
+            config=sends.config,
+        )
+        if _ends(await self._judge(held, run, before)):
+            return self._end(held, run, "before the model was called")
+        await self._state.hold(request.id, held)
+        return answer
+
+    async def _results(
+        self, held: Held, run: Run, conversation: Conversation
+    ) -> Refuse | None:
+        made: dict[str, tuple[ChatMessageAssistant, ToolCall]] = {}
+        for entry in held.input:
+            if isinstance(entry, ChatMessageAssistant):
+                for call in entry.tool_calls or []:
+                    made[call.id] = (entry, call)
+            if not isinstance(entry, ChatMessageTool):
+                continue
+            found = made.get(entry.tool_call_id or "")
+            if found is None:
+                raise UnreadableError(
+                    f"The request holds a result for a call it doesn't hold: {entry.tool_call_id!r}."
+                )
+            assistant, call = found
+            if _told(conversation, call, entry):
+                # what the sidecar wrote for a call that didn't run is not a
+                # tool's result
+                continue
+            digest = _result_digest(call, entry)
+            if digest in run.judged:
+                continue
+            sent = conversation.made.get(call.id)
+            step = AfterToolCall(
+                conversation=held.conversation,
+                message=assistant.text,
+                call=call,
+                result=entry,
+                # left empty: only what the model is sent crosses the wire, and
+                # a monitor must not take that for everything the tool returned
+                output="",
+                view=tool_call_view(call),
+                input=sent.input if sent is not None else None,
+                history=_through(held.kept, call.id),
+                tools=sent.tools if sent is not None else None,
+            )
+            if _ends(await self._judge(held, run, step)):
+                # not marked as judged, so a client that sends it again is
+                # refused again
+                return self._end(
+                    held, run, f"at the result of the call to {call.function}"
+                )
+            run.judged.add(digest)
+        return None
+
+    async def _reply(self, reply: Reply) -> Answer:
+        held = await self._state.release(reply.id)
+        if reply.status != 200:
+            # nothing came from the model to judge
+            return Pass()
+        if held is None:
+            raise UnreadableError(
+                f"The reply {reply.id!r} answers a request this sidecar was never shown, or no longer keeps."
+            )
+        output = await read_reply(
+            reply.provider, reply.content_type, reply.body, reply.format
+        )
+        run = await self._state.run(held.run)
+        refusal = _ended(run, held.marks)
+        if refusal is not None:
+            # a sentinel ended the run while the model was answering
+            return refusal
+        conversation = run.conversations.setdefault(held.conversation, Conversation())
+
+        after = AfterGenerate(
+            model=held.model,
+            conversation=held.conversation,
+            input=held.input,
+            history=held.input,
+            tools=held.offered.tools,
+            tool_choice=held.offered.tool_choice,
+            config=held.offered.config,
+            output=output,
+        )
+        if _ends(await self._judge(held, run, after)):
+            return self._end(held, run, "at the model's reply")
+
+        if not output.choices:
+            return self._passed(held, run, conversation, None)
+        message = output.message
+        calls = message.tool_calls or []
+        for call in calls:
+            step = BeforeToolCall(
+                conversation=held.conversation,
+                message=message.text,
+                call=call,
+                view=tool_call_view(call),
+                input=held.input,
+                history=[*held.kept, message],
+                tools=held.offered.tools,
+            )
+            decision = await self._judge(held, run, step)
+            if decision is None or decision.action == "proceed":
+                continue
+            if decision.action == "terminate":
+                return self._end(held, run, f"at the call to {call.function}")
+            if decision.action != "reject":
+                raise NotImplementedError(
+                    f"A sidecar can't carry out a {decision.action!r} decision yet."
+                )
+            return self._reject(held, run, conversation, message, call, decision)
+        return self._passed(held, run, conversation, message)
+
+    def _passed(
+        self,
+        held: Held,
+        run: Run,
+        conversation: Conversation,
+        message: ChatMessageAssistant | None,
+    ) -> Pass:
+        run.in_a_row = 0
+        if not held.named:
+            run.answered.add(held.mark)
+        if message is not None:
+            # kept now, as the client may compact it away before sending it back
+            conversation.kept = _kept(conversation.kept, [*held.kept, message])
+            for call in message.tool_calls or []:
+                conversation.made[call.id] = Made(held.input, held.offered.tools)
+        return Pass()
+
+    def _reject(
+        self,
+        held: Held,
+        run: Run,
+        conversation: Conversation,
+        message: ChatMessageAssistant,
+        call: ToolCall,
+        decision: Decision,
+    ) -> Refuse:
+        run.in_a_row += 1
+        if run.in_a_row >= _MAX_CONSECUTIVE_REJECTIONS:
+            return self._end(
+                held,
+                run,
+                f"at the call to {call.function} after {_MAX_CONSECUTIVE_REJECTIONS} rejected turns in a row",
+            )
+        # a client that comes back after a rejection sends the same request, so
+        # its rejected turns in a row share a point
+        rejected = next(
+            (
+                known
+                for known in conversation.rejected
+                if (known.sent, known.mark) == (held.sent, held.mark)
+            ),
+            None,
+        )
+        if rejected is None:
+            rejected = Rejected(held.sent, held.mark, [])
+            conversation.rejected.append(rejected)
+        # only `message` is for the agent; a decision's explanation is for the log
+        why = decision.message or _REJECTED
+        rejected.turns.append(
+            (
+                message,
+                {
+                    other.id: why if other.id == call.id else _NOT_RUN
+                    for other in message.tool_calls or []
+                },
+            )
+        )
+        return Refuse(
+            self._reject_status,
+            f"A sentinel rejected the call to {call.function}: {why}",
+        )
+
+    async def _judge(self, held: Held, run: Run, step: Step) -> Decision | None:
+        return await run_sentinel(
+            self._protocol,
+            HostContext(host=self._host, recorder=held.recorder, store=run.store),
+            step,
+        )
+
+    def _end(self, held: Held, run: Run, where: str) -> Refuse:
+        for conversation in run.conversations.values():
+            conversation.rejected.clear()
+        run.in_a_row = 0
+        refusal = Refuse(400, f"A sentinel ended this run {where}.")
+        if held.named:
+            run.refusal = refusal
+        elif held.answered:
+            run.ended_at[held.mark] = refusal
+        # A run the proxy didn't name, ended before any reply in its
+        # conversation was passed on, is not remembered as ended. Its
+        # conversation is still only how it opens, which is all another
+        # conversation with the same key has too, and nothing tells them apart.
+        return refusal
+
+    def _out_of_time(self, what: str, id: str) -> TimeLimitError:
+        return TimeLimitError(
+            f"The sentinel didn't finish judging the {what} {id!r} within {self._time_limit} seconds."
+        )
+
+
+def _ended(run: Run, marks: Sequence[str]) -> Refuse | None:
+    # what a request is refused with, if its run has ended: any request of a
+    # run the proxy names, or one that continues the conversation it was
+    # ended in
+    return run.refusal or next(
+        (run.ended_at[mark] for mark in marks if mark in run.ended_at), None
+    )
+
+
+def _told(conversation: Conversation, call: ToolCall, result: ChatMessageTool) -> bool:
+    # whether a result is the one the sidecar wrote for a rejected call: the
+    # same call, and what the sidecar wrote, and not merely the call's id
+    return any(
+        rejected.id == call.id
+        and rejected.function == call.function
+        and rejected.arguments == call.arguments
+        and told[call.id] in result.text
+        for point in conversation.rejected
+        for message, told in point.turns
+        for rejected in message.tool_calls or []
+    )
+
+
+def _ends(decision: Decision | None) -> bool:
+    # an escalate nobody took has already been turned into a terminate
+    return decision is not None and decision.action == "terminate"
+
+
+def _model(provider: str, model: str) -> str:
+    # a step names the model as `provider/name`
+    return model if model.startswith(f"{provider}/") else f"{provider}/{model}"
+
+
+def _opening(messages: Sequence[ChatMessage]) -> str:
+    # How the conversation opens: what tells a run apart when the proxy
+    # doesn't name it, and a conversation apart within a run. Conversations
+    # that open alike share it.
+    opening = [m for m in messages if m.role == "system"][:1] + [
+        m for m in messages if m.role == "user"
+    ][:1]
+    digest = hashlib.sha256("\x00".join(m.text for m in opening).encode())
+    return digest.hexdigest()[:16]
+
+
+def _digest(message: ChatMessage) -> str:
+    # What makes two messages the same turn. A reply the sidecar read, and the
+    # same reply sent back in a later request, are read with different ids,
+    # sources and provider details, so only what the turn says is compared.
+    calls = [
+        [call.id, call.function, call.arguments]
+        for call in (
+            message.tool_calls if isinstance(message, ChatMessageAssistant) else None
+        )
+        or []
+    ]
+    result = message.tool_call_id if isinstance(message, ChatMessageTool) else None
+    return hashlib.sha256(
+        json.dumps(
+            [message.role, message.text, calls, result], sort_keys=True, default=str
+        ).encode()
+    ).hexdigest()
+
+
+def _kept(kept: list[ChatMessage], messages: list[ChatMessage]) -> list[ChatMessage]:
+    # What is kept, after a request or a reply. The turns kept since the two
+    # last agreed, that the request no longer carries, stay where they were,
+    # followed by the turns the request carries in its own order: a request
+    # that continues what is kept replaces it, and after a compaction the
+    # turns from before it are still there, as in Inspect's own history.
+    known = [_digest(message) for message in kept]
+    sent = [_digest(message) for message in messages]
+    common = 0
+    while common < min(len(known), len(sent)) and known[common] == sent[common]:
+        common += 1
+    carried = set(sent)
+    dropped = [
+        message
+        for message, digest in zip(kept[common:], known[common:], strict=True)
+        if digest not in carried
+    ]
+    return [*messages[:common], *dropped, *messages[common:]]
+
+
+def _through(kept: list[ChatMessage], call_id: str) -> list[ChatMessage]:
+    # the conversation as it stood when the call ran: up to the model's message
+    for index in range(len(kept) - 1, -1, -1):
+        message = kept[index]
+        if isinstance(message, ChatMessageAssistant) and any(
+            call.id == call_id for call in message.tool_calls or []
+        ):
+            return kept[: index + 1]
+    return list(kept)
+
+
+def _result_digest(call: ToolCall, result: ChatMessageTool) -> str:
+    # the call as well as the result: the client wrote both into the request,
+    # so an id seen before doesn't vouch for what now stands beside it
+    digest = hashlib.sha256(
+        json.dumps([call.id, call.function, call.arguments], sort_keys=True).encode()
+    )
+    digest.update(b"\x00")
+    digest.update(result.model_dump_json(exclude={"id"}).encode())
+    return digest.hexdigest()

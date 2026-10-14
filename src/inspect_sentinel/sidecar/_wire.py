@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, cast
 
-from inspect_ai.model import ChatMessage, ModelOutput
+from inspect_ai.model import (
+    ChatMessage,
+    ChatMessageAssistant,
+    ChatMessageTool,
+    GenerateConfig,
+    ModelOutput,
+)
+from inspect_ai.tool import ToolCallError, ToolChoice, ToolInfo
 
 Format: TypeAlias = Literal["anthropic-messages", "openai-chat", "openai-responses"]
 """Which API a request or a reply is written in. A provider can have more than one, and a proxy can serve one provider's model through another provider's API."""
@@ -33,19 +42,7 @@ async def read_request(
         UnreadableError: If there is no reader for the provider's API, or the body isn't what that API takes.
     """
     request = json_object(body, "request")
-    match _request_format(provider, request, format):
-        case "anthropic-messages":
-            from . import _anthropic
-
-            return await _anthropic.read_request(request)
-        case "openai-chat":
-            from . import _openai
-
-            return await _openai.read_chat_request(request)
-        case "openai-responses":
-            from . import _openai
-
-            return await _openai.read_responses_request(request)
+    return await _api(provider, request, format).read(request)
 
 
 async def read_reply(
@@ -73,6 +70,95 @@ async def read_reply(
             content_type, body, None if format is None else format == "openai-chat"
         )
     raise UnreadableError(f"There is no reader for provider {provider!r}.")
+
+
+@dataclass(frozen=True)
+class Offered:
+    """What a request offers the model besides its messages."""
+
+    tools: list[ToolInfo]
+    tool_choice: ToolChoice
+    config: GenerateConfig
+
+
+def offered(provider: str, body: bytes, format: Format | None = None) -> Offered:
+    """The tools, tool choice and configuration a request sends the model.
+
+    Raises:
+        UnreadableError: If there is no reader for the provider's API, or the request's tool choice or settings can't be read. A tool declaration that can't be read is left out, with a warning.
+    """
+    request = json_object(body, "request")
+    api = _api(provider, request, format)
+    try:
+        tools, tool_choice, config = api.offered(request)
+    except Exception as ex:
+        # inspect_ai's readers raise errors of many kinds on what they can't read
+        raise UnreadableError(
+            "The request's tool choice or settings can't be read."
+        ) from ex
+    if tool_choice is None:
+        # what inspect_ai's own generate sends when it is given none
+        tool_choice = "auto" if tools else "none"
+    return Offered(tools, tool_choice, config)
+
+
+async def add_rejections(
+    provider: str,
+    body: bytes,
+    rejected: Mapping[int, Sequence[tuple[ChatMessageAssistant, Mapping[str, str]]]],
+    format: Format | None = None,
+) -> bytes:
+    """Add rejected turns to a later request of their conversation, so the model is told.
+
+    Each rejected turn, the model's message followed by a result for each of its calls saying why it didn't run, goes where the client would have put it had it been handed the reply: after the entries the client had sent when the turn was rejected. Nothing else in the request is changed, though the body is written out again.
+
+    Args:
+        provider: Whose API the body is written for.
+        body: The request body.
+        rejected: The rejected turns in order, by how many entries the client's conversation held when each was rejected. A turn is the model's message, with what the model is told happened to each of its calls, by call id.
+        format: Which API the body is written in, if the proxy said.
+    """
+    request = json_object(body, "request")
+    api = _api(provider, request, format)
+    entries = _conversation(request, api)
+    sent: list[Any] = []
+    for count in range(len(entries) + 1):
+        for message, told in rejected.get(count, ()):
+            results = [
+                ChatMessageTool(
+                    content=told[call.id],
+                    tool_call_id=call.id,
+                    function=call.function,
+                    error=ToolCallError("approval", told[call.id]),
+                )
+                for call in message.tool_calls or []
+            ]
+            sent.extend(await api.rejected_turn(message, results))
+        if count < len(entries):
+            sent.append(entries[count])
+    request[api.conversation] = sent
+    return json.dumps(request).encode()
+
+
+def request_marks(
+    provider: str, body: bytes, format: Format | None = None
+) -> list[str]:
+    """A mark for each length of a request's conversation, to tell whether a later request continues from it.
+
+    Two requests whose marks agree at `n` open with the same `n` entries. A mark leaves out what a client changes from one request to the next while the conversation stays the same.
+
+    Returns:
+        One mark for each count of entries from none to all of them, so one more mark than there are entries.
+    """
+    request = json_object(body, "request")
+    api = _api(provider, request, format)
+    running = hashlib.sha256()
+    marks = [running.hexdigest()]
+    for entry in _conversation(request, api):
+        running.update(json.dumps(api.settled(entry), sort_keys=True).encode())
+        running.update(bytes(1))
+        marks.append(running.hexdigest())
+    return marks
 
 
 def json_object(body: bytes, what: str) -> dict[str, Any]:
@@ -109,6 +195,68 @@ def stream_events(body: bytes) -> Iterator[dict[str, Any]]:
                 "The reply stream holds an event that is not a JSON object."
             )
         yield cast("dict[str, Any]", event)
+
+
+@dataclass(frozen=True)
+class _Api:
+    # how one provider API writes a request
+    conversation: str
+    read: Callable[[dict[str, Any]], Awaitable[list[ChatMessage]]]
+    offered: Callable[
+        [dict[str, Any]], tuple[list[ToolInfo], ToolChoice | None, GenerateConfig]
+    ]
+    rejected_turn: Callable[
+        [ChatMessageAssistant, Sequence[ChatMessageTool]], Awaitable[list[Any]]
+    ]
+    settled: Callable[[object], object]
+
+
+def _api(provider: str, request: dict[str, Any], format: Format | None) -> _Api:
+    from . import _inspect_ai
+
+    match _request_format(provider, request, format):
+        case "anthropic-messages":
+            from . import _anthropic
+
+            return _Api(
+                "messages",
+                _anthropic.read_request,
+                _inspect_ai.anthropic_offered,
+                _anthropic.rejected_turn,
+                _anthropic.settled,
+            )
+        case "openai-chat":
+            from . import _openai
+
+            return _Api(
+                "messages",
+                _openai.read_chat_request,
+                _inspect_ai.chat_offered,
+                _openai.chat_rejected_turn,
+                _as_sent,
+            )
+        case "openai-responses":
+            from . import _openai
+
+            return _Api(
+                "input",
+                _openai.read_responses_request,
+                _inspect_ai.responses_offered,
+                _openai.responses_rejected_turn,
+                _as_sent,
+            )
+
+
+def _as_sent(entry: object) -> object:
+    return entry
+
+
+def _conversation(request: dict[str, Any], api: _Api) -> list[Any]:
+    entries: object = request.get(api.conversation)
+    if isinstance(entries, str):
+        # the Responses API takes a lone user message as a string
+        return [{"role": "user", "content": entries}]
+    return cast("list[Any]", entries) if isinstance(entries, list) else []
 
 
 def _request_format(
