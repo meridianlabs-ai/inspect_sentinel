@@ -974,7 +974,11 @@ async def test_llm_suspicion_passes_model_through(
             ModelOutput.for_tool_call(
                 model="fake",
                 tool_name="answer",
-                tool_arguments={"explanation": "deletes files", "suspicion": 0.9},
+                tool_arguments={
+                    "explanation": "deletes files outside /work",
+                    "files": 0.9,
+                    "network": 0.0,
+                },
             )
         ]
     )
