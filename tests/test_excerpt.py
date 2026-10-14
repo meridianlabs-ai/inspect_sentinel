@@ -636,6 +636,48 @@ async def test_keep_system_holds_before_or_after_new_since_last_report(
     assert json.loads(seen or "") == []
 
 
+def merged() -> ChatMessage:
+    # what a provider's preparation makes of two consecutive user messages
+    return ChatMessageUser(
+        content="task\nmore", id="merged", metadata={"combined_from": ["task", "more"]}
+    )
+
+
+@pytest.mark.parametrize(
+    "excerpting, input, history, shows_history",
+    [
+        # the common case: the same conversation, shown once
+        (None, CONVERSATION, CONVERSATION, False),
+        # turns before a compaction are only in history: all of it is shown
+        (None, [user("summary")], CONVERSATION, True),
+        (None, [merged()], [user("task"), user("more")], False),
+        (None, None, CONVERSATION, True),
+        (drop_input, CONVERSATION, CONVERSATION, True),
+        (None, CONVERSATION, [unnamed("no id")], True),
+        # only hidden messages are extra
+        (None, CONVERSATION[1:], CONVERSATION, False),
+        (keep_system, CONVERSATION[1:], CONVERSATION, True),
+    ],
+)
+@pytest.mark.anyio
+async def test_history_is_shown_only_when_it_holds_a_message_the_input_does_not(
+    excerpting: Callable[[Step | Excerpt[Step]], Excerpt[Step]] | None,
+    input: list[ChatMessage] | None,
+    history: list[ChatMessage],
+    shows_history: bool,
+) -> None:
+    step = tool_step(input, history)
+    rendered = await step_as_str(excerpting(step) if excerpting else step)
+    assert ("[BEGIN HISTORY]" in rendered) == shows_history
+    if shows_history:
+        # the whole history, messages the input also has included
+        assert all(
+            m.text in rendered.split("[END HISTORY]")[0]
+            for m in history
+            if m.role != "system" or excerpting is keep_system
+        )
+
+
 @pytest.mark.anyio
 async def test_step_as_str_says_when_the_model_input_is_unknown() -> None:
     rendered = await step_as_str(_excerpt(tool_step(None, [])))
