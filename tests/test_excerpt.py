@@ -2,7 +2,6 @@ import json
 from collections.abc import Callable
 from dataclasses import replace
 from functools import reduce
-from inspect import signature
 from itertools import permutations
 from typing import cast
 
@@ -22,7 +21,7 @@ from inspect_ai.model import (
 )
 from inspect_ai.tool import ToolCall
 from inspect_ai.util import Store
-from inspect_scout import MessagesPreprocessor, message_numbering, messages_as_str
+from inspect_scout import MessagesPreprocessor, message_numbering
 
 from inspect_sentinel import (
     AfterGenerate,
@@ -43,6 +42,7 @@ from inspect_sentinel import (
     step_as_str,
 )
 from inspect_sentinel._decorators import monitor, protocol
+from inspect_sentinel._excerpt import scout_nonce
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._runner import run_monitors, run_protocols, run_sentinel
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
@@ -60,7 +60,7 @@ from ._fakes import (
 NONCE = "3f9a1c7e"
 
 # Scout 0.5.5 and earlier write no nonce on message headers
-HEADER = f" ({NONCE})" if "nonce" in signature(messages_as_str).parameters else ""
+HEADER = f" ({NONCE})" if scout_nonce(NONCE) else ""
 
 
 def call(id: str) -> ToolCall:

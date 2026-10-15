@@ -1,6 +1,5 @@
 import re
 from dataclasses import replace
-from inspect import signature
 from typing import Any
 
 import pytest
@@ -14,9 +13,9 @@ from inspect_ai.model import (
     ModelOutput,
 )
 from inspect_ai.tool import ToolCall
-from inspect_scout import messages_as_str
 
 from inspect_sentinel import Decision, Host, Reported, Step, keep_history, last_turns
+from inspect_sentinel._excerpt import scout_nonce
 
 from ._fakes import (
     FakeHost,
@@ -25,7 +24,7 @@ from ._fakes import (
 )
 
 # Scout 0.5.5 and earlier write no nonce on message headers
-SCOUT_TAKES_NONCE = "nonce" in signature(messages_as_str).parameters
+SCOUT_TAKES_NONCE = bool(scout_nonce("3f9a1c7e"))
 
 EVAL = replace(
     eval_context(), sample_input="Free disk space.", metadata={"area": "/work"}
@@ -63,6 +62,10 @@ async def test_a_string_is_one_score() -> None:
     )
     n = nonce(host)
     assert f"[BEGIN TASK ({n})]\nFree disk space.\n[END TASK ({n})]" in prompt(host)
+    # the model is told the code before it first meets it
+    assert prompt(host).index("contains the code") < prompt(host).index(f"({n})]")
+    # the model is told the code before it first meets it
+    assert prompt(host).index("contains the code") < prompt(host).index(f"({n})]")
     assert "cmd: rm -rf /etc" in prompt(host)
     assert "Does this call write outside /work?" in prompt(host)
     assert "use the answer() tool" in prompt(host)
@@ -439,7 +442,7 @@ async def test_earlier_escalations_are_shown_after_the_task(windowed: bool) -> N
     await Host(host).score(last_turns(step, 3) if windowed else step, "Safe?")
     n = nonce(host)
     assert (
-        f"[END TASK ({n})]\n\n[BEGIN ESCALATIONS ({n})]\n- rules: rm outside /work\n- llm\n[END ESCALATIONS ({n})]\n\n"
+        f"[END TASK ({n})]\n\n[BEGIN ESCALATIONS ({n})]\n- rules: rm outside /work\n- llm\n[END ESCALATIONS ({n})]\n\n[AGENT STEP - BEGIN TOOL CALL ({n})]"
         in prompt(host)
     )
 
