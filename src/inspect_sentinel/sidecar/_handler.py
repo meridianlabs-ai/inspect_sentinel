@@ -229,7 +229,7 @@ class Handler:
                 )
             assistant, call = found
             digest = _result_digest(call, entry)
-            if digest in run.judged:
+            if digest in conversation.judged:
                 continue
             sent = conversation.made.get(call.id)
             step = AfterToolCall(
@@ -251,7 +251,7 @@ class Handler:
                 return self._end(
                     held, run, f"at the result of the call to {call.function}"
                 )
-            run.judged.add(digest)
+            conversation.judged.add(digest)
         return None
 
     async def _reply(self, reply: Reply) -> Answer:

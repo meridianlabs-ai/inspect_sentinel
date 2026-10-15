@@ -1161,3 +1161,25 @@ async def test_a_server_tool_answered_in_the_next_reply_is_read() -> None:
     third = await handler.request(request("c", then=after))
 
     assert (first, second, third) == (Pass(), Pass(), Pass())
+
+
+@protocol
+def notes_results() -> Protocol:
+    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+        return Decision.proceed(step.call.id)
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_result_is_judged_in_each_conversation_it_reaches() -> None:
+    handler = Handler(notes_results())
+    # two conversations of one run, each holding the same call and result
+    then = ran("Oslo", "Rain.")
+
+    await handler.request(request("a", "First conversation", then, run="run_1"))
+    await handler.request(request("b", "Second conversation", then, run="run_1"))
+    # and the first again, which has judged it
+    await handler.request(request("c", "First conversation", then, run="run_1"))
+
+    assert [len(await handler.records(id) or []) for id in "abc"] == [1, 1, 0]

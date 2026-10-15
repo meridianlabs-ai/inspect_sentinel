@@ -55,6 +55,9 @@ class Conversation:
     noted: JsonValue | None = None
     """What inspect_ai's converters noted while reading the conversation's replies, which reading the next one needs."""
 
+    judged: set[str] = field(default_factory=set[str])
+    """Digests of the tool results in the conversation the sentinel has been shown and let go on."""
+
     made: dict[str, Made] = field(default_factory=dict[str, Made])
     """For each tool call the client was handed, by id, what the model was sent for the generate that made it."""
 
@@ -65,9 +68,6 @@ class Run:
 
     store: Store = field(default_factory=Store)
     """The sentinel's store."""
-
-    judged: set[str] = field(default_factory=set[str])
-    """Digests of the tool results the sentinel has been shown and let go on."""
 
     conversations: dict[str, Conversation] = field(
         default_factory=dict[str, Conversation]
