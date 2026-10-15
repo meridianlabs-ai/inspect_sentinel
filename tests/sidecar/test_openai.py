@@ -946,3 +946,46 @@ async def test_audio_from_the_user_is_read() -> None:
     ]
 
     assert await Handler(storm_rule()).request(_request("chat", then=then)) == Pass()
+
+
+@protocol
+def rejects_the_computer() -> Protocol:
+    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+        return Decision.reject("clicks", message="Clicking is not allowed.")
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_rejected_computer_call_is_put_back_with_why() -> None:
+    handler = Handler(rejects_the_computer())
+    await handler.request(_request("responses", "a"))
+    computer = {
+        "type": "computer_call",
+        "id": "cu_1",
+        "call_id": "call_c",
+        "actions": [{"type": "click", "x": 1, "y": 2, "button": "left"}],
+        "pending_safety_checks": [],
+        "status": "completed",
+    }
+    await handler.reply(
+        replace(
+            _reply("responses", "a"),
+            body=_changed("responses", output=[computer]),
+        )
+    )
+
+    again = await handler.request(_request("responses", "b"))
+
+    assert isinstance(again, Replace)
+    added = _conversation("responses", again.body)[
+        len(_conversation("responses", _request("responses").body)) :
+    ]
+    # a computer call's output can hold only a screenshot, so why it didn't
+    # run follows in a message of its own
+    assert [entry.get("type") or entry["role"] for entry in added] == [
+        "computer_call",
+        "computer_call_output",
+        "user",
+    ]
+    assert "Clicking is not allowed." in json.dumps(added[-1])

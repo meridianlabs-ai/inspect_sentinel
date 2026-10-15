@@ -197,7 +197,29 @@ async def responses_rejected_turn(
 ) -> list[Any]:
     # written by inspect_ai, so a reasoning item goes back with the calls it
     # led to
-    return cast("list[Any]", await messages_to_openai_responses([message, *results]))
+    written = cast("list[Any]", await messages_to_openai_responses([message, *results]))
+    # A computer call's output holds only a screenshot, so inspect_ai writes
+    # a blank one and the model isn't told why the call didn't run. It is
+    # told in a message after the outputs.
+    computer = {
+        cast("dict[str, Any]", entry).get("call_id")
+        for entry in written
+        if isinstance(entry, dict)
+        and cast("dict[str, Any]", entry).get("type") == "computer_call_output"
+    }
+    told = [
+        f"{result.tool_call_id}: {result.text}"
+        for result in results
+        if result.tool_call_id in computer
+    ]
+    if told:
+        written.append(
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "\n".join(told)}],
+            }
+        )
+    return written
 
 
 def _check_choices(entries: list[dict[str, Any]], part: str) -> None:
