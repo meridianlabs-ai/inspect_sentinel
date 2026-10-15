@@ -48,9 +48,6 @@ class Made:
 class Conversation:
     """One conversation within a run."""
 
-    kept: list[ChatMessage] = field(default_factory=list[ChatMessage])
-    """The conversation as the sidecar has seen it, with turns a later request no longer carries."""
-
     rejected: list[Rejected] = field(default_factory=list[Rejected])
     """The points at which turns were rejected."""
 
@@ -101,8 +98,6 @@ class Held:
     input: list[ChatMessage]
     """What the model was sent."""
     offered: Offered
-    kept: list[ChatMessage]
-    """The conversation as the sidecar had seen it, up to this request."""
     marks: list[str]
     """The request's marks, for each count of the entries the client sent, before anything was added."""
 

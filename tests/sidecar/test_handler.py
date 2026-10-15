@@ -615,11 +615,8 @@ async def test_sentinel_is_given_the_call_its_result_and_what_led_to_it() -> Non
     # was sent for them is not known. Whether the client cut a result is not
     # known either.
     assert _explanations(await handler.records("x")) == [
-        "Looking.|get_weather|{'location': 'Oslo'}|rain|False||None"
-        "|['system', 'user', 'assistant']|None",
-        # the conversation as it stood when the second call ran
-        "Looking.|get_weather|{'location': 'Lima'}|no such city|True||None"
-        "|['system', 'user', 'assistant', 'tool', 'assistant']|None",
+        "Looking.|get_weather|{'location': 'Oslo'}|rain|False||None|None|None",
+        "Looking.|get_weather|{'location': 'Lima'}|no such city|True||None|None|None",
     ]
 
 

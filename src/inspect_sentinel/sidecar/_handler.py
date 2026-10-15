@@ -161,7 +161,6 @@ class Handler:
             )
             messages = await read_request(request.provider, body, request.format)
             answer = Replace(body)
-        conversation.kept = _kept(conversation.kept, messages)
 
         held = Held(
             run=key,
@@ -172,7 +171,6 @@ class Handler:
             recorder=await self._state.recorder(request.id),
             input=messages,
             offered=sends,
-            kept=list(conversation.kept),
             marks=marks,
         )
         ended = await self._results(held, run, conversation, client)
@@ -182,9 +180,8 @@ class Handler:
             model=held.model,
             conversation=conversation_key,
             input=messages,
-            # what the caller passed to generate is the conversation the
-            # request carries
-            history=messages,
+            # the caller's own list is not known behind a proxy
+            history=None,
             tools=sends.tools,
             tool_choice=sends.tool_choice,
             config=sends.config,
@@ -232,7 +229,7 @@ class Handler:
                 output="",
                 view=tool_call_view(call),
                 input=sent.input if sent is not None else None,
-                history=_through(held.kept, call.id),
+                history=None,
                 tools=sent.tools if sent is not None else None,
             )
             if _ends(await self._judge(held, run, step)):
@@ -267,7 +264,7 @@ class Handler:
             model=held.model,
             conversation=held.conversation,
             input=held.input,
-            history=held.input,
+            history=None,
             tools=held.offered.tools,
             tool_choice=held.offered.tool_choice,
             config=held.offered.config,
@@ -289,7 +286,7 @@ class Handler:
                 call=call,
                 view=tool_call_view(call),
                 input=held.input,
-                history=[*held.kept, message],
+                history=None,
                 tools=held.offered.tools,
             )
             decision = await self._judge(held, run, step)
@@ -318,8 +315,6 @@ class Handler:
         if not held.named:
             run.answered.add(held.mark)
         if message is not None:
-            # kept now, as the client may compact it away before sending it back
-            conversation.kept = _kept(conversation.kept, [*held.kept, message])
             for call in message.tool_calls or []:
                 conversation.made[call.id] = Made(held.input, held.offered.tools)
         return Pass()
@@ -425,56 +420,6 @@ def _opening(messages: Sequence[ChatMessage]) -> str:
     ][:1]
     digest = hashlib.sha256("\x00".join(m.text for m in opening).encode())
     return digest.hexdigest()[:16]
-
-
-def _digest(message: ChatMessage) -> str:
-    # What makes two messages the same turn. A reply the sidecar read, and the
-    # same reply sent back in a later request, are read with different ids,
-    # sources and provider details, so only what the turn says is compared.
-    calls = [
-        [call.id, call.function, call.arguments]
-        for call in (
-            message.tool_calls if isinstance(message, ChatMessageAssistant) else None
-        )
-        or []
-    ]
-    result = message.tool_call_id if isinstance(message, ChatMessageTool) else None
-    return hashlib.sha256(
-        json.dumps(
-            [message.role, message.text, calls, result], sort_keys=True, default=str
-        ).encode()
-    ).hexdigest()
-
-
-def _kept(kept: list[ChatMessage], messages: list[ChatMessage]) -> list[ChatMessage]:
-    # What is kept, after a request or a reply. The turns kept since the two
-    # last agreed, that the request no longer carries, stay where they were,
-    # followed by the turns the request carries in its own order: a request
-    # that continues what is kept replaces it, and after a compaction the
-    # turns from before it are still there, as in Inspect's own history.
-    known = [_digest(message) for message in kept]
-    sent = [_digest(message) for message in messages]
-    common = 0
-    while common < min(len(known), len(sent)) and known[common] == sent[common]:
-        common += 1
-    carried = set(sent)
-    dropped = [
-        message
-        for message, digest in zip(kept[common:], known[common:], strict=True)
-        if digest not in carried
-    ]
-    return [*messages[:common], *dropped, *messages[common:]]
-
-
-def _through(kept: list[ChatMessage], call_id: str) -> list[ChatMessage]:
-    # the conversation as it stood when the call ran: up to the model's message
-    for index in range(len(kept) - 1, -1, -1):
-        message = kept[index]
-        if isinstance(message, ChatMessageAssistant) and any(
-            call.id == call_id for call in message.tool_calls or []
-        ):
-            return kept[: index + 1]
-    return list(kept)
 
 
 def _result_digest(call: ToolCall, result: ChatMessageTool) -> str:

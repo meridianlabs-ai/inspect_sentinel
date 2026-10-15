@@ -102,7 +102,7 @@ def reports_generates() -> Protocol:
                 [
                     step.model,
                     _roles(step.input),
-                    str(step.history == step.input),
+                    str(step.history),
                     str([tool.name for tool in step.tools]),
                     str(step.tool_choice),
                     str(step.config.max_tokens),
@@ -144,7 +144,7 @@ async def test_generate_stages_are_given_what_the_request_offers() -> None:
 
     explanations = _explanations(await handler.records("x"))
     assert (
-        "anthropic/claude-test|['system', 'user']|True"
+        "anthropic/claude-test|['system', 'user']|None"
         "|['get_weather', 'web_search']|auto|512|0.5"
     ) in explanations
     assert (
@@ -204,69 +204,27 @@ _LOOKING = {"type": "text", "text": "Looking."}
 def reports_histories() -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         call = step.call.id if isinstance(step, BeforeToolCall | AfterToolCall) else "-"
-        texts = [m.text for m in step.history or []]
+        texts = None if step.history is None else [m.text for m in step.history]
         return Decision.proceed(f"{type(step).__name__}|{call}|{texts}")
 
     return decide
 
 
 @pytest.mark.anyio
-async def test_a_tool_step_is_given_the_conversation_before_a_compaction() -> None:
-    handler = Handler(reports_histories())
-    earlier = [
-        *ran("Oslo", "rain", "toolu_1"),
-        *ran("Lima", "sun", "toolu_2"),
-    ]
-    await handler.request(request("a", then=earlier))
-    await handler.reply(reply(message(_LOOKING, weather("Cairo", "toolu_3")), id="a"))
-
-    # the agent compacts its conversation, keeping only the latest turn
-    await handler.request(
-        request(
-            "b",
-            then=[
-                {"role": "assistant", "content": "Oslo had rain and Lima sun."},
-                {"role": "user", "content": "Go on."},
-                *ran("Cairo", "fog", "toolu_3"),
-            ],
-        )
-    )
-
-    explanations = _explanations(await handler.records("b"))
-    question = ["You are helpful.", "What is the weather?"]
-    lookups = ["Looking.", "rain", "Looking.", "sun"]
-    # the result is judged with every turn the sidecar has seen, those the
-    # request no longer carries first, up to the call that made it
-    assert explanations[0] == (
-        f"AfterToolCall|toolu_3|"
-        f"{[*question, *lookups, 'Oslo had rain and Lima sun.', 'Go on.', 'Looking.']}"
-    )
-    # the request is judged with the conversation it carries, as Inspect gives
-    # a generate what its caller passed
-    assert explanations[1] == (
-        f"BeforeGenerate|-|"
-        f"{[*question, 'Oslo had rain and Lima sun.', 'Go on.', 'Looking.', 'fog']}"
-    )
-
-
-@pytest.mark.anyio
-async def test_a_call_is_judged_with_the_conversation_and_the_turn_that_made_it() -> (
-    None
-):
+async def test_no_step_is_given_a_history() -> None:
+    # the caller's own list is not known behind a proxy, only what each
+    # request carries, which is a step's `input`
     handler = Handler(reports_histories())
     await handler.request(request(then=ran("Oslo", "rain", "toolu_1")))
 
-    await handler.reply(
-        reply(
-            message({"type": "text", "text": "Now Lima."}, weather("Lima", "toolu_2"))
-        )
-    )
+    await handler.reply(reply(message(_LOOKING, weather("Lima", "toolu_2"))))
 
-    explanations = _explanations(await handler.records("x"))
-    assert explanations[-1] == (
-        "BeforeToolCall|toolu_2|"
-        f"{['You are helpful.', 'What is the weather?', 'Looking.', 'rain', 'Now Lima.']}"
-    )
+    assert _explanations(await handler.records("x")) == [
+        "AfterToolCall|toolu_1|None",
+        "BeforeGenerate|-|None",
+        "AfterGenerate|-|None",
+        "BeforeToolCall|toolu_2|None",
+    ]
 
 
 @protocol
@@ -323,42 +281,3 @@ async def test_a_tool_the_provider_ran_is_not_judged_as_a_call() -> None:
     records = await handler.records("x")
     assert records is not None
     assert [record.stage for record in records] == ["model_input", "model_output"]
-
-
-@pytest.mark.anyio
-async def test_a_reply_passed_on_stays_in_the_history_after_a_compaction() -> None:
-    handler = Handler(reports_histories())
-    await handler.request(request("a"))
-    await handler.reply(
-        reply(
-            message({"type": "text", "text": "Which city?"}, stop_reason="end_turn"),
-            id="a",
-        )
-    )
-
-    # the agent compacts its conversation before the reply is ever sent back
-    await handler.request(
-        request("b", then=[{"role": "user", "content": "Summary so far. Oslo."}])
-    )
-    await handler.reply(reply(message(_LOOKING, weather("Oslo", "toolu_1")), id="b"))
-
-    explanations = _explanations(await handler.records("b"))
-    assert explanations[-1] == (
-        "BeforeToolCall|toolu_1|"
-        f"{['You are helpful.', 'What is the weather?', 'Which city?', 'Summary so far. Oslo.', 'Looking.']}"
-    )
-
-
-@pytest.mark.anyio
-async def test_a_reply_passed_on_and_sent_back_is_kept_once() -> None:
-    handler = Handler(reports_histories())
-    await handler.request(request("a"))
-    await handler.reply(reply(message(_LOOKING, weather("Oslo", "toolu_1")), id="a"))
-
-    await handler.request(request("b", then=ran("Oslo", "rain", "toolu_1")))
-
-    explanations = _explanations(await handler.records("b"))
-    assert explanations[0] == (
-        "AfterToolCall|toolu_1|"
-        f"{['You are helpful.', 'What is the weather?', 'Looking.']}"
-    )
