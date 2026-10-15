@@ -144,29 +144,33 @@ def _check_blocks(content: object, what: str) -> None:
 
 def _texts(message: dict[str, Any]) -> list[object]:
     # The texts inspect_ai's Anthropic reader takes <content-internal> spans
-    # out of: text blocks, in a message or a tool result, and an assistant's
-    # text given as a string. A user's string and a tool result's string are
-    # read whole. See content_block_to_content() in inspect_ai's
-    # src/inspect_ai/agent/_bridge/anthropic_api_impl.py.
+    # out of: text blocks, wherever they are, and an assistant's text given
+    # as a string. A user's string, a tool result's string and a document of
+    # plain text are read whole. See content_block_to_content() in
+    # inspect_ai's src/inspect_ai/agent/_bridge/anthropic_api_impl.py.
     content: object = message.get("content")
     if isinstance(content, str):
         return [content] if message.get("role") == "assistant" else []
+    return _block_texts(content)
+
+
+def _block_texts(blocks: object) -> list[object]:
+    # text blocks, and those in a tool result or a document made of blocks
     texts: list[object] = []
-    for block in cast("list[object]", content if isinstance(content, list) else []):
+    for block in cast("list[object]", blocks if isinstance(blocks, list) else []):
         if not isinstance(block, dict):
             continue
         block = cast("dict[str, Any]", block)
         if block.get("type") == "text":
             texts.append(block.get("text"))
-        elif block.get("type") == "tool_result" and isinstance(
-            block.get("content"), list
-        ):
-            texts.extend(
-                cast("dict[str, Any]", part).get("text")
-                for part in cast("list[object]", block["content"])
-                if isinstance(part, dict)
-                and cast("dict[str, Any]", part).get("type") == "text"
-            )
+        elif block.get("type") == "tool_result":
+            texts.extend(_block_texts(block.get("content")))
+        elif block.get("type") == "document":
+            source: object = block.get("source")
+            if isinstance(source, dict):
+                texts.extend(
+                    _block_texts(cast("dict[str, Any]", source).get("content"))
+                )
     return texts
 
 

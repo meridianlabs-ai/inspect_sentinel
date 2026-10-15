@@ -1,8 +1,14 @@
+import base64
 import json
 from typing import Any
 
 import pytest
-from inspect_ai.model import ChatMessageAssistant, ChatMessageSystem, ChatMessageUser
+from inspect_ai.model import (
+    ChatMessageAssistant,
+    ChatMessageSystem,
+    ChatMessageUser,
+    ContentDocument,
+)
 
 from inspect_sentinel.sidecar import UnreadableError, read_reply, read_request
 from tests.sidecar._traffic import JSON, STREAM, anthropic_recorded, message, weather
@@ -276,6 +282,8 @@ async def test_request_that_cannot_be_read(body: bytes, says: str) -> None:
         await read_request("anthropic", body)
 
 
+_NO_INPUT: dict[str, Any] = {}
+
 # a span inspect_ai reads, then one it would drop unread
 _TWO_SPANS = (
     "Rain. <content-internal>eyJpZCI6IDF9</content-internal>"
@@ -323,6 +331,36 @@ async def test_a_reply_with_text_inspect_ai_would_drop_is_unreadable() -> None:
                 }
             ],
             id="a user's text block",
+        ),
+        pytest.param(
+            [{"role": "user", "content": [_document(_TWO_SPANS)]}],
+            id="a document's text block",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "f",
+                            "input": _NO_INPUT,
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [_document(_TWO_SPANS)],
+                        }
+                    ],
+                },
+            ],
+            id="a document's text block in a tool result",
         ),
     ],
 )
@@ -375,3 +413,17 @@ async def test_text_inspect_ai_reads_whole_is_read() -> None:
     assert "A storm." in messages[0].text
     assert "A storm." in json.dumps((called.tool_calls or [])[0].arguments)
     assert "A storm." in messages[2].text
+
+
+@pytest.mark.anyio
+async def test_a_document_of_plain_text_is_read_whole() -> None:
+    document = {
+        "type": "document",
+        "source": {"type": "text", "media_type": "text/plain", "data": _TWO_SPANS},
+    }
+
+    messages = await read_request("anthropic", _asked(document))
+
+    read = messages[-1].content[0]
+    assert isinstance(read, ContentDocument)
+    assert base64.b64decode(read.document.split(",", 1)[1]).decode() == _TWO_SPANS
