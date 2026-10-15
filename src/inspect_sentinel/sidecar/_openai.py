@@ -50,7 +50,6 @@ async def read_reply(
         if chat:
             _check_choices([parsed], "message")
         reply = _completion(parsed) if chat else _response(parsed)
-    check_internal(reply, "reply")
     if chat:
         for choice in cast("list[Any]", getattr(reply, "choices", None) or []):
             calls = getattr(getattr(choice, "message", None), "tool_calls", None)
@@ -106,6 +105,8 @@ async def read_chat_request(request: dict[str, Any]) -> list[ChatMessage]:
                 raise UnreadableError(
                     "The request holds audio from the model, which can't be read."
                 )
+            check_internal(_chat_texts(message), "request")
+    _check_merged(cast("list[object]", messages))
     try:
         read = await messages_from_openai(cast(Any, messages), _model(request))
     except Exception as ex:
@@ -154,6 +155,16 @@ async def read_responses_request(request: dict[str, Any]) -> list[ChatMessage]:
         raise UnreadableError("The request has no input.")
     _check_parts(cast("list[object]", entries))
     _check_duplicates(cast("list[object]", entries))
+    check_internal(
+        [
+            text
+            for entry in cast("list[object]", entries)
+            if isinstance(entry, dict)
+            and cast("dict[str, Any]", entry).get("role") == "assistant"
+            for text in _assistant_texts(cast("dict[str, Any]", entry))
+        ],
+        "request",
+    )
     for entry in cast("list[object]", entries):
         if (
             isinstance(entry, dict)
@@ -250,6 +261,67 @@ async def responses_rejected_turn(
             }
         )
     return written
+
+
+def _chat_texts(message: dict[str, Any]) -> list[object]:
+    # The texts inspect_ai's Chat Completions reader takes <content-internal>
+    # spans out of: a text part of any message, and an assistant's text given
+    # as a string. Any other message's string is read whole. See
+    # messages_from_openai() and content_from_openai() in inspect_ai's
+    # src/inspect_ai/model/_openai.py.
+    content: object = message.get("content")
+    if isinstance(content, str):
+        return [content] if message.get("role") == "assistant" else []
+    return [
+        cast("dict[str, Any]", part).get("text")
+        for part in cast("list[object]", content if isinstance(content, list) else [])
+        if isinstance(part, dict) and cast("dict[str, Any]", part).get("type") == "text"
+    ]
+
+
+def _assistant_texts(entry: dict[str, Any]) -> list[object]:
+    # the texts of an assistant's item in a Responses request, which
+    # inspect_ai's reader takes <content-internal> spans out of; a refusal is
+    # read whole
+    content: object = entry.get("content")
+    if isinstance(content, str):
+        return [content]
+    return [
+        cast("dict[str, Any]", part).get("text")
+        for part in cast("list[object]", content if isinstance(content, list) else [])
+        if isinstance(part, dict) and "text" in cast("dict[str, Any]", part)
+    ]
+
+
+def _check_merged(messages: list[object]) -> None:
+    # inspect_ai's Chat Completions reader merges a turn some scaffolds split,
+    # assistant(calls) -> tool -> assistant(content), by moving the second
+    # assistant's content into the first and dropping the rest of it. A
+    # refusal given there would be dropped unread. This follows the merge as
+    # openai_assistant_message_reducer() in inspect_ai's
+    # src/inspect_ai/model/_openai.py makes it.
+    reduced: list[dict[str, Any]] = []
+    for entry in messages:
+        if not isinstance(entry, dict):
+            continue
+        message = cast("dict[str, Any]", entry)
+        if (
+            len(reduced) >= 2
+            and message.get("role") == "assistant"
+            and "tool_calls" not in message
+            and "content" in message
+            and reduced[-1].get("role") == "tool"
+            and reduced[-2].get("role") == "assistant"
+            and "tool_calls" in reduced[-2]
+            and reduced[-2].get("content") is None
+        ):
+            if message.get("refusal"):
+                raise UnreadableError(
+                    "The request holds an assistant's refusal that would be merged into an earlier turn and dropped."
+                )
+            reduced[-2] = reduced[-2] | {"content": message["content"]}
+        else:
+            reduced.append(message)
 
 
 def _check_arguments(arguments: object, what: str) -> None:

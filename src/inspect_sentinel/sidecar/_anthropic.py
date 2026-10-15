@@ -62,7 +62,8 @@ async def read_reply(content_type: str, body: bytes) -> ModelOutput:
     else:
         message = _message(json_object(body, "reply"))
     _check_blocks(getattr(message, "content", None), "reply")
-    check_internal(message, "reply")
+    blocks = cast("list[object]", getattr(message, "content", None) or [])
+    check_internal([getattr(block, "text", None) for block in blocks], "reply")
     try:
         # an object, not a dict, so that the converter doesn't validate it again
         return await model_output_from_anthropic(cast(Any, message))
@@ -82,6 +83,7 @@ async def read_request(request: dict[str, Any]) -> list[ChatMessage]:
         if entry.get("role") == "assistant" and isinstance(entry.get("content"), list):
             _check_blocks(entry["content"], "request")
         _check_documents(entry.get("content"))
+        check_internal(_texts(entry), "request")
     try:
         return await messages_from_anthropic(
             cast(Any, messages), _system(request.get("system"))
@@ -138,6 +140,34 @@ def _check_blocks(content: object, what: str) -> None:
             raise UnreadableError(
                 f"The {what} holds content of a kind that can't be read: {kind!r}."
             )
+
+
+def _texts(message: dict[str, Any]) -> list[object]:
+    # The texts inspect_ai's Anthropic reader takes <content-internal> spans
+    # out of: text blocks, in a message or a tool result, and an assistant's
+    # text given as a string. A user's string and a tool result's string are
+    # read whole. See content_block_to_content() in inspect_ai's
+    # src/inspect_ai/agent/_bridge/anthropic_api_impl.py.
+    content: object = message.get("content")
+    if isinstance(content, str):
+        return [content] if message.get("role") == "assistant" else []
+    texts: list[object] = []
+    for block in cast("list[object]", content if isinstance(content, list) else []):
+        if not isinstance(block, dict):
+            continue
+        block = cast("dict[str, Any]", block)
+        if block.get("type") == "text":
+            texts.append(block.get("text"))
+        elif block.get("type") == "tool_result" and isinstance(
+            block.get("content"), list
+        ):
+            texts.extend(
+                cast("dict[str, Any]", part).get("text")
+                for part in cast("list[object]", block["content"])
+                if isinstance(part, dict)
+                and cast("dict[str, Any]", part).get("type") == "text"
+            )
+    return texts
 
 
 def _check_documents(content: object) -> None:

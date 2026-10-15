@@ -4,7 +4,7 @@ from dataclasses import replace
 from typing import Any, cast
 
 import pytest
-from inspect_ai.model import ChatMessageTool, ContentReasoning
+from inspect_ai.model import ChatMessageAssistant, ChatMessageTool, ContentReasoning
 from inspect_ai.util import StoreModel
 
 from inspect_sentinel._context import Context
@@ -877,17 +877,38 @@ def _chat_result(*parts: str) -> dict[str, Any]:
     ) | {"model": "gpt-test"}
 
 
+def _chat_said(*then: dict[str, Any]) -> dict[str, Any]:
+    return openai_request("chat", then=list(then)) | {"model": "gpt-test"}
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "body",
     [
         pytest.param(_chat_result("Rain.", _TWO_SPANS), id="chat, a tool result"),
         pytest.param(
-            {
-                "model": "gpt-test",
-                "input": _result_parts({"type": "input_text", "text": _TWO_SPANS}),
+            _chat_said({"role": "assistant", "content": _TWO_SPANS}),
+            id="chat, an assistant's text",
+        ),
+        pytest.param(
+            _chat_said(
+                {"role": "user", "content": [{"type": "text", "text": _TWO_SPANS}]}
+            ),
+            id="chat, a user's text part",
+        ),
+        pytest.param(
+            {"model": "gpt-test", "input": [{"role": "user", "content": "Hi"}]}
+            | {
+                "input": [
+                    {"role": "user", "content": "Hi"},
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": _TWO_SPANS}],
+                    },
+                ]
             },
-            id="responses, a tool result",
+            id="responses, an assistant's text",
         ),
     ],
 )
@@ -898,13 +919,67 @@ async def test_a_request_with_text_inspect_ai_would_drop_is_unreadable(
         await read_request("openai", json.dumps(body).encode())
 
 
+def _write_file(text: str) -> dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "arguments": json.dumps({"text": text}),
+                },
+            }
+        ],
+    }
+
+
 @pytest.mark.anyio
-async def test_a_reply_with_text_inspect_ai_would_drop_is_unreadable() -> None:
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(
+            _chat_said({"role": "user", "content": _TWO_SPANS}),
+            id="chat, a user's text",
+        ),
+        pytest.param(
+            _chat_said(
+                _write_file(_TWO_SPANS),
+                {"role": "tool", "tool_call_id": "call_1", "content": "Written."},
+            ),
+            id="chat, a call's arguments",
+        ),
+        pytest.param(
+            {
+                "model": "gpt-test",
+                "input": _result_parts({"type": "input_text", "text": _TWO_SPANS}),
+            },
+            id="responses, a tool result",
+        ),
+    ],
+)
+async def test_text_inspect_ai_reads_whole_is_read(body: dict[str, Any]) -> None:
+    messages = await read_request("openai", json.dumps(body).encode())
+
+    read = [m.text for m in messages] + [
+        json.dumps(call.arguments)
+        for m in messages
+        if isinstance(m, ChatMessageAssistant)
+        for call in m.tool_calls or []
+    ]
+    assert any("A storm." in text for text in read)
+
+
+@pytest.mark.anyio
+async def test_a_chat_reply_is_read_whole() -> None:
     reply = json.loads(openai_recorded("chat")[1])
     reply["choices"][0]["message"]["content"] = _TWO_SPANS
 
-    with pytest.raises(UnreadableError, match="more than one <content-internal>"):
-        await read_reply("openai", JSON, json.dumps(reply).encode())
+    output = await read_reply("openai", JSON, json.dumps(reply).encode())
+
+    assert "A storm." in output.message.text
 
 
 @pytest.mark.anyio
@@ -1104,3 +1179,28 @@ async def test_one_assistant_text_sent_twice_is_read_once() -> None:
     messages = await read_request("openai", _assistant_said(once, again))
 
     assert [m.text for m in messages if m.role == "assistant"] == ["A quiet day."]
+
+
+@pytest.mark.anyio
+async def test_a_refusal_merged_into_an_earlier_turn_is_unreadable() -> None:
+    # inspect_ai merges assistant(calls) -> tool -> assistant(content), a turn
+    # some scaffolds split, keeping only the second assistant's content
+    body = _chat_said(
+        _write_file("Rain."),
+        {"role": "tool", "tool_call_id": "call_1", "content": "Written."},
+        {"role": "assistant", "content": None, "refusal": "A dangerous storm."},
+    )
+
+    with pytest.raises(UnreadableError, match="refusal"):
+        await read_request("openai", json.dumps(body).encode())
+
+
+@pytest.mark.anyio
+async def test_a_refusal_that_is_not_merged_is_read() -> None:
+    body = _chat_said(
+        {"role": "assistant", "content": None, "refusal": "A dangerous storm."}
+    )
+
+    messages = await read_request("openai", json.dumps(body).encode())
+
+    assert messages[-1].text == "A dangerous storm."

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, cast
 
@@ -15,7 +15,7 @@ from inspect_ai.model import (
     ModelOutput,
 )
 from inspect_ai.tool import ToolCallError, ToolChoice, ToolInfo
-from pydantic import BaseModel, JsonValue
+from pydantic import JsonValue
 
 Format: TypeAlias = Literal["anthropic-messages", "openai-chat", "openai-responses"]
 """Which API a request or a reply is written in. A provider can have more than one, and a proxy can serve one provider's model through another provider's API."""
@@ -55,7 +55,6 @@ async def read_request(
 
     request = json_object(body, "request")
     api = _api(provider, request, format)
-    check_internal(request, "request")
     with noting(start):
         return await api.read(request)
 
@@ -255,25 +254,21 @@ def request_marks(
 _INTERNAL = re.compile(r"<content-internal>.*?</content-internal>", re.DOTALL)
 
 
-def check_internal(value: object, what: str) -> None:
+def check_internal(texts: Iterable[object], what: str) -> None:
     """Refuse a body in which inspect_ai's readers would take text out unread.
 
+    Args:
+        texts: The texts of the body that inspect_ai's readers take `<content-internal>` spans out of. Each reader passes its own: the others are read whole, and a span in them is kept.
+        what: `request` or `reply`, for the error.
+
     Raises:
-        UnreadableError: If a string anywhere in `value` holds more than one `<content-internal>` span, as only the first is read and the others are dropped, while the model is sent them all.
+        UnreadableError: If one of `texts` holds more than one span, as only the first is read and the others are dropped, while the model is sent them all.
     """
-    if isinstance(value, BaseModel):
-        value = value.model_dump(warnings=False)
-    if isinstance(value, str):
-        if len(_INTERNAL.findall(value)) > 1:
+    for text in texts:
+        if isinstance(text, str) and len(_INTERNAL.findall(text)) > 1:
             raise UnreadableError(
                 f"The {what} holds text with more than one <content-internal> span, of which only the first would be read."
             )
-    elif isinstance(value, dict):
-        for item in cast("dict[str, object]", value).values():
-            check_internal(item, what)
-    elif isinstance(value, list):
-        for item in cast("list[object]", value):
-            check_internal(item, what)
 
 
 def json_object(body: bytes, what: str) -> dict[str, Any]:

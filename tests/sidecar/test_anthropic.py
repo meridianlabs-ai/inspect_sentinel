@@ -2,7 +2,7 @@ import json
 from typing import Any
 
 import pytest
-from inspect_ai.model import ChatMessageSystem, ChatMessageUser
+from inspect_ai.model import ChatMessageAssistant, ChatMessageSystem, ChatMessageUser
 
 from inspect_sentinel.sidecar import UnreadableError, read_reply, read_request
 from tests.sidecar._traffic import JSON, STREAM, anthropic_recorded, message, weather
@@ -306,3 +306,72 @@ async def test_a_reply_with_text_inspect_ai_would_drop_is_unreadable() -> None:
 
     with pytest.raises(UnreadableError, match="more than one <content-internal>"):
         await read_reply("anthropic", JSON, body)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "then",
+    [
+        pytest.param(
+            [{"role": "assistant", "content": _TWO_SPANS}], id="an assistant's text"
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": _TWO_SPANS}],
+                }
+            ],
+            id="a user's text block",
+        ),
+    ],
+)
+async def test_more_text_inspect_ai_would_drop_is_unreadable(
+    then: list[dict[str, Any]],
+) -> None:
+    body = json.dumps(
+        {"messages": [{"role": "user", "content": "Hello"}, *then]}
+    ).encode()
+
+    with pytest.raises(UnreadableError, match="more than one <content-internal>"):
+        await read_request("anthropic", body)
+
+
+@pytest.mark.anyio
+async def test_text_inspect_ai_reads_whole_is_read() -> None:
+    body = json.dumps(
+        {
+            "messages": [
+                {"role": "user", "content": _TWO_SPANS},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "write_file",
+                            "input": {"text": _TWO_SPANS},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": _TWO_SPANS,
+                        }
+                    ],
+                },
+            ]
+        }
+    ).encode()
+
+    messages = await read_request("anthropic", body)
+
+    called = messages[1]
+    assert isinstance(called, ChatMessageAssistant)
+    assert "A storm." in messages[0].text
+    assert "A storm." in json.dumps((called.tool_calls or [])[0].arguments)
+    assert "A storm." in messages[2].text
