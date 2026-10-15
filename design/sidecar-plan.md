@@ -98,7 +98,7 @@ Repository: `inspect_sentinel`, the sidecar and the core package. Depends on: PR
 Repository: `inspect_sentinel`. Depends on: PR 5.
 
 - `GET /sentinel/info`, and JSON-RPC 2.0 at `POST /sentinel/v1`: `register_task`, `request_result`, `run_result` and `end_run` (section 9).
-- Task registration: on unless `--no-task-registration`, replacing the last unless the task is in the tasks file, `expiry` capped by `--task-expiry`, a run taking its sample's facts at its first request, and `context.eval` from them.
+- Task registration: on unless `--no-runtime-task-registration`, replacing the last unless the task is in the tasks file, `expiry` capped by `--task-expiry`, a run taking its sample's facts at its first request, and `context.eval` from them.
 - The tasks file, read with `--tasks FILE` (section 9). Producing it is asked of the workstream that builds `RemoteSentinel`.
 - `--run-expiry`, dropping registrations Inspect made once their `expiry` passes, and `request_result` answering `dropped` for a while after a request's records go.
 - The `sidecar` stanza in the sentinel config file, if the core team approves it ("Proposed for the core package").
