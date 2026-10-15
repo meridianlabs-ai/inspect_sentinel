@@ -372,6 +372,13 @@ def test_schema_file_is_what_the_models_say() -> None:
     assert _SCHEMA == schema()
 
 
+def test_schema_file_says_a_call_not_judged_is_refused() -> None:
+    errors = _SCHEMA["errors"]
+
+    assert set(errors) == {str(UNREADABLE), str(SENTINEL_FAILED), str(TIME_LIMIT)}
+    assert all("refuses the call" in error["description"] for error in errors.values())
+
+
 def test_calls_in_these_tests_fit_the_schema_file() -> None:
     methods = _SCHEMA["methods"]
     assert _fits(methods["judge_request"]["params"], _REQUEST)

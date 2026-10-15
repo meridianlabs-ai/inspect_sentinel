@@ -108,6 +108,23 @@ class RefuseResult(BaseModel):
     message: str = Field(description="What the caller is told.")
 
 
+_NOT_JUDGED = "A proxy hook refuses the call, unless its operator has chosen to let calls that weren't judged through."
+
+_ERRORS: dict[int, tuple[str, str]] = {
+    UNREADABLE: (
+        "unreadable",
+        f"The request or reply couldn't be read, so it was not judged. {_NOT_JUDGED}",
+    ),
+    SENTINEL_FAILED: (
+        "sentinel_failed",
+        f"The sentinel failed, so the request or reply was not judged. {_NOT_JUDGED}",
+    ),
+    TIME_LIMIT: (
+        "time_limit",
+        f"The sentinel didn't finish judging within the sidecar's time limit, and was cancelled. {_NOT_JUDGED}",
+    ),
+}
+
 _METHODS: dict[str, tuple[type[BaseModel], tuple[type[BaseModel], ...]]] = {
     "judge_request": (
         JudgeRequestParams,
@@ -125,7 +142,7 @@ def proxy_app(handler: Handler, *, max_body_bytes: int = MAX_BODY_BYTES) -> Star
 
     Every call is a JSON-RPC 2.0 request POSTed to `/proxy/v1`. A proxy hook calls `judge_request` with each model request and `judge_reply` with the provider's reply, and each is answered with a result whose `action` is `pass`, `replace` or `refuse`. A proxy hook is a package of its own, and nothing of this package runs in the proxy.
 
-    A refusal is a result, because it is a decision. A request or reply that was not judged is answered with a JSON-RPC error: one that couldn't be read, one the sentinel failed on, and one the sentinel didn't finish judging within the handler's time limit each have a code of their own. The proxy hook says whether an error refuses the call or lets it through. A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
+    A refusal is a result, because it is a decision. A request or reply that was not judged is answered with a JSON-RPC error: one that couldn't be read, one the sentinel failed on, and one the sentinel didn't finish judging within the handler's time limit each have a code of their own, which the schema lists under `errors`. A proxy hook refuses the call on any of them, unless its operator has chosen to let calls that weren't judged through, as Inspect fails a sample whose sentinel fails. A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
 
     The app also answers a health check at `/health`, which a proxy doesn't call.
 
@@ -237,7 +254,7 @@ def _result(answer: Answer, *, reply: bool) -> BaseModel:
 def schema() -> dict[str, Any]:
     """The JSON Schema of each method's parameters and results.
 
-    A call to method `m` has `params` that fit the definition named in `methods[m].params`, and is answered with a `result` that fits one of the definitions named in `methods[m].result`.
+    A call to method `m` has `params` that fit the definition named in `methods[m].params`, and is answered with a `result` that fits one of the definitions named in `methods[m].result`. A call that was not judged is answered with a JSON-RPC error whose code is a key of `errors`.
     """
     models = {
         model: None
@@ -247,7 +264,7 @@ def schema() -> dict[str, Any]:
     _, definitions = models_json_schema(
         [(model, "validation") for model in models],
         title="Inspect Sentinel: the endpoint for proxies",
-        description=f"JSON-RPC 2.0 methods, POSTed to {PATH}. `methods` names the definition that a method's `params` fit, and the definitions that its `result` fits one of.",
+        description=f"JSON-RPC 2.0 methods, POSTed to {PATH}. `methods` names the definition that a method's `params` fit, and the definitions that its `result` fits one of. `errors` lists the codes of the JSON-RPC errors that say a call was not judged, and what a proxy hook does on each.",
     )
     return {
         "$schema": GenerateJsonSchema.schema_dialect,
@@ -262,6 +279,10 @@ def schema() -> dict[str, Any]:
                 },
             }
             for name, (params, results) in _METHODS.items()
+        },
+        "errors": {
+            str(code): {"name": name, "description": description}
+            for code, (name, description) in _ERRORS.items()
         },
     }
 

@@ -250,7 +250,7 @@
     }
   },
   "title": "Inspect Sentinel: the endpoint for proxies",
-  "description": "JSON-RPC 2.0 methods, POSTed to /proxy/v1. `methods` names the definition that a method's `params` fit, and the definitions that its `result` fits one of.",
+  "description": "JSON-RPC 2.0 methods, POSTed to /proxy/v1. `methods` names the definition that a method's `params` fit, and the definitions that its `result` fits one of. `errors` lists the codes of the JSON-RPC errors that say a call was not judged, and what a proxy hook does on each.",
   "methods": {
     "judge_request": {
       "params": {
@@ -287,6 +287,20 @@
           }
         ]
       }
+    }
+  },
+  "errors": {
+    "-32003": {
+      "name": "unreadable",
+      "description": "The request or reply couldn't be read, so it was not judged. A proxy hook refuses the call, unless its operator has chosen to let calls that weren't judged through."
+    },
+    "-32004": {
+      "name": "sentinel_failed",
+      "description": "The sentinel failed, so the request or reply was not judged. A proxy hook refuses the call, unless its operator has chosen to let calls that weren't judged through."
+    },
+    "-32005": {
+      "name": "time_limit",
+      "description": "The sentinel didn't finish judging within the sidecar's time limit, and was cancelled. A proxy hook refuses the call, unless its operator has chosen to let calls that weren't judged through."
     }
   }
 }
