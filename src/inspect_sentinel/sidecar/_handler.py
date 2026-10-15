@@ -83,6 +83,9 @@ class Handler:
         self._state: State = state if state is not None else MemoryState()
         self._reject_status = reject_status
         self._time_limit = time_limit
+        # the tool results being judged now, by run, conversation and digest,
+        # so that a request holding one waits for the request judging it
+        self._judging: dict[tuple[str, str, str], anyio.Event] = {}
 
     async def request(self, request: Request) -> Answer:
         """Judge a request before the proxy sends it.
@@ -229,6 +232,9 @@ class Handler:
                 )
             assistant, call = found
             digest = _result_digest(call, entry)
+            key = (held.run, held.conversation, digest)
+            while (judging := self._judging.get(key)) is not None:
+                await judging.wait()
             if digest in conversation.judged:
                 continue
             sent = conversation.made.get(call.id)
@@ -245,13 +251,18 @@ class Handler:
                 history=None,
                 tools=sent.tools if sent is not None else None,
             )
-            if _ends(await self._judge(held, run, step)):
-                # not marked as judged, so a client that sends it again is
-                # refused again
-                return self._end(
-                    held, run, f"at the result of the call to {call.function}"
-                )
-            conversation.judged.add(digest)
+            judging = self._judging[key] = anyio.Event()
+            try:
+                if _ends(await self._judge(held, run, step)):
+                    # not marked as judged, so a client that sends it again
+                    # is refused again
+                    return self._end(
+                        held, run, f"at the result of the call to {call.function}"
+                    )
+                conversation.judged.add(digest)
+            finally:
+                del self._judging[key]
+                judging.set()
         return None
 
     async def _reply(self, reply: Reply) -> Answer:

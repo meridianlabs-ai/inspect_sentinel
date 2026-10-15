@@ -4,6 +4,7 @@ from dataclasses import replace
 from typing import Any, cast
 
 import anyio
+import anyio.lowlevel
 import pytest
 from inspect_ai.util import StoreModel
 
@@ -1183,3 +1184,42 @@ async def test_a_result_is_judged_in_each_conversation_it_reaches() -> None:
     await handler.request(request("c", "First conversation", then, run="run_1"))
 
     assert [len(await handler.records(id) or []) for id in "abc"] == [1, 1, 0]
+
+
+class _Gate:
+    judged = 0
+    open: anyio.Event
+    reached: anyio.Event
+
+
+@protocol
+def holds_the_first_result() -> Protocol:
+    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+        _Gate.judged += 1
+        _Gate.reached.set()
+        await _Gate.open.wait()
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_result_two_requests_hold_at_once_is_judged_once() -> None:
+    _Gate.judged, _Gate.open, _Gate.reached = 0, anyio.Event(), anyio.Event()
+    handler = Handler(holds_the_first_result())
+    then = ran("Oslo", "Rain.")
+    answers: dict[str, Answer] = {}
+
+    async def ask(id: str) -> None:
+        answers[id] = await handler.request(request(id, then=then))
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(ask, "a")
+        await _Gate.reached.wait()
+        group.start_soon(ask, "b")
+        # let the second request get as far as it can
+        for _ in range(20):
+            await anyio.lowlevel.checkpoint()
+        _Gate.open.set()
+
+    assert (_Gate.judged, answers) == (1, {"a": Pass(), "b": Pass()})
