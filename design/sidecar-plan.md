@@ -98,7 +98,8 @@ Repository: `inspect_sentinel`, the sidecar and the core package. Depends on: PR
 Repository: `inspect_sentinel`. Depends on: PR 5.
 
 - `GET /sentinel/info`, and JSON-RPC 2.0 at `POST /sentinel/v1`: `register_task`, `request_result`, `run_result` and `end_run` (section 9).
-- Task registration: replacing the last unless fixed, `keep_for`, a run taking its sample's facts at its first request, and `context.eval` from them.
+- Task registration: on unless `--no-task-registration`, replacing the last unless the task is in the tasks file, `keep_for`, a run taking its sample's facts at its first request, and `context.eval` from them.
+- The tasks file: the one builder of `register_task`'s parameters from a `Task`, the command that writes the file with inspect_ai's task loader, and `--tasks FILE` (section 9).
 - `--run-expiry`, and dropping task registrations made by Inspect after a day, or later if they asked.
 - Tool views from a task's registration: inspect_ai's own viewers, the default view, and a task's own viewers where its package is installed (section 9).
 - The second port and its own token, as an option.
@@ -156,7 +157,6 @@ These need design first. Each names the repositories it would touch.
 - Asking a person from the sidecar: the sidecar holding the turn, `RemoteSentinel` showing the question in Inspect's approval UI, and the answer coming back on the person's own credential. `inspect_sentinel` and `inspect_ai`.
 - How Inspect says that a run is new or resumed. `inspect_sentinel` and `inspect_ai`.
 - Model calls that Inspect answers from its cache, which never reach the proxy. `inspect_ai`, and possibly `inspect_sentinel`.
-- How an admin registers tasks beforehand. `inspect_sentinel`.
 - Tallies kept at the task level. `inspect_sentinel`.
 - A credential tied to the evals it may name. `inspect_sentinel`.
 - The Envoy shim. `inspect_sentinel`.
