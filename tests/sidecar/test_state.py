@@ -1,7 +1,10 @@
+import gc
+import weakref
+
 import anyio
 import pytest
 
-from inspect_sentinel.sidecar import Handler, Pass, UnreadableError
+from inspect_sentinel.sidecar import Handler, Pass, UnreadableError, _state
 from inspect_sentinel.sidecar._state import MemoryState
 from tests.sidecar._traffic import message, reply, request, weather, weather_rule
 
@@ -49,3 +52,28 @@ async def test_a_rejection_is_forgotten_with_its_run() -> None:
     await anyio.sleep(0.1)
 
     assert await handler.request(request("b")) == Pass()
+
+
+@pytest.mark.anyio
+async def test_requests_whose_replies_never_come_are_dropped_as_more_arrive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [0.0]
+
+    class Clock:
+        @staticmethod
+        def monotonic() -> float:
+            return now[0]
+
+    # the state's own clock only: the event loop keeps the real one
+    monkeypatch.setattr(_state, "time", Clock)
+    handler = Handler(weather_rule(), state=MemoryState(expiry=10))
+    await handler.request(request("a"))
+    recorder = weakref.ref(await handler._state.recorder("a"))  # pyright: ignore[reportPrivateUsage]
+
+    # only more requests arrive, and no reply
+    now[0] = 11.0
+    await handler.request(request("b"))
+    gc.collect()
+
+    assert recorder() is None

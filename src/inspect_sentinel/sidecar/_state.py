@@ -197,6 +197,9 @@ class _Expiring(Generic[V]):
         return kept[1]
 
     def put(self, key: str, value: V) -> None:
+        # swept here too: what is only ever put, such as a request whose reply
+        # never comes, would otherwise be kept for good
+        self._expire()
         self._kept[key] = (time.monotonic(), value)
         self._kept.move_to_end(key)
 
