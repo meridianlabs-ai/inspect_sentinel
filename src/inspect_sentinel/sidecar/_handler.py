@@ -11,6 +11,7 @@ from inspect_ai.model import (
     ChatMessageTool,
 )
 from inspect_ai.tool import ToolCall
+from pydantic import JsonValue
 
 from .._host import HostNative
 from .._integration import HostContext, resolve_sentinel, run_sentinel, watched_stages
@@ -31,7 +32,8 @@ from ._wire import (
     UnreadableError,
     add_rejections,
     offered,
-    read_reply,
+    read_opening,
+    read_reply_noted,
     read_request,
     request_marks,
 )
@@ -131,20 +133,24 @@ class Handler:
         return await self._state.records(id)
 
     async def _request(self, request: Request) -> Answer:
-        messages = await read_request(request.provider, request.body, request.format)
-        sends = offered(request.provider, request.body, request.format)
-        marks = request_marks(request.provider, request.body, request.format)
-        opening = _opening(messages)
+        opening = _opening(
+            await read_opening(request.provider, request.body, request.format)
+        )
         named = request.run is not None
         key = request.run if request.run is not None else opening
         # a conversation is told apart within a named run by how it opens
         conversation_key = f"{key}/{opening}" if named else key
         run = await self._state.run(key)
+        conversation = run.conversations.setdefault(conversation_key, Conversation())
+        messages = await read_request(
+            request.provider, request.body, request.format, start=conversation.noted
+        )
+        sends = offered(request.provider, request.body, request.format)
+        marks = request_marks(request.provider, request.body, request.format)
         refusal = _ended(run, marks)
         if refusal is not None:
             # the run has ended, and the sentinel is not asked again
             return refusal
-        conversation = run.conversations.setdefault(conversation_key, Conversation())
 
         answer: Answer = Pass()
         # only what the client sent holds results to judge: what the sidecar
@@ -161,7 +167,9 @@ class Handler:
             body = await add_rejections(
                 request.provider, request.body, told, request.format
             )
-            messages = await read_request(request.provider, body, request.format)
+            messages = await read_request(
+                request.provider, body, request.format, start=conversation.noted
+            )
             answer = Replace(body)
 
         held = Held(
@@ -255,15 +263,21 @@ class Handler:
             raise UnreadableError(
                 f"The reply {reply.id!r} answers a request this sidecar was never shown, or no longer keeps."
             )
-        output = await read_reply(
-            reply.provider, reply.content_type, reply.body, reply.format
-        )
         run = await self._state.run(held.run)
+        conversation = run.conversations.setdefault(held.conversation, Conversation())
+        output, noted = await read_reply_noted(
+            reply.provider,
+            reply.content_type,
+            reply.body,
+            reply.format,
+            start=conversation.noted,
+        )
+        # kept whatever is decided: the provider continues from what it sent
+        conversation.noted = noted
         refusal = _ended(run, held.marks)
         if refusal is not None:
             # a sentinel ended the run while the model was answering
             return refusal
-        conversation = run.conversations.setdefault(held.conversation, Conversation())
 
         if AfterGenerate in self._watched:
             after = AfterGenerate(
@@ -307,7 +321,7 @@ class Handler:
                 )
             # another exchange of the run may have ended it while this one waited
             return _ended(run, held.marks) or self._reject(
-                held, run, conversation, message, call, decision
+                held, run, conversation, message, noted, call, decision
             )
         return _ended(run, held.marks) or self._passed(held, run, conversation, message)
 
@@ -332,6 +346,7 @@ class Handler:
         run: Run,
         conversation: Conversation,
         message: ChatMessageAssistant,
+        noted: JsonValue | None,
         call: ToolCall,
         decision: Decision,
     ) -> Refuse:
@@ -364,6 +379,7 @@ class Handler:
                     other.id: why if other.id == call.id else _NOT_RUN
                     for other in message.tool_calls or []
                 },
+                noted,
             )
         )
         return Refuse(

@@ -15,6 +15,7 @@ from inspect_ai.model import (
     ModelOutput,
 )
 from inspect_ai.tool import ToolCallError, ToolChoice, ToolInfo
+from pydantic import JsonValue
 
 Format: TypeAlias = Literal["anthropic-messages", "openai-chat", "openai-responses"]
 """Which API a request or a reply is written in. A provider can have more than one, and a proxy can serve one provider's model through another provider's API."""
@@ -24,12 +25,20 @@ Format: TypeAlias = Literal["anthropic-messages", "openai-chat", "openai-respons
 _LINE_END = re.compile(r"\r\n|\r|\n")
 
 
+Turn: TypeAlias = tuple[ChatMessageAssistant, Mapping[str, str], JsonValue | None]
+"""A rejected turn: the model's message, what the model is told happened to each of its calls by call id, and what inspect_ai's converters noted when the reply was read."""
+
+
 class UnreadableError(Exception):
     """A request or reply couldn't be read into Inspect's types, so it can't be judged."""
 
 
 async def read_request(
-    provider: str, body: bytes, format: Format | None = None
+    provider: str,
+    body: bytes,
+    format: Format | None = None,
+    *,
+    start: JsonValue | None = None,
 ) -> list[ChatMessage]:
     """Read a request body into the messages the model is being sent.
 
@@ -37,12 +46,48 @@ async def read_request(
         provider: Whose API the body is written for, e.g. `anthropic`.
         body: The request body, in the provider's own format.
         format: Which API the body is written in, if the proxy said. It is then read as that, whatever the provider.
+        start: What was noted while reading the conversation's replies, as `read_reply_noted` hands it back. A request holds those replies, and Anthropic can give a server tool's result in a later reply than the one that started it, which can't be read without it.
 
     Raises:
         UnreadableError: If there is no reader for the provider's API, or the body isn't what that API takes.
     """
+    from ._inspect_ai import noting
+
     request = json_object(body, "request")
-    return await _api(provider, request, format).read(request)
+    api = _api(provider, request, format)
+    with noting(start):
+        return await api.read(request)
+
+
+async def read_opening(
+    provider: str, body: bytes, format: Format | None = None
+) -> list[ChatMessage]:
+    """Read how a request's conversation opens: its system messages, and its first user message.
+
+    It is read without anything noted from the conversation's replies, which are not needed for it, so it can say which conversation the request continues before the rest is read.
+
+    Raises:
+        UnreadableError: As `read_request` does.
+    """
+    from ._inspect_ai import noting
+
+    request = json_object(body, "request")
+    api = _api(provider, request, format)
+    entries = _conversation(request, api)
+    user = next(
+        (
+            index
+            for index, entry in enumerate(entries)
+            if isinstance(entry, dict)
+            and cast("dict[str, Any]", entry).get("role") == "user"
+        ),
+        None,
+    )
+    opening = request | {
+        api.conversation: entries[: user + 1] if user is not None else []
+    }
+    with noting():
+        return await api.read(opening)
 
 
 async def read_reply(
@@ -59,6 +104,39 @@ async def read_reply(
     Raises:
         UnreadableError: If there is no reader for the provider's API, the body isn't a complete reply, or it holds content that can't be read.
     """
+    output, _ = await read_reply_noted(provider, content_type, body, format)
+    return output
+
+
+async def read_reply_noted(
+    provider: str,
+    content_type: str,
+    body: bytes,
+    format: Format | None = None,
+    *,
+    start: JsonValue | None = None,
+) -> tuple[ModelOutput, JsonValue | None]:
+    """Read a reply body, as `read_reply` does, with what inspect_ai's converters noted while reading it.
+
+    What they noted is what reading the conversation's next reply needs, and what writing this reply's message back into a request needs, to put back each item as the provider wrote it.
+
+    Args:
+        provider: Whose API the body is written in.
+        content_type: The reply's `content-type`.
+        body: The whole reply body.
+        format: Which API the body is written in, if the proxy said.
+        start: What was noted while reading the conversation's earlier replies. Anthropic can start a server tool in one reply and give its result in the next, which can't be read without it.
+    """
+    from ._inspect_ai import noting
+
+    with noting(start) as noted:
+        output = await _read_reply(provider, content_type, body, format)
+    return output, noted.value
+
+
+async def _read_reply(
+    provider: str, content_type: str, body: bytes, format: Format | None
+) -> ModelOutput:
     if format == "anthropic-messages" or (format is None and provider == "anthropic"):
         from . import _anthropic
 
@@ -87,10 +165,13 @@ def offered(provider: str, body: bytes, format: Format | None = None) -> Offered
     Raises:
         UnreadableError: If there is no reader for the provider's API, or the request's tools, tool choice or settings can't be read.
     """
+    from ._inspect_ai import noting
+
     request = json_object(body, "request")
     api = _api(provider, request, format)
     try:
-        tools, tool_choice, config = api.offered(request)
+        with noting():
+            tools, tool_choice, config = api.offered(request)
     except UnreadableError:
         raise
     except Exception as ex:
@@ -107,7 +188,7 @@ def offered(provider: str, body: bytes, format: Format | None = None) -> Offered
 async def add_rejections(
     provider: str,
     body: bytes,
-    rejected: Mapping[int, Sequence[tuple[ChatMessageAssistant, Mapping[str, str]]]],
+    rejected: Mapping[int, Sequence[Turn]],
     format: Format | None = None,
 ) -> bytes:
     """Add rejected turns to a later request of their conversation, so the model is told.
@@ -117,15 +198,17 @@ async def add_rejections(
     Args:
         provider: Whose API the body is written for.
         body: The request body.
-        rejected: The rejected turns in order, by how many entries the client's conversation held when each was rejected. A turn is the model's message, with what the model is told happened to each of its calls, by call id.
+        rejected: The rejected turns in order, by how many entries the client's conversation held when each was rejected.
         format: Which API the body is written in, if the proxy said.
     """
+    from ._inspect_ai import noting
+
     request = json_object(body, "request")
     api = _api(provider, request, format)
     entries = _conversation(request, api)
     sent: list[Any] = []
     for count in range(len(entries) + 1):
-        for message, told in rejected.get(count, ()):
+        for message, told, noted in rejected.get(count, ()):
             results = [
                 ChatMessageTool(
                     content=told[call.id],
@@ -135,7 +218,10 @@ async def add_rejections(
                 )
                 for call in message.tool_calls or []
             ]
-            sent.extend(await api.rejected_turn(message, results))
+            # from what was noted when the turn was read, and only that,
+            # so each item goes back as the provider wrote it for this run
+            with noting(noted):
+                sent.extend(await api.rejected_turn(message, results))
         if count < len(entries):
             sent.append(entries[count])
     request[api.conversation] = sent

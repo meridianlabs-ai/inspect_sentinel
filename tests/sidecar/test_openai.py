@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from typing import Any, cast
 
 import pytest
@@ -554,3 +555,37 @@ async def test_what_the_model_is_told_of_a_rejection_is_not_judged_as_a_result(
 
     assert isinstance(again, Replace)
     assert await handler.records("b") == []
+
+
+def _function_calls(body: bytes) -> list[tuple[str, str, str]]:
+    return [
+        (entry["call_id"], entry.get("id", ""), entry["arguments"])
+        for entry in json.loads(body)["input"]
+        if entry.get("type") == "function_call"
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_rejected_turn_is_put_back_as_its_own_run_was_handed_it() -> None:
+    handler = Handler(weather_rule("reject", "Tokyo"))
+    await handler.request(replace(_request("responses", "a"), run="run_a"))
+    first = _reply("responses", "a")
+    await handler.reply(first)
+    # another run's model reuses the call ids, with arguments of its own
+    other = json.loads(first.body)
+    for item in other["output"]:
+        if item["type"] == "function_call":
+            item["arguments"] = json.dumps({"location": "Tokyo", "note": "run b's"})
+    await handler.request(replace(_request("responses", "b"), run="run_b"))
+    await handler.reply(replace(first, id="b", body=json.dumps(other).encode()))
+
+    again = await handler.request(replace(_request("responses", "c"), run="run_a"))
+
+    assert isinstance(again, Replace)
+    handed = json.loads(first.body)["output"]
+    # each call as the provider wrote it, its own id included
+    assert _function_calls(again.body) == [
+        (item["call_id"], item["id"], item["arguments"])
+        for item in handed
+        if item["type"] == "function_call"
+    ]

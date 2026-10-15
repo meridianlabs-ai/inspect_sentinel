@@ -1108,3 +1108,56 @@ async def test_a_stage_nothing_watches_is_never_judged(
     await handler.reply(reply(message(weather("Lima", "toolu_2"))))
 
     assert steps == judged
+
+
+_SEARCH = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_1",
+    "name": "web_search",
+    "input": {"query": "Paris weather"},
+}
+
+
+@pytest.mark.anyio
+async def test_a_server_tool_answered_in_the_next_reply_is_read() -> None:
+    # Anthropic can start a search in one reply, hand the client a call, and
+    # give the search's result in the reply after
+    handler = Handler(weather_rule())
+    await handler.request(request("a"))
+    first = await handler.reply(reply(message(_SEARCH, weather("Paris")), id="a"))
+    then = [
+        {"role": "assistant", "content": [_SEARCH, weather("Paris")]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Rain."}
+            ],
+        },
+    ]
+    await handler.request(request("b", then=then))
+    result = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_1",
+        "content": [
+            {
+                "type": "web_search_result",
+                "url": "https://example.com/paris",
+                "title": "Paris weather",
+                "encrypted_content": "abc",
+                "page_age": None,
+            }
+        ],
+    }
+    answered: list[dict[str, Any]] = [result, {"type": "text", "text": "Rain."}]
+    second = await handler.reply(
+        reply(message(*answered, stop_reason="end_turn"), id="b")
+    )
+    # and the conversation goes on, holding both replies
+    after = [
+        *then,
+        {"role": "assistant", "content": answered},
+        {"role": "user", "content": "Thanks."},
+    ]
+    third = await handler.request(request("c", then=after))
+
+    assert (first, second, third) == (Pass(), Pass(), Pass())

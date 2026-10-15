@@ -5,13 +5,14 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Generic, Protocol, TypeVar
 
-from inspect_ai.model import ChatMessage, ChatMessageAssistant
+from inspect_ai.model import ChatMessage
 from inspect_ai.tool import ToolInfo
 from inspect_ai.util import Store
+from pydantic import JsonValue
 
 from ._exchange import Refuse
 from ._host import ListRecorder, Record
-from ._wire import Offered
+from ._wire import Offered, Turn
 
 V = TypeVar("V")
 
@@ -32,8 +33,8 @@ class Rejected:
     mark: str
     """The mark of those entries."""
 
-    turns: list[tuple[ChatMessageAssistant, dict[str, str]]]
-    """Each rejected turn: the model's message, and what the model is told happened to each of its calls, by call id."""
+    turns: list[Turn]
+    """Each rejected turn."""
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,9 @@ class Conversation:
 
     rejected: list[Rejected] = field(default_factory=list[Rejected])
     """The points at which turns were rejected."""
+
+    noted: JsonValue | None = None
+    """What inspect_ai's converters noted while reading the conversation's replies, which reading the next one needs."""
 
     made: dict[str, Made] = field(default_factory=dict[str, Made])
     """For each tool call the client was handed, by id, what the model was sent for the generate that made it."""

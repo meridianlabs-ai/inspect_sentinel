@@ -5,11 +5,16 @@ Every import of a private inspect_ai module in the sidecar is here and nowhere e
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import importlib
+from collections.abc import Callable, Generator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from typing import Any, cast
 
 from inspect_ai.model import ChatMessage, GenerateConfig
 from inspect_ai.tool import Tool, ToolCall, ToolCallView, ToolChoice, ToolInfo
+from pydantic import JsonValue
 
 from ._wire import UnreadableError
 
@@ -27,6 +32,65 @@ def tool_call_view(call: ToolCall) -> ToolCallView:
     from inspect_ai.tool._tool_call import default_tool_call_viewer
 
     return default_tool_call_viewer(call)
+
+
+# where inspect_ai's providers note what a message can't hold: each module
+# with the name of its context variable and of the class it holds
+_NOTED = (
+    (
+        "inspect_ai.model._openai_responses",
+        "_openai_assistant_internal",
+        "_AssistantInternal",
+    ),
+    (
+        "inspect_ai.model._providers.anthropic",
+        "_anthropic_assistant_internal",
+        "_AssistantInternal",
+    ),
+)
+
+
+@dataclass
+class Noted:
+    """What inspect_ai's converters noted within a `noting()` block, once it is left."""
+
+    value: JsonValue | None = None
+
+
+@contextmanager
+def noting(start: JsonValue | None = None) -> Generator[Noted]:
+    """Give inspect_ai's converters a place of their own to note what a message can't hold.
+
+    The Anthropic and OpenAI Responses converters note each provider item an Inspect message can't hold, such as a tool call as the provider wrote it, so that a message written back puts the item back as it was. They note it in state that inspect_ai gives each sample. The sidecar runs no sample, so without this every conversion in the process would share one place, and a call id that two runs both use would put one run's call into the other's request.
+
+    Args:
+        start: What an earlier block noted, for the converters to start from. They start from nothing if it is None.
+
+    Asked of inspect_ai: a public way to run its converters with state of their own.
+    """
+    from inspect_ai.model._assistant_internal import (
+        dump_sample_assistant_internal,
+        init_sample_assistant_internal,
+    )
+
+    bound: list[tuple[ContextVar[Any], Token[Any]]] = []
+    for module_name, variable_name, class_name in _NOTED:
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            # that provider's SDK isn't installed, so nothing is noted for it
+            continue
+        variable = cast("ContextVar[Any]", getattr(module, variable_name))
+        bound.append((variable, variable.set(getattr(module, class_name)())))
+    noted = Noted()
+    try:
+        if start is not None:
+            init_sample_assistant_internal(start)
+        yield noted
+        noted.value = dump_sample_assistant_internal()
+    finally:
+        for variable, token in reversed(bound):
+            variable.reset(token)
 
 
 async def anthropic_message(message: ChatMessage) -> dict[str, Any]:
