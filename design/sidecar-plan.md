@@ -39,7 +39,7 @@ inspect_sentinel                                              inspect_ai
 10 Middleman: inspect_sentinel and hawk, after 3 and 5          9 smaller asks, at any time
 ```
 
-PRs 1 to 3 come first, one after another. After 3, the guardrail (4) and the sidecar's support for Inspect clients (5) can go in parallel. PR 4 gains the `sentinel` field once 5 has landed. PR 8 needs 5 and 6, and needs 7 for per-call rejection and `modify`. PR 9 needs nothing and can start at any time. PR 10 waits on METR accepting Middleman's passthrough hook.
+PRs 1 to 3 come first, one after another, and land as one pull request with a commit for each, because the endpoint is the first point at which anything runs. After 3, the guardrail (4) and the sidecar's support for Inspect clients (5) can go in parallel. PR 4 gains the `sentinel` field once 5 has landed. PR 8 needs 5 and 6, and needs 7 for per-call rejection and `modify`. PR 9 needs nothing and can start at any time. PR 10 waits on METR accepting Middleman's passthrough hook.
 
 ## PR 1: reading provider traffic
 
