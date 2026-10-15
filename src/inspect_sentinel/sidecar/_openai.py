@@ -143,6 +143,10 @@ async def read_responses_request(request: dict[str, Any]) -> list[ChatMessage]:
         raise UnreadableError(
             "The request continues a conversation the provider keeps, which this sidecar is not shown."
         )
+    if request.get("prompt") is not None:
+        raise UnreadableError(
+            "The request names a prompt the provider keeps, whose text this sidecar is not shown."
+        )
     if request.get("background"):
         raise UnreadableError(
             "The request asks for a reply that is fetched later, which this sidecar would not be shown."
@@ -302,8 +306,8 @@ def _assistant_texts(entry: dict[str, Any]) -> list[object]:
 def _check_merged(messages: list[object]) -> None:
     # inspect_ai's Chat Completions reader merges a turn some scaffolds split,
     # assistant(calls) -> tool -> assistant(content), by moving the second
-    # assistant's content into the first and dropping the rest of it. A
-    # refusal given there would be dropped unread. This follows the merge as
+    # assistant's content into the first and dropping the rest of it, such as
+    # a refusal or the model's reasoning, unread. This follows the merge as
     # openai_assistant_message_reducer() in inspect_ai's
     # src/inspect_ai/model/_openai.py makes it.
     reduced: list[dict[str, Any]] = []
@@ -321,9 +325,14 @@ def _check_merged(messages: list[object]) -> None:
             and "tool_calls" in reduced[-2]
             and reduced[-2].get("content") is None
         ):
-            if message.get("refusal"):
+            dropped = sorted(
+                key
+                for key, value in message.items()
+                if key not in ("role", "content") and value not in (None, "", [], {})
+            )
+            if dropped:
                 raise UnreadableError(
-                    "The request holds an assistant's refusal that would be merged into an earlier turn and dropped."
+                    f"The request holds an assistant's {', '.join(dropped)} that would be merged into an earlier turn and dropped."
                 )
             reduced[-2] = reduced[-2] | {"content": message["content"]}
         else:

@@ -329,6 +329,11 @@ async def test_request_is_read(body: dict[str, Any], roles: list[str]) -> None:
             id="continues a stored conversation",
         ),
         pytest.param(
+            {"input": "And then?", "prompt": {"id": "pmpt_1", "variables": {}}},
+            "names a prompt the provider keeps",
+            id="names a stored prompt",
+        ),
+        pytest.param(
             {"input": "Take your time.", "background": True},
             "fetched later",
             id="answered in the background",
@@ -1186,17 +1191,41 @@ async def test_one_assistant_text_sent_twice_is_read_once() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_refusal_merged_into_an_earlier_turn_is_unreadable() -> None:
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("refusal", "A dangerous storm."),
+        ("reasoning_content", "A dangerous storm."),
+        ("reasoning", "A dangerous storm."),
+        ("reasoning_details", [{"type": "reasoning.text", "text": "A storm."}]),
+    ],
+)
+async def test_what_a_merged_turn_would_drop_is_unreadable(
+    field: str, value: object
+) -> None:
     # inspect_ai merges assistant(calls) -> tool -> assistant(content), a turn
     # some scaffolds split, keeping only the second assistant's content
     body = _chat_said(
         _write_file("Rain."),
         {"role": "tool", "tool_call_id": "call_1", "content": "Written."},
-        {"role": "assistant", "content": None, "refusal": "A dangerous storm."},
+        {"role": "assistant", "content": "Done.", field: value},
     )
 
-    with pytest.raises(UnreadableError, match="refusal"):
+    with pytest.raises(UnreadableError, match=field):
         await read_request("openai", json.dumps(body).encode())
+
+
+@pytest.mark.anyio
+async def test_a_merged_turn_of_content_alone_is_read() -> None:
+    body = _chat_said(
+        _write_file("Rain."),
+        {"role": "tool", "tool_call_id": "call_1", "content": "Written."},
+        {"role": "assistant", "content": "Done."},
+    )
+
+    messages = await read_request("openai", json.dumps(body).encode())
+
+    assert "Done." in [m.text for m in messages if m.role == "assistant"]
 
 
 @pytest.mark.anyio
