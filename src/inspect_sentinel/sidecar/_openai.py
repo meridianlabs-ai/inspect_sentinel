@@ -77,6 +77,12 @@ async def read_chat_request(request: dict[str, Any]) -> list[ChatMessage]:
                 raise UnreadableError(
                     "The request holds a call in the legacy `function_call` field, or its result, which can't be read."
                 )
+            # inspect_ai's reader drops the model's earlier audio, which the
+            # model is sent by its id; a user's input_audio is read
+            if message.get("role") == "assistant" and message.get("audio"):
+                raise UnreadableError(
+                    "The request holds audio from the model, which can't be read."
+                )
     try:
         read = await messages_from_openai(cast(Any, messages), _model(request))
     except Exception as ex:

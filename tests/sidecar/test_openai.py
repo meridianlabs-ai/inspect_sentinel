@@ -914,3 +914,35 @@ async def test_an_item_written_into_its_text_by_inspect_ai_is_read() -> None:
     messages = await read_request("openai", json.dumps(body).encode())
 
     assert messages[-1].text == "Rain."
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "content",
+    [pytest.param(None, id="audio alone"), pytest.param("Rain.", id="with text")],
+)
+async def test_earlier_audio_from_the_model_makes_the_request_unreadable(
+    content: str | None,
+) -> None:
+    # inspect_ai's reader drops the reference, and a step would be told the
+    # model had said nothing, or only the text
+    then = [
+        {"role": "assistant", "content": content, "audio": {"id": "audio_1"}},
+        {"role": "user", "content": "And tomorrow?"},
+    ]
+
+    with pytest.raises(UnreadableError, match="audio"):
+        await Handler(storm_rule()).request(_request("chat", then=then))
+
+
+@pytest.mark.anyio
+async def test_audio_from_the_user_is_read() -> None:
+    audio = {
+        "type": "input_audio",
+        "input_audio": {"data": "UklGRg==", "format": "wav"},
+    }
+    then = [
+        {"role": "user", "content": [{"type": "text", "text": "Hear this."}, audio]}
+    ]
+
+    assert await Handler(storm_rule()).request(_request("chat", then=then)) == Pass()
