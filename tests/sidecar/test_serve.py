@@ -2,12 +2,16 @@ import argparse
 import logging
 import threading
 import time
-from pathlib import Path
 
 import httpx
 import pytest
 import uvicorn
 
+from inspect_sentinel._context import Context
+from inspect_sentinel._decorators import protocol
+from inspect_sentinel._report import Decision
+from inspect_sentinel._step import BeforeToolCall
+from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, Refuse
 from inspect_sentinel.sidecar._proxy_endpoint import proxy_app
 from inspect_sentinel.sidecar._serve import (
@@ -15,7 +19,6 @@ from inspect_sentinel.sidecar._serve import (
     _quiet_health_checks,
     add_arguments,
     handler_from_arguments,
-    load_sentinel,
 )
 from tests.sidecar._traffic import message, reply, request, weather, weather_rule
 
@@ -68,19 +71,14 @@ def test_health_checks_stay_out_of_the_access_log() -> None:
     assert '"GET /proxy/v1?next=/health HTTP/1.1" 405' in lines.lines[1]
 
 
-_SENTINEL_FILE = """
-from inspect_sentinel import BeforeToolCall, Context, Decision, protocol
-
-
 @protocol
-def no_tokyo():
+def no_tokyo() -> Protocol:
     async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
         if step.call.arguments.get("location") == "Tokyo":
             return Decision.reject("Tokyo", message="Tokyo is not allowed.")
         return Decision.proceed()
 
     return decide
-"""
 
 
 def _arguments(*given: str) -> argparse.Namespace:
@@ -100,15 +98,12 @@ def test_defaults_are_one_port_and_no_limits() -> None:
 
 
 @pytest.mark.anyio
-async def test_handler_is_built_from_the_arguments(tmp_path: Path) -> None:
-    sentinels = tmp_path / "sentinels_for_serve.py"
-    sentinels.write_text(_SENTINEL_FILE)
+async def test_handler_is_built_from_the_arguments() -> None:
+    # a registered name, as an installed package's monitors and protocols are
     handler = handler_from_arguments(
         _arguments(
             "--sentinel",
             "no_tokyo",
-            "--load",
-            str(sentinels),
             "--reject-status",
             "503",
             "--role",
@@ -128,8 +123,3 @@ async def test_handler_is_built_from_the_arguments(tmp_path: Path) -> None:
 def test_a_role_is_role_equals_model(role: str) -> None:
     with pytest.raises(ValueError, match="ROLE=MODEL"):
         handler_from_arguments(_arguments("--sentinel", "x", "--role", role))
-
-
-def test_a_file_to_load_must_exist(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError, match="No such file to load"):
-        load_sentinel("no_tokyo", [str(tmp_path / "missing.py")])

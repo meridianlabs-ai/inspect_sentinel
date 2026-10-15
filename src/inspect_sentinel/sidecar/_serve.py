@@ -1,16 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import logging
-import sys
-from collections.abc import Sequence
-from pathlib import Path
 
 import uvicorn
 
 from .._config import sentinel_from_config
-from .._types import Sentinels
 from ._handler import Handler
 from ._host import SidecarHost
 from ._http import HEALTH_PATH, MAX_BODY_BYTES
@@ -28,13 +23,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--sentinel",
         required=True,
         help="A YAML or JSON sentinel configuration file, or the registered name of a monitor or protocol.",
-    )
-    parser.add_argument(
-        "--load",
-        action="append",
-        default=[],
-        metavar="FILE",
-        help="A Python file to import first, so the monitors and protocols it defines can be named. May be repeated.",
     )
     parser.add_argument(
         "--role",
@@ -100,7 +88,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
             raise ValueError(f"--role takes ROLE=MODEL, not {role!r}.")
         roles[name] = model
     return Handler(
-        load_sentinel(arguments.sentinel, arguments.load),
+        sentinel_from_config(arguments.sentinel),
         host=SidecarHost(roles),
         state=MemoryState(expiry=arguments.run_expiry),
         reject_status=arguments.reject_status,
@@ -139,32 +127,3 @@ def _quiet_health_checks() -> None:
     access = logging.getLogger("uvicorn.access")
     if not any(isinstance(kept, _HealthCheckFilter) for kept in access.filters):
         access.addFilter(_HealthCheckFilter())
-
-
-def load_sentinel(config: str, load: Sequence[str] = ()) -> Sentinels:
-    """Import the files that define monitors and protocols, then build the sentinel a configuration names.
-
-    Args:
-        config: A YAML or JSON sentinel configuration file, or a registered monitor or protocol name.
-        load: Python files to import first.
-
-    Raises:
-        FileNotFoundError: If a file in `load` does not exist.
-        ValueError: If the configuration is invalid.
-    """
-    for file in load:
-        path = Path(file).resolve()
-        if not path.is_file():
-            raise FileNotFoundError(f"No such file to load: {file}")
-        spec = importlib.util.spec_from_file_location(path.stem, path)
-        if spec is None or spec.loader is None:
-            raise ValueError(f"{file} can't be imported as a Python module.")
-        module = importlib.util.module_from_spec(spec)
-        # a file may import the files beside it, as it would when run directly
-        sys.path.insert(0, str(path.parent))
-        try:
-            sys.modules[path.stem] = module
-            spec.loader.exec_module(module)
-        finally:
-            sys.path.remove(str(path.parent))
-    return sentinel_from_config(config)
