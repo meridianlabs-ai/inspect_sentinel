@@ -1348,7 +1348,7 @@ requires-dist = [
     { name = "build", marker = "extra == 'dist'" },
     { name = "griffe", marker = "extra == 'dev'", specifier = ">=2" },
     { name = "griffe", marker = "extra == 'doc'", specifier = ">=2" },
-    { name = "inspect-ai", specifier = ">=0.3.279" },
+    { name = "inspect-ai", specifier = ">=0.3.280" },
     { name = "inspect-scout", marker = "extra == 'dev'" },
     { name = "jupyter", marker = "extra == 'dev'" },
     { name = "jupyter", marker = "extra == 'doc'" },
