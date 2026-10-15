@@ -40,6 +40,21 @@ _BLOCKS = frozenset(
     }
 )
 
+# The kinds of content delta that the SDK's stream accumulator applies. It
+# drops any other kind without an error, such as the delta that carries a
+# compaction block's summary, so a stream holding one is unreadable here.
+# Kept in step with accumulate_event() in the SDK's
+# anthropic/lib/streaming/_messages.py.
+_DELTAS = frozenset(
+    {
+        "text_delta",
+        "input_json_delta",
+        "citations_delta",
+        "thinking_delta",
+        "signature_delta",
+    }
+)
+
 
 async def read_reply(content_type: str, body: bytes) -> ModelOutput:
     if content_type.startswith("text/event-stream"):
@@ -199,6 +214,13 @@ def _stream(body: bytes) -> object:
                 "The reply stream ended in an error from the provider."
             )
         stopped = stopped or kind == "message_stop"
+        if kind == "content_block_delta":
+            delta: object = event.get("delta")
+            delta_kind = _kind(delta)
+            if delta_kind not in _DELTAS:
+                raise UnreadableError(
+                    f"The reply stream holds content of a kind that can't be read: {delta_kind!r}."
+                )
         try:
             snapshot = accumulate(
                 event=construct_type(type_=RawMessageStreamEvent, value=event),

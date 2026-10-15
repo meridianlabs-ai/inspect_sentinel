@@ -68,10 +68,31 @@ async def read_chat_request(request: dict[str, Any]) -> list[ChatMessage]:
         if isinstance(entry, dict):
             _check_calls(cast("dict[str, Any]", entry).get("tool_calls"))
     try:
-        return await messages_from_openai(cast(Any, messages), _model(request))
+        read = await messages_from_openai(cast(Any, messages), _model(request))
     except Exception as ex:
         # the converters raise errors of many kinds on content they can't read
         raise UnreadableError("The request holds a message that can't be read.") from ex
+    _check_results(cast("list[object]", messages), read)
+    return read
+
+
+def _check_results(messages: list[object], read: list[ChatMessage]) -> None:
+    # inspect_ai's Chat Completions converter takes reasoning tags out of a
+    # tool result written as a string, and keeps only the rest of it, while
+    # the model is sent all of it. A result read as anything but what was
+    # sent is unreadable, rather than judged with part of it unseen.
+    sent = [
+        cast("dict[str, Any]", entry).get("content")
+        for entry in messages
+        if isinstance(entry, dict)
+        and cast("dict[str, Any]", entry).get("role") == "tool"
+    ]
+    results = [message for message in read if isinstance(message, ChatMessageTool)]
+    for content, result in zip(sent, results, strict=False):
+        if isinstance(content, str) and result.text != content:
+            raise UnreadableError(
+                "The request holds a tool result that would be read as less than the model is sent."
+            )
 
 
 async def read_responses_request(request: dict[str, Any]) -> list[ChatMessage]:

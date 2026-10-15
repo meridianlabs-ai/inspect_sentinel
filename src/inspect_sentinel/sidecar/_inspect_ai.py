@@ -5,22 +5,18 @@ Every import of a private inspect_ai module in the sidecar is here and nowhere e
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 from inspect_ai.model import ChatMessage, GenerateConfig
 from inspect_ai.tool import Tool, ToolCall, ToolCallView, ToolChoice, ToolInfo
 
-logger = logging.getLogger(__name__)
+from ._wire import UnreadableError
 
 # A request offers the model every tool it declares. The agent bridge withholds
 # the tools a provider runs unless its eval grants them, so here every one is
 # granted: the sidecar reads a request, and leaves what it offers to the client.
 _EVERY_PROVIDER: dict[str, Any] = {}
-
-# the kinds of tool declaration a warning has been logged for
-_warned: set[str] = set()
 
 
 def tool_call_view(call: ToolCall) -> ToolCallView:
@@ -125,7 +121,8 @@ def responses_offered(
     )
 
     def read(declaration: Any) -> list[ToolInfo | Tool]:
-        # a kind inspect_ai doesn't know is left out here, with its own warning
+        # a kind inspect_ai doesn't know is left out here, with its own
+        # warning, and _readable() refuses the request for it
         return tools_from_responses_tool(
             declaration,
             cast(Any, _EVERY_PROVIDER),
@@ -145,27 +142,28 @@ def _readable(
     declarations: object,
     read: Callable[[Any], Sequence[ToolInfo | Tool]],
 ) -> list[ToolInfo]:
-    # A declaration that can't be read is left out of what a step is told the
-    # model is offered, and the request is judged as usual: a call the model
-    # makes to that tool is still in its reply, and is judged there.
+    # A declaration that can't be read makes the request unreadable, rather
+    # than a step being told the model is offered fewer tools than it is.
+    # inspect_ai's readers raise on some kinds they don't know, and leave
+    # others out with a warning of their own.
     from inspect_ai.tool._tool_util import tool_to_tool_info
 
     tools: list[ToolInfo] = []
     for declaration in cast("list[Any]", declarations or []):
         try:
-            tools.extend(
+            read_ = [
                 tool if isinstance(tool, ToolInfo) else tool_to_tool_info(tool)
                 for tool in read(declaration)
-            )
+            ]
         except Exception as ex:
-            kind = f"{api} {_kind(declaration)}"
-            if kind not in _warned:
-                _warned.add(kind)
-                logger.warning(
-                    "A request offers a tool that can't be read (%s: %s), so a step is not told the model is offered it.",
-                    kind,
-                    ex,
-                )
+            raise UnreadableError(
+                f"The request offers a tool that can't be read: {api} {_kind(declaration)}."
+            ) from ex
+        if not read_:
+            raise UnreadableError(
+                f"The request offers a tool that can't be read: {api} {_kind(declaration)}."
+            )
+        tools.extend(read_)
     return tools
 
 

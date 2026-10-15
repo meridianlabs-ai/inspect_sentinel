@@ -1,6 +1,5 @@
 """What a sentinel in the sidecar is given at each step, found in the traffic."""
 
-import logging
 from typing import Any, cast
 
 import pytest
@@ -22,7 +21,6 @@ from inspect_sentinel.sidecar import (
     Record,
     Refuse,
     UnreadableError,
-    _inspect_ai,
 )
 from tests.sidecar._traffic import message, ran, reply, request, weather
 
@@ -181,23 +179,12 @@ async def test_tool_choice_is_what_the_model_is_sent(
 
 
 @pytest.mark.anyio
-async def test_a_tool_that_cannot_be_read_is_left_out_with_a_warning(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setattr(_inspect_ai, "_warned", set[str]())
+async def test_a_tool_that_cannot_be_read_makes_the_request_unreadable() -> None:
+    # a step is never told the model is offered fewer tools than it is
     tools = [*_TOOLS[:1], {"type": "future_tool_20990101", "name": "future"}]
-    handler = Handler(reports_generates())
 
-    with caplog.at_level(logging.WARNING):
-        for id in ("a", "b"):
-            assert await handler.request(request(id, tools=tools)) == Pass()
-
-    (explanation,) = _explanations(await handler.records("a"))
-    assert explanation.split("|")[3] == "['get_weather']"
-    # once for each kind of tool, however often it is offered
-    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert "anthropic future_tool_20990101" in warnings[0]
+    with pytest.raises(UnreadableError, match="anthropic future_tool_20990101"):
+        await Handler(reports_generates()).request(request(tools=tools))
 
 
 @pytest.mark.anyio

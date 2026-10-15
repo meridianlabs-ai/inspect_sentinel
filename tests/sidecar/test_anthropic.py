@@ -95,6 +95,29 @@ _UNKNOWN_BLOCK: dict[str, Any] = {
             id="streamed block of a kind inspect_ai doesn't read",
         ),
         pytest.param(
+            STREAM,
+            _stream(
+                _START,
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "compaction", "content": ""},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "compaction_delta",
+                        "content": "Oslo had a storm.",
+                    },
+                },
+                {"type": "content_block_stop", "index": 0},
+                {"type": "message_stop"},
+            ),
+            "'compaction_delta'",
+            id="streamed content the SDK's accumulator drops",
+        ),
+        pytest.param(
             STREAM, _stream(_START), "not a complete message", id="stream cut short"
         ),
         pytest.param(

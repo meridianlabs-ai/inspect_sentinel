@@ -1,5 +1,4 @@
 import json
-import logging
 from typing import Any, cast
 
 import pytest
@@ -18,7 +17,6 @@ from inspect_sentinel.sidecar import (
     Reply,
     Request,
     UnreadableError,
-    _inspect_ai,
     read_reply,
     read_request,
 )
@@ -460,26 +458,74 @@ async def test_generate_stage_is_given_the_tools_the_request_offers(
 
 
 @pytest.mark.anyio
-async def test_a_chat_custom_tool_is_left_out_with_a_warning(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    # inspect_ai's Chat Completions reader has no form for a custom tool
-    monkeypatch.setattr(_inspect_ai, "_warned", set[str]())
+async def test_a_chat_tool_result_read_as_less_than_was_sent_is_unreadable() -> None:
+    # inspect_ai's reader would keep only "sun", and the model is sent it all
+    body = openai_request(
+        "chat",
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "<think>storm</think>sun",
+            },
+        ],
+    )
+
+    with pytest.raises(UnreadableError, match="less than the model is sent"):
+        await read_request("openai", json.dumps(body).encode())
+
+
+@pytest.mark.anyio
+async def test_a_chat_tool_result_with_tags_in_parts_is_read_whole() -> None:
+    body = openai_request(
+        "chat",
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "<think>storm</think>sun"}],
+            },
+        ],
+    )
+
+    messages = await read_request("openai", json.dumps(body).encode())
+
+    assert messages[-1].text == "<think>storm</think>sun"
+
+
+@pytest.mark.anyio
+async def test_a_chat_custom_tool_makes_the_request_unreadable() -> None:
+    # inspect_ai's Chat Completions reader has no form for a custom tool, and
+    # a step is never told the model is offered fewer tools than it is
     tools = [
         {"type": "function", "function": _FUNCTION},
         {"type": "custom", "custom": {"name": "apply_patch"}},
     ]
-    handler = Handler(reports_tools())
 
-    with caplog.at_level(logging.WARNING):
-        assert await handler.request(_request("chat", tools=tools)) == Pass()
-
-    records = await handler.records("x")
-    assert records is not None
-    assert [cast(Any, record.detail).report.explanation for record in records] == [
-        "['get_weather']|None"
-    ]
-    assert "openai-chat custom" in caplog.text
+    with pytest.raises(UnreadableError, match="openai-chat custom"):
+        await Handler(reports_tools()).request(_request("chat", tools=tools))
 
 
 @protocol

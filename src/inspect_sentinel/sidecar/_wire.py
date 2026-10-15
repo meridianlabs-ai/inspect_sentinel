@@ -85,12 +85,14 @@ def offered(provider: str, body: bytes, format: Format | None = None) -> Offered
     """The tools, tool choice and configuration a request sends the model.
 
     Raises:
-        UnreadableError: If there is no reader for the provider's API, or the request's tool choice or settings can't be read. A tool declaration that can't be read is left out, with a warning.
+        UnreadableError: If there is no reader for the provider's API, or the request's tools, tool choice or settings can't be read.
     """
     request = json_object(body, "request")
     api = _api(provider, request, format)
     try:
         tools, tool_choice, config = api.offered(request)
+    except UnreadableError:
+        raise
     except Exception as ex:
         # inspect_ai's readers raise errors of many kinds on what they can't read
         raise UnreadableError(
