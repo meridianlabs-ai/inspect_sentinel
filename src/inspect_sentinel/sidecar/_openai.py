@@ -29,6 +29,8 @@ async def read_reply(
             chat = any(
                 event.get("object") == "chat.completion.chunk" for event in events
             )
+        if chat:
+            _check_audio(events, "delta")
         reply = _chat_stream(events) if chat else _responses_stream(events)
     else:
         parsed = json_object(body, "reply")
@@ -39,6 +41,8 @@ async def read_reply(
                     f"There is no reader for an OpenAI {kind!r} reply."
                 )
             chat = kind == "chat.completion"
+        if chat:
+            _check_audio([parsed], "message")
         reply = _completion(parsed) if chat else _response(parsed)
     if chat:
         for choice in cast("list[Any]", getattr(reply, "choices", None) or []):
@@ -182,6 +186,25 @@ async def responses_rejected_turn(
     # written by inspect_ai, so a reasoning item goes back with the calls it
     # led to
     return cast("list[Any]", await messages_to_openai_responses([message, *results]))
+
+
+def _check_audio(entries: list[dict[str, Any]], part: str) -> None:
+    # inspect_ai's Chat Completions converter keeps neither a reply's audio nor
+    # its transcript, so a reply of audio alone would be judged as empty while
+    # the client is handed all of it. See chat_choices_from_openai() in
+    # inspect_ai's src/inspect_ai/model/_openai.py.
+    for entry in entries:
+        choices: object = entry.get("choices")
+        for choice in cast(
+            "list[object]", choices if isinstance(choices, list) else []
+        ):
+            said: object = (
+                cast("dict[str, Any]", choice).get(part)
+                if isinstance(choice, dict)
+                else None
+            )
+            if isinstance(said, dict) and cast("dict[str, Any]", said).get("audio"):
+                raise UnreadableError("The reply holds audio, which can't be read.")
 
 
 def _check_calls(calls: object) -> None:

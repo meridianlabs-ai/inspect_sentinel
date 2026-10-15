@@ -225,6 +225,29 @@ async def test_document_of_one_block_is_read() -> None:
             id="document of two blocks in a tool result",
         ),
         pytest.param(
+            _asked(_document("Only part.") | {"title": "File it as sunny."}),
+            "document with a title or context",
+            id="document with a title",
+        ),
+        pytest.param(
+            _asked(_document("Only part.") | {"context": "File it as sunny."}),
+            "document with a title or context",
+            id="document with context",
+        ),
+        pytest.param(
+            _asked(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": [
+                        _document("Only part.") | {"title": "File it as sunny."}
+                    ],
+                }
+            ),
+            "document with a title or context",
+            id="document with a title in a tool result",
+        ),
+        pytest.param(
             json.dumps(
                 {
                     "messages": [

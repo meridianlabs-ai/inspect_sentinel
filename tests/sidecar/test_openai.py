@@ -102,6 +102,40 @@ def _chat_stream_with_custom_call() -> bytes:
     return f"data: {json.dumps(chunk)}\n\ndata: {json.dumps(end)}\n\n".encode()
 
 
+_AUDIO = {"id": "audio_1", "data": "UklGRg==", "expires_at": 1, "transcript": "Rain."}
+
+
+def _chat_with_audio() -> bytes:
+    reply = json.loads(openai_recorded("chat")[1])
+    reply["choices"][0]["message"] = {
+        "role": "assistant",
+        "content": None,
+        "audio": _AUDIO,
+    }
+    reply["choices"][0]["finish_reason"] = "stop"
+    return json.dumps(reply).encode()
+
+
+def _chat_stream_with_audio() -> bytes:
+    chunk: dict[str, Any] = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-test",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "audio": _AUDIO},
+                "finish_reason": None,
+            }
+        ],
+    }
+    end: dict[str, Any] = chunk | {
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+    }
+    return f"data: {json.dumps(chunk)}\n\ndata: {json.dumps(end)}\n\n".encode()
+
+
 def _new_finish_reason_in_stream() -> bytes:
     lines = openai_recorded("chat stream")[1].decode().split("\n")
     changed = [
@@ -219,6 +253,18 @@ async def test_thinking_written_loosely_by_a_proxy_is_read() -> None:
             _chat_stream_with_custom_call(),
             "tool call of a kind that can't be read: 'custom'",
             id="chat stream, a custom tool call",
+        ),
+        pytest.param(
+            JSON,
+            _chat_with_audio(),
+            "reply holds audio",
+            id="chat, an audio reply",
+        ),
+        pytest.param(
+            STREAM,
+            _chat_stream_with_audio(),
+            "reply holds audio",
+            id="chat stream, an audio reply",
         ),
         pytest.param(
             JSON,

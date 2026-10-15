@@ -141,8 +141,9 @@ def _check_blocks(content: object, what: str) -> None:
 
 def _check_documents(content: object) -> None:
     # inspect_ai's Anthropic converter reads only the first block of a document
-    # whose source is a list of blocks, and drops the rest without an error.
-    # See content_block_to_content() in inspect_ai's
+    # whose source is a list of blocks, and drops the rest, and drops a
+    # document's title and context, which the model is sent too, all without
+    # an error. See content_block_to_content() in inspect_ai's
     # src/inspect_ai/agent/_bridge/anthropic_api_impl.py.
     if not isinstance(content, list):
         return
@@ -152,8 +153,14 @@ def _check_documents(content: object) -> None:
         block = cast("dict[str, Any]", block)
         if block.get("type") == "tool_result":
             _check_documents(block.get("content"))
+        if block.get("type") != "document":
+            continue
+        if block.get("title") or block.get("context"):
+            raise UnreadableError(
+                "The request holds a document with a title or context, which would not be read."
+            )
         source = block.get("source")
-        if block.get("type") != "document" or not isinstance(source, dict):
+        if not isinstance(source, dict):
             continue
         parts = cast("dict[str, Any]", source).get("content")
         if isinstance(parts, list) and len(cast("list[object]", parts)) > 1:
