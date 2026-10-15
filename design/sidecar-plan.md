@@ -112,7 +112,7 @@ Repository: `inspect_sentinel`. Depends on: PRs 2 and 5.
 
 - Taking a rejected call out of a reply, and changing a modified call, block by block in the provider's own document, for each provider format, streamed and not (section 4).
 - Putting the call back, or the model's original call, on every later request of the conversation, and adding nothing when the request already holds it.
-- Refusing the whole turn when every call in it is rejected.
+- Refusing the whole turn when every call in it is rejected, and ending the run after three such turns in a row. A turn in which some calls ran starts the count again (section 4).
 - Tests: edited replies read back by each SDK; the put-back request equal to what Inspect sends in process.
 
 ## PR 8: `RemoteSentinel`
