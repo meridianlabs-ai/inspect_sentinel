@@ -244,7 +244,7 @@ async def step_as_str(
 
     Args:
         step: A step, rendered whole, or an excerpt of one.
-        nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker; none by default. The default renderer also writes it on every message header, as `[M1] USER (3f9a1c7e):`, where the installed Scout takes a nonce; Scout needs at least 8 characters.
+        nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker; none by default. The default renderer also writes it on every message header, as `USER (3f9a1c7e):`, where the installed Scout takes a nonce; Scout needs at least 8 characters.
         messages_as_str: Renders a list of messages; pass the first function of Scout's `message_numbering()` to number them so a model's answer can cite them (made with `MessagesPreprocessor(exclude_system=False)`, so that the excerpt decides whether system messages show). By default Scout's `messages_as_str`, which leaves out only what the excerpt excludes.
     """
     # Scout imports duckdb and pandas, so load it only when a monitor renders
@@ -318,7 +318,8 @@ async def step_as_str(
 
 def scout_nonce(nonce: str) -> dict[str, str]:
     # Scout 0.5.5 and earlier take no nonce; until this package requires a
-    # later Scout, it is passed only to one that takes it
+    # later Scout, it is passed only to one that takes it. Scout added it to
+    # messages_as_str and message_numbering together, so one check serves both
     from inspect_scout import messages_as_str
 
     return {"nonce": nonce} if "nonce" in signature(messages_as_str).parameters else {}
