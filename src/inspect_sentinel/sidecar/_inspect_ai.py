@@ -263,6 +263,45 @@ def _key(declaration: object) -> tuple[object, object]:
     return (found.get("type"), found.get("name"))
 
 
+# what a function that declares no parameters takes
+_NO_PARAMETERS: dict[str, Any] = {"type": "object", "properties": {}}
+
+
+def _filled(api: str, declaration: object) -> object:
+    # A provider lets a tool declaration leave out some fields that
+    # inspect_ai's bridge readers index, so they are filled in here with what
+    # leaving them out means: no description, no parameters, any of an MCP
+    # server's tools, no headers, and input of any text.
+    if not isinstance(declaration, dict):
+        return declaration
+    found = cast("dict[str, Any]", declaration)
+    kind = found.get("type")
+    if api == "openai-chat":
+        function: object = found.get("function")
+        if kind == "function" and isinstance(function, dict):
+            return found | {
+                "function": {"description": "", "parameters": _NO_PARAMETERS}
+                | cast("dict[str, Any]", function)
+            }
+    elif api == "anthropic":
+        if "input_schema" in found:
+            return {"description": ""} | found
+    elif kind == "function":
+        return {"description": "", "parameters": _NO_PARAMETERS} | found
+    elif kind == "custom":
+        return {"description": "", "format": {"type": "text"}} | found
+    elif kind == "mcp":
+        return {"allowed_tools": None, "headers": None} | found
+    elif kind == "namespace":
+        # a namespace holds tools of its own, which are read the same way
+        inner: object = found.get("tools")
+        if isinstance(inner, list):
+            return found | {
+                "tools": [_filled(api, tool) for tool in cast("list[object]", inner)]
+            }
+    return found
+
+
 def _readable(
     api: str,
     declarations: object,
@@ -279,7 +318,7 @@ def _readable(
         try:
             read_ = [
                 tool if isinstance(tool, ToolInfo) else tool_to_tool_info(tool)
-                for tool in read(declaration)
+                for tool in read(_filled(api, declaration))
             ]
         except Exception as ex:
             raise UnreadableError(

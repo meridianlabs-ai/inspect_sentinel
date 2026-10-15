@@ -1406,3 +1406,63 @@ async def test_a_request_whose_call_arguments_cant_be_parsed_is_unreadable(
 
     with pytest.raises(UnreadableError, match="arguments can't be read"):
         await read_request("openai", json.dumps(body).encode())
+
+
+_SCHEMA = {"type": "object", "properties": {"location": {"type": "string"}}}
+
+
+@pytest.mark.parametrize(
+    ("provider", "body", "names"),
+    [
+        pytest.param(
+            "openai",
+            {
+                "messages": [],
+                "tools": [
+                    {"type": "function", "function": {"name": "get_weather"}},
+                    {
+                        "type": "function",
+                        "function": {"name": "file_report", "parameters": _SCHEMA},
+                    },
+                ],
+            },
+            ["get_weather", "file_report"],
+            id="chat",
+        ),
+        pytest.param(
+            "openai",
+            {
+                "input": [],
+                "tools": [
+                    {"type": "function", "name": "get_weather"},
+                    {"type": "custom", "name": "apply_patch"},
+                    {"type": "mcp", "server_label": "maps", "server_url": "https://x"},
+                    {
+                        "type": "namespace",
+                        "name": "travel",
+                        "tools": [{"type": "function", "name": "book_flight"}],
+                    },
+                ],
+            },
+            ["get_weather", "apply_patch", "mcp_server_maps", "book_flight"],
+            id="responses",
+        ),
+        pytest.param(
+            "anthropic",
+            {
+                "messages": [],
+                "tools": [{"name": "get_weather", "input_schema": _SCHEMA}],
+            },
+            ["get_weather"],
+            id="anthropic",
+        ),
+    ],
+)
+def test_tools_declared_without_their_optional_fields_are_read(
+    provider: str, body: dict[str, Any], names: list[str]
+) -> None:
+    from inspect_sentinel.sidecar._wire import offered
+
+    read = offered(provider, json.dumps(body).encode())
+
+    assert [tool.name for tool in read.tools] == names
