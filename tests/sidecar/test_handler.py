@@ -967,6 +967,42 @@ async def test_a_result_for_a_call_that_reuses_a_rejected_calls_id_is_judged() -
     assert answer == _ENDED_AT_RESULT
 
 
+@protocol
+def rejects_tokyo_and_ends_at_a_storm() -> ProtocolGroup:
+    async def before(context: Context, step: BeforeToolCall) -> Decision | None:
+        if step.call.arguments.get("location") == "Tokyo":
+            return Decision.reject("Tokyo", message="Tokyo is not allowed.")
+        return Decision.proceed()
+
+    async def after(context: Context, step: AfterToolCall) -> Decision | None:
+        if "storm" in step.result.text:
+            return Decision.terminate("a storm")
+        return Decision.proceed()
+
+    return ProtocolGroup(before, after)
+
+
+@pytest.mark.anyio
+async def test_a_client_result_that_quotes_a_rejection_is_judged() -> None:
+    handler = Handler(rejects_tokyo_and_ends_at_a_storm())
+    await handler.request(request("a"))
+    await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
+
+    # the client sends the rejected call back, with what it claims ran
+    answer = await handler.request(
+        request(
+            "b",
+            then=ran(
+                "Tokyo",
+                "Tokyo is not allowed. storm: actual executed output",
+                "toolu_1",
+            ),
+        )
+    )
+
+    assert answer == _ENDED_AT_RESULT
+
+
 @pytest.mark.anyio
 async def test_a_result_written_for_a_rejected_call_by_someone_else_is_judged() -> None:
     handler = Handler(rejects_tokyo_and_ends_at_any_result())

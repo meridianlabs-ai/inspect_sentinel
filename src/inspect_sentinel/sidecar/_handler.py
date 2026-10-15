@@ -145,6 +145,9 @@ class Handler:
         conversation = run.conversations.setdefault(conversation_key, Conversation())
 
         answer: Answer = Pass()
+        # only what the client sent holds results to judge: what the sidecar
+        # adds below is its own writing
+        client = messages
         # a point this request doesn't continue from is kept for the requests
         # that do: a run's key is shared by conversations that open alike
         told = {
@@ -172,7 +175,7 @@ class Handler:
             kept=list(conversation.kept),
             marks=marks,
         )
-        ended = await self._results(held, run, conversation)
+        ended = await self._results(held, run, conversation, client)
         if ended is not None:
             return ended
         before = BeforeGenerate(
@@ -192,10 +195,14 @@ class Handler:
         return answer
 
     async def _results(
-        self, held: Held, run: Run, conversation: Conversation
+        self,
+        held: Held,
+        run: Run,
+        conversation: Conversation,
+        client: list[ChatMessage],
     ) -> Refuse | None:
         made: dict[str, tuple[ChatMessageAssistant, ToolCall]] = {}
-        for entry in held.input:
+        for entry in client:
             if isinstance(entry, ChatMessageAssistant):
                 for call in entry.tool_calls or []:
                     made[call.id] = (entry, call)
@@ -207,10 +214,6 @@ class Handler:
                     f"The request holds a result for a call it doesn't hold: {entry.tool_call_id!r}."
                 )
             assistant, call = found
-            if _told(conversation, call, entry):
-                # what the sidecar wrote for a call that didn't run is not a
-                # tool's result
-                continue
             digest = _result_digest(call, entry)
             if digest in run.judged:
                 continue
@@ -391,20 +394,6 @@ def _ended(run: Run, marks: Sequence[str]) -> Refuse | None:
     # ended in
     return run.refusal or next(
         (run.ended_at[mark] for mark in marks if mark in run.ended_at), None
-    )
-
-
-def _told(conversation: Conversation, call: ToolCall, result: ChatMessageTool) -> bool:
-    # whether a result is the one the sidecar wrote for a rejected call: the
-    # same call, and what the sidecar wrote, and not merely the call's id
-    return any(
-        rejected.id == call.id
-        and rejected.function == call.function
-        and rejected.arguments == call.arguments
-        and told[call.id] in result.text
-        for point in conversation.rejected
-        for message, told in point.turns
-        for rejected in message.tool_calls or []
     )
 
 
