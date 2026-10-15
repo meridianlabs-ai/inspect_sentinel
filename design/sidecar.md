@@ -900,7 +900,9 @@ A client that retries a request sends it again under the same id. `outcome` and 
 
 `outcome` and `message` are present only when `state` is `decided`.
 
-`records` says whether the sidecar has records for the request. It is one of three values: `held` means it has them, and they are in `recorded`; `dropped` means it had them and no longer keeps them; `unknown` means it never saw the request. `dropped` and `unknown` are normal results and not errors, because the eval writes them into its log. Once a request's records are dropped, the sidecar keeps the request's id alone, for as long again as it kept the records and up to a limit on how many ids it keeps, so that it can answer `dropped`. After that, it answers `unknown`. With either of them, the result has no `outcome`, `message` or `recorded`.
+When the latest attempt's turn was refused because a call in it was rejected, the result also holds `withheld`: the model's turn and what the model is told of each call, as the `sentinel` field holds it. An eval whose proxy dropped the field puts the turn into its own copy of the conversation from here, as it would from the field.
+
+`records` says whether the sidecar has records for the request. It is one of three values: `held` means it has them, and they are in `recorded`; `dropped` means it had them and no longer keeps them; `unknown` means it never saw the request. `dropped` and `unknown` are normal results and not errors, because the eval writes them into its log. Once a request's records are dropped, the sidecar keeps the request's id alone, for as long again as it kept the records and up to a limit on how many ids it keeps, so that it can answer `dropped`. After that, it answers `unknown`. With either of them, the result has no `outcome`, `message`, `recorded` or `withheld`.
 
 **`run_result`.** The eval asks once, before scoring:
 
