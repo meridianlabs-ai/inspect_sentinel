@@ -62,9 +62,9 @@ async def read_request(
 async def read_opening(
     provider: str, body: bytes, format: Format | None = None
 ) -> list[ChatMessage]:
-    """Read how a request's conversation opens: its system messages, and its first user message.
+    """Read how a request's conversation opens: its system and developer messages, and its first user message.
 
-    It is read without anything noted from the conversation's replies, which are not needed for it, so it can say which conversation the request continues before the rest is read.
+    It is read without anything noted from the conversation's replies, which none of those messages need, so it can say which conversation the request continues before the rest is read.
 
     Raises:
         UnreadableError: As `read_request` does.
@@ -73,21 +73,19 @@ async def read_opening(
 
     request = json_object(body, "request")
     api = _api(provider, request, format)
-    entries = _conversation(request, api)
-    user = next(
-        (
-            index
-            for index, entry in enumerate(entries)
+    opening: list[Any] = []
+    user = False
+    for entry in _conversation(request, api):
+        role = (
+            cast("dict[str, Any]", entry).get("role")
             if isinstance(entry, dict)
-            and cast("dict[str, Any]", entry).get("role") == "user"
-        ),
-        None,
-    )
-    opening = request | {
-        api.conversation: entries[: user + 1] if user is not None else []
-    }
+            else None
+        )
+        if role in ("system", "developer") or (role == "user" and not user):
+            opening.append(entry)
+            user = user or role == "user"
     with noting():
-        return await api.read(opening)
+        return await api.read(request | {api.conversation: opening})
 
 
 async def read_reply(

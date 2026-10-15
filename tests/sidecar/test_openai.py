@@ -4,6 +4,7 @@ from typing import Any, cast
 
 import pytest
 from inspect_ai.model import ChatMessageTool, ContentReasoning
+from inspect_ai.util import StoreModel
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
@@ -676,3 +677,46 @@ async def test_a_rejected_turn_is_put_back_as_its_own_run_was_handed_it() -> Non
         for item in handed
         if item["type"] == "function_call"
     ]
+
+
+class _Asked(StoreModel):
+    requests: int = 0
+
+
+@protocol
+def one_request_a_run() -> Protocol:
+    async def decide(context: Context, step: BeforeGenerate) -> Decision | None:
+        asked = context.store_as(_Asked)
+        asked.requests += 1
+        if asked.requests > 1:
+            return Decision.terminate("A second request.")
+        return None
+
+    return decide
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("api", "role"),
+    [("chat", "system"), ("chat", "developer"), ("responses", "developer")],
+)
+async def test_requests_that_open_with_different_instructions_alone_are_runs_apart(
+    api: str, role: str
+) -> None:
+    handler = Handler(one_request_a_run())
+    field = "messages" if api == "chat" else "input"
+
+    def asked(id: str, prompt: str) -> Request:
+        body = {"model": "gpt-test", field: [{"role": role, "content": prompt}]}
+        return Request(
+            id=id,
+            provider="openai",
+            model="gpt-test",
+            user="user-1",
+            body=json.dumps(body).encode(),
+        )
+
+    first = await handler.request(asked("a", "You file weather reports."))
+    second = await handler.request(asked("b", "You book travel."))
+
+    assert (first, second) == (Pass(), Pass())
