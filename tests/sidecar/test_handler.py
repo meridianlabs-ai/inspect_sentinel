@@ -1223,3 +1223,29 @@ async def test_a_result_two_requests_hold_at_once_is_judged_once() -> None:
         _Gate.open.set()
 
     assert (_Gate.judged, answers) == (1, {"a": Pass(), "b": Pass()})
+
+
+@protocol
+def ends_at_a_storm_the_model_mentions() -> Protocol:
+    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+        if "storm" in step.message:
+            return Decision.terminate("a storm")
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_result_is_judged_again_beside_what_the_model_said_anew() -> None:
+    handler = Handler(ends_at_a_storm_the_model_mentions())
+    then = ran("Oslo", "Rain.")
+    await handler.request(request("a", then=then))
+    # the same call and result, beside other words from the model
+    changed = [
+        {**then[0], "content": [{"type": "text", "text": "A storm."}, weather("Oslo")]},
+        then[1],
+    ]
+
+    answer = await handler.request(request("b", then=changed))
+
+    assert isinstance(answer, Refuse)

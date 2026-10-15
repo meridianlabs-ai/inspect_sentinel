@@ -231,7 +231,7 @@ class Handler:
                     f"The request holds a result for a call it doesn't hold: {entry.tool_call_id!r}."
                 )
             assistant, call = found
-            digest = _result_digest(call, entry)
+            digest = _result_digest(assistant, call, entry)
             key = (held.run, held.conversation, digest)
             while (judging := self._judging.get(key)) is not None:
                 await judging.wait()
@@ -456,11 +456,16 @@ def _opening(messages: Sequence[ChatMessage]) -> str:
     return digest.hexdigest()[:16]
 
 
-def _result_digest(call: ToolCall, result: ChatMessageTool) -> str:
-    # the call as well as the result: the client wrote both into the request,
-    # so an id seen before doesn't vouch for what now stands beside it
+def _result_digest(
+    assistant: ChatMessageAssistant, call: ToolCall, result: ChatMessageTool
+) -> str:
+    # everything the step is given from the request, the model's words with
+    # the call as well as the result: the client wrote them all into the
+    # request, so an id seen before doesn't vouch for what now stands beside it
     digest = hashlib.sha256(
-        json.dumps([call.id, call.function, call.arguments], sort_keys=True).encode()
+        json.dumps(
+            [assistant.text, call.id, call.function, call.arguments], sort_keys=True
+        ).encode()
     )
     digest.update(b"\x00")
     digest.update(result.model_dump_json(exclude={"id"}).encode())
