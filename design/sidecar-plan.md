@@ -57,7 +57,7 @@ Repository: `inspect_sentinel`. Depends on: PR 1.
 - Runs, keyed by a name the proxy passes on or by how a conversation opens, and conversations within a run (section 7).
 - The four steps, found in the traffic: `AfterToolCall` and `BeforeGenerate` on a request, `AfterGenerate` and `BeforeToolCall` on a reply, each tool result judged once (section 3).
 - Carrying out decisions on the request or reply held: `proceed`, refusing a whole turn, a `terminate` that keeps the run ended, rejected turns put back on later requests, and three rejections in a row ending the run (section 4).
-- The conversation kept for each run, given to a step as its `history` (section 8).
+- No `history` at any step, as the core defines it behind a proxy (section 8).
 - The state behind one interface, with an in-memory implementation (section 10).
 - Tests: the handler driven directly, with no proxy and no HTTP.
 
@@ -157,6 +157,7 @@ These need design first. Each names the repositories it would touch.
 - Asking a person from the sidecar: the sidecar holding the turn, `RemoteSentinel` showing the question in Inspect's approval UI, and the answer coming back on the person's own credential. `inspect_sentinel` and `inspect_ai`.
 - How Inspect says that a run is new or resumed. `inspect_sentinel` and `inspect_ai`.
 - Model calls that Inspect answers from its cache, which never reach the proxy. `inspect_ai`, and possibly `inspect_sentinel`.
+- Filling `step.sent` from each conversation the sidecar keeps, with the turns before a compaction, once the core has `step.sent`. `inspect_sentinel`.
 - Tallies kept at the task level. `inspect_sentinel`.
 - A credential tied to the evals it may name. `inspect_sentinel`.
 - The Envoy shim. `inspect_sentinel`.
