@@ -56,7 +56,11 @@ async def read_request(
     request = json_object(body, "request")
     api = _api(provider, request, format)
     with noting(start):
-        return await api.read(request)
+        messages = await api.read(request)
+    for message in messages:
+        if isinstance(message, ChatMessageAssistant):
+            _check_parsed(message, "request")
+    return messages
 
 
 async def read_opening(
@@ -129,7 +133,20 @@ async def read_reply_noted(
 
     with noting(start) as noted:
         output = await _read_reply(provider, content_type, body, format)
+    if output.choices:
+        _check_parsed(output.message, "reply")
     return output, noted.value
+
+
+def _check_parsed(message: ChatMessageAssistant, what: str) -> None:
+    # inspect_ai reads a call whose arguments it can't parse, such as JSON
+    # nested deeper than it allows, as one with no arguments and an error,
+    # while the client is handed the arguments as they were
+    for call in message.tool_calls or []:
+        if call.parse_error is not None:
+            raise UnreadableError(
+                f"The {what} holds a call to {call.function} whose arguments can't be read."
+            )
 
 
 async def _read_reply(

@@ -1370,3 +1370,39 @@ async def test_each_call_that_reuses_an_id_keeps_its_own_words() -> None:
     second = await handler.request(_chat_asked("b", *turns("A storm.")))
 
     assert (first, isinstance(second, Refuse)) == (Pass(), True)
+
+
+# valid JSON nested deeper than inspect_ai reads a call's arguments
+_DEEP = json.dumps({"location": "Tokyo", "pad": json.loads("[" * 120 + "]" * 120)})
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(_calls_with(_DEEP), id="chat"),
+        pytest.param(_function_calls_with(_DEEP), id="responses"),
+    ],
+)
+async def test_a_reply_whose_call_arguments_cant_be_parsed_is_unreadable(
+    body: bytes,
+) -> None:
+    with pytest.raises(UnreadableError, match="arguments can't be read"):
+        await read_reply("openai", JSON, body)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("api", ["chat", "responses"])
+async def test_a_request_whose_call_arguments_cant_be_parsed_is_unreadable(
+    api: str,
+) -> None:
+    then = openai_ran(api, "rain")
+    for entry in then:
+        if entry.get("type") == "function_call":
+            entry["arguments"] = _DEEP
+        for call in cast("list[dict[str, Any]]", entry.get("tool_calls") or []):
+            call["function"]["arguments"] = _DEEP
+    body = openai_request(api, then=then) | {"model": "gpt-test"}
+
+    with pytest.raises(UnreadableError, match="arguments can't be read"):
+        await read_request("openai", json.dumps(body).encode())
