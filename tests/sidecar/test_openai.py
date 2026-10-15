@@ -897,6 +897,10 @@ def _chat_said(*then: dict[str, Any]) -> dict[str, Any]:
             id="chat, a user's text part",
         ),
         pytest.param(
+            _chat_said({"role": "user", "content": [{"text": _TWO_SPANS}]}),
+            id="chat, a user's text part written as text alone",
+        ),
+        pytest.param(
             {"model": "gpt-test", "input": [{"role": "user", "content": "Hi"}]}
             | {
                 "input": [
@@ -1244,3 +1248,22 @@ async def test_a_custom_call_is_judged_apart_from_a_function_call_like_it() -> N
     second = await handler.request(_request("responses", "b", then=custom))
 
     assert (first, isinstance(second, Refuse)) == (Pass(), True)
+
+
+@pytest.mark.anyio
+async def test_texts_with_one_internal_value_in_different_turns_are_read() -> None:
+    body = json.loads(
+        _assistant_said(
+            f"A dangerous storm. {_internal({'id': 'msg_1'})}",
+            f"A quiet day. {_internal({'id': 'msg_1'})}",
+        )
+    )
+    # a user message between the two ends the first turn
+    body["input"].insert(2, {"role": "user", "content": "Go on."})
+
+    messages = await read_request("openai", json.dumps(body).encode())
+
+    assert [m.text for m in messages if m.role == "assistant"] == [
+        "A dangerous storm.",
+        "A quiet day.",
+    ]

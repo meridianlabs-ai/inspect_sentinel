@@ -93,6 +93,16 @@ def noting(start: JsonValue | None = None) -> Generator[Noted]:
             variable.reset(token)
 
 
+def is_assistant_item(item: dict[str, Any]) -> bool:
+    """Whether inspect_ai's Responses reader takes an input item for part of an assistant's turn, as it gathers a turn's items until another item ends it.
+
+    Asked of inspect_ai: Responses readers that drop no assistant text unread.
+    """
+    from inspect_ai.model._openai_responses import is_assistant_message_param
+
+    return is_assistant_message_param(cast(Any, item))
+
+
 def internal_text(text: str) -> tuple[str, str] | None:
     """The `<content-internal>` value a text carries, as inspect_ai's Responses reader compares two of them, and the text it reads; None if the text carries none or one it can't read.
 

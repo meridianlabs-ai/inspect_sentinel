@@ -17,7 +17,7 @@ from inspect_ai.model import (
     model_output_from_openai_responses,
 )
 
-from ._inspect_ai import internal_text
+from ._inspect_ai import internal_text, is_assistant_item
 from ._wire import (
     UnreadableError,
     check_internal,
@@ -275,8 +275,14 @@ def _chat_texts(message: dict[str, Any]) -> list[object]:
     return [
         cast("dict[str, Any]", part).get("text")
         for part in cast("list[object]", content if isinstance(content, list) else [])
-        if isinstance(part, dict) and cast("dict[str, Any]", part).get("type") == "text"
+        if isinstance(part, dict) and _is_text(cast("dict[str, Any]", part))
     ]
+
+
+def _is_text(part: dict[str, Any]) -> bool:
+    # a text part, or one written as {"text": ...} alone, which the reader
+    # takes for a text part too
+    return part.get("type") == "text" or ("type" not in part and set(part) == {"text"})
 
 
 def _assistant_texts(entry: dict[str, Any]) -> list[object]:
@@ -343,14 +349,18 @@ def _check_duplicates(entries: list[object]) -> None:
     # inspect_ai's Responses reader keeps only the last of an assistant's
     # texts that carry the same <content-internal> span, as a scaffold can
     # send one text twice. Two different texts with one span would lose the
-    # first unread. See filter_duplicate_assistant_content() in inspect_ai's
+    # first unread. It does so within each run of assistant items, which any
+    # other item ends. See messages_from_responses_input() and
+    # filter_duplicate_assistant_content() in inspect_ai's
     # src/inspect_ai/agent/_bridge/responses_impl.py.
     seen: dict[str, str] = {}
     for entry in entries:
         if not (
-            isinstance(entry, dict)
-            and cast("dict[str, Any]", entry).get("role") == "assistant"
+            isinstance(entry, dict) and is_assistant_item(cast("dict[str, Any]", entry))
         ):
+            seen = {}
+            continue
+        if cast("dict[str, Any]", entry).get("role") != "assistant":
             continue
         content: object = cast("dict[str, Any]", entry).get("content")
         # each part read as inspect_ai reads it: a refusal is text too
