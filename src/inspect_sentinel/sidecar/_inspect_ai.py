@@ -195,10 +195,41 @@ def responses_offered(
         )
 
     return (
-        _readable("openai-responses", request.get("tools"), read),
+        _readable("openai-responses", _responses_tools(request), read),
         tool_choice_from_responses_tool_choice(request.get("tool_choice")),
         generate_config_from_openai_responses(request),
     )
+
+
+def _responses_tools(request: dict[str, Any]) -> list[Any]:
+    # A client can declare tools in `additional_tools` items of its input,
+    # rather than or as well as in `tools`. They are offered the model just
+    # the same, so they are merged as inspect_ai's bridge merges them, in
+    # inspect_responses_api_request_impl() in its
+    # src/inspect_ai/agent/_bridge/responses_impl.py.
+    declared: object = request.get("tools")
+    tools = list(cast("list[Any]", declared)) if isinstance(declared, list) else []
+    known = {_key(tool) for tool in tools}
+    entries: object = request.get("input")
+    for entry in cast("list[object]", entries if isinstance(entries, list) else []):
+        if not (
+            isinstance(entry, dict)
+            and cast("dict[str, Any]", entry).get("type") == "additional_tools"
+        ):
+            continue
+        added: object = cast("dict[str, Any]", entry).get("tools")
+        for tool in cast("list[Any]", added if isinstance(added, list) else []):
+            if _key(tool) not in known:
+                known.add(_key(tool))
+                tools.append(tool)
+    return tools
+
+
+def _key(declaration: object) -> tuple[object, object]:
+    if not isinstance(declaration, dict):
+        return (None, None)
+    found = cast("dict[str, Any]", declaration)
+    return (found.get("type"), found.get("name"))
 
 
 def _readable(

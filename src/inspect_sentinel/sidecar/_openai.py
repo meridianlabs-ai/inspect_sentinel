@@ -113,6 +113,7 @@ async def read_responses_request(request: dict[str, Any]) -> list[ChatMessage]:
         entries = [{"role": "user", "content": entries}]
     if not isinstance(entries, list):
         raise UnreadableError("The request has no input.")
+    _check_parts(cast("list[object]", entries))
     try:
         messages = await messages_from_openai_responses(
             cast(Any, entries), _model(request)
@@ -124,6 +125,49 @@ async def read_responses_request(request: dict[str, Any]) -> list[ChatMessage]:
     if isinstance(instructions, str) and instructions:
         return [ChatMessageSystem(content=instructions), *messages]
     return messages
+
+
+# what inspect_ai's Responses reader keeps of a tool result given as parts;
+# it leaves out a part of any other kind
+_RESULT_PARTS = frozenset({"input_text", "input_image"})
+
+
+def _check_parts(entries: list[object]) -> None:
+    # inspect_ai's Responses reader leaves out a tool result's file, and reads
+    # an image or file given by a file id, which it can't fetch, as an empty
+    # one, while the model is sent all of it. A part read as less than was
+    # sent is unreadable, rather than judged with part of it unseen.
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        item = cast("dict[str, Any]", entry)
+        result = item.get("type") in ("function_call_output", "custom_tool_call_output")
+        parts: object = item.get("output" if result else "content")
+        if not isinstance(parts, list):
+            continue
+        for part in cast("list[object]", parts):
+            if not isinstance(part, dict):
+                continue
+            kind = cast("dict[str, Any]", part).get("type")
+            if (result and kind not in _RESULT_PARTS) or not _whole(
+                cast("dict[str, Any]", part)
+            ):
+                raise UnreadableError(
+                    f"The request holds {'a tool result' if result else 'a message'} with an {kind!r} part that would be read as less than the model is sent."
+                )
+
+
+def _whole(part: dict[str, Any]) -> bool:
+    # whether a part carries its content, rather than naming a file the
+    # provider keeps
+    match part.get("type"):
+        case "input_image":
+            source = part.get("image_url")
+        case "input_file":
+            source = part.get("file_data")
+        case _:
+            return True
+    return isinstance(source, str) and source != ""
 
 
 async def chat_rejected_turn(

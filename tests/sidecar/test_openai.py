@@ -3,7 +3,7 @@ from dataclasses import replace
 from typing import Any, cast
 
 import pytest
-from inspect_ai.model import ContentReasoning
+from inspect_ai.model import ChatMessageTool, ContentReasoning
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
@@ -49,6 +49,27 @@ _CUSTOM_CALL: dict[str, Any] = {
     "type": "custom",
     "custom": {"name": "apply_patch", "input": "*** Begin Patch"},
 }
+
+
+_PDF = "data:application/pdf;base64,JVBERi0xLjQK"
+
+
+def _result_parts(*parts: dict[str, Any]) -> list[dict[str, Any]]:
+    # a Responses conversation whose tool result is given as parts
+    return [
+        {"role": "user", "content": "What's the weather in Paris?"},
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "get_weather",
+            "arguments": '{"location": "Paris"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [{"type": "input_text", "text": "Rain."}, *parts],
+        },
+    ]
 
 
 def _chat_with_custom_call() -> bytes:
@@ -284,6 +305,35 @@ async def test_request_is_read(body: dict[str, Any], roles: list[str]) -> None:
             "input that can't be read",
             id="responses, an item the provider keeps",
         ),
+        pytest.param(
+            {"input": _result_parts({"type": "input_file", "file_data": _PDF})},
+            "a tool result with an 'input_file' part",
+            id="responses, a file in a tool result",
+        ),
+        pytest.param(
+            {
+                "input": _result_parts(
+                    {"type": "input_image", "image_url": None, "file_id": "file_1"}
+                )
+            },
+            "a tool result with an 'input_image' part",
+            id="responses, an image by file id in a tool result",
+        ),
+        pytest.param(
+            {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "What is this?"},
+                            {"type": "input_image", "file_id": "file_1"},
+                        ],
+                    }
+                ]
+            },
+            "a message with an 'input_image' part",
+            id="responses, an image by file id in a message",
+        ),
         pytest.param({"prompt": "Once upon a time"}, "no reader", id="completions"),
         pytest.param({"messages": "hello"}, "no list of messages", id="no messages"),
     ],
@@ -291,6 +341,21 @@ async def test_request_is_read(body: dict[str, Any], roles: list[str]) -> None:
 async def test_request_that_cannot_be_read(body: dict[str, Any], match: str) -> None:
     with pytest.raises(UnreadableError, match=match):
         await read_request("openai", json.dumps(body | {"model": "gpt-test"}).encode())
+
+
+@pytest.mark.anyio
+async def test_a_responses_tool_result_of_text_and_images_is_read_whole() -> None:
+    image = {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0K"}
+    body = {"model": "gpt-test", "input": _result_parts(image)}
+
+    messages = await read_request("openai", json.dumps(body).encode())
+
+    result = messages[-1]
+    assert isinstance(result, ChatMessageTool)
+    assert [part.type for part in cast("list[Any]", result.content)] == [
+        "text",
+        "image",
+    ]
 
 
 def _request(api: str, id: str = "x", then: Any = (), **fields: Any) -> Request:
@@ -455,6 +520,28 @@ async def test_generate_stage_is_given_the_tools_the_request_offers(
     assert records is not None
     assert [cast(Any, record.detail).report.explanation for record in records] == [
         expected
+    ]
+
+
+@pytest.mark.anyio
+async def test_generate_stage_is_given_the_tools_a_responses_input_declares() -> None:
+    handler = Handler(reports_tools())
+    declared = {"type": "function", **_FUNCTION}
+    other = declared | {"name": "file_report"}
+
+    await handler.request(
+        _request(
+            "responses",
+            then=[{"type": "additional_tools", "tools": [declared, other]}],
+            tools=[declared],
+        )
+    )
+
+    records = await handler.records("x")
+    assert records is not None
+    # declared in both places, it is offered once
+    assert [cast(Any, record.detail).report.explanation for record in records] == [
+        "['get_weather', 'file_report']|None"
     ]
 
 
