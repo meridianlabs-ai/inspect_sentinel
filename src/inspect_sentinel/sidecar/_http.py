@@ -26,9 +26,9 @@ async def read_within(http: HttpRequest, limit: int) -> bytes | None:
         return None
     body = bytearray()
     async for chunk in http.stream():
-        body += chunk
-        if len(body) > limit:
+        if len(body) + len(chunk) > limit:
             return None
+        body += chunk
     return bytes(body)
 
 
