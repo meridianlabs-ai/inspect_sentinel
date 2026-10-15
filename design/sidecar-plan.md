@@ -87,7 +87,7 @@ Repository: `inspect_sentinel`, package `inspect_sentinel_litellm` under `src/pr
 Repository: `inspect_sentinel`, the sidecar and the core package. Depends on: PR 3.
 
 - Reading `x-inspect-context`, and taking the run from its `sample_uuid` (section 7).
-- Building the `sentinel` field from every step judged during an exchange: the stage, the call, the original call, the decision and the records (section 9).
+- Building the `sentinel` field from every step judged during an exchange: the stage, the call, the original call, the decision and the records; with what the exchange came to, and the turn withheld from the client (section 9).
 - Answering an Inspect client's reply with `replace`, with the field added, and putting the field on `refuse` (sections 1 and 9). Other clients get the provider's bytes untouched.
 - Trimming the field under `--no-eval-results` (section 9).
 - In the core package: `Context.proxy`, with `inspect`, what `x-inspect-context` says ("Proposed for the core package").

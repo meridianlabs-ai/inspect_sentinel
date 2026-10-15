@@ -91,7 +91,7 @@ Two rules keep the handler from being limited to what the least capable proxy ca
 
 Middleman is to have a passthrough hook: a setting that names a class, which Middleman loads at startup. Middleman calls the class with each passthrough request before sending it to the provider. It then holds the provider's reply whole and calls the class with the reply. `MiddlemanHook` puts each one to the sidecar's endpoint for proxies, and the answer to each is pass, replace or refuse. The passthrough hook is a change to Middleman, which is Hawk's to accept. `MiddlemanHook` calls the same methods as `LiteLLMGuardrail`.
 
-With each request, the proxy hook tells the sidecar the provider, the model's public name, the user, the run, the headers that say which job and sample the request belongs to, and any other request headers the operator has listed for the proxy hook. No credential is sent to the sidecar: Middleman removes the caller's before it calls the proxy hook. Who can reach the sidecar is the operator's to control: the sidecar listens at an address that only Middleman can reach (section 10). An operator can also limit the proxy hook to some of Middleman's channels. A channel is the kind of caller: an eval, a scan or a direct call. Traffic on the other channels never reaches the proxy hook and streams as it does when no proxy hook is set.
+With each request, the proxy hook tells the sidecar the provider, the model's public name, the user, the headers that say which job and sample the request belongs to, and any other request headers the operator has listed for the proxy hook. No credential is sent to the sidecar: Middleman removes the caller's before it calls the proxy hook. Who can reach the sidecar is the operator's to control: the sidecar listens at an address that only Middleman can reach (section 10). An operator can also limit the proxy hook to some of Middleman's channels. A channel is the kind of caller: an eval, a scan or a direct call. Traffic on the other channels never reaches the proxy hook and streams as it does when no proxy hook is set.
 
 **Middleman's passthrough hook and `MiddlemanHook` are two different things, with different owners.**
 
@@ -315,7 +315,7 @@ In an eval, the sidecar cannot work that out from the conversation. A fingerprin
 
   Inspect writes the JSON with every character outside ASCII escaped, because a header value must be ASCII and a sample id can be any string.
 
-  The proxy hook passes the header to the sidecar without reading it, and the sidecar takes `sample_uuid` from it as the run. A run is therefore one sample in one epoch, across its retries. A proxy hook never needs to understand Inspect's headers. `judge_request`'s `run` parameter is only for a proxy that names runs in its own way. The sample's input and metadata are not in the header. They are too long for a header, and the metadata can be private, so they reach the sidecar only through registration. Registration is per task (section 9), and the sidecar finds a sample's registered facts by the header's `eval_id`, `task` and `sample_id`. Inspect's existing `x-irid` header stays the id of a single model request. Reading the header and checking it against registration are not built yet.
+  The proxy hook passes the header to the sidecar without reading it, and the sidecar takes `sample_uuid` from it as the run. A run is therefore one sample in one epoch, across its retries. A proxy hook never needs to understand Inspect's headers, and it never names the run itself. A run that a proxy names in its own way can be added when a proxy hook needs it. The sample's input and metadata are not in the header. They are too long for a header, and the metadata can be private, so they reach the sidecar only through registration. Registration is per task (section 9), and the sidecar finds a sample's registered facts by the header's `eval_id`, `task` and `sample_id`. Inspect's existing `x-irid` header stays the id of a single model request. Reading the header and checking it against registration are not built yet.
 - **A run that the proxy names is one run, however many conversations it holds.** A subagent's conversation belongs to the same run. Rejected turns are still kept separately for each conversation within the run.
 - **Scans and graders use the same proxy.** The model calls of a Scout scan, and of an eval's grader, pass through Middleman as an agent's calls do. They reach the sidecar unless the proxy is configured to keep them from it. The job's type is among the headers a sentinel is given (section 8), so a sentinel can tell a scan from an eval. Nothing marks a grader's calls.
 - **Headers carry compact context, not the sample's fuller details.** Every proxy hook passes `x-inspect-context` and `x-irid` to the sidecar, among the request's headers in `judge_request`, and removes both from the request before it goes to the provider. A sample's input and private metadata reach the sidecar through registration (section 9), and are never put into the provider request.
@@ -654,6 +654,7 @@ This is an Anthropic reply, not streamed, after the sidecar took out one of the 
   "usage": {"input_tokens": 812, "output_tokens": 96},
   "sentinel": {
     "version": 1,
+    "outcome": "proceed",
     "steps": [
       {"stage": "model_input", "decision": {"action": "proceed"}, "recorded": []},
       {"stage": "model_output", "decision": {"action": "proceed"}, "recorded": []},
@@ -691,6 +692,7 @@ And this is a refusal, after a sentinel ended the run at a tool result in the re
   "error": {"type": "invalid_request_error", "message": "A sentinel ended this run."},
   "sentinel": {
     "version": 1,
+    "outcome": "terminate",
     "steps": [
       {
         "stage": "tool_result",
@@ -703,14 +705,16 @@ And this is a refusal, after a sentinel ended the run at a tool result in the re
 }
 ```
 
-- **`steps` lists every step judged during the exchange**, in the order they were judged: `AfterToolCall` for each new tool result in the request, `BeforeGenerate`, `AfterGenerate`, and `BeforeToolCall` for each call in the reply. A step that ended the run is the last. The stage names are the ones Inspect's own sentinel events use: `model_input`, `model_output`, `tool_call` and `tool_result`.
+- **`outcome` is what the exchange came to.** It is `proceed` when the reply goes on, including a reply with calls taken out or changed. It is `reject` when the whole turn was refused and the run goes on. It is `terminate` once the run has ended: when a step in this exchange ended it, when the third rejected turn in a row ended it, and on every later request of the run. Inspect ends the sample on `terminate` from the field alone, and never reads the error's message to find out.
+- **`steps` lists every step judged during the exchange**, in the order they were judged: `AfterToolCall` for each new tool result in the request, `BeforeGenerate`, `AfterGenerate`, and `BeforeToolCall` for each call in the reply. A step that ended the run is the last. A request of a run that had already ended is refused without judging anything, so its `steps` is empty. The stage names are the ones Inspect's own sentinel events use: `model_input`, `model_output`, `tool_call` and `tool_result`.
 - **`decision` is the step's final `Decision`**, as the core package writes it.
 - **`recorded` is what each monitor and protocol recorded for the step**, in the form `request_result` returns.
 - **`original` is the call the model proposed**, written as Inspect writes a tool call, and is there only when the sidecar took the call out or changed it.
-- **Inspect acts on the field as it would in process.** It puts a call that was taken out back into its own copy of the conversation, with an approval error that holds the rejection's `message`. It keeps the model's original call in its copy where a call was changed, and records the arguments that ran. It ends the sample on a `terminate`, and still scores it. It writes every step into its transcript, including those that changed nothing.
+- **`withheld` is the model's turn, when the whole turn was refused** because a call in it was rejected. It holds the model's `message`, written as Inspect writes a `ChatMessageAssistant` with every call in it, and `results`, what the model is told happened to each call, by call id. Inspect puts the turn and those results into its own copy of the conversation. The sidecar adds the turn to each later request of the conversation that doesn't already hold it, so a client that put it back is not sent it twice.
+- **Inspect acts on the field as it would in process.** It puts a call that was taken out back into its own copy of the conversation, with an approval error that holds the rejection's `message`. It keeps the model's original call in its copy where a call was changed, and records the arguments that ran. It ends the sample when `outcome` is `terminate`, and still scores it. It writes every step into its transcript, including those that changed nothing.
 - **Only a rejection's `message` is meant for the agent.** Inspect never shows the agent anything else in the field.
-- **On a stream, the field goes in the last event that the provider's SDK reads**: Anthropic's `message_delta`, the last chunk of an OpenAI Chat Completions stream, or the Responses API's `response.completed`. An event of a new type would not do, because the Anthropic SDK drops event types it does not know.
-- **With `--no-eval-results`**, each step keeps only what Inspect acts on: the stage, the call, `original`, and the decision's action, `message` and modified call. The explanation, the references, the metadata and `recorded` are left out, and the field says so.
+- **On a stream, the field goes in the last event that the provider's SDK reads**: Anthropic's `message_delta`, the last chunk of an OpenAI Chat Completions stream, or the Responses API's `response.completed`, or the event that ends a response that did not complete. An event of a new type would not do, because the Anthropic SDK drops event types it does not know.
+- **With `--no-eval-results`**, each step keeps only what Inspect acts on: the stage, the call, `original`, and the decision's action, `message` and modified call. The explanation, the references, the metadata and `recorded` are left out, and the field says so with `"trimmed": true`. `outcome` and `withheld` are kept, because Inspect acts on them.
 - **Inspect never reads a missing field as `proceed`.** It asks the sidecar what happened (below).
 
 **When the field is missing.** Inspect cannot tell from the reply why the field is missing, so it always asks the sidecar with `request_result`, by the request's `x-irid`. The sidecar's answer says what happened:
