@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.3](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.2...0.1.3) (2026-10-15)
+
+
+### Features
+
+* Host.score, with excerpts for what a monitor shows a model ([#87](https://github.com/meridianlabs-ai/inspect_sentinel/issues/87)) ([8cdb257](https://github.com/meridianlabs-ai/inspect_sentinel/commit/8cdb257cac864d287c8c156e4ad5772fc2f69710))
+* require Python 3.11 and test on Python 3.14 ([#95](https://github.com/meridianlabs-ai/inspect_sentinel/issues/95)) ([dd3f250](https://github.com/meridianlabs-ai/inspect_sentinel/commit/dd3f25094136e698f88f579009816dd3a1a7fe6c))
+
 ## [0.1.2](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.1...0.1.2) (2026-10-14)
 
 
