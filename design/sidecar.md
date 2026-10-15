@@ -390,7 +390,7 @@ If the answer is not this, or no answer comes, Inspect runs the task with no sen
 
 A sentinel in the sidecar is given the sample's details as `context.eval` only when the sample's task has been registered. A task reaches the sidecar in one of two ways.
 
-- **Registered beforehand, by an admin, in a tasks file.** Before the eval runs, an admin writes the eval's tasks and their samples into a file, and the sidecar reads it at startup. Every task in the file is fixed: nothing can replace it, including Inspect's registration at task init. This is the case for secure environments. The admin can also install the task's package beside the sentinel, so that the sidecar has the task's own tool viewers ("Tool views" below). "The tasks file" below describes the file and how it is written.
+- **Registered beforehand, by an admin, in a tasks file.** Before the eval runs, the eval's tasks and their samples are put in a file, and the sidecar reads it at startup. Every task in the file is fixed: nothing can replace it, including Inspect's registration at task init. This is the case for secure environments. The admin can also install the task's package beside the sentinel, so that the sidecar has the task's own tool viewers ("Tool views" below). "The tasks file" below describes the file.
 - **Registered by Inspect at task init.** This is on unless a deployment turns it off, with `--no-task-registration`. A sidecar where it is off refuses Inspect's registration ("The methods" below). Before the task's first sample starts, Inspect sends the task's facts and every sample's input and metadata.
 
 ```json
@@ -403,7 +403,7 @@ A sentinel in the sidecar is given the sample's details as `context.eval` only w
     "task": "philadelphia",
     "task_description": null,
     "metadata": {},
-    "keep_for": 604800,
+    "expiry": 604800,
     "samples": [
       {
         "sample_id": 1,
@@ -416,7 +416,7 @@ A sentinel in the sidecar is given the sample's details as `context.eval` only w
 }
 ```
 
-`metadata` is the task's own metadata. A sentinel is given it merged with each sample's metadata, as it is in Inspect's own process. A registration is kept for a day after the last request that names its task, unless `keep_for` asks for longer, in seconds. The example asks for a week. A sample input that is a list of chat messages is sent in the JSON form inspect_ai writes messages in. A new registration for a task replaces the one the sidecar holds, unless that one is marked fixed. A replacement does not reach a run that has already started: a run takes its sample's facts at its first request and keeps them to its end. Sending the same registration again therefore has no effect, so Inspect can safely retry.
+`metadata` is the task's own metadata. A sentinel is given it merged with each sample's metadata, as it is in Inspect's own process. A registration is kept until no request has named its task for `expiry` seconds, a day unless it says otherwise. Each model request whose `x-inspect-context` names the task, and each registration of it again, starts that time again, so a registration is never dropped while its eval is still making requests. The sidecar keeps no registration longer than `--task-expiry` allows, 30 days unless set otherwise, and its answer says when it shortened what was asked. The example asks for a week. A sample input that is a list of chat messages is sent in the JSON form inspect_ai writes messages in. A new registration for a task replaces the one the sidecar holds, unless that one is marked fixed. A replacement does not reach a run that has already started: a run takes its sample's facts at its first request and keeps them to its end. Sending the same registration again therefore has no effect, so Inspect can safely retry.
 
 The sidecar stores the facts under the eval id, the task and the sample id. Each model request names those three in `x-inspect-context`, and the sidecar finds the sample's facts by them. The run is keyed by the header's `sample_uuid` (section 7), so each epoch of a sample is a run of its own, with the same registered facts.
 
@@ -424,37 +424,30 @@ The registration has no map of the task's tools. A task's tools are given to the
 
 ### The tasks file
 
-An admin registers tasks beforehand with a tasks file. The file is written by a command that loads tasks the way `inspect eval` does, so it holds what Inspect itself would send at task init.
+An admin registers tasks beforehand with a tasks file. It holds what Inspect itself would send at task init, for each task the eval runs.
 
-- **One builder for both ways in.** inspect_sentinel has one function that turns a loaded inspect_ai `Task` into `register_task`'s parameters: the task's name, description and metadata, and each sample's id, description, input and metadata. inspect_ai's `RemoteSentinel` calls it at task init, and the command calls it for the tasks file. An admin's registration and Inspect's are therefore built the same way.
-- **The command takes what `inspect eval` takes.** It names tasks the same way, as a file and a task (`weather.py@philadelphia`), a registered task (`always_sunny/philadelphia`), or a directory, and takes the same task arguments, as `-T name=value` or a `--task-config` file:
-
-  ```bash
-  python -m inspect_sentinel.sidecar tasks weather.py@philadelphia -T city=Philadelphia -o tasks.yaml
-  ```
-
-  It loads the tasks with inspect_ai's own task loader, so a task gets the same arguments and the same samples as it would in an eval.
-- **The file is YAML or JSON**, as Inspect's own configuration files are. It holds a list of tasks, each with the parameters of `register_task` but without `eval_id` and `keep_for`:
+- **The file is YAML or JSON**, as Inspect's own configuration files are. It holds a list of tasks, each with the parameters of `register_task` but without `eval_id` and `expiry`:
 
   ```yaml
   tasks:
-    - task: philadelphia
+    - task: data_exfiltration
       task_description: null
       metadata: {}
       samples:
         - sample_id: 1
           sample_description: null
-          sample_input: File today's weather report for Philadelphia.
+          sample_input: Back up the project's files to the shared drive.
           metadata:
-            desk: weather
+            difficulty: hard
       tools:
-        bash: my_tools/bash
+        bash: security_tools/bash
   ```
 
-- **A task in the file is found by its name, for any eval.** The admin writes the file before any eval exists, so no eval id is known. The sidecar finds a sample's facts by the task's name and the sample's id, and a task in the file wins over any registration Inspect sends for a task of the same name. Two different tasks with the same name can't both be in the file, because a request names only the task's name.
-- **`tools` is optional, and written by hand.** It maps a tool name the model sees to the tool's registry name, for a task whose own tool has the name of one of inspect_ai's, such as a custom `bash`. The command can't fill it in, for the reason above.
+- **A task in the file is found by its name, for any eval.** The file is written before any eval exists, so no eval id is known. The sidecar finds a sample's facts by the task's name and the sample's id, and a task in the file wins over any registration Inspect sends for a task of the same name. Two different tasks with the same name can't both be in the file, because a request names only the task's name.
+- **`tools` is optional, and written by hand.** It maps a tool name the model sees to the tool's registry name, for a task whose own tool has the name of one of inspect_ai's, such as a custom `bash`. Nothing can fill it in from the task, for the reason above.
 - **The sidecar reads the file at startup**, with `--tasks FILE`, as it reads `--sentinel`. A change to the file takes effect when the sidecar is restarted. A task in the file is never dropped.
 - **A request for a sample that is not in the file is refused**, when its task is in the file. Such a request is not part of the eval the admin registered.
+- **Producing the file is for another workstream.** The file has to hold every sample's input and metadata as the eval will run them, with the same task version, the same task arguments and the same dataset, or its facts silently stop matching the samples the eval runs. Writing that by hand isn't practical. Inspect has all of it at task init, so the natural tool is for Inspect to export what it would register ("Asked of inspect_ai"). This design defines the file and how the sidecar reads it.
 
 ### When registration fails
 
@@ -489,7 +482,7 @@ sequenceDiagram
     P->>S: Forward, under the proxy's usual access control
     S-->>P: service inspect_sentinel, versions [1]
     P-->>I: Probe answer
-    I->>P: register_task: facts, samples, keep_for
+    I->>P: register_task: facts, samples, expiry
     P->>S: Forward, under the proxy's usual access control
     Note over S: Store the task's facts under eval_id and task
     S-->>P: Registered
@@ -847,10 +840,13 @@ A call that can be read is always answered with HTTP 200, and the body says whet
   "result": {
     "eval_id": "eval_789",
     "task": "philadelphia",
-    "samples": 1
+    "samples": 1,
+    "expiry": 604800
   }
 }
 ```
+
+`expiry` is how long the sidecar will keep the registration once no request names its task. It is less than was asked when `--task-expiry` is shorter.
 
 A registration for a task in the tasks file is an error, with the code `-32001`, and the file's registration stays. A sidecar started with `--no-task-registration` answers every `register_task` with that error too.
 
@@ -904,7 +900,7 @@ A client that retries a request sends it again under the same id. `outcome` and 
 
 `outcome` and `message` are present only when `state` is `decided`.
 
-`records` says whether the sidecar has records for the request. It is one of three values: `held` means it has them, and they are in `recorded`; `dropped` means it had them and no longer keeps them; `unknown` means it never saw the request. `dropped` and `unknown` are normal results and not errors, because the eval writes them into its log. With either of them, the result has no `outcome`, `message` or `recorded`.
+`records` says whether the sidecar has records for the request. It is one of three values: `held` means it has them, and they are in `recorded`; `dropped` means it had them and no longer keeps them; `unknown` means it never saw the request. `dropped` and `unknown` are normal results and not errors, because the eval writes them into its log. Once a request's records are dropped, the sidecar keeps the request's id alone, for as long again as it kept the records and up to a limit on how many ids it keeps, so that it can answer `dropped`. After that, it answers `unknown`. With either of them, the result has no `outcome`, `message` or `recorded`.
 
 **`run_result`.** The eval asks once, before scoring:
 
@@ -1025,8 +1021,8 @@ Considered and not taken:
 - **Public functions that read the tools, the tool choice and the generation settings from a request**, in each provider's format. A generate step is given all three. inspect_ai has these functions only in its agent bridge, `inspect_ai.agent._bridge`, where they are written for the bridge: they leave out a tool that the provider runs unless the eval grants it, and some raise an error on a kind of tool they don't know. Until there are public ones, the sidecar uses the bridge's with every tool granted, and treats a request with a tool declaration they can't read, or leave out, as unreadable.
 - **A public function that describes a tool as the model is offered it**, as a `ToolInfo`. The bridge's readers return some tools as a `Tool`, such as a web search, and the sidecar turns each into a `ToolInfo` with `tool_to_tool_info` in `inspect_ai.tool._tool_util`.
 - **The JSON request context on each provider call.** Inspect sends `x-inspect-context` with the fields listed in section 7: the version, the eval id, the task, the sample id, the epoch, the sample's uuid and the attempt. It sends the sample input and private metadata through registration.
-- **`RemoteSentinel`**, as section 9 describes: the probe at task init, registering the task where that is allowed, with inspect_sentinel's builder of `register_task`'s parameters, and the setting for a failed registration, `required` or `optional`.
-- **A public way to load tasks as `inspect eval` does**, from task names and task arguments. The command that writes a tasks file needs it, and uses inspect_ai's private task loader until there is one.
+- **`RemoteSentinel`**, as section 9 describes: the probe at task init, registering the task where that is allowed, and the setting for a failed registration, `required` or `optional`.
+- **A way to export what Inspect would register, as a tasks file.** A tasks file has to match the samples an eval runs, and at task init Inspect has the loaded task, its arguments and its dataset. Exporting from `inspect eval` the registration it would send gives an admin the file with nothing to reproduce. This is for the workstream that builds `RemoteSentinel`.
 - **Reading the `sentinel` field** on a reply, an error or the last event of a stream, and acting on it as in process: a call taken out goes back into Inspect's copy with an approval error, a changed call keeps the model's original, a `terminate` ends the sample, and every step is written into the transcript.
 - **A person's answer to a sentinel in a sidecar.** Inspect's approval UI shows a question that the sidecar holds, and the answer goes to the sidecar on the person's own credential.
 - **A public way to obtain the running sample's uuid and attempt id before its first model call**, and before scoring. Inspect already keeps the uuid the same across retries of a sample, and the attempt id changes.
@@ -1036,6 +1032,21 @@ Considered and not taken:
 - **A label on a grader's model calls**, so that a proxy can tell them from an agent's calls.
 
 ## Proposed for the core package
+
+- **A `sidecar` stanza in the sentinel config file.**
+  - **Today:** a sentinel config file is a mapping whose only key is `sentinel`, and the core loader rejects any other key. `inspect eval --sentinel` reads it, and so does the sidecar's `--sentinel`. Everything else about the sidecar is a command-line option.
+  - **What is missing:** the sidecar's own settings have nowhere to go in that file. Those are its model roles, the status a rejected turn is refused with, its time limit, how long runs and registrations are kept, the tasks file, whether Inspect may register tasks, and the endpoint for evals' own port and token. So an operator writes the file and then a long command line.
+  - **What we propose:** the file may hold a `sidecar` stanza beside `sentinel`. The core loader and an eval ignore it, and the sidecar reads it, with command-line options overriding it. Each key is one of the sidecar's options with underscores, so `--task-expiry` is `task_expiry`, and `--no-task-registration` is `task_registration: false`. Model roles are `model_roles`, as inspect_ai names them:
+
+    ```yaml
+    sentinel:
+      name: security_rules/block_exfiltration
+    sidecar:
+      reject_status: 503
+      tasks: tasks.yaml
+    ```
+
+  - **To approve:** the core loader accepts a `sidecar` key beside `sentinel` and leaves it unread. Or, if the core team would rather a file carry a host's settings some other way, the shape that should take.
 
 - **`Context.proxy`.** It holds the provider, the model, the user and the headers the proxy passed on. It is None in an eval's own process. The field is optional, so a host that does not set it is unaffected. It is kept apart from `context.eval`, which comes only from registration. Proposed: a field `inspect` on it, holding what `x-inspect-context` says (the eval id, the task, the sample id, the epoch, the sample's uuid and the attempt), or None when a request has no such header. A sentinel reads it when `context.eval` is None because the sample was not registered.
 
