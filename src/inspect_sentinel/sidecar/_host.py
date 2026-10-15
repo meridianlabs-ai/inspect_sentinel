@@ -22,7 +22,7 @@ Stage: TypeAlias = Literal["model_input", "model_output", "tool_call", "tool_res
 class SidecarHost:
     """What a sentinel in a sidecar may do to the outside world: the sidecar's `HostNative`.
 
-    A proxy's requests are not an eval's samples, so the sentinel is told of no eval. Models are called by the sidecar itself, never through the proxy it sits beside. A person can't be asked yet: at a tool stage the case is logged for review and the step goes on, and at a generate stage asking fails, as it does in Inspect.
+    A proxy's requests are not an eval's samples, so the sentinel is told of no eval. Models are called by the sidecar itself, never through the proxy it sits beside. A person can't be asked yet: at a tool stage the answer is the most cautious choice offered, so the step fails closed, and at a generate stage asking fails, as it does in Inspect.
     """
 
     def __init__(self, roles: Mapping[str, str] | None = None) -> None:
@@ -74,7 +74,9 @@ class SidecarHost:
         )
 
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
-        """Log a tool step for review and answer `approve`, so the step goes on.
+        """Answer for a person who can't be asked: `reject` if it is offered, otherwise `terminate`.
+
+        An escalation never lets a call through without someone deciding, so the step fails closed, as Inspect's own host does when nobody can answer. A deployment that wants unattended escalations to go on says so in its sentinel, for example with `handle_escalation("proceed")` after `human()`.
 
         Args:
             step: The step to decide about.
@@ -84,16 +86,16 @@ class SidecarHost:
             raise NotImplementedError(
                 f"A sidecar cannot ask a person at the {stage(step)} stage, as Inspect cannot."
             )
-        if "approve" not in choices:
-            raise ValueError(
-                f"A sidecar answers approve without waiting for a person, and approve was not among the choices offered: {list(choices)!r}."
-            )
+        decision = "reject" if "reject" in choices else "terminate"
         logger.warning(
-            "Queued for review, and allowed to proceed: the %s stage of the call to %s.",
+            "No person can be asked from the sidecar, so the %s stage of the call to %s was answered %s.",
             stage(step),
             step.call.function,
+            decision,
         )
-        return HumanAnswer(decision="approve", reason="Queued for review.")
+        return HumanAnswer(
+            decision=decision, reason="No person can be asked from the sidecar yet."
+        )
 
 
 def stage(step: Step) -> Stage:
