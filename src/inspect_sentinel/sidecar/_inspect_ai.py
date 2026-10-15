@@ -93,6 +93,27 @@ def noting(start: JsonValue | None = None) -> Generator[Noted]:
             variable.reset(token)
 
 
+def internal_text(text: str) -> tuple[str, str] | None:
+    """The `<content-internal>` value a text carries, as inspect_ai's Responses reader compares two of them, and the text it reads; None if the text carries none or one it can't read.
+
+    Asked of inspect_ai: Responses readers that drop no assistant text unread.
+    """
+    from inspect_ai._util.json import to_json_str_safe
+    from inspect_ai.model._internal import (
+        CONTENT_INTERNAL_TAG,
+        parse_content_with_internal,
+    )
+
+    try:
+        kept, value = parse_content_with_internal(text, CONTENT_INTERNAL_TAG)
+    except Exception:
+        # the reader raises on it too, which makes the request unreadable
+        return None
+    if not value:
+        return None
+    return to_json_str_safe(value), kept
+
+
 async def anthropic_message(message: ChatMessage) -> dict[str, Any]:
     """A message written in Anthropic's Messages format, as inspect_ai's provider writes it.
 

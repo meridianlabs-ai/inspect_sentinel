@@ -17,7 +17,13 @@ from inspect_ai.model import (
     model_output_from_openai_responses,
 )
 
-from ._wire import UnreadableError, check_internal, json_object, stream_events
+from ._inspect_ai import internal_text
+from ._wire import (
+    UnreadableError,
+    check_internal,
+    json_object,
+    stream_events,
+)
 
 
 async def read_reply(
@@ -47,7 +53,14 @@ async def read_reply(
     check_internal(reply, "reply")
     if chat:
         for choice in cast("list[Any]", getattr(reply, "choices", None) or []):
-            _check_calls(getattr(getattr(choice, "message", None), "tool_calls", None))
+            calls = getattr(getattr(choice, "message", None), "tool_calls", None)
+            _check_calls(calls)
+            for call in cast("list[Any]", calls or []):
+                _check_arguments(getattr(call.function, "arguments", None), "reply")
+    else:
+        for item in cast("list[Any]", getattr(reply, "output", None) or []):
+            if getattr(item, "type", None) == "function_call":
+                _check_arguments(getattr(item, "arguments", None), "reply")
     try:
         # objects, not dicts, so that the converters don't validate them again
         output = await (
@@ -73,6 +86,16 @@ async def read_chat_request(request: dict[str, Any]) -> list[ChatMessage]:
         if isinstance(entry, dict):
             message = cast("dict[str, Any]", entry)
             _check_calls(message.get("tool_calls"))
+            for call in cast("list[object]", message.get("tool_calls") or []):
+                function: object = (
+                    cast("dict[str, Any]", call).get("function")
+                    if isinstance(call, dict)
+                    else None
+                )
+                if isinstance(function, dict):
+                    _check_arguments(
+                        cast("dict[str, Any]", function).get("arguments"), "request"
+                    )
             if message.get("function_call") or message.get("role") == "function":
                 raise UnreadableError(
                     "The request holds a call in the legacy `function_call` field, or its result, which can't be read."
@@ -130,6 +153,13 @@ async def read_responses_request(request: dict[str, Any]) -> list[ChatMessage]:
     if not isinstance(entries, list):
         raise UnreadableError("The request has no input.")
     _check_parts(cast("list[object]", entries))
+    _check_duplicates(cast("list[object]", entries))
+    for entry in cast("list[object]", entries):
+        if (
+            isinstance(entry, dict)
+            and cast("dict[str, Any]", entry).get("type") == "function_call"
+        ):
+            _check_arguments(cast("dict[str, Any]", entry).get("arguments"), "request")
     try:
         messages = await messages_from_openai_responses(
             cast(Any, entries), _model(request)
@@ -220,6 +250,64 @@ async def responses_rejected_turn(
             }
         )
     return written
+
+
+def _check_arguments(arguments: object, what: str) -> None:
+    # inspect_ai reads a call's arguments as a JSON object. Anything else it
+    # maps to the tool's first parameter, but only when it is given the tool's
+    # schema, and its converters aren't: without it, the call is read with no
+    # arguments and no error, while the client is handed them. See
+    # parse_tool_call() in inspect_ai's src/inspect_ai/model/_call_tools.py.
+    if not isinstance(arguments, str):
+        return
+    written = arguments.strip()
+    if written and not written.startswith("{"):
+        raise UnreadableError(
+            f"The {what} holds a tool call whose arguments aren't a JSON object, which would be read as none."
+        )
+
+
+def _check_duplicates(entries: list[object]) -> None:
+    # inspect_ai's Responses reader keeps only the last of an assistant's
+    # texts that carry the same <content-internal> span, as a scaffold can
+    # send one text twice. Two different texts with one span would lose the
+    # first unread. See filter_duplicate_assistant_content() in inspect_ai's
+    # src/inspect_ai/agent/_bridge/responses_impl.py.
+    seen: dict[str, str] = {}
+    for entry in entries:
+        if not (
+            isinstance(entry, dict)
+            and cast("dict[str, Any]", entry).get("role") == "assistant"
+        ):
+            continue
+        content: object = cast("dict[str, Any]", entry).get("content")
+        # each part read as inspect_ai reads it: a refusal is text too
+        texts = (
+            [content]
+            if isinstance(content, str)
+            else [
+                str(
+                    cast("dict[str, Any]", part).get(
+                        "text", cast("dict[str, Any]", part).get("refusal", "")
+                    )
+                )
+                for part in cast("list[object]", content)
+                if isinstance(part, dict)
+            ]
+            if isinstance(content, list)
+            else []
+        )
+        for text in texts:
+            read = internal_text(text)
+            if read is None:
+                continue
+            value, kept = read
+            # compared as inspect_ai compares them: the decoded value, written
+            # its way, and the text it reads
+            if seen.setdefault(value, kept) != kept:
+                raise UnreadableError(
+                    "The request holds two different assistant texts that carry the same <content-internal> value, of which only the last would be read."
+                )
 
 
 def _check_choices(entries: list[dict[str, Any]], part: str) -> None:

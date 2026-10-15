@@ -989,3 +989,118 @@ async def test_a_rejected_computer_call_is_put_back_with_why() -> None:
         "user",
     ]
     assert "Clicking is not allowed." in json.dumps(added[-1])
+
+
+def _calls_with(arguments: str) -> bytes:
+    # the recorded reply's calls, each with `arguments`
+    reply = json.loads(openai_recorded("chat")[1])
+    for call in reply["choices"][0]["message"]["tool_calls"]:
+        call["function"]["arguments"] = arguments
+    return json.dumps(reply).encode()
+
+
+def _function_calls_with(arguments: str) -> bytes:
+    reply = json.loads(openai_recorded("responses")[1])
+    for item in reply["output"]:
+        if item["type"] == "function_call":
+            item["arguments"] = arguments
+    return json.dumps(reply).encode()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(_calls_with('"Tokyo"'), id="chat"),
+        pytest.param(_function_calls_with('"Tokyo"'), id="responses"),
+    ],
+)
+async def test_a_reply_whose_call_arguments_arent_an_object_is_unreadable(
+    body: bytes,
+) -> None:
+    with pytest.raises(UnreadableError, match="aren't a JSON object"):
+        await read_reply("openai", JSON, body)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("api", ["chat", "responses"])
+async def test_a_request_whose_call_arguments_arent_an_object_is_unreadable(
+    api: str,
+) -> None:
+    then = openai_ran(api, "rain")
+    for entry in then:
+        if entry.get("type") == "function_call":
+            entry["arguments"] = '"Tokyo"'
+        for call in cast("list[dict[str, Any]]", entry.get("tool_calls") or []):
+            call["function"]["arguments"] = '"Tokyo"'
+    body = openai_request(api, then=then) | {"model": "gpt-test"}
+
+    with pytest.raises(UnreadableError, match="aren't a JSON object"):
+        await read_request("openai", json.dumps(body).encode())
+
+
+@pytest.mark.anyio
+async def test_a_call_with_no_arguments_is_read() -> None:
+    output = await read_reply("openai", JSON, _calls_with(""))
+
+    assert [call.arguments for call in output.message.tool_calls or []] == [{}] * 3
+
+
+def _assistant_said(*parts: str | dict[str, Any]) -> bytes:
+    body = {
+        "model": "gpt-test",
+        "input": [
+            {"role": "user", "content": "How is the weather?"},
+            *(
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": part}
+                        if isinstance(part, str)
+                        else part
+                    ],
+                }
+                for part in parts
+            ),
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+    }
+    return json.dumps(body).encode()
+
+
+def _encoded(json_text: str) -> str:
+    # a span holding exactly this JSON, however it is spaced
+    return f"<content-internal>{base64.b64encode(json_text.encode()).decode()}</content-internal>"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("first", "second", "refusal"),
+    [
+        pytest.param('{"id": "msg_1"}', '{"id": "msg_1"}', False, id="one encoding"),
+        pytest.param('{"id":"msg_1"}', '{"id": "msg_1"}', False, id="two encodings"),
+        pytest.param('{"id": "msg_1"}', '{"id": "msg_1"}', True, id="a refusal"),
+    ],
+)
+async def test_two_assistant_texts_with_one_internal_value_are_unreadable(
+    first: str, second: str, refusal: bool
+) -> None:
+    dangerous = f"A dangerous storm. {_encoded(first)}"
+    body = _assistant_said(
+        {"type": "refusal", "refusal": dangerous} if refusal else dangerous,
+        f"A quiet day. {_encoded(second)}",
+    )
+
+    with pytest.raises(UnreadableError, match="same <content-internal> value"):
+        await read_request("openai", body)
+
+
+@pytest.mark.anyio
+async def test_one_assistant_text_sent_twice_is_read_once() -> None:
+    once = "A quiet day. " + _encoded('{"id": "msg_1"}')
+    again = "A quiet day. " + _encoded('{"id":"msg_1"}')
+
+    messages = await read_request("openai", _assistant_said(once, again))
+
+    assert [m.text for m in messages if m.role == "assistant"] == ["A quiet day."]
