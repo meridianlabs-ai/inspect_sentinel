@@ -106,7 +106,7 @@ async def test_handler_is_built_from_the_arguments() -> None:
             "no_tokyo",
             "--reject-status",
             "503",
-            "--role",
+            "--model-role",
             "monitor=mockllm/model",
         )
     )
@@ -122,4 +122,4 @@ async def test_handler_is_built_from_the_arguments() -> None:
 @pytest.mark.parametrize("role", ["monitor", "=mockllm/model", "monitor="])
 def test_a_role_is_role_equals_model(role: str) -> None:
     with pytest.raises(ValueError, match="ROLE=MODEL"):
-        handler_from_arguments(_arguments("--sentinel", "x", "--role", role))
+        handler_from_arguments(_arguments("--sentinel", "x", "--model-role", role))

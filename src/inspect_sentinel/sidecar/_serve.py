@@ -25,7 +25,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="A YAML or JSON sentinel configuration file, or the registered name of a monitor or protocol.",
     )
     parser.add_argument(
-        "--role",
+        "--model-role",
         action="append",
         default=[],
         metavar="ROLE=MODEL",
@@ -79,13 +79,13 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         arguments: Parsed arguments that `add_arguments` defined.
 
     Raises:
-        ValueError: If a `--role` is not `ROLE=MODEL`, or the sentinel configuration is invalid.
+        ValueError: If a `--model-role` is not `ROLE=MODEL`, or the sentinel configuration is invalid.
     """
     roles: dict[str, str] = {}
-    for role in arguments.role:
+    for role in arguments.model_role:
         name, sep, model = str(role).partition("=")
         if not sep or not name or not model:
-            raise ValueError(f"--role takes ROLE=MODEL, not {role!r}.")
+            raise ValueError(f"--model-role takes ROLE=MODEL, not {role!r}.")
         roles[name] = model
     return Handler(
         sentinel_from_config(arguments.sentinel),
