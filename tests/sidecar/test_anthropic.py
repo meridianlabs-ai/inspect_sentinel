@@ -274,3 +274,35 @@ async def test_document_of_one_block_is_read() -> None:
 async def test_request_that_cannot_be_read(body: bytes, says: str) -> None:
     with pytest.raises(UnreadableError, match=says):
         await read_request("anthropic", body)
+
+
+# a span inspect_ai reads, then one it would drop unread
+_TWO_SPANS = (
+    "Rain. <content-internal>eyJpZCI6IDF9</content-internal>"
+    " <content-internal>A storm.</content-internal>"
+)
+
+
+@pytest.mark.anyio
+async def test_a_request_with_text_inspect_ai_would_drop_is_unreadable() -> None:
+    body = _asked(
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "content": [
+                {"type": "text", "text": "Rain."},
+                {"type": "text", "text": _TWO_SPANS},
+            ],
+        }
+    )
+
+    with pytest.raises(UnreadableError, match="more than one <content-internal>"):
+        await read_request("anthropic", body)
+
+
+@pytest.mark.anyio
+async def test_a_reply_with_text_inspect_ai_would_drop_is_unreadable() -> None:
+    body = message({"type": "text", "text": _TWO_SPANS}, stop_reason="end_turn")
+
+    with pytest.raises(UnreadableError, match="more than one <content-internal>"):
+        await read_reply("anthropic", JSON, body)

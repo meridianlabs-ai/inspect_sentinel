@@ -14,7 +14,7 @@ from inspect_ai.model import (
 )
 
 from ._inspect_ai import anthropic_message
-from ._wire import UnreadableError, json_object, stream_events
+from ._wire import UnreadableError, check_internal, json_object, stream_events
 
 # The content kinds that inspect_ai's Anthropic converter reads, in a reply or
 # in an assistant turn of a request. It drops any other kind without an error,
@@ -62,6 +62,7 @@ async def read_reply(content_type: str, body: bytes) -> ModelOutput:
     else:
         message = _message(json_object(body, "reply"))
     _check_blocks(getattr(message, "content", None), "reply")
+    check_internal(message, "reply")
     try:
         # an object, not a dict, so that the converter doesn't validate it again
         return await model_output_from_anthropic(cast(Any, message))

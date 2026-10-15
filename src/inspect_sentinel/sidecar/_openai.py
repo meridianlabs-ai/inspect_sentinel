@@ -17,7 +17,7 @@ from inspect_ai.model import (
     model_output_from_openai_responses,
 )
 
-from ._wire import UnreadableError, json_object, stream_events
+from ._wire import UnreadableError, check_internal, json_object, stream_events
 
 
 async def read_reply(
@@ -30,7 +30,7 @@ async def read_reply(
                 event.get("object") == "chat.completion.chunk" for event in events
             )
         if chat:
-            _check_audio(events, "delta")
+            _check_choices(events, "delta")
         reply = _chat_stream(events) if chat else _responses_stream(events)
     else:
         parsed = json_object(body, "reply")
@@ -42,8 +42,9 @@ async def read_reply(
                 )
             chat = kind == "chat.completion"
         if chat:
-            _check_audio([parsed], "message")
+            _check_choices([parsed], "message")
         reply = _completion(parsed) if chat else _response(parsed)
+    check_internal(reply, "reply")
     if chat:
         for choice in cast("list[Any]", getattr(reply, "choices", None) or []):
             _check_calls(getattr(getattr(choice, "message", None), "tool_calls", None))
@@ -70,7 +71,12 @@ async def read_chat_request(request: dict[str, Any]) -> list[ChatMessage]:
         raise UnreadableError("The request has no list of messages.")
     for entry in cast("list[object]", messages):
         if isinstance(entry, dict):
-            _check_calls(cast("dict[str, Any]", entry).get("tool_calls"))
+            message = cast("dict[str, Any]", entry)
+            _check_calls(message.get("tool_calls"))
+            if message.get("function_call") or message.get("role") == "function":
+                raise UnreadableError(
+                    "The request holds a call in the legacy `function_call` field, or its result, which can't be read."
+                )
     try:
         read = await messages_from_openai(cast(Any, messages), _model(request))
     except Exception as ex:
@@ -188,11 +194,12 @@ async def responses_rejected_turn(
     return cast("list[Any]", await messages_to_openai_responses([message, *results]))
 
 
-def _check_audio(entries: list[dict[str, Any]], part: str) -> None:
+def _check_choices(entries: list[dict[str, Any]], part: str) -> None:
     # inspect_ai's Chat Completions converter keeps neither a reply's audio nor
     # its transcript, so a reply of audio alone would be judged as empty while
-    # the client is handed all of it. See chat_choices_from_openai() in
-    # inspect_ai's src/inspect_ai/model/_openai.py.
+    # the client is handed all of it, and it skips a call in the legacy
+    # `function_call` field, which would reach the client unjudged. See
+    # chat_choices_from_openai() in inspect_ai's src/inspect_ai/model/_openai.py.
     for entry in entries:
         choices: object = entry.get("choices")
         for choice in cast(
@@ -203,8 +210,14 @@ def _check_audio(entries: list[dict[str, Any]], part: str) -> None:
                 if isinstance(choice, dict)
                 else None
             )
-            if isinstance(said, dict) and cast("dict[str, Any]", said).get("audio"):
+            if not isinstance(said, dict):
+                continue
+            if cast("dict[str, Any]", said).get("audio"):
                 raise UnreadableError("The reply holds audio, which can't be read.")
+            if cast("dict[str, Any]", said).get("function_call"):
+                raise UnreadableError(
+                    "The reply holds a call in the legacy `function_call` field, which can't be read."
+                )
 
 
 def _check_calls(calls: object) -> None:

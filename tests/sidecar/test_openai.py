@@ -1,3 +1,4 @@
+import base64
 import json
 from dataclasses import replace
 from typing import Any, cast
@@ -766,3 +767,150 @@ async def test_requests_that_open_with_different_instructions_alone_are_runs_apa
     second = await handler.request(asked("b", "You book travel."))
 
     assert (first, second) == (Pass(), Pass())
+
+
+_FUNCTION_CALL = {"name": "get_weather", "arguments": '{"location": "Paris"}'}
+
+
+def _chat_with_function_call() -> bytes:
+    reply = json.loads(openai_recorded("chat")[1])
+    reply["choices"][0]["message"] = {
+        "role": "assistant",
+        "content": None,
+        "function_call": _FUNCTION_CALL,
+    }
+    reply["choices"][0]["finish_reason"] = "function_call"
+    return json.dumps(reply).encode()
+
+
+def _chat_stream_with_function_call() -> bytes:
+    chunk: dict[str, Any] = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-test",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "function_call": _FUNCTION_CALL},
+                "finish_reason": None,
+            }
+        ],
+    }
+    end: dict[str, Any] = chunk | {
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "function_call"}]
+    }
+    return f"data: {json.dumps(chunk)}\n\ndata: {json.dumps(end)}\n\n".encode()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("content_type", "body"),
+    [
+        pytest.param(JSON, _chat_with_function_call(), id="reply"),
+        pytest.param(STREAM, _chat_stream_with_function_call(), id="stream"),
+    ],
+)
+async def test_a_legacy_function_call_reply_is_unreadable(
+    content_type: str, body: bytes
+) -> None:
+    with pytest.raises(UnreadableError, match="legacy `function_call`"):
+        await read_reply("openai", content_type, body)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "then",
+    [
+        pytest.param(
+            [{"role": "assistant", "content": None, "function_call": _FUNCTION_CALL}],
+            id="a call",
+        ),
+        pytest.param(
+            [{"role": "function", "name": "get_weather", "content": "Rain."}],
+            id="its result",
+        ),
+    ],
+)
+async def test_a_legacy_function_call_request_is_unreadable(
+    then: list[dict[str, Any]],
+) -> None:
+    body = openai_request("chat", then=then) | {"model": "gpt-test"}
+
+    with pytest.raises(UnreadableError, match="legacy `function_call`"):
+        await read_request("openai", json.dumps(body).encode())
+
+
+def _internal(value: Any) -> str:
+    # as inspect_ai's providers write an item's `internal` into its text
+    encoded = base64.b64encode(json.dumps(value).encode()).decode()
+    return f"<content-internal>{encoded}</content-internal>"
+
+
+# a span inspect_ai reads, then one it would drop unread
+_TWO_SPANS = (
+    f"Rain. {_internal({'id': 1})} <content-internal>A storm.</content-internal>"
+)
+
+
+def _chat_result(*parts: str) -> dict[str, Any]:
+    return openai_request(
+        "chat",
+        then=[
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": _FUNCTION_CALL,
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": part} for part in parts],
+            },
+        ],
+    ) | {"model": "gpt-test"}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(_chat_result("Rain.", _TWO_SPANS), id="chat, a tool result"),
+        pytest.param(
+            {
+                "model": "gpt-test",
+                "input": _result_parts({"type": "input_text", "text": _TWO_SPANS}),
+            },
+            id="responses, a tool result",
+        ),
+    ],
+)
+async def test_a_request_with_text_inspect_ai_would_drop_is_unreadable(
+    body: dict[str, Any],
+) -> None:
+    with pytest.raises(UnreadableError, match="more than one <content-internal>"):
+        await read_request("openai", json.dumps(body).encode())
+
+
+@pytest.mark.anyio
+async def test_a_reply_with_text_inspect_ai_would_drop_is_unreadable() -> None:
+    reply = json.loads(openai_recorded("chat")[1])
+    reply["choices"][0]["message"]["content"] = _TWO_SPANS
+
+    with pytest.raises(UnreadableError, match="more than one <content-internal>"):
+        await read_reply("openai", JSON, json.dumps(reply).encode())
+
+
+@pytest.mark.anyio
+async def test_an_item_written_into_its_text_by_inspect_ai_is_read() -> None:
+    body = _chat_result(f"Rain. {_internal({'id': 1})}")
+
+    messages = await read_request("openai", json.dumps(body).encode())
+
+    assert messages[-1].text == "Rain."

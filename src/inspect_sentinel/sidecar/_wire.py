@@ -15,7 +15,7 @@ from inspect_ai.model import (
     ModelOutput,
 )
 from inspect_ai.tool import ToolCallError, ToolChoice, ToolInfo
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
 Format: TypeAlias = Literal["anthropic-messages", "openai-chat", "openai-responses"]
 """Which API a request or a reply is written in. A provider can have more than one, and a proxy can serve one provider's model through another provider's API."""
@@ -55,6 +55,7 @@ async def read_request(
 
     request = json_object(body, "request")
     api = _api(provider, request, format)
+    check_internal(request, "request")
     with noting(start):
         return await api.read(request)
 
@@ -245,6 +246,34 @@ def request_marks(
         running.update(bytes(1))
         marks.append(running.hexdigest())
     return marks
+
+
+# inspect_ai's providers write an item's `internal` into its text in this
+# tag, and its readers take every such span out of a text but read only the
+# first. See parse_content_with_internal() in inspect_ai's
+# src/inspect_ai/model/_internal.py.
+_INTERNAL = re.compile(r"<content-internal>.*?</content-internal>", re.DOTALL)
+
+
+def check_internal(value: object, what: str) -> None:
+    """Refuse a body in which inspect_ai's readers would take text out unread.
+
+    Raises:
+        UnreadableError: If a string anywhere in `value` holds more than one `<content-internal>` span, as only the first is read and the others are dropped, while the model is sent them all.
+    """
+    if isinstance(value, BaseModel):
+        value = value.model_dump(warnings=False)
+    if isinstance(value, str):
+        if len(_INTERNAL.findall(value)) > 1:
+            raise UnreadableError(
+                f"The {what} holds text with more than one <content-internal> span, of which only the first would be read."
+            )
+    elif isinstance(value, dict):
+        for item in cast("dict[str, object]", value).values():
+            check_internal(item, what)
+    elif isinstance(value, list):
+        for item in cast("list[object]", value):
+            check_internal(item, what)
 
 
 def json_object(body: bytes, what: str) -> dict[str, Any]:
