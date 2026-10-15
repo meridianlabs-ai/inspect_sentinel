@@ -39,7 +39,7 @@ inspect_sentinel                                              inspect_ai
 10 Middleman: inspect_sentinel and hawk, after 3 and 5          9 smaller asks, at any time
 ```
 
-PRs 1 to 3 come first, one after another, and land as one pull request with a commit for each, because the endpoint is the first point at which anything runs. After 3, the guardrail (4) and the sidecar's support for Inspect clients (5) can go in parallel. PR 4 gains the `sentinel` field once 5 has landed. PR 8 needs 5 and 6, and needs 7 for per-call rejection and `modify`. PR 9 needs nothing and can start at any time. PR 10 waits on METR accepting Middleman's passthrough hook.
+PRs 1 to 3 come first, one after another, and land as one pull request with a commit for each, because the endpoint is the first point at which anything runs. After 3, the sidecar's support for Inspect clients (5) and the guardrail (4) land together as one pull request, with a commit for each and one more for the guardrail passing the `sentinel` field on: the guardrail's tests run a real sidecar, and the field can only be tested through LiteLLM once the sidecar writes it. PR 8 needs 5 and 6, and needs 7 for per-call rejection and `modify`. PR 9 needs nothing and can start at any time. PR 10 waits on METR accepting Middleman's passthrough hook.
 
 ## PR 1: reading provider traffic
 
@@ -72,7 +72,7 @@ Repository: `inspect_sentinel`. Depends on: PR 2.
 
 ## PR 4: the LiteLLM guardrail
 
-Repository: `inspect_sentinel`, package `inspect_sentinel_litellm` under `src/proxies/litellm`. Depends on: PR 3, and PR 5 for the `sentinel` field.
+Repository: `inspect_sentinel`, package `inspect_sentinel_litellm` under `src/proxies/litellm`. Depends on: PR 3, and PR 5 for the `sentinel` field. Lands with PR 5, in one pull request.
 
 - `LiteLLMGuardrail`: `judge_request` and `judge_reply` on LiteLLM's three routes, holding a streamed reply whole, and LiteLLM's own setting for a sidecar that gives no answer (section 1).
 - Passing `x-inspect-context` and `x-irid` to the sidecar without reading them, and removing both before the provider (section 7).
