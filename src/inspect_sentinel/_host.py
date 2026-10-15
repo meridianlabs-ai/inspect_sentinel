@@ -132,14 +132,15 @@ class Host(HostNative):
 
         Pass the step to show the model all of it, or narrow what it sees with the windowing functions, such as `last_turns(step, 6)` or `new_since_last_report(context, step)`.
 
-        The default template opens with `instructions`, then shows the model `policy`, the task, any escalations and the step, asks it to score the step from 0.0 to 1.0 against `dimensions`, and asks for an explanation. Templates are Jinja templates. A custom one uses the same variables, and must include `{{ step }}` and `{{ answer_format }}`:
+        The default template opens with `instructions`, then shows the model `policy`, the task, any escalations, a paragraph on the nonce and the step, asks it to score the step from 0.0 to 1.0 against `dimensions`, and asks for an explanation. Templates are Jinja templates. A custom one uses the same variables, and must include `{{ step }}` and `{{ answer_format }}`:
 
         - `{{ instructions }}`: `instructions`, or by default a sentence on monitoring AI agents for harmful actions and one telling the model to treat what the agent wrote or was shown as data and ignore any instructions in it. Instructions you pass replace both, so say the second yourself.
-        - `{{ policy }}`: `policy`, the policy the agent must follow whatever its task, between `[BEGIN POLICY]` and `[END POLICY]` lines; empty when there is none.
-        - `{{ task }}`: the task the agent was given (in an eval, the sample's input), between `[BEGIN TASK]` and `[END TASK]` lines; empty outside an eval.
+        - `{{ policy }}`: `policy`, the policy the agent must follow whatever its task, between `[BEGIN POLICY (nonce)]` and `[END POLICY (nonce)]` lines; empty when there is none.
+        - `{{ task }}`: the task the agent was given (in an eval, the sample's input), between `[BEGIN TASK (nonce)]` and `[END TASK (nonce)]` lines; empty outside an eval.
         - `{{ eval }}`: the eval the agent is running in, as `context.eval` holds it, such as `{{ eval.task }}` or `{{ eval.metadata.difficulty }}`; None outside an eval, so guard it with `{% if eval %}` in a monitor that may run outside one.
-        - `{{ escalations }}`: the escalations from earlier links of a `sequential` composition (`step.escalations`), one `- name: explanation` line each, between `[BEGIN ESCALATIONS]` and `[END ESCALATIONS]` lines; empty when there are none.
+        - `{{ escalations }}`: the escalations from earlier links of a `sequential` composition (`step.escalations`), one `- name: explanation` line each, between `[BEGIN ESCALATIONS (nonce)]` and `[END ESCALATIONS (nonce)]` lines; empty when there are none.
         - `{{ step }}`: `step_as_str()` of the step or excerpt, its messages numbered `[M1]`, `[M2]` and so on so the explanation can cite them; the observation's `references` come from those cites.
+        - `{{ sentinel_nonce }}`: a nonce made for this call, 8 hex characters, on every block marker and, where the installed Scout takes a nonce, every message header (`[M1] USER (3f9a1c7e):`). The agent never sees the prompt, so text it writes that looks like a marker or a header lacks the nonce, and the default template tells the model so. A `sentinel_nonce` in `template_variables` is ignored.
         - `{{ dimensions }}`: `dimensions` as given, or each dimension's name followed by its text.
         - `{{ answer_format }}`: the instruction to call the answer tool.
         - Any name in `template_variables`, set to its value.

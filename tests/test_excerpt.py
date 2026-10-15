@@ -2,6 +2,7 @@ import json
 from collections.abc import Callable
 from dataclasses import replace
 from functools import reduce
+from inspect import signature
 from itertools import permutations
 from typing import cast
 
@@ -21,7 +22,7 @@ from inspect_ai.model import (
 )
 from inspect_ai.tool import ToolCall
 from inspect_ai.util import Store
-from inspect_scout import MessagesPreprocessor, message_numbering
+from inspect_scout import MessagesPreprocessor, message_numbering, messages_as_str
 
 from inspect_sentinel import (
     AfterGenerate,
@@ -55,6 +56,11 @@ from ._fakes import (
     host_context,
     in_step,
 )
+
+NONCE = "3f9a1c7e"
+
+# Scout 0.5.5 and earlier write no nonce on message headers
+HEADER = f" ({NONCE})" if "nonce" in signature(messages_as_str).parameters else ""
 
 
 def call(id: str) -> ToolCall:
@@ -217,9 +223,7 @@ def one_turn(step: Step | Excerpt[Step]) -> Excerpt[Step]:
     return last_turns(step, 1)
 
 
-UNKNOWN_INPUT = (
-    "[BEGIN INPUT]\nThe model input for this call is not available.\n[END INPUT]"
-)
+UNKNOWN_INPUT = f"[BEGIN INPUT ({NONCE})]\nThe model input for this call is not available.\n[END INPUT ({NONCE})]"
 
 
 @pytest.mark.parametrize(
@@ -237,9 +241,11 @@ async def test_drop_input_leaves_it_out_and_an_unknown_input_stays_named(
     input: list[ChatMessage] | None,
     says_unknown: bool,
 ) -> None:
-    rendered = await step_as_str(excerpting(tool_step(input, CONVERSATION)))
+    rendered = await step_as_str(
+        excerpting(tool_step(input, CONVERSATION)), nonce=NONCE
+    )
     assert (UNKNOWN_INPUT in rendered) == says_unknown
-    assert ("[BEGIN INPUT]" in rendered) == says_unknown
+    assert (f"[BEGIN INPUT ({NONCE})]" in rendered) == says_unknown
 
 
 Shown = tuple[list[str] | None, list[str] | None]
@@ -462,9 +468,9 @@ async def test_step_as_str_leaves_out_empty_parts_whatever_the_renderer() -> Non
 
     prefilled = [user("task"), asks("prefill")]
     step = replace(before_generate_step(), input=prefilled, history=prefilled)
-    rendered = await step_as_str(step, messages_as_str=as_json)
-    assert "[BEGIN HISTORY]" not in rendered
-    assert "[AGENT STEP - BEGIN MODEL REQUEST]" not in rendered
+    rendered = await step_as_str(step, messages_as_str=as_json, nonce=NONCE)
+    assert f"[BEGIN HISTORY ({NONCE})]" not in rendered
+    assert f"[AGENT STEP - BEGIN MODEL REQUEST ({NONCE})]" not in rendered
 
 
 def test_new_since_last_report_outside_the_runner_raises() -> None:
@@ -490,12 +496,12 @@ def test_new_since_last_report_outside_the_runner_raises() -> None:
             "MODEL REQUEST",
             ["go"],
         ),
-        (after_generate_step(), [], "MODEL REPLY", ["ASSISTANT:\ndone"]),
+        (after_generate_step(), [], "MODEL REPLY", [f"ASSISTANT{HEADER}:\ndone"]),
         (
             replace(after_generate_step(), output=ModelOutput(model="m", choices=[])),
             [],
             "MODEL REPLY",
-            ["ASSISTANT:"],
+            [f"ASSISTANT{HEADER}:"],
         ),
     ],
 )
@@ -503,11 +509,11 @@ def test_new_since_last_report_outside_the_runner_raises() -> None:
 async def test_step_as_str_renders_each_kept_part_in_a_block(
     cut: Step | Excerpt[Step], absent: list[str], block: str, shown: list[str]
 ) -> None:
-    rendered = await step_as_str(cut)
-    assert not any(f"[BEGIN {name}]" in rendered for name in absent)
+    rendered = await step_as_str(cut, nonce=NONCE)
+    assert not any(f"[BEGIN {name} ({NONCE})]" in rendered for name in absent)
     # the step's own part comes last, in a block named for its stage
-    assert rendered.endswith(f"[AGENT STEP - END {block}]")
-    step_block = rendered.split(f"[AGENT STEP - BEGIN {block}]")[1]
+    assert rendered.endswith(f"[AGENT STEP - END {block} ({NONCE})]")
+    step_block = rendered.split(f"[AGENT STEP - BEGIN {block} ({NONCE})]")[1]
     assert all(text in step_block for text in shown)
 
 
@@ -515,10 +521,10 @@ async def test_step_as_str_renders_each_kept_part_in_a_block(
 async def test_a_request_ending_in_a_prefill_has_no_step_block() -> None:
     prefilled = [user("task"), asks("prefill")]
     rendered = await step_as_str(
-        replace(before_generate_step(), input=prefilled, history=prefilled)
+        replace(before_generate_step(), input=prefilled, history=prefilled), nonce=NONCE
     )
-    assert "[AGENT STEP - BEGIN MODEL REQUEST]" not in rendered
-    assert "prefill" in rendered.split("[BEGIN INPUT]")[1]
+    assert f"[AGENT STEP - BEGIN MODEL REQUEST ({NONCE})]" not in rendered
+    assert "prefill" in rendered.split(f"[BEGIN INPUT ({NONCE})]")[1]
 
 
 def thinks(text: str, id: str) -> ChatMessageAssistant:
@@ -574,8 +580,8 @@ async def test_drops_leave_content_out_of_every_block(
     drop: Callable[[Step], Excerpt[Step]] | None, gone: list[str], kept: list[str]
 ) -> None:
     step = thoughtful()
-    rendered = await step_as_str(drop(step) if drop else step)
-    step_block = rendered.split("[AGENT STEP - BEGIN MODEL REPLY]")[1]
+    rendered = await step_as_str(drop(step) if drop else step, nonce=NONCE)
+    step_block = rendered.split(f"[AGENT STEP - BEGIN MODEL REPLY ({NONCE})]")[1]
     assert not any(text in rendered for text in gone)
     assert all(text in rendered for text in kept)
     # the reply's own reasoning goes too, its text stays
@@ -591,6 +597,7 @@ async def test_drops_compose_with_windows_and_keep_cites() -> None:
     rendered = await step_as_str(
         drop_reasoning(last_turns(thoughtful(), 1)),
         messages_as_str=numbered,
+        nonce=NONCE,
     )
     assert "be helpful" not in rendered and "thinking about" not in rendered
     assert [r.id for r in extract_refs("see [M1]")] == ["earlier"]
@@ -629,18 +636,20 @@ async def test_a_chain_gives_the_same_excerpt_in_any_order(
     )
     assert isinstance(chained, Excerpt)
     assert chained.exclude == {"input", "reasoning", "tool_usage"}
-    rendered = await step_as_str(chained)
+    rendered = await step_as_str(chained, nonce=NONCE)
     assert rendered == await step_as_str(
         drop_input(
             two_turns(
                 drop_tool_usage(drop_reasoning(keep_history(keep_system(thoughtful()))))
             )
-        )
+        ),
+        nonce=NONCE,
     )
     # the input is dropped, so the kept history shows, system message included
-    assert "be helpful" in rendered.split("[END HISTORY]")[0]
+    assert "be helpful" in rendered.split(f"[END HISTORY ({NONCE})]")[0]
     assert not any(
-        text in rendered for text in ["thinking about", "searched", "[BEGIN INPUT]"]
+        text in rendered
+        for text in ["thinking about", "searched", f"[BEGIN INPUT ({NONCE})]"]
     )
 
 
@@ -742,12 +751,12 @@ async def test_history_is_kept_by_choice_and_shown_when_it_adds_to_the_input(
     shows_history: bool,
 ) -> None:
     step = tool_step(input, history)
-    rendered = await step_as_str(excerpting(step) if excerpting else step)
-    assert ("[BEGIN HISTORY]" in rendered) == shows_history
+    rendered = await step_as_str(excerpting(step) if excerpting else step, nonce=NONCE)
+    assert (f"[BEGIN HISTORY ({NONCE})]" in rendered) == shows_history
     if shows_history:
         # the whole history, messages the input also has included
         assert all(
-            m.text in rendered.split("[END HISTORY]")[0]
+            m.text in rendered.split(f"[END HISTORY ({NONCE})]")[0]
             for m in history
             if m.role != "system" or excerpting is with_system
         )
@@ -763,13 +772,15 @@ async def test_blocks_come_input_then_history_then_the_step_numbered_in_that_ord
     step = replace(
         tool_step([user("summary")], CONVERSATION), call=call("b"), message="calls b"
     )
-    rendered = await step_as_str(keep_history(step), messages_as_str=numbered)
+    rendered = await step_as_str(
+        keep_history(step), messages_as_str=numbered, nonce=NONCE
+    )
     starts = [
         rendered.index(marker)
         for marker in (
-            "[BEGIN INPUT]",
-            "[BEGIN HISTORY]",
-            "[AGENT STEP - BEGIN TOOL CALL]",
+            f"[BEGIN INPUT ({NONCE})]",
+            f"[BEGIN HISTORY ({NONCE})]",
+            f"[AGENT STEP - BEGIN TOOL CALL ({NONCE})]",
         )
     ]
     assert starts == sorted(starts)
@@ -780,9 +791,7 @@ def windows(step: Step) -> Excerpt[Step]:
     return last_messages(last_turns(keep_history(step), 1), 1)
 
 
-UNKNOWN_HISTORY = (
-    "[BEGIN HISTORY]\nThe agent's conversation history is not available.\n[END HISTORY]"
-)
+UNKNOWN_HISTORY = f"[BEGIN HISTORY ({NONCE})]\nThe agent's conversation history is not available.\n[END HISTORY ({NONCE})]"
 
 
 # a host that cannot provide the history (a proxy, a replay) passes None
@@ -805,16 +814,16 @@ async def test_a_history_the_host_could_not_provide_is_named_where_it_would_show
     excerpting: Callable[[Step], Excerpt[Step]] | None,
     says_unknown: bool,
 ) -> None:
-    rendered = await step_as_str(excerpting(step) if excerpting else step)
+    rendered = await step_as_str(excerpting(step) if excerpting else step, nonce=NONCE)
     assert (UNKNOWN_HISTORY in rendered) == says_unknown
     assert "[AGENT STEP - BEGIN" in rendered
 
 
 @pytest.mark.anyio
 async def test_step_as_str_says_when_the_model_input_is_unknown() -> None:
-    rendered = await step_as_str(tool_step(None, []))
+    rendered = await step_as_str(tool_step(None, []), nonce=NONCE)
     assert (
-        "[BEGIN INPUT]\nThe model input for this call is not available.\n[END INPUT]"
+        f"[BEGIN INPUT ({NONCE})]\nThe model input for this call is not available.\n[END INPUT ({NONCE})]"
         in rendered
     )
 
@@ -823,9 +832,11 @@ async def test_step_as_str_says_when_the_model_input_is_unknown() -> None:
 async def test_numbered_citations_resolve_to_the_agents_messages() -> None:
     numbered, extract_refs = message_numbering()
     rendered = await step_as_str(
-        keep_history(parallel_after_b()), messages_as_str=numbered
+        keep_history(parallel_after_b()), messages_as_str=numbered, nonce=NONCE
     )
-    step_block = rendered.split("[AGENT STEP - BEGIN TOOL CALL AND RESULT]")[1]
+    step_block = rendered.split(f"[AGENT STEP - BEGIN TOOL CALL AND RESULT ({NONCE})]")[
+        1
+    ]
     assert "cmd: b" in step_block and "cmd: a" not in step_block
     # history's task is [M1]; the step's message holding the call is [M2]
     assert [r.id for r in extract_refs("see [M1] and [M2]")] == ["task", "both"]
