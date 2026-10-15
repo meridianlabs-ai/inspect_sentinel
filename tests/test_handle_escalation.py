@@ -8,7 +8,14 @@ from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._integration import Sentinels, resolve_sentinel
 from inspect_sentinel._protocols import threshold
-from inspect_sentinel._report import Action, Decision, Observation, Report, Reported
+from inspect_sentinel._report import (
+    Action,
+    Decision,
+    Escalations,
+    Observation,
+    Report,
+    Reported,
+)
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol
@@ -19,7 +26,9 @@ from tests._fakes import FakeHost, ListRecorder, after_step, before_step, host_c
 def he_rule(
     action: Action | None = "escalate", explanation: str | None = "unsure"
 ) -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         if action is None:
             return None
         cite = f"[{explanation}]"

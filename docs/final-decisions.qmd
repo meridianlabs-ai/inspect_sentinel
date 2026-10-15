@@ -37,7 +37,7 @@ Task(..., sentinel=sequential([triage(), human(stages=["tool_call"])]))
 inspect eval examples/escalate_to_human.py --model openai/gpt-5-mini
 ```
 
-The person chooses from `choices`: by default approve, reject or terminate before a call, and approve or terminate after a call and at `"model_output"`, where reject and modify are not offered and asking for them is an error when `human()` is called. Before a call you can also offer `"modify"`, to edit the call's arguments, where the host supports it. The reason that comes with the answer is what the agent is told on a reject, and is recorded as the decision's explanation.
+The person chooses from `choices`: by default approve, reject or terminate before a call, and approve or terminate after a call and at `"model_output"`, where reject and modify are not offered and asking for them is an error when `human()` is called. Before a call you can also offer `"modify"`, to edit the call's arguments, where the host supports it. The reason that comes with the answer is recorded as the decision's explanation, an approve's included, so the log says why the person let a step go ahead; on a reject it is also what the agent is told.
 
 The answer is an ordinary decision. At the end of a `sequential()` it decides for the chain, as any link's decision does, and the layers above vote on it as usual. Beside other protocols in a `concurrent()` group, which is what a list or mapping passed to `Task(sentinel=)` becomes, the person is one vote: another protocol's `reject` outranks the person's `approve`, and the person's `reject` or `terminate` wins over a weaker vote.
 

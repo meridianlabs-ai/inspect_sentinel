@@ -29,7 +29,6 @@ from inspect_ai._util.registry import (
     registry_tag,
 )
 
-from ._context import Context
 from ._portable import check_portable
 from ._report import Decision, Observation, Report
 from ._step import Step
@@ -65,6 +64,11 @@ _GUARDED_ATTR = "__sentinel_guarded__"
 # identity and params, and the step types it recomputes; any other attribute of
 # the configured instance, such as dispatch metadata, carries over
 _REPLACED = frozenset({REGISTRY_INFO, REGISTRY_PARAMS, STEP_TYPES_ATTR})
+# a protocol is also handed the escalations of earlier links; a monitor is not
+_PARAMETERS: dict[RegistryType, tuple[str, ...]] = {
+    "monitor": ("context", "step"),
+    "protocol": ("context", "step", "escalations"),
+}
 VERSION = "version"
 PORTABLE = "portable"
 ENTRY_FIELDS = ("name", "params", VERSION, "meta")
@@ -81,12 +85,10 @@ _OUTSIDE = _Outside()
 _invoking: ContextVar[object] = ContextVar("sentinel_invoking", default=_OUTSIDE)
 
 
-async def invoke(
-    function: SentinelFunction, context: Context, step: Step
-) -> Report | None:
+async def invoke(function: SentinelFunction, *args: object) -> Report | None:
     token = _invoking.set(function)
     try:
-        return await function(context, step)
+        return await function(*args)
     finally:
         _invoking.reset(token)
 
@@ -195,7 +197,7 @@ def protocol(
 ) -> Callable[P, Protocol | ProtocolGroup] | _ProtocolDecorator:
     """Register a protocol factory.
 
-    Same contract as `@monitor`, with each returned function annotated `-> Decision`, or `-> Decision | None` if it can abstain, and `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. A function never dispatches on the payload type: a union of some stages but not all is rejected, so write a `ProtocolGroup` with one function per stage instead. A union of every stage written out is `Step`. To configure several functions as one instance, return a `ProtocolGroup`; a function among them that returns `terminate` or calls `decide_final()` ends the instance's run, and those after it do not run and are not recorded. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
+    Same contract as `@monitor`, with each returned function taking `(context, step, escalations)` and annotated `-> Decision`, or `-> Decision | None` if it can abstain. `escalations`, annotated `Escalations` (`tuple[Reported[Decision], ...]`), holds the escalations of the links before this one in a `sequential()`, in the order they escalated, so a protocol after them sees who escalated and why; it is empty anywhere else, since escalations do not cross layers. A monitor is never handed them, so its observation does not depend on what another monitor or protocol decided. `step` may also be annotated `Step` for a protocol that runs at every stage, such as a composition that only forwards the step to its children. A function never dispatches on the payload type: a union of some stages but not all is rejected, so write a `ProtocolGroup` with one function per stage instead. A union of every stage written out is `Step`. To configure several functions as one instance, return a `ProtocolGroup`; a function among them that returns `terminate` or calls `decide_final()` ends the instance's run, and those after it do not run and are not recorded. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided `terminate`.
 
     As with `@monitor`, a configured function called directly from another protocol's body during a run raises `RuntimeError`; call it through `run_protocols` or `run_children`.
 
@@ -437,17 +439,17 @@ def _carry_over(configured: object, fresh: object, *own: str) -> None:
 
 def _guard(function: SentinelFunction) -> SentinelFunction:
     @wraps(function)
-    async def guarded(context: Context, step: Step) -> Report | None:
+    async def guarded(*args: object) -> Report | None:
         current = _invoking.get()
         if current is _OUTSIDE:
-            return await function(context, step)
+            return await function(*args)
         if current is not guarded:
             raise RuntimeError(
                 f"{function.__name__} was called directly during a sentinel run; call children through run_monitors/run_protocols/run_children."
             )
         token = _invoking.set(None)
         try:
-            return await function(context, step)
+            return await function(*args)
         finally:
             _invoking.reset(token)
 
@@ -488,16 +490,17 @@ def _validate_signature(
         )
     signature = inspect.signature(instance)
     parameters = list(signature.parameters)
-    if len(parameters) != 2:
+    expected = _PARAMETERS[kind]
+    if len(parameters) != len(expected):
         raise TypeError(
-            f"A {kind} takes exactly (context, step); {name} takes {parameters}."
+            f"A {kind} takes exactly ({', '.join(expected)}); {name} takes {parameters}."
         )
     if any(
         p.kind not in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
         for p in signature.parameters.values()
     ):
         raise TypeError(
-            f"A {kind} takes (context, step) as positional parameters; {name} does not."
+            f"A {kind} takes ({', '.join(expected)}) as positional parameters; {name} does not."
         )
     try:
         hints = get_type_hints(instance)
