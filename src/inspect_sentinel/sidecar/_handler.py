@@ -13,7 +13,7 @@ from inspect_ai.model import (
 from inspect_ai.tool import ToolCall
 
 from .._host import HostNative
-from .._integration import HostContext, resolve_sentinel, run_sentinel
+from .._integration import HostContext, resolve_sentinel, run_sentinel, watched_stages
 from .._report import Decision
 from .._step import (
     AfterGenerate,
@@ -75,6 +75,8 @@ class Handler:
             time_limit: The longest the sentinel may take to judge one request or one reply, in seconds, after which it is cancelled. None, the default, is no limit.
         """
         self._protocol = resolve_sentinel(sentinel)
+        # a stage nothing watches is never built, as in Inspect's own process
+        self._watched = watched_stages(self._protocol)
         self._host: HostNative = host if host is not None else SidecarHost()
         self._state: State = state if state is not None else MemoryState()
         self._reject_status = reject_status
@@ -83,7 +85,7 @@ class Handler:
     async def request(self, request: Request) -> Answer:
         """Judge a request before the proxy sends it.
 
-        Each tool result in the request that the sentinel hasn't been shown is put to it as an `AfterToolCall` step, in order. A result is shown once, however often the client sends it. The request is then put to the sentinel as a `BeforeGenerate` step. If either ends the run, the request is refused.
+        Each tool result in the request that the sentinel hasn't been shown is put to it as an `AfterToolCall` step, in order. A result is shown once, however often the client sends it. The request is then put to the sentinel as a `BeforeGenerate` step. A stage nothing in the sentinel watches is left out. If either ends the run, the request is refused.
 
         If turns were rejected earlier in the conversation this request continues, they are added where they happened, so the model is still told.
 
@@ -103,7 +105,7 @@ class Handler:
     async def reply(self, reply: Reply) -> Answer:
         """Judge a reply before the proxy passes any of it on.
 
-        The reply is put to the sentinel as an `AfterGenerate` step, then each tool call in it as a `BeforeToolCall` step, in order. The first call that is rejected refuses the whole turn, and the rejection is kept for the later requests of its conversation. The third rejected turn in a row ends the run. A provider's error is passed on unjudged.
+        The reply is put to the sentinel as an `AfterGenerate` step, then each tool call in it as a `BeforeToolCall` step, in order, leaving out a stage nothing in the sentinel watches. The first call that is rejected refuses the whole turn, and the rejection is kept for the later requests of its conversation. The third rejected turn in a row ends the run. A provider's error is passed on unjudged.
 
         Args:
             reply: The reply, as the proxy handed it over.
@@ -176,18 +178,19 @@ class Handler:
         ended = await self._results(held, run, conversation, client)
         if ended is not None:
             return ended
-        before = BeforeGenerate(
-            model=held.model,
-            conversation=conversation_key,
-            input=messages,
-            # the caller's own list is not known behind a proxy
-            history=None,
-            tools=sends.tools,
-            tool_choice=sends.tool_choice,
-            config=sends.config,
-        )
-        if _ends(await self._judge(held, run, before)):
-            return self._end(held, run, "before the model was called")
+        if BeforeGenerate in self._watched:
+            before = BeforeGenerate(
+                model=held.model,
+                conversation=conversation_key,
+                input=messages,
+                # the caller's own list is not known behind a proxy
+                history=None,
+                tools=sends.tools,
+                tool_choice=sends.tool_choice,
+                config=sends.config,
+            )
+            if _ends(await self._judge(held, run, before)):
+                return self._end(held, run, "before the model was called")
         # another exchange of the run may have ended it while this one waited
         refusal = _ended(run, marks)
         if refusal is not None:
@@ -202,6 +205,8 @@ class Handler:
         conversation: Conversation,
         client: list[ChatMessage],
     ) -> Refuse | None:
+        if AfterToolCall not in self._watched:
+            return None
         made: dict[str, tuple[ChatMessageAssistant, ToolCall]] = {}
         for entry in client:
             if isinstance(entry, ChatMessageAssistant):
@@ -260,25 +265,27 @@ class Handler:
             return refusal
         conversation = run.conversations.setdefault(held.conversation, Conversation())
 
-        after = AfterGenerate(
-            model=held.model,
-            conversation=held.conversation,
-            input=held.input,
-            history=None,
-            tools=held.offered.tools,
-            tool_choice=held.offered.tool_choice,
-            config=held.offered.config,
-            output=output,
-        )
-        if _ends(await self._judge(held, run, after)):
-            return self._end(held, run, "at the model's reply")
+        if AfterGenerate in self._watched:
+            after = AfterGenerate(
+                model=held.model,
+                conversation=held.conversation,
+                input=held.input,
+                history=None,
+                tools=held.offered.tools,
+                tool_choice=held.offered.tool_choice,
+                config=held.offered.config,
+                output=output,
+            )
+            if _ends(await self._judge(held, run, after)):
+                return self._end(held, run, "at the model's reply")
 
         if not output.choices:
             return _ended(run, held.marks) or self._passed(
                 held, run, conversation, None
             )
         message = output.message
-        calls = message.tool_calls or []
+        # the reply is still read, and kept as passed, when no call is judged
+        calls = (message.tool_calls or []) if BeforeToolCall in self._watched else []
         for call in calls:
             step = BeforeToolCall(
                 conversation=held.conversation,

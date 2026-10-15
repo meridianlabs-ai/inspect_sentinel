@@ -1078,3 +1078,33 @@ async def test_a_request_judged_while_its_run_ended_is_refused() -> None:
         group.start_soon(end)
 
     assert answers == {"a": _ENDED, "b": _ENDED}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("sentinel", "judged"),
+    [
+        (weather_rule(), [BeforeToolCall]),
+        (storm_rule(), [AfterToolCall]),
+    ],
+    ids=["before a call", "after a call"],
+)
+async def test_a_stage_nothing_watches_is_never_judged(
+    sentinel: Protocol, judged: list[type[Step]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from inspect_sentinel.sidecar import _handler
+
+    steps: list[type[Step]] = []
+    run = _handler.run_sentinel
+
+    async def counted(protocol: Any, host: Any, step: Step) -> Decision | None:
+        steps.append(type(step))
+        return await run(protocol, host, step)
+
+    monkeypatch.setattr(_handler, "run_sentinel", counted)
+    handler = Handler(sentinel)
+    await handler.request(request(then=ran("Oslo", "rain", "toolu_1")))
+
+    await handler.reply(reply(message(weather("Lima", "toolu_2"))))
+
+    assert steps == judged
