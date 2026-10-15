@@ -15,7 +15,7 @@
 #
 # then render it for the prompt (a step on its own renders whole):
 #
-#       evidence = await step_as_str(last_turns(step, 6), nonce=secrets.token_hex(4))
+#       evidence = await step_as_str(last_turns(step, 6))
 
 from __future__ import annotations
 
@@ -235,16 +235,16 @@ def new_since_last_report(context: Context, step: S | Excerpt[S]) -> Excerpt[S]:
 async def step_as_str(
     step: S | Excerpt[S],
     *,
-    nonce: str,
+    nonce: str | None = None,
     messages_as_str: MessagesAsStr | None = None,
 ) -> str:
     """Render `step`, or an excerpt of it, for a monitor's prompt.
 
-    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it has nothing to show: `INPUT`, `HISTORY`, then the step's own part (see `Excerpt`), in a block marked `[AGENT STEP - BEGIN ...]` and `[AGENT STEP - END ...]` and named for the stage: `TOOL CALL` before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` (the messages the model is about to answer) before a generate, and `MODEL REPLY` after one. `HISTORY` is shown only after `keep_history()`, or in place of an unknown input that `drop_input()` did not leave out; even then, since it is usually the same conversation as the input, it is shown, whole, only when it holds a message the input does not, such as turns before a compaction; messages are matched by id, counting the ones a merged message was made from. When a tool step has no model input, the `INPUT` block says so, even after `drop_input()`, and when the host could not provide the history, the `HISTORY` block says so wherever it would be shown. Every `[BEGIN ...]` and `[END ...]` line carries `nonce` in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, so a model told the nonce can tell a real marker from one the agent wrote. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
+    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it has nothing to show: `INPUT`, `HISTORY`, then the step's own part (see `Excerpt`), in a block marked `[AGENT STEP - BEGIN ...]` and `[AGENT STEP - END ...]` and named for the stage: `TOOL CALL` before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` (the messages the model is about to answer) before a generate, and `MODEL REPLY` after one. `HISTORY` is shown only after `keep_history()`, or in place of an unknown input that `drop_input()` did not leave out; even then, since it is usually the same conversation as the input, it is shown, whole, only when it holds a message the input does not, such as turns before a compaction; messages are matched by id, counting the ones a merged message was made from. When a tool step has no model input, the `INPUT` block says so, even after `drop_input()`, and when the host could not provide the history, the `HISTORY` block says so wherever it would be shown. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, so a model told the nonce can tell a real marker from one the agent wrote. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
 
     Args:
         step: A step, rendered whole, or an excerpt of one.
-        nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker. The default renderer also writes it on every message header, as `[M1] USER (3f9a1c7e):`, where the installed Scout takes a nonce; Scout needs at least 8 characters.
+        nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker; none by default. The default renderer also writes it on every message header, as `[M1] USER (3f9a1c7e):`, where the installed Scout takes a nonce; Scout needs at least 8 characters.
         messages_as_str: Renders a list of messages; pass the first function of Scout's `message_numbering()` to number them so a model's answer can cite them (made with `MessagesPreprocessor(exclude_system=False)`, so that the excerpt decides whether system messages show). By default Scout's `messages_as_str`, which leaves out only what the excerpt excludes.
     """
     # Scout imports duckdb and pandas, so load it only when a monitor renders
@@ -255,7 +255,7 @@ async def step_as_str(
     keep: MessagesPreprocessor[list[ChatMessage]] = MessagesPreprocessor(
         exclude_system=False
     )
-    with_nonce = scout_nonce(nonce)
+    with_nonce = {} if nonce is None else scout_nonce(nonce)
 
     async def render_all(messages: list[ChatMessage]) -> str:
         # Scout 0.5.5's overloads reject the nonce keyword; the ignore goes
@@ -308,8 +308,9 @@ async def step_as_str(
             await text(_without(_step_part(shown.step), shown.exclude)),
         ),
     ]
+    mark = "" if nonce is None else f" ({nonce})"
     return "\n\n".join(
-        f"[{prefix}BEGIN {name} ({nonce})]\n{text}\n[{prefix}END {name} ({nonce})]"
+        f"[{prefix}BEGIN {name}{mark}]\n{text}\n[{prefix}END {name}{mark}]"
         for prefix, name, text in blocks
         if text
     )
