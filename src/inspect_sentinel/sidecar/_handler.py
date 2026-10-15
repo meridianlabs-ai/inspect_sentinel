@@ -191,6 +191,10 @@ class Handler:
         )
         if _ends(await self._judge(held, run, before)):
             return self._end(held, run, "before the model was called")
+        # another exchange of the run may have ended it while this one waited
+        refusal = _ended(run, marks)
+        if refusal is not None:
+            return refusal
         await self._state.hold(request.id, held)
         return answer
 
@@ -273,7 +277,9 @@ class Handler:
             return self._end(held, run, "at the model's reply")
 
         if not output.choices:
-            return self._passed(held, run, conversation, None)
+            return _ended(run, held.marks) or self._passed(
+                held, run, conversation, None
+            )
         message = output.message
         calls = message.tool_calls or []
         for call in calls:
@@ -295,8 +301,11 @@ class Handler:
                 raise NotImplementedError(
                     f"A sidecar can't carry out a {decision.action!r} decision yet."
                 )
-            return self._reject(held, run, conversation, message, call, decision)
-        return self._passed(held, run, conversation, message)
+            # another exchange of the run may have ended it while this one waited
+            return _ended(run, held.marks) or self._reject(
+                held, run, conversation, message, call, decision
+            )
+        return _ended(run, held.marks) or self._passed(held, run, conversation, message)
 
     def _passed(
         self,

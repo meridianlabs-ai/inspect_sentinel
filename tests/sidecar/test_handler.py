@@ -10,9 +10,10 @@ from inspect_ai.util import StoreModel
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
 from inspect_sentinel._report import Decision
-from inspect_sentinel._step import AfterToolCall, BeforeToolCall
+from inspect_sentinel._step import AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 from inspect_sentinel._types import Protocol, ProtocolGroup
 from inspect_sentinel.sidecar import (
+    Answer,
     Handler,
     Pass,
     Record,
@@ -1013,3 +1014,70 @@ async def test_a_result_written_for_a_rejected_call_by_someone_else_is_judged() 
     answer = await handler.request(request("b", then=ran("Tokyo", "sun", "toolu_1")))
 
     assert answer == _ENDED_AT_RESULT
+
+
+# made in each test, as an event belongs to the event loop it is made in
+_seen_tokyo: anyio.Event | None = None
+
+
+def _tokyo() -> anyio.Event:
+    assert _seen_tokyo is not None
+    return _seen_tokyo
+
+
+@protocol
+def ends_at_tokyo_after_oslo_waits() -> Protocol:
+    # Oslo is judged only once Tokyo has ended the run
+    async def decide(context: Context, step: Step) -> Decision | None:
+        if isinstance(step, BeforeToolCall):
+            if step.call.arguments.get("location") == "Tokyo":
+                _tokyo().set()
+                return Decision.terminate("Tokyo")
+            await _tokyo().wait()
+        if isinstance(step, BeforeGenerate) and "Oslo" in step.input[-1].text:
+            await _tokyo().wait()
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_reply_judged_while_its_run_ended_is_refused() -> None:
+    global _seen_tokyo
+    _seen_tokyo = anyio.Event()
+    handler = Handler(ends_at_tokyo_after_oslo_waits())
+    await handler.request(request("a", run="sample-1"))
+    await handler.request(request("b", "Another conversation", run="sample-1"))
+    answers: dict[str, Answer] = {}
+
+    async def judge(id: str, city: str) -> None:
+        answers[id] = await handler.reply(reply(message(weather(city)), id=id))
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(judge, "a", "Oslo")
+        group.start_soon(judge, "b", "Tokyo")
+
+    assert answers == {"a": _ENDED, "b": _ENDED}
+
+
+@pytest.mark.anyio
+async def test_a_request_judged_while_its_run_ended_is_refused() -> None:
+    global _seen_tokyo
+    _seen_tokyo = anyio.Event()
+    handler = Handler(ends_at_tokyo_after_oslo_waits())
+    await handler.request(request("a", run="sample-1"))
+    answers: dict[str, Answer] = {}
+
+    async def ask() -> None:
+        answers["b"] = await handler.request(
+            request("b", "Weather in Oslo?", run="sample-1")
+        )
+
+    async def end() -> None:
+        answers["a"] = await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(ask)
+        group.start_soon(end)
+
+    assert answers == {"a": _ENDED, "b": _ENDED}
