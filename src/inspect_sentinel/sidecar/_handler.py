@@ -464,7 +464,15 @@ def _result_digest(
     # request, so an id seen before doesn't vouch for what now stands beside it
     digest = hashlib.sha256(
         json.dumps(
-            [assistant.text, call.id, call.function, call.arguments], sort_keys=True
+            [
+                assistant.text,
+                call.id,
+                call.type,
+                call.function,
+                call.arguments,
+                call.parse_error,
+            ],
+            sort_keys=True,
         ).encode()
     )
     digest.update(b"\x00")

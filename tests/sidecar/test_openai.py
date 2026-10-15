@@ -1204,3 +1204,43 @@ async def test_a_refusal_that_is_not_merged_is_read() -> None:
     messages = await read_request("openai", json.dumps(body).encode())
 
     assert messages[-1].text == "A dangerous storm."
+
+
+@protocol
+def ends_at_a_custom_result() -> Protocol:
+    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+        if step.call.type == "custom":
+            return Decision.terminate("a custom tool")
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_custom_call_is_judged_apart_from_a_function_call_like_it() -> None:
+    handler = Handler(ends_at_a_custom_result())
+    # read alike, as a call to apply_patch with {"input": "hello"}, apart from
+    # the kind of call
+    function = [
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "apply_patch",
+            "arguments": json.dumps({"input": "hello"}),
+        },
+        {"type": "function_call_output", "call_id": "call_1", "output": "Done."},
+    ]
+    custom = [
+        {
+            "type": "custom_tool_call",
+            "call_id": "call_1",
+            "name": "apply_patch",
+            "input": "hello",
+        },
+        {"type": "custom_tool_call_output", "call_id": "call_1", "output": "Done."},
+    ]
+
+    first = await handler.request(_request("responses", "a", then=function))
+    second = await handler.request(_request("responses", "b", then=custom))
+
+    assert (first, isinstance(second, Refuse)) == (Pass(), True)
