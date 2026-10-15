@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import anyio
 from inspect_ai.model import (
@@ -31,6 +31,7 @@ from ._state import Conversation, Held, Made, MemoryState, Rejected, Run, State
 from ._wire import (
     UnreadableError,
     add_rejections,
+    call_texts,
     offered,
     read_opening,
     read_reply_noted,
@@ -186,7 +187,8 @@ class Handler:
             offered=sends,
             marks=marks,
         )
-        ended = await self._results(held, run, conversation, client)
+        said = call_texts(request.provider, request.body, request.format)
+        ended = await self._results(held, run, conversation, client, said)
         if ended is not None:
             return ended
         if BeforeGenerate in self._watched:
@@ -215,14 +217,22 @@ class Handler:
         run: Run,
         conversation: Conversation,
         client: list[ChatMessage],
+        said: Mapping[str, Sequence[str]],
     ) -> Refuse | None:
         if AfterToolCall not in self._watched:
             return None
-        made: dict[str, tuple[ChatMessageAssistant, ToolCall]] = {}
+        made: dict[str, tuple[ChatMessageAssistant, ToolCall, str]] = {}
+        # how many calls with each id have come before, as a client can use
+        # one id for calls in different turns, each with words of its own
+        occurrences: dict[str, int] = {}
         for entry in client:
             if isinstance(entry, ChatMessageAssistant):
                 for call in entry.tool_calls or []:
-                    made[call.id] = (entry, call)
+                    index = occurrences.get(call.id, 0)
+                    occurrences[call.id] = index + 1
+                    written = said.get(call.id, ())
+                    words = written[index] if index < len(written) else entry.text
+                    made[call.id] = (entry, call, words)
             if not isinstance(entry, ChatMessageTool):
                 continue
             found = made.get(entry.tool_call_id or "")
@@ -230,11 +240,16 @@ class Handler:
                 raise UnreadableError(
                     f"The request holds a result for a call it doesn't hold: {entry.tool_call_id!r}."
                 )
-            assistant, call = found
-            digest = _result_digest(assistant, call, entry)
+            assistant, call, words = found
+            digest = _result_digest(words, call, entry)
             key = (held.run, held.conversation, digest)
-            while (judging := self._judging.get(key)) is not None:
-                await judging.wait()
+            if key in self._judging:
+                while (judging := self._judging.get(key)) is not None:
+                    await judging.wait()
+                # the judgment waited for may have ended the run
+                refusal = _ended(run, held.marks)
+                if refusal is not None:
+                    return refusal
             if digest in conversation.judged:
                 continue
             sent = conversation.made.get(call.id)
@@ -456,16 +471,15 @@ def _opening(messages: Sequence[ChatMessage]) -> str:
     return digest.hexdigest()[:16]
 
 
-def _result_digest(
-    assistant: ChatMessageAssistant, call: ToolCall, result: ChatMessageTool
-) -> str:
-    # everything the step is given from the request, the model's words with
-    # the call as well as the result: the client wrote them all into the
-    # request, so an id seen before doesn't vouch for what now stands beside it
+def _result_digest(said: str, call: ToolCall, result: ChatMessageTool) -> str:
+    # everything the step is given from the request, what the model said with
+    # the call as well as the call and the result: the client wrote them all
+    # into the request, so an id seen before doesn't vouch for what now
+    # stands beside it
     digest = hashlib.sha256(
         json.dumps(
             [
-                assistant.text,
+                said,
                 call.id,
                 call.type,
                 call.function,

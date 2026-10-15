@@ -226,6 +226,36 @@ async def add_rejections(
     return json.dumps(request).encode()
 
 
+def call_texts(
+    provider: str, body: bytes, format: Format | None = None
+) -> dict[str, list[str]]:
+    """What the model said with each tool call in a request, as the client wrote it, by call id, in the order the calls come, where reading the request can change it.
+
+    inspect_ai's Chat Completions reader merges a turn some scaffolds split, assistant(calls) -> tool -> assistant(text), moving the later text into the turn that made the calls. What the model said with a call is then its own words as the client wrote them, so a summary that follows a result doesn't make the result new. Other formats are read as written, and have nothing here.
+    """
+    request = json_object(body, "request")
+    if _request_format(provider, request, format) != "openai-chat":
+        return {}
+    said: dict[str, list[str]] = {}
+    for entry in _conversation(request, _api(provider, request, format)):
+        if not isinstance(entry, dict):
+            continue
+        message = cast("dict[str, Any]", entry)
+        calls: object = message.get("tool_calls")
+        if message.get("role") != "assistant" or not isinstance(calls, list):
+            continue
+        # a refusal too, which inspect_ai reads as the text when there is no
+        # content
+        written = json.dumps(
+            [message.get("content"), message.get("refusal")], sort_keys=True
+        )
+        for call in cast("list[object]", calls):
+            if isinstance(call, dict):
+                call_id = str(cast("dict[str, Any]", call).get("id"))
+                said.setdefault(call_id, []).append(written)
+    return said
+
+
 def request_marks(
     provider: str, body: bytes, format: Format | None = None
 ) -> list[str]:

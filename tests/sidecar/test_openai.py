@@ -1267,3 +1267,106 @@ async def test_texts_with_one_internal_value_in_different_turns_are_read() -> No
         "A dangerous storm.",
         "A quiet day.",
     ]
+
+
+class _Results(StoreModel):
+    judged: int = 0
+
+
+@protocol
+def ends_at_a_second_result() -> Protocol:
+    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+        results = context.store_as(_Results)
+        results.judged += 1
+        if results.judged > 1:
+            return Decision.terminate("a second result")
+        return Decision.proceed()
+
+    return decide
+
+
+_CALLED = _write_file("Rain.") | {"content": None}
+_RESULT = {"role": "tool", "tool_call_id": "call_1", "content": "Written."}
+
+
+def _chat_asked(id: str, *then: dict[str, Any]) -> Request:
+    return Request(
+        id=id,
+        provider="openai",
+        model="gpt-test",
+        user="user-1",
+        body=json.dumps(_chat_said(*then)).encode(),
+    )
+
+
+@pytest.mark.anyio
+async def test_a_summary_after_a_result_does_not_make_the_result_new() -> None:
+    # inspect_ai merges the summary into the turn that made the call
+    handler = Handler(ends_at_a_second_result())
+
+    first = await handler.request(_chat_asked("a", _CALLED, _RESULT))
+    second = await handler.request(
+        _chat_asked(
+            "b",
+            _CALLED,
+            _RESULT,
+            {"role": "assistant", "content": "The file is written."},
+            {"role": "user", "content": "Thanks."},
+        )
+    )
+
+    assert (first, second) == (Pass(), Pass())
+
+
+@pytest.mark.anyio
+async def test_a_result_beside_changed_words_from_the_model_is_new() -> None:
+    handler = Handler(ends_at_a_second_result())
+
+    await handler.request(_chat_asked("a", _CALLED, _RESULT))
+    second = await handler.request(
+        _chat_asked("b", _CALLED | {"content": "A storm."}, _RESULT)
+    )
+
+    assert isinstance(second, Refuse)
+
+
+@pytest.mark.anyio
+async def test_a_result_beside_a_changed_refusal_is_new() -> None:
+    # with no content, inspect_ai reads the refusal as what the model said
+    handler = Handler(ends_at_a_second_result())
+
+    await handler.request(_chat_asked("a", _CALLED | {"refusal": "Fine."}, _RESULT))
+    second = await handler.request(
+        _chat_asked("b", _CALLED | {"refusal": "A storm."}, _RESULT)
+    )
+
+    assert isinstance(second, Refuse)
+
+
+@protocol
+def ends_at_a_storm_the_model_mentions() -> Protocol:
+    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+        if "storm" in step.message:
+            return Decision.terminate("a storm")
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_each_call_that_reuses_an_id_keeps_its_own_words() -> None:
+    handler = Handler(ends_at_a_storm_the_model_mentions())
+
+    def turns(first: str) -> list[dict[str, Any]]:
+        return [
+            _CALLED | {"content": first},
+            _RESULT,
+            _CALLED | {"content": "Fine too."},
+            _RESULT,
+        ]
+
+    first = await handler.request(_chat_asked("a", *turns("Fine.")))
+    # the earlier of two calls with one id, beside changed words
+    second = await handler.request(_chat_asked("b", *turns("A storm.")))
+
+    assert (first, isinstance(second, Refuse)) == (Pass(), True)

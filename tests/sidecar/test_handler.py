@@ -1249,3 +1249,38 @@ async def test_a_result_is_judged_again_beside_what_the_model_said_anew() -> Non
     answer = await handler.request(request("b", then=changed))
 
     assert isinstance(answer, Refuse)
+
+
+@protocol
+def holds_then_ends_the_run() -> Protocol:
+    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+        _Gate.judged += 1
+        _Gate.reached.set()
+        await _Gate.open.wait()
+        return Decision.terminate("a result")
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_request_that_waited_for_a_judgment_that_ended_the_run_is_refused() -> (
+    None
+):
+    _Gate.judged, _Gate.open, _Gate.reached = 0, anyio.Event(), anyio.Event()
+    handler = Handler(holds_then_ends_the_run())
+    then = ran("Oslo", "Rain.")
+    answers: dict[str, Answer] = {}
+
+    async def ask(id: str) -> None:
+        answers[id] = await handler.request(request(id, then=then, run="run_1"))
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(ask, "a")
+        await _Gate.reached.wait()
+        group.start_soon(ask, "b")
+        for _ in range(20):
+            await anyio.lowlevel.checkpoint()
+        _Gate.open.set()
+
+    assert _Gate.judged == 1
+    assert all(isinstance(answer, Refuse) for answer in answers.values())
