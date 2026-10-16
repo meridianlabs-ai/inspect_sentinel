@@ -236,6 +236,7 @@ class Handler:
             return None
         made: dict[str, tuple[ChatMessageAssistant, ToolCall, str, int]] = {}
         results: list[_Result] = []
+        held_calls = _calls(client)
         # how many calls with each id have come before, as a client can use
         # one id for calls in different turns, each with words of its own
         occurrences: dict[str, int] = {}
@@ -255,13 +256,18 @@ class Handler:
                     f"The request holds a result for a call it doesn't hold: {entry.tool_call_id!r}."
                 )
             assistant, call, words, index = found
-            # the call's occurrence too: a client that runs two calls with one
-            # id, the same arguments and the same result ran them both
-            digest = _result_digest(words, call, entry, index)
-            results.append((assistant, call, index, entry, digest))
+            # A call's place among those with its id tells it apart from the
+            # others, as a client that runs two calls with one id, the same
+            # arguments and the same result ran them both. A conversation
+            # that lost calls with its id, to compaction, shifted that place,
+            # so the call is then known without it.
+            placed = held_calls.get(call.id, 0) >= conversation.issued.get(call.id, 0)
+            loose = _result_digest(words, call, entry, None)
+            digest = _result_digest(words, call, entry, index) if placed else loose
+            results.append((assistant, call, index, entry, digest, loose, placed))
         chosen = _to_judge(conversation, results)
-        held_calls = _calls(client)
-        for position, (assistant, call, index, entry, digest) in enumerate(results):
+        for position, result in enumerate(results):
+            assistant, call, index, entry, digest, loose, placed = result
             if position not in chosen:
                 continue
             key = (held.run, held.conversation, digest)
@@ -277,14 +283,9 @@ class Handler:
             ):
                 # judged while this request waited
                 continue
-            # what the model was sent for the call, unless the conversation
-            # lost calls with its id, after which its place among them no
-            # longer says which call it is
-            sent = (
-                conversation.made.get(occurrence(call.id, index))
-                if held_calls.get(call.id, 0) >= conversation.issued.get(call.id, 0)
-                else None
-            )
+            # what the model was sent for the call, unless its place among
+            # the calls with its id no longer says which call it is
+            sent = conversation.made.get(occurrence(call.id, index)) if placed else None
             step = AfterToolCall(
                 conversation=held.conversation,
                 message=assistant.text,
@@ -306,7 +307,8 @@ class Handler:
                     return self._end(
                         held, run, f"at the result of the call to {call.function}"
                     )
-                conversation.judged.add(digest)
+                # known without its place too, for after compaction
+                conversation.judged.update((digest, loose))
                 _settle(conversation.owed, call_key(call))
             finally:
                 del self._judging[key]
@@ -404,7 +406,9 @@ class Handler:
                 owed = call_key(call)
                 conversation.owed[owed] = conversation.owed.get(owed, 0) + 1
                 # moved to the end, so the ids used least lately go first
-                issued = conversation.issued.pop(call.id, 0) + 1
+                # counting the calls with its id the client already held,
+                # which this sidecar may never have handed out
+                issued = max(conversation.issued.pop(call.id, 0) + 1, index + 1)
                 conversation.issued[call.id] = issued
             for kept in (conversation.made, conversation.issued):
                 while len(kept) > MADE_KEPT:
@@ -516,9 +520,12 @@ def _opening(messages: Sequence[ChatMessage]) -> str:
     return digest.hexdigest()[:16]
 
 
-_Result: TypeAlias = tuple[ChatMessageAssistant, ToolCall, int, ChatMessageTool, str]
+_Result: TypeAlias = tuple[
+    ChatMessageAssistant, ToolCall, int, ChatMessageTool, str, str, bool
+]
 # a tool result in a request: the turn that made its call, the call, how
-# many calls with its id came before it, the result, and its digest
+# many calls with its id came before it, the result, the digest it is known
+# by, its digest without the call's place, and whether the place is known
 
 
 def _to_judge(conversation: Conversation, results: Sequence[_Result]) -> set[int]:
@@ -530,7 +537,7 @@ def _to_judge(conversation: Conversation, results: Sequence[_Result]) -> set[int
     # of results owed tells apart from the earlier one sent again.
     owed = dict(conversation.owed)
     chosen: set[int] = set()
-    for position, (_, call, _, _, digest) in enumerate(results):
+    for position, (_, call, _, _, digest, _, _) in enumerate(results):
         if digest not in conversation.judged:
             chosen.add(position)
             _settle(owed, call_key(call))
@@ -561,7 +568,7 @@ def _calls(messages: Sequence[ChatMessage]) -> dict[str, int]:
 
 
 def _result_digest(
-    said: str, call: ToolCall, result: ChatMessageTool, index: int
+    said: str, call: ToolCall, result: ChatMessageTool, index: int | None
 ) -> str:
     # everything the step is given from the request, what the model said with
     # the call as well as the call and the result: the client wrote them all

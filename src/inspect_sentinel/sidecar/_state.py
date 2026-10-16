@@ -84,7 +84,7 @@ class Conversation:
     """For each tool call the client was handed, by `call_key()`, how many of its results haven't been judged yet. A result judged before can be a new one: a conversation that was compacted can hold a later run of the same call, with the same id and the same result, in its earlier one's place. Every call is counted until its result is judged, as forgetting one would let its result pass unjudged; each count is small."""
 
     issued: dict[str, int] = field(default_factory=dict[str, int])
-    """For the latest call ids the client was handed, how many calls with each id. A request that holds fewer was compacted, so a call's place among those with its id no longer tells which of them it is."""
+    """For the latest call ids the client was handed, how many calls with each id its conversation has held, those it held before this sidecar saw it included. A request that holds fewer was compacted, so a call's place among those with its id no longer tells which of them it is."""
 
     made: dict[str, Made] = field(default_factory=dict[str, Made])
     """For the latest tool calls the client was handed, by `occurrence()`, what the model was sent for the generate that made each. The oldest are dropped past `MADE_KEPT`, as each holds what the model was sent, which grows with the conversation."""

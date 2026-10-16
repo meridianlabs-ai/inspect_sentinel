@@ -1899,3 +1899,24 @@ async def test_a_later_run_of_a_call_in_a_compacted_conversation_is_judged_witho
 
     # which of the two calls it is can't be told, so nor what made it
     assert await _explained(handler, "c") == ["None"]
+
+
+@pytest.mark.anyio
+async def test_compaction_of_calls_the_sidecar_never_handed_out_is_noticed() -> None:
+    handler = Handler(notes_what_the_model_was_sent())
+    # the conversation already holds a call to call_1 when the sidecar first
+    # sees it
+    earlier = [_CALLED, _RESULT]
+    await handler.request(_chat_asked("a", *earlier))
+    await handler.reply(_chat_reply_calling("a"))
+    first = [_CALLED, _RESULT | {"content": "Written first."}]
+    await handler.request(_chat_asked("b", *earlier, *first))
+    await handler.reply(_chat_reply_calling("b"))
+
+    # compaction drops the call the sidecar never handed out
+    second = [_CALLED, _RESULT | {"content": "Written second."}]
+    await handler.request(_chat_asked("c", *first, *second))
+
+    # the second result is judged without what made it, which can't be told,
+    # and the first, judged before, is not judged again
+    assert await _explained(handler, "c") == ["None"]
