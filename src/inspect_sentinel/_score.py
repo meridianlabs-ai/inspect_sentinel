@@ -174,9 +174,11 @@ async def score_step(
         ),
     )
     # one per sample, so text that recurs from step to step renders the same
-    # and the monitor model's prompt cache keeps working; the agent never sees
-    # a prompt, so it cannot learn the nonce from an earlier one
-    nonce = store.get(_NONCE, secrets.token_hex(4))
+    # and the monitor model's prompt cache keeps working. The nonce must never
+    # be sent to the model being monitored: one that knows it can fake markers
+    # and headers for the rest of the sample. Keep it out of anything the
+    # agent sees, such as a tool result or a decision's message.
+    nonce = secrets.token_hex(4)
     # the excerpt decides what is left out, system messages included
     numbered, extract_refs = message_numbering(
         MessagesPreprocessor(exclude_system=False), **scout_nonce(nonce)
