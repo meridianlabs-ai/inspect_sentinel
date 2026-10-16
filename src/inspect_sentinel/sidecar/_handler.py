@@ -27,7 +27,17 @@ from .._types import Sentinels
 from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request
 from ._host import Record, SidecarHost
 from ._inspect_ai import tool_call_view
-from ._state import Conversation, Held, Made, MemoryState, Rejected, Run, State
+from ._state import (
+    MADE_KEPT,
+    Conversation,
+    Held,
+    Made,
+    MemoryState,
+    Rejected,
+    Run,
+    State,
+    occurrence,
+)
 from ._wire import (
     UnreadableError,
     add_rejections,
@@ -184,6 +194,7 @@ class Handler:
             model=_model(request.provider, request.model),
             recorder=await self._state.recorder(request.id),
             input=messages,
+            calls=_calls(client),
             offered=sends,
             marks=marks,
         )
@@ -221,7 +232,7 @@ class Handler:
     ) -> Refuse | None:
         if AfterToolCall not in self._watched:
             return None
-        made: dict[str, tuple[ChatMessageAssistant, ToolCall, str]] = {}
+        made: dict[str, tuple[ChatMessageAssistant, ToolCall, str, int]] = {}
         # how many calls with each id have come before, as a client can use
         # one id for calls in different turns, each with words of its own
         occurrences: dict[str, int] = {}
@@ -232,7 +243,7 @@ class Handler:
                     occurrences[call.id] = index + 1
                     written = said.get(call.id, ())
                     words = written[index] if index < len(written) else entry.text
-                    made[call.id] = (entry, call, words)
+                    made[call.id] = (entry, call, words, index)
             if not isinstance(entry, ChatMessageTool):
                 continue
             found = made.get(entry.tool_call_id or "")
@@ -240,8 +251,10 @@ class Handler:
                 raise UnreadableError(
                     f"The request holds a result for a call it doesn't hold: {entry.tool_call_id!r}."
                 )
-            assistant, call, words = found
-            digest = _result_digest(words, call, entry)
+            assistant, call, words, index = found
+            # the call's occurrence too: a client that runs two calls with one
+            # id, the same arguments and the same result ran them both
+            digest = _result_digest(words, call, entry, index)
             key = (held.run, held.conversation, digest)
             if key in self._judging:
                 while (judging := self._judging.get(key)) is not None:
@@ -252,7 +265,7 @@ class Handler:
                     return refusal
             if digest in conversation.judged:
                 continue
-            sent = conversation.made.get(call.id)
+            sent = conversation.made.get(occurrence(call.id, index))
             step = AfterToolCall(
                 conversation=held.conversation,
                 message=assistant.text,
@@ -362,8 +375,14 @@ class Handler:
         if not held.named:
             run.answered.add(held.mark)
         if message is not None:
+            seen = dict(held.calls)
             for call in message.tool_calls or []:
-                conversation.made[call.id] = Made(held.input, held.offered.tools)
+                index = seen.get(call.id, 0)
+                seen[call.id] = index + 1
+                made = Made(held.input, held.offered.tools)
+                conversation.made[occurrence(call.id, index)] = made
+            while len(conversation.made) > MADE_KEPT:
+                del conversation.made[next(iter(conversation.made))]
         return Pass()
 
     def _reject(
@@ -471,7 +490,19 @@ def _opening(messages: Sequence[ChatMessage]) -> str:
     return digest.hexdigest()[:16]
 
 
-def _result_digest(said: str, call: ToolCall, result: ChatMessageTool) -> str:
+def _calls(messages: Sequence[ChatMessage]) -> dict[str, int]:
+    # how many tool calls with each id the messages hold
+    calls: dict[str, int] = {}
+    for message in messages:
+        if isinstance(message, ChatMessageAssistant):
+            for call in message.tool_calls or []:
+                calls[call.id] = calls.get(call.id, 0) + 1
+    return calls
+
+
+def _result_digest(
+    said: str, call: ToolCall, result: ChatMessageTool, index: int
+) -> str:
     # everything the step is given from the request, what the model said with
     # the call as well as the call and the result: the client wrote them all
     # into the request, so an id seen before doesn't vouch for what now
@@ -481,6 +512,7 @@ def _result_digest(said: str, call: ToolCall, result: ChatMessageTool) -> str:
             [
                 said,
                 call.id,
+                index,
                 call.type,
                 call.function,
                 call.arguments,

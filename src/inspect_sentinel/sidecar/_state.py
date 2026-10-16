@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Generic, Protocol, TypeVar
 
@@ -15,6 +16,9 @@ from ._host import ListRecorder, Record
 from ._wire import Offered, Turn
 
 V = TypeVar("V")
+
+MADE_KEPT = 64
+"""How many tool calls a conversation keeps what the model was sent for. A call's result is judged without it once it is dropped."""
 
 RUN_EXPIRY = 24 * 60 * 60
 """How long a run's state is kept once no request has named it, in seconds."""
@@ -35,6 +39,11 @@ class Rejected:
 
     turns: list[Turn]
     """Each rejected turn."""
+
+
+def occurrence(call: str, index: int) -> str:
+    """A tool call told apart from others with its id: a client can use one id for calls in different turns. `index` is how many calls with the id come before it in the client's conversation, which only grows, so it stays the same on every request."""
+    return f"{call}#{index}"
 
 
 @dataclass(frozen=True)
@@ -59,7 +68,7 @@ class Conversation:
     """Digests of the tool results in the conversation the sentinel has been shown and let go on."""
 
     made: dict[str, Made] = field(default_factory=dict[str, Made])
-    """For each tool call the client was handed, by id, what the model was sent for the generate that made it."""
+    """For the latest tool calls the client was handed, by `occurrence()`, what the model was sent for the generate that made each. The oldest are dropped past `MADE_KEPT`, as each holds what the model was sent, which grows with the conversation."""
 
 
 @dataclass
@@ -101,6 +110,8 @@ class Held:
     recorder: ListRecorder
     input: list[ChatMessage]
     """What the model was sent."""
+    calls: Mapping[str, int]
+    """How many tool calls with each id the client sent, which the reply's calls follow."""
     offered: Offered
     marks: list[str]
     """The request's marks, for each count of the entries the client sent, before anything was added."""

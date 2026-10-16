@@ -1646,3 +1646,82 @@ async def test_a_span_inside_reasoning_is_read_in_the_reasoning() -> None:
     assert _internal({"secret": "A storm."}) in json.dumps(
         [m.model_dump(mode="json") for m in messages]
     )
+
+
+@pytest.mark.anyio
+async def test_two_calls_that_share_an_id_and_a_result_are_each_judged() -> None:
+    # a client can use one id in different turns, and the same call can give
+    # the same result twice: each ran
+    handler = Handler(ends_at_a_second_result())
+
+    answer = await handler.request(_chat_asked("a", _CALLED, _RESULT, _CALLED, _RESULT))
+
+    assert isinstance(answer, Refuse)
+
+
+@protocol
+def notes_what_the_model_was_sent() -> Protocol:
+    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+        sent = step.input
+        return Decision.proceed("None" if sent is None else str(len(sent)))
+
+    return decide
+
+
+def _chat_reply_calling(id: str) -> Reply:
+    reply = json.loads(openai_recorded("chat")[1])
+    reply["choices"][0]["message"]["tool_calls"] = _write_file("Rain.")["tool_calls"]
+    return Reply(
+        id=id,
+        provider="openai",
+        model="gpt-test",
+        user="user-1",
+        status=200,
+        content_type=JSON,
+        body=json.dumps(reply).encode(),
+    )
+
+
+async def _explained(handler: Handler, id: str) -> list[str]:
+    records = await handler.records(id) or []
+    return [cast(Any, record.detail).report.explanation for record in records]
+
+
+@pytest.mark.anyio
+async def test_each_call_that_shares_an_id_is_judged_with_what_its_model_was_sent() -> (
+    None
+):
+    handler = Handler(notes_what_the_model_was_sent())
+    # the model is handed call_1 twice, in two turns
+    await handler.request(_chat_asked("a"))
+    await handler.reply(_chat_reply_calling("a"))
+    await handler.request(_chat_asked("b", _CALLED, _RESULT))
+    await handler.reply(_chat_reply_calling("b"))
+
+    # and the client changes the first call's result
+    changed = _RESULT | {"content": "Written again."}
+    await handler.request(_chat_asked("c", _CALLED, changed, _CALLED, _RESULT))
+
+    # the first was made from what the model was sent for "a", the system
+    # prompt and the user's message, not for "b"
+    assert (await _explained(handler, "c"))[0] == "2"
+
+
+@pytest.mark.anyio
+async def test_a_result_whose_call_is_no_longer_kept_is_judged_without_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from inspect_sentinel.sidecar import _handler
+
+    monkeypatch.setattr(_handler, "MADE_KEPT", 1)
+    handler = Handler(notes_what_the_model_was_sent())
+    await handler.request(_chat_asked("a"))
+    await handler.reply(_chat_reply_calling("a"))
+    await handler.request(_chat_asked("b", _CALLED, _RESULT))
+    # a later call takes the one place kept
+    await handler.reply(_chat_reply_calling("b"))
+
+    changed = _RESULT | {"content": "Written again."}
+    await handler.request(_chat_asked("c", _CALLED, changed, _CALLED, _RESULT))
+
+    assert (await _explained(handler, "c"))[0] == "None"
