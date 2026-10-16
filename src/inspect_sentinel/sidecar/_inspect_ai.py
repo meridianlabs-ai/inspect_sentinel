@@ -324,6 +324,26 @@ def _filled(api: str, declaration: object) -> object:
     return found
 
 
+def _complete(api: str, declaration: object) -> object:
+    # A Responses declaration of a provider's tool can give the model content
+    # of its own that inspect_ai's readers leave out: an MCP server's
+    # description, and the files a code interpreter's container holds. Such
+    # a declaration can't be read whole.
+    if api != "openai-responses" or not isinstance(declaration, dict):
+        return declaration
+    found = cast("dict[str, Any]", declaration)
+    container: object = found.get("container")
+    if (found.get("type") == "mcp" and found.get("server_description")) or (
+        found.get("type") == "code_interpreter"
+        and isinstance(container, dict)
+        and cast("dict[str, Any]", container).get("file_ids")
+    ):
+        raise UnreadableError(
+            f"The request offers a tool with content that would not be read: {api} {_kind(found)}."
+        )
+    return found
+
+
 def _readable(
     api: str,
     declarations: object,
@@ -340,8 +360,10 @@ def _readable(
         try:
             read_ = [
                 tool if isinstance(tool, ToolInfo) else tool_to_tool_info(tool)
-                for tool in read(_filled(api, declaration))
+                for tool in read(_filled(api, _complete(api, declaration)))
             ]
+        except UnreadableError:
+            raise
         except Exception as ex:
             raise UnreadableError(
                 f"The request offers a tool that can't be read: {api} {_kind(declaration)}."
