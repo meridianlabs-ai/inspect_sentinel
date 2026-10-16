@@ -45,16 +45,16 @@ def _evidence(history: list[ChatMessage] | None) -> str:
 
 def _every_stage(value: float) -> MonitorGroup:
     async def tool_call(context: Context, step: BeforeToolCall) -> Observation | None:
-        return Observation.score(value, _evidence(step.history))
+        return Observation.score(value, _evidence(step.agent_messages))
 
     async def tool_result(context: Context, step: AfterToolCall) -> Observation | None:
-        return Observation.score(value, _evidence(step.history))
+        return Observation.score(value, _evidence(step.agent_messages))
 
     async def model_input(context: Context, step: BeforeGenerate) -> Observation | None:
-        return Observation.score(value, _evidence(step.history))
+        return Observation.score(value, _evidence(step.agent_messages))
 
     async def model_output(context: Context, step: AfterGenerate) -> Observation | None:
-        return Observation.score(value, _evidence(step.history))
+        return Observation.score(value, _evidence(step.agent_messages))
 
     return MonitorGroup(tool_call, tool_result, model_input, model_output)
 
@@ -90,15 +90,15 @@ def _every_builtin() -> Sentinels:
 @pytest.mark.parametrize(
     ("step", "action", "asked"),
     [
-        (replace(before_step(), history=None), "proceed", True),
-        (replace(after_step(), history=None), "proceed", True),
-        (replace(before_generate_step(), history=None), "terminate", False),
-        (replace(after_generate_step(), history=None), "terminate", False),
+        (replace(before_step(), agent_messages=None), "proceed", True),
+        (replace(after_step(), agent_messages=None), "proceed", True),
+        (replace(before_generate_step(), agent_messages=None), "terminate", False),
+        (replace(after_generate_step(), agent_messages=None), "terminate", False),
     ],
     ids=["tool_call", "tool_result", "model_input", "model_output"],
 )
 @pytest.mark.anyio
-async def test_builtins_run_without_history(
+async def test_builtins_run_without_agent_messages(
     step: Step, action: Action, asked: bool
 ) -> None:
     host = FakeHost(*([HumanAnswer(decision="approve")] if asked else []))
@@ -109,7 +109,7 @@ async def test_builtins_run_without_history(
         step,
     )
     assert decision is not None and decision.action == action
-    assert [a.step.history for a in host.asked] == ([None] if asked else [])
+    assert [a.step.agent_messages for a in host.asked] == ([None] if asked else [])
     assert recorder.failures == []
     observed = [
         r.reported.report
