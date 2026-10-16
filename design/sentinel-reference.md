@@ -460,7 +460,7 @@ Rules:
 
 ### State
 
-Per-sample state lives in the sample `Store`. `context.store_as()` namespaces it by the instance path so two configured instances of the same monitor do not collide. It is the only way in the API offers: `Context` is immutable and has no `store`, so nothing hands a monitor or protocol the agent's state. This is a convention, not isolation, since the `StoreModel` that `store_as()` returns carries the store it reads. The package itself keeps one key outside any namespace, `inspect_sentinel:nonce`, the nonce `Host.score` puts on every prompt in the sample; solver code that reads the store, and the eval log, see it:
+Per-sample state lives in the sample `Store`. `context.store_as()` namespaces it by the instance path so two configured instances of the same monitor do not collide. It is the only way in the API offers: `Context` is immutable and has no `store`, so nothing hands a monitor or protocol the agent's state. This is a convention, not isolation, since the `StoreModel` that `store_as()` returns carries the store it reads:
 
 ```python
 class TrajectoryState(StoreModel):
@@ -476,6 +476,8 @@ async def check(context: Context, step: BeforeToolCall) -> Observation | None:
 You get three things for free: the state is recorded to the transcript as `StoreEvent`s, it survives checkpoint and resume, and `store_from_events_as()` reconstructs it from a finished log for analysis. A scorer holding a `TaskState` reads it with `store_as(TrajectoryState, instance=<instance path>)`, for example `instance="attempt/internet_attempt"`.
 
 The key is the instance path, so renaming a mapping key or wrapping a monitor in another layer moves its state: a resumed sample or a scorer reading under the old path finds nothing.
+
+The package itself keeps one key outside any namespace, `inspect_sentinel:nonce`, the nonce `Host.score` puts on every prompt in the sample; solver code that reads the store, and the eval log, see it.
 
 Per-task state is planned, not built: `store_as()` has no `scope=` today. `pr-series.md`, "Deferred", lists four scopes (the sample in one epoch, which is today's, the sample across epochs, the task, and global), which need a design for concurrency and checkpointing first. The intended shape, illustrative:
 
