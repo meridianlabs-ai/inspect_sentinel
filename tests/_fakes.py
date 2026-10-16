@@ -1,5 +1,6 @@
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import Any, NamedTuple
 
 from inspect_ai.model import (
@@ -13,7 +14,12 @@ from inspect_ai.tool import ToolCall, ToolCallError, ToolCallView, ToolChoice, T
 from inspect_ai.util import Store
 
 from inspect_sentinel._context import Context, EvalContext
-from inspect_sentinel._host import HostContext, HumanAnswer, enter_layer, running_step
+from inspect_sentinel._host import (
+    HostContext,
+    HumanAnswer,
+    enter_layer,
+    running_step,
+)
 from inspect_sentinel._report import Decision, Failed, Report, Reported
 from inspect_sentinel._step import (
     AfterGenerate,
@@ -29,12 +35,28 @@ class Asked(NamedTuple):
     choices: tuple[str, ...]
 
 
+class Offered(NamedTuple):
+    tools: list[ToolInfo]
+    tool_choice: ToolChoice | None
+    config: GenerateConfig | None
+
+
 class FakeHost:
-    def __init__(self, *answers: HumanAnswer, completion: str = "ok") -> None:
+    def __init__(
+        self,
+        *answers: HumanAnswer,
+        completion: str = "ok",
+        outputs: Sequence[ModelOutput] = (),
+        eval: EvalContext | None = None,
+    ) -> None:
+        self.eval = eval
         self.answers = list(answers)
         self.asked: list[Asked] = []
         self.completion = completion
+        self.outputs = list(outputs)
         self.models: list[tuple[str | None, str | None]] = []
+        self.inputs: list[list[ChatMessage]] = []
+        self.offered: list[Offered] = []
 
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
         self.asked.append(Asked(step, tuple(choices)))
@@ -51,7 +73,15 @@ class FakeHost:
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
         self.models.append((model, role))
-        return ModelOutput.from_content(model="fake", content=self.completion)
+        self.offered.append(Offered(tools or [], tool_choice, config))
+        self.inputs.append(
+            [ChatMessageUser(content=input)] if isinstance(input, str) else input
+        )
+        return (
+            self.outputs.pop(0)
+            if self.outputs
+            else ModelOutput.from_content(model="fake", content=self.completion)
+        )
 
 
 class Recorded(NamedTuple):
@@ -115,13 +145,12 @@ def eval_context() -> EvalContext:
 
 
 def host_context(
-    path: str = "",
     recorder: ListRecorder | None = None,
     host: FakeHost | None = None,
     store: Store | None = None,
 ) -> HostContext:
     return HostContext(
-        context=Context(path=path, host=host or FakeHost(), eval=eval_context()),
+        host=host or FakeHost(),
         recorder=recorder or ListRecorder(),
         store=store or Store(),
     )
@@ -135,10 +164,10 @@ def in_step(
     store: Store | None = None,
     factory: str = "",
 ) -> Generator[Context]:
-    built = host_context(path, recorder, host, store)
+    built = host_context(recorder, host, store)
     with running_step(built.recorder, built.store):
         enter_layer(path, factory)
-        yield built.context
+        yield replace(built.context, path=path)
 
 
 def before_step() -> BeforeToolCall:

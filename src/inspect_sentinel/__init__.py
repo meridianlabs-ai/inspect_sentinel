@@ -5,6 +5,18 @@ A *monitor* observes a step of an agent's execution and reports a suspicion scor
 
 from ._context import Context, EvalContext
 from ._decorators import monitor, protocol
+from ._excerpt import (
+    Excerpt,
+    drop_input,
+    drop_reasoning,
+    drop_tool_usage,
+    keep_history,
+    keep_system,
+    last_messages,
+    last_turns,
+    new_since_last_report,
+    step_as_str,
+)
 from ._final import decide_final
 from ._host import Host, HumanAnswer
 from ._portable import PortabilityError
@@ -68,6 +80,7 @@ __all__ = [
     "Decision",
     "Decisions",
     "EvalContext",
+    "Excerpt",
     "Failed",
     "Host",
     "HumanAnswer",
@@ -92,10 +105,18 @@ __all__ = [
     "call_text",
     "concurrent",
     "decide_final",
+    "drop_input",
+    "drop_reasoning",
+    "drop_tool_usage",
     "find_words",
     "handle_escalation",
     "human",
+    "keep_history",
+    "keep_system",
+    "last_messages",
+    "last_turns",
     "monitor",
+    "new_since_last_report",
     "observe_only",
     "protocol",
     "result_text",
@@ -103,6 +124,7 @@ __all__ = [
     "run_monitors",
     "run_protocols",
     "sequential",
+    "step_as_str",
     "threshold",
     "tool_matches",
     "__version__",

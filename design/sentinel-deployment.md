@@ -77,7 +77,9 @@ So there is no `PortableAction` subset — the vocabulary crosses whole, and wha
 The single most useful structural decision: define a monitor as pure logic plus a small declared effect surface. Then the compilation and transport strategy becomes a deployment detail rather than a design constraint.
 
 ``` python
-class Host(typing.Protocol):
+class HostNative(typing.Protocol):
+    @property
+    def eval(self) -> EvalContext | None: ...  # the task and sample; None outside an eval
     async def generate(
         self,
         input: str | list[ChatMessage],
@@ -107,6 +109,26 @@ class Host(typing.Protocol):
     """End this session or agent out-of-band. False if unsupported."""
 
 
+class Host(HostNative):
+    """What `Context.host` is: the host's `HostNative`, plus what every host shares."""
+    def __init__(self, native: HostNative) -> None: ...
+    async def score(
+        self,
+        step: Step | Excerpt[Step],  # a step, or what a windowing function kept of it
+        dimensions: str | Mapping[str, str],  # one prompt text, or each dimension's name to its text
+        *,
+        instructions: str | None = None,  # the monitor's own opening, in place of the default
+        policy: str | None = None,  # what binds the agent whatever its task
+        template: str | None = None,  # a Jinja template
+        template_variables: Mapping[str, Any] | None = None,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+        retry_refusals: int = 3,
+    ) -> Observation: ...
+    """Ask a model to score the step from 0.0 to 1.0, with an explanation, through a checked answer tool."""
+
+
 class HostResponse(typing.Protocol):
     status: int
     headers: Mapping[str, str]
@@ -115,7 +137,9 @@ class HostResponse(typing.Protocol):
     def text(self) -> str: ...
 ```
 
-Only `generate` and `ask_human` are built; `fetch`, `get`/`put` and `terminate` are planned.
+Only `eval`, `generate`, `ask_human` and `Host.score` are built; `fetch`, `get`/`put` and `terminate` are planned.
+
+`score` takes the narrow form of a monitor that asks a model for its judgement: one score or one per named dimension, from 0.0 to 1.0, and an explanation, returned as an `Observation`. The model answers through an answer tool whose arguments pydantic checks, and an invalid answer goes back to it as a tool error; after the last attempt `score` raises, and the runner records the monitor as failed. `score` is sentinel code on `Host`, which wraps the host's `HostNative` (decided by the maintainer on 2026-10-14): the prompt, the answer loop and its checks ask the model only through the host's own `generate`, so a host implements nothing for `score`, and the call does not pass through the host and back: every model call a monitor makes goes through `generate`, and no sentinel API takes a `Model` (decided by the maintainers on 2026-10-13). The host passes its `HostNative` to `HostContext`, which builds `Context(path="", host=Host(native))`; `Context.eval` and the prompt's `{{ eval }}` read the native host's `eval`, so the eval has one source. Templates are Jinja, as Scout's are: a monitor can add its own variables (`template_variables`), read the eval (`{{ eval.metadata.x }}`), and a template that names an unknown variable raises before the model is asked. A provider refusal is asked again, up to `retry_refusals` times. The prompt's `{{ step }}` is `step_as_str()` of the step or excerpt, its messages numbered with Inspect Scout's `message_numbering` so the explanation's cites become `references`; Scout is not yet a dependency of this package, so `score` needs it installed, until message rendering moves from Scout into inspect_ai.
 
 `ask_human` answers one of the offered choices, or, when the person ends the prompt without one, `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered.
 
@@ -127,7 +151,7 @@ Known limits of inspect_ai's surfaces: ACP cannot withdraw a permission request 
 
 The same surface whether the host is an `ext_proc` sidecar embedding a WASM runtime, a Go runtime, or ordinary Python in-process where these are normal implementations. In a WASM host it becomes WIT imports (spike #58: `generate`, `fetch`, `sleep`, `get`, `put`, with JSON payloads).
 
-Recording is not on the ABI. The runner records every report, failure, cancellation, bypass and supersession through a separate `Recorder` that the host implements and authors never see (`sentinel-reference.md`, "Context"), so a protocol cannot skip recording by not calling it. The host builds the top layer's `Context` and hands it to `run_sentinel` in a `HostContext` together with its recorder and the sample store. `Context` has no private fields: the runner keeps the recorder, the store and each running layer's factory in a context variable that `run_sentinel` sets for the step, so a monitor or protocol is handed only author data.
+Recording is not on the ABI. The runner records every report, failure, cancellation, bypass and supersession through a separate `Recorder` that the host implements and authors never see (`sentinel-reference.md`, "Context"), so a protocol cannot skip recording by not calling it. The host hands `run_sentinel` a `HostContext` of its `HostNative`, its recorder and the sample store, and `HostContext` builds the top layer's `Context` from the host. `Context` has no private fields: the runner keeps the recorder, the store and each running layer's factory in a context variable that `run_sentinel` sets for the step, so a monitor or protocol is handed only author data.
 
 A monitor reaches it as `context.host` (`sentinel.md`, "The context"), never by import. That is what keeps a monitor a pure function of its two arguments, and it is why the ABI is small enough to be worth specifying: everything a portable monitor can do to the outside world is enumerable from one interface.
 
@@ -197,7 +221,7 @@ Three notes:
 
 ## State
 
-A proxy has no ContextVar, no sample identity and no `Store`. It passes `Context.eval=None`, since a request has no task, sample or epoch. Two mechanisms replace the store, and they are complementary.
+A proxy has no ContextVar, no sample identity and no `Store`. Its `HostNative.eval` is None, so `context.eval` is None, since a request has no task, sample or epoch. Two mechanisms replace the store, and they are complementary.
 
 **The conversation is state.** Every request carries the entire history, so a monitor that is a pure function of the request needs no storage: "has this agent reached the internet" is recomputable by scanning messages. Nothing to key, evict, or forge.
 
