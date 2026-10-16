@@ -318,6 +318,43 @@ def check_internal(texts: Iterable[object], what: str) -> None:
             )
 
 
+def check_internal_kept(
+    texts: Iterable[object], messages: Iterable[ChatMessage], what: str
+) -> None:
+    """Refuse a body whose `<content-internal>` values inspect_ai's readers took out of its texts but kept nowhere.
+
+    A reader keeps a span's value on the part it reads the text as, but some read no part for a text that holds nothing else, or keep the text and drop the value.
+
+    Args:
+        texts: The texts the readers take spans out of, as `check_internal` is given them.
+        messages: What the readers read the body as.
+        what: `request` or `reply`, for the error.
+
+    Raises:
+        UnreadableError: If the value of a span in `texts` is on no part of `messages`.
+    """
+    from ._inspect_ai import internal_key, internal_text
+
+    sent = {
+        read[0]
+        for text in texts
+        if isinstance(text, str) and (read := internal_text(text)) is not None
+    }
+    if not sent:
+        return
+    kept = {
+        internal_key(part.internal)
+        for message in messages
+        if not isinstance(message.content, str)
+        for part in message.content
+        if getattr(part, "internal", None) is not None
+    }
+    if sent - kept:
+        raise UnreadableError(
+            f"The {what} holds a <content-internal> value that would be dropped unread."
+        )
+
+
 def json_object(body: bytes, what: str) -> dict[str, Any]:
     try:
         parsed: object = json.loads(body)

@@ -17,10 +17,11 @@ from inspect_ai.model import (
     model_output_from_openai_responses,
 )
 
-from ._inspect_ai import internal_text, is_assistant_item
+from ._inspect_ai import internal_text, is_assistant_item, without_reasoning
 from ._wire import (
     UnreadableError,
     check_internal,
+    check_internal_kept,
     json_object,
     stream_events,
 )
@@ -52,7 +53,12 @@ async def read_reply(
         reply = _completion(parsed) if chat else _response(parsed)
     if chat:
         for choice in cast("list[Any]", getattr(reply, "choices", None) or []):
-            calls = getattr(getattr(choice, "message", None), "tool_calls", None)
+            said = getattr(choice, "message", None)
+            if getattr(said, "content", None) and getattr(said, "refusal", None):
+                raise UnreadableError(
+                    "The reply holds text and a refusal both, of which only the refusal would be read."
+                )
+            calls = getattr(said, "tool_calls", None)
             _check_calls(calls)
             for call in cast("list[Any]", calls or []):
                 _check_arguments(getattr(call.function, "arguments", None), "reply")
@@ -81,6 +87,14 @@ async def read_chat_request(request: dict[str, Any]) -> list[ChatMessage]:
     messages = request.get("messages")
     if not isinstance(messages, list):
         raise UnreadableError("The request has no list of messages.")
+    if request.get("functions") is not None or request.get("function_call") is not None:
+        # declared as `tools` and `tool_choice` were before them, which
+        # inspect_ai's readers don't read, so a step would be told the model
+        # is offered no tools
+        raise UnreadableError(
+            "The request offers tools in the legacy `functions` field, which can't be read."
+        )
+    texts: list[object] = []
     for entry in cast("list[object]", messages):
         if isinstance(entry, dict):
             message = cast("dict[str, Any]", entry)
@@ -105,7 +119,17 @@ async def read_chat_request(request: dict[str, Any]) -> list[ChatMessage]:
                 raise UnreadableError(
                     "The request holds audio from the model, which can't be read."
                 )
-            check_internal(_chat_texts(message), "request")
+            texts.extend(_chat_texts(message))
+            if (
+                message.get("role") == "assistant"
+                # the refusal is read only when there is no content at all
+                and message.get("content") is not None
+                and message.get("refusal")
+            ):
+                raise UnreadableError(
+                    "The request holds an assistant's text and refusal both, of which only the text would be read."
+                )
+    check_internal(texts, "request")
     _check_merged(cast("list[object]", messages))
     try:
         read = await messages_from_openai(cast(Any, messages), _model(request))
@@ -113,6 +137,7 @@ async def read_chat_request(request: dict[str, Any]) -> list[ChatMessage]:
         # the converters raise errors of many kinds on content they can't read
         raise UnreadableError("The request holds a message that can't be read.") from ex
     _check_results(cast("list[object]", messages), read)
+    check_internal_kept(texts, read, "request")
     return read
 
 
@@ -159,16 +184,14 @@ async def read_responses_request(request: dict[str, Any]) -> list[ChatMessage]:
         raise UnreadableError("The request has no input.")
     _check_parts(cast("list[object]", entries))
     _check_duplicates(cast("list[object]", entries))
-    check_internal(
-        [
-            text
-            for entry in cast("list[object]", entries)
-            if isinstance(entry, dict)
-            and cast("dict[str, Any]", entry).get("role") == "assistant"
-            for text in _assistant_texts(cast("dict[str, Any]", entry))
-        ],
-        "request",
-    )
+    texts = [
+        text
+        for entry in cast("list[object]", entries)
+        if isinstance(entry, dict)
+        and cast("dict[str, Any]", entry).get("role") == "assistant"
+        for text in _assistant_texts(cast("dict[str, Any]", entry))
+    ]
+    check_internal(texts, "request")
     for entry in cast("list[object]", entries):
         if (
             isinstance(entry, dict)
@@ -182,6 +205,7 @@ async def read_responses_request(request: dict[str, Any]) -> list[ChatMessage]:
     except Exception as ex:
         # the converters raise errors of many kinds on content they can't read
         raise UnreadableError("The request holds input that can't be read.") from ex
+    check_internal_kept(texts, messages, "request")
     instructions = request.get("instructions")
     if isinstance(instructions, str) and instructions:
         return [ChatMessageSystem(content=instructions), *messages]
@@ -270,12 +294,15 @@ async def responses_rejected_turn(
 def _chat_texts(message: dict[str, Any]) -> list[object]:
     # The texts inspect_ai's Chat Completions reader takes <content-internal>
     # spans out of: a text part of any message, and an assistant's text given
-    # as a string. Any other message's string is read whole. See
+    # as a string, once the reasoning in tags is taken out of it, as a span in
+    # the reasoning stays there. Any other message's string is read whole. See
     # messages_from_openai() and content_from_openai() in inspect_ai's
     # src/inspect_ai/model/_openai.py.
     content: object = message.get("content")
     if isinstance(content, str):
-        return [content] if message.get("role") == "assistant" else []
+        if message.get("role") != "assistant":
+            return []
+        return [without_reasoning(content)]
     return [
         cast("dict[str, Any]", part).get("text")
         for part in cast("list[object]", content if isinstance(content, list) else [])
@@ -330,6 +357,10 @@ def _check_merged(messages: list[object]) -> None:
                 for key, value in message.items()
                 if key not in ("role", "content") and value not in (None, "", [], {})
             )
+            # the earlier turn's refusal too, which is read as its text only
+            # while it has no content
+            if reduced[-2].get("refusal"):
+                dropped.append("earlier refusal")
             if dropped:
                 raise UnreadableError(
                     f"The request holds an assistant's {', '.join(dropped)} that would be merged into an earlier turn and dropped."

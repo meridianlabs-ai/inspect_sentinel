@@ -14,7 +14,13 @@ from inspect_ai.model import (
 )
 
 from ._inspect_ai import anthropic_message
-from ._wire import UnreadableError, check_internal, json_object, stream_events
+from ._wire import (
+    UnreadableError,
+    check_internal,
+    check_internal_kept,
+    json_object,
+    stream_events,
+)
 
 # The content kinds that inspect_ai's Anthropic converter reads, in a reply or
 # in an assistant turn of a request. It drops any other kind without an error,
@@ -63,19 +69,23 @@ async def read_reply(content_type: str, body: bytes) -> ModelOutput:
         message = _message(json_object(body, "reply"))
     _check_blocks(getattr(message, "content", None), "reply")
     blocks = cast("list[object]", getattr(message, "content", None) or [])
-    check_internal([getattr(block, "text", None) for block in blocks], "reply")
+    texts = [getattr(block, "text", None) for block in blocks]
+    check_internal(texts, "reply")
     try:
         # an object, not a dict, so that the converter doesn't validate it again
-        return await model_output_from_anthropic(cast(Any, message))
+        output = await model_output_from_anthropic(cast(Any, message))
     except Exception as ex:
         # the converter raises errors of many kinds on content it can't read
         raise UnreadableError("The reply holds content that can't be read.") from ex
+    check_internal_kept(texts, [output.message] if output.choices else [], "reply")
+    return output
 
 
 async def read_request(request: dict[str, Any]) -> list[ChatMessage]:
     messages = request.get("messages")
     if not isinstance(messages, list):
         raise UnreadableError("The request has no list of messages.")
+    texts: list[object] = []
     for entry in cast("list[object]", messages):
         if not isinstance(entry, dict):
             continue
@@ -83,14 +93,17 @@ async def read_request(request: dict[str, Any]) -> list[ChatMessage]:
         if entry.get("role") == "assistant" and isinstance(entry.get("content"), list):
             _check_blocks(entry["content"], "request")
         _check_documents(entry.get("content"))
-        check_internal(_texts(entry), "request")
+        texts.extend(_texts(entry))
+    check_internal(texts, "request")
     try:
-        return await messages_from_anthropic(
+        read = await messages_from_anthropic(
             cast(Any, messages), _system(request.get("system"))
         )
     except Exception as ex:
         # the converter raises errors of many kinds on content it can't read
         raise UnreadableError("The request holds a message that can't be read.") from ex
+    check_internal_kept(texts, read, "request")
+    return read
 
 
 async def rejected_turn(

@@ -1495,3 +1495,154 @@ def test_tools_declared_without_their_optional_fields_are_read(
     read = offered(provider, json.dumps(body).encode())
 
     assert [tool.name for tool in read.tools] == names
+
+
+_ONE_SPAN = f"Rain. {_internal({'secret': 'A storm.'})}"
+
+
+@pytest.mark.anyio
+async def test_an_assistant_string_whose_internal_value_is_dropped_is_unreadable() -> (
+    None
+):
+    body = _chat_said({"role": "assistant", "content": _ONE_SPAN})
+
+    with pytest.raises(UnreadableError, match="would be dropped unread"):
+        await read_request("openai", json.dumps(body).encode())
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "said",
+    [
+        pytest.param(
+            {"role": "assistant", "content": f"<think>Hmm.</think>{_ONE_SPAN}"},
+            id="a string with reasoning",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": [{"type": "text", "text": _ONE_SPAN}]},
+            id="a text part",
+        ),
+    ],
+)
+async def test_an_assistant_text_whose_internal_value_is_kept_is_read(
+    said: dict[str, Any],
+) -> None:
+    messages = await read_request("openai", json.dumps(_chat_said(said)).encode())
+
+    assert "A storm." in json.dumps([m.model_dump(mode="json") for m in messages])
+
+
+@pytest.mark.anyio
+async def test_a_merge_that_overwrites_an_earlier_refusal_is_unreadable() -> None:
+    body = _chat_said(
+        _write_file("Rain.") | {"refusal": "A dangerous storm."},
+        {"role": "tool", "tool_call_id": "call_1", "content": "Written."},
+        {"role": "assistant", "content": "Fine."},
+    )
+
+    with pytest.raises(UnreadableError, match="earlier refusal"):
+        await read_request("openai", json.dumps(body).encode())
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(
+            _chat_said(
+                {"role": "assistant", "content": f"<think>Hmm.</think>{_ONE_SPAN[6:]}"}
+            ),
+            id="chat, reasoning and a span alone",
+        ),
+        pytest.param(
+            {
+                "model": "gpt-test",
+                "input": [
+                    {"role": "user", "content": "Hi"},
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": _ONE_SPAN[6:]}],
+                    },
+                ],
+            },
+            id="responses, a span alone",
+        ),
+    ],
+)
+async def test_an_internal_value_read_into_no_part_is_unreadable(
+    body: dict[str, Any],
+) -> None:
+    with pytest.raises(UnreadableError, match="would be dropped unread"):
+        await read_request("openai", json.dumps(body).encode())
+
+
+@pytest.mark.anyio
+async def test_a_chat_reply_with_text_and_a_refusal_is_unreadable() -> None:
+    reply = json.loads(openai_recorded("chat")[1])
+    reply["choices"][0]["message"] = {
+        "role": "assistant",
+        "content": "A dangerous storm.",
+        "refusal": "I can't help with that.",
+    }
+    reply["choices"][0]["finish_reason"] = "stop"
+
+    with pytest.raises(UnreadableError, match="text and a refusal"):
+        await read_reply("openai", JSON, json.dumps(reply).encode())
+
+
+@pytest.mark.anyio
+async def test_a_chat_request_with_text_and_a_refusal_is_unreadable() -> None:
+    body = _chat_said(
+        {
+            "role": "assistant",
+            "content": "A dangerous storm.",
+            "refusal": "I can't help with that.",
+        }
+    )
+
+    with pytest.raises(UnreadableError, match="text and refusal"):
+        await read_request("openai", json.dumps(body).encode())
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({"functions": [_FUNCTION]}, id="functions"),
+        pytest.param({"function_call": "auto"}, id="function_call"),
+    ],
+)
+async def test_a_chat_request_with_legacy_functions_is_unreadable(
+    fields: dict[str, Any],
+) -> None:
+    body = _chat_said() | fields
+
+    with pytest.raises(UnreadableError, match="legacy `functions`"):
+        await read_request("openai", json.dumps(body).encode())
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("content", ["", []], ids=["empty text", "no parts"])
+async def test_a_chat_request_with_empty_content_and_a_refusal_is_unreadable(
+    content: object,
+) -> None:
+    body = _chat_said(
+        {"role": "assistant", "content": content, "refusal": "A dangerous storm."}
+    )
+
+    with pytest.raises(UnreadableError, match="text and refusal"):
+        await read_request("openai", json.dumps(body).encode())
+
+
+@pytest.mark.anyio
+async def test_a_span_inside_reasoning_is_read_in_the_reasoning() -> None:
+    said = f"<think>Hmm. {_ONE_SPAN}</think>A quiet day."
+    body = _chat_said({"role": "assistant", "content": said})
+
+    messages = await read_request("openai", json.dumps(body).encode())
+
+    assert "A quiet day." in messages[-1].text
+    assert _internal({"secret": "A storm."}) in json.dumps(
+        [m.model_dump(mode="json") for m in messages]
+    )

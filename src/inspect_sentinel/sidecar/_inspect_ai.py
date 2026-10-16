@@ -103,6 +103,28 @@ def is_assistant_item(item: dict[str, Any]) -> bool:
     return is_assistant_message_param(cast(Any, item))
 
 
+def without_reasoning(text: str) -> str:
+    """A Chat Completions assistant's text with the reasoning in tags taken out, as inspect_ai's reader takes it out before anything else.
+
+    Asked of inspect_ai: Chat Completions readers that keep an assistant's `internal` value.
+    """
+    from inspect_ai.model._reasoning import parse_content_with_reasoning
+
+    try:
+        rest, _ = parse_content_with_reasoning(text)
+    except Exception:
+        # the reader raises on it too, which makes the request unreadable
+        return text
+    return rest
+
+
+def internal_key(value: object) -> str:
+    """An `internal` value written as inspect_ai writes one to compare it."""
+    from inspect_ai._util.json import to_json_str_safe
+
+    return to_json_str_safe(value)
+
+
 def internal_text(text: str) -> tuple[str, str] | None:
     """The `<content-internal>` value a text carries, as inspect_ai's Responses reader compares two of them, and the text it reads; None if the text carries none or one it can't read.
 
