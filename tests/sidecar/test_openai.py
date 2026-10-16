@@ -1497,6 +1497,27 @@ def test_tools_declared_without_their_optional_fields_are_read(
     assert [tool.name for tool in read.tools] == names
 
 
+def test_a_namespace_with_a_tool_that_cannot_be_read_is_unreadable() -> None:
+    from inspect_sentinel.sidecar._wire import offered
+
+    body = {
+        "input": [],
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "travel",
+                "tools": [
+                    {"type": "function", "name": "book_flight"},
+                    {"type": "future_tool_20990101", "name": "book_hotel"},
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(UnreadableError, match="openai-responses namespace"):
+        offered("openai", json.dumps(body).encode())
+
+
 _ONE_SPAN = f"Rain. {_internal({'secret': 'A storm.'})}"
 
 

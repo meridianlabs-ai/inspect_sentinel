@@ -376,12 +376,22 @@ def _readable(
             raise UnreadableError(
                 f"The request offers a tool that can't be read: {api} {_kind(declaration)}."
             ) from ex
-        if not read_:
+        if len(read_) < _declared(declaration):
             raise UnreadableError(
                 f"The request offers a tool that can't be read: {api} {_kind(declaration)}."
             )
         tools.extend(read_)
     return tools
+
+
+def _declared(declaration: object) -> int:
+    # the tools in a declaration: a namespace's reader leaves out any of its
+    # tools it doesn't know, with a warning of its own
+    if isinstance(declaration, dict):
+        found = cast("dict[str, Any]", declaration)
+        if found.get("type") == "namespace" and isinstance(found.get("tools"), list):
+            return len(cast("list[object]", found["tools"]))
+    return 1
 
 
 def _kind(declaration: object) -> str:
