@@ -13,7 +13,14 @@ from inspect_ai.model import (
 )
 from inspect_ai.tool import ToolCall
 
-from inspect_sentinel import Decision, Host, Reported, Step, keep_history, last_turns
+from inspect_sentinel import (
+    Decision,
+    Host,
+    Reported,
+    Step,
+    keep_agent_messages,
+    last_turns,
+)
 
 from ._fakes import (
     FakeHost,
@@ -112,10 +119,10 @@ async def test_an_excerpt_is_shown_numbered_and_cites_become_references() -> Non
         ChatMessageAssistant(content="deleting the logs", id="assistant"),
         ChatMessageUser(content="go on", id="later"),
     ]
-    step = replace(before_tool_call("bash", cmd="ls"), history=history)
+    step = replace(before_tool_call("bash", cmd="ls"), agent_messages=history)
     host = FakeHost(outputs=[answer(explanation="as planned in [M1]", suspicion=0.0)])
     observation = await Host(host).score(
-        keep_history(last_turns(step, 1)), "Is it safe?"
+        keep_agent_messages(last_turns(step, 1)), "Is it safe?"
     )
     assert "clean up" not in prompt(host)
     assert "[M1] ASSISTANT:\ndeleting the logs" in prompt(host)
