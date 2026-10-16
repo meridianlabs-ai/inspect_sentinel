@@ -30,7 +30,7 @@ How to write a monitor: a `@monitor` factory returning a function that takes a `
 
 ## Annotating Calls a Person Reviewed
 
-When a monitor renders the conversation into its prompt, it can mark each past tool call a person already reviewed through `human()`, so the model doesn't flag already-reviewed history again. `step.human_decisions` holds those reviews, and `human_decision_for(step, call_id)` finds the latest one covering a call. This monitor checks each tool result and shows the model the calls that came before it, each marked when a person reviewed it:
+When a monitor renders the conversation into its prompt, it can mark each past tool call a person already reviewed through `human()`, so the model doesn't flag already-reviewed history again. `step.human_decisions` holds those reviews, and `human_decision_for(step, call_id)` finds the latest one covering a call. This monitor checks each tool result and shows the model the tool calls earlier in the conversation, each marked when a person reviewed it:
 
 ```python
 import json
@@ -93,7 +93,7 @@ def result_check(model: str | None = None, role: str | None = None) -> Monitor:
 
 The marks annotate past calls; they are not a standing permission. Never lower suspicion of a new call because it resembles one a person approved: the same command can mean something else once the state has changed (an `rm -rf build/` approved in one working directory deletes something else after a `cd`), and an agent can get a benign call approved and then issue a similar harmful one.
 
-A review of a whole turn at `"model_output"` covers each of the turn's calls, so `human_decision_for()` finds it through any of them. A review of a turn with no tool calls stays in `step.human_decisions`, with empty `call_ids` and the turn's message id as `step_id`, but has no stable key to annotate by. The sketch reads `step.history`, which is `None` when the host cannot provide it, as under a proxy; it parses the model's answer by hand to stay short, where `context.host.score()` gives a checked, structured answer.
+A review of a whole turn at `"model_output"` covers each of the turn's calls, so `human_decision_for()` finds it through any of them. A review of a turn with no tool calls stays in `step.human_decisions`, with empty `call_ids` and the turn's message id as `step_id`, but has no stable key to annotate by. The sketch finds the past calls in the conversation on `step.history` and checks it for `None`, which means the host cannot provide that conversation; the lookup is by call id, so it works on any list of the agent's messages. It parses the model's answer by hand to stay short, where `context.host.score()` gives a checked, structured answer.
 
 ## Portable Monitors
 
