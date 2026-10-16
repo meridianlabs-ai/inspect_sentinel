@@ -1,0 +1,283 @@
+"""What a sentinel in the sidecar is given at each step, found in the traffic."""
+
+from typing import Any, cast
+
+import pytest
+
+from inspect_sentinel._context import Context
+from inspect_sentinel._decorators import protocol
+from inspect_sentinel._report import Decision
+from inspect_sentinel._step import (
+    AfterGenerate,
+    AfterToolCall,
+    BeforeGenerate,
+    BeforeToolCall,
+    Step,
+)
+from inspect_sentinel._types import Protocol
+from inspect_sentinel.sidecar import (
+    Handler,
+    Pass,
+    Record,
+    Refuse,
+    UnreadableError,
+)
+from tests.sidecar._traffic import message, ran, reply, request, weather
+
+_TOOLS = [
+    {
+        "name": "get_weather",
+        "description": "Look up the weather.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"location": {"type": "string"}},
+        },
+    },
+    # a tool the provider runs
+    {"type": "web_search_20250305", "name": "web_search"},
+]
+
+
+@protocol
+def at(stage: str, action: str = "terminate") -> Protocol:
+    """Decide `action` at every step of one stage."""
+
+    async def decide(context: Context, step: Step) -> Decision | None:
+        if type(step).__name__ != stage:
+            return Decision.proceed()
+        return Decision(action=cast(Any, action), explanation=stage)
+
+    return decide
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("action", ["terminate", "escalate"])
+async def test_request_ended_before_the_model_is_called_is_not_sent(
+    action: str,
+) -> None:
+    handler = Handler(at("BeforeGenerate", action))
+
+    answer = await handler.request(request())
+
+    # an escalate nobody takes ends the run, as at any stage
+    assert answer == Refuse(
+        400, "A sentinel ended this run before the model was called."
+    )
+    with pytest.raises(UnreadableError, match="never shown"):
+        await handler.reply(reply(message(weather("Oslo"))))
+
+
+@pytest.mark.anyio
+async def test_reply_ended_after_the_model_answered_is_not_passed_on() -> None:
+    handler = Handler(at("AfterGenerate"))
+    await handler.request(request())
+
+    answer = await handler.reply(reply(message(weather("Oslo"))))
+
+    assert answer == Refuse(400, "A sentinel ended this run at the model's reply.")
+    records = await handler.records("x")
+    assert records is not None
+    # the run ended before any call in the reply was judged
+    assert [record.stage for record in records] == [
+        "model_input",
+        "model_output",
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("stage", ["BeforeGenerate", "AfterGenerate"])
+async def test_reject_at_a_generate_stage_is_a_failing_protocol(stage: str) -> None:
+    handler = Handler(at(stage, "reject"))
+
+    with pytest.raises(ValueError, match="cannot reject yet"):
+        await handler.request(request())
+        await handler.reply(reply(message(weather("Oslo"))))
+
+
+@protocol
+def reports_generates() -> Protocol:
+    async def before(context: Context, step: BeforeGenerate) -> Decision | None:
+        return Decision.proceed(
+            "|".join(
+                [
+                    step.model,
+                    _roles(step.input),
+                    str(step.history),
+                    str([tool.name for tool in step.tools]),
+                    str(step.tool_choice),
+                    str(step.config.max_tokens),
+                    str(step.config.temperature),
+                ]
+            )
+        )
+
+    return before
+
+
+@protocol
+def reports_outputs() -> Protocol:
+    async def after(context: Context, step: AfterGenerate) -> Decision | None:
+        return Decision.proceed(
+            f"{_roles(step.input)}|{[tool.name for tool in step.tools]}|{step.output.message.text}"
+        )
+
+    return after
+
+
+def _roles(messages: list[Any] | None) -> str:
+    return str(None if messages is None else [m.role for m in messages])
+
+
+def _explanations(records: list[Record] | None) -> list[str]:
+    assert records is not None
+    return [cast(Any, record.detail).report.explanation for record in records]
+
+
+@pytest.mark.anyio
+async def test_generate_stages_are_given_what_the_request_offers() -> None:
+    handler = Handler([reports_generates(), reports_outputs()])
+    await handler.request(request(tools=_TOOLS, max_tokens=512, temperature=0.5))
+
+    await handler.reply(
+        reply(message({"type": "text", "text": "Checking."}, weather("Oslo")))
+    )
+
+    explanations = _explanations(await handler.records("x"))
+    assert (
+        "anthropic/claude-test|['system', 'user']|None"
+        "|['get_weather', 'web_search']|auto|512|0.5"
+    ) in explanations
+    assert (
+        "['system', 'user']|['get_weather', 'web_search']|Checking."
+    ) in explanations
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({}, "[]|none"),
+        ({"tools": _TOOLS[:1]}, "['get_weather']|auto"),
+        (
+            {
+                "tools": _TOOLS[:1],
+                "tool_choice": {"type": "tool", "name": "get_weather"},
+            },
+            "['get_weather']|ToolFunction(name='get_weather')",
+        ),
+    ],
+)
+async def test_tool_choice_is_what_the_model_is_sent(
+    fields: dict[str, Any], expected: str
+) -> None:
+    handler = Handler(reports_generates())
+
+    await handler.request(request(**fields))
+
+    (explanation,) = _explanations(await handler.records("x"))
+    assert explanation.split("|")[3:5] == expected.split("|")
+
+
+@pytest.mark.anyio
+async def test_a_tool_that_cannot_be_read_makes_the_request_unreadable() -> None:
+    # a step is never told the model is offered fewer tools than it is
+    tools = [*_TOOLS[:1], {"type": "future_tool_20990101", "name": "future"}]
+
+    with pytest.raises(UnreadableError, match="anthropic future_tool_20990101"):
+        await Handler(reports_generates()).request(request(tools=tools))
+
+
+@pytest.mark.anyio
+async def test_a_tool_choice_that_cannot_be_read_is_unreadable() -> None:
+    with pytest.raises(UnreadableError, match="tool choice or settings"):
+        await Handler(reports_generates()).request(
+            request(tool_choice={"type": "future_choice"})
+        )
+
+
+# the text beside each call in a reply, as `ran` writes it when the client
+# sends the reply back
+_LOOKING = {"type": "text", "text": "Looking."}
+
+
+@protocol
+def reports_histories() -> Protocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        call = step.call.id if isinstance(step, BeforeToolCall | AfterToolCall) else "-"
+        texts = None if step.history is None else [m.text for m in step.history]
+        return Decision.proceed(f"{type(step).__name__}|{call}|{texts}")
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_no_step_is_given_a_history() -> None:
+    # the caller's own list is not known behind a proxy, only what each
+    # request carries, which is a step's `input`
+    handler = Handler(reports_histories())
+    await handler.request(request(then=ran("Oslo", "rain", "toolu_1")))
+
+    await handler.reply(reply(message(_LOOKING, weather("Lima", "toolu_2"))))
+
+    assert _explanations(await handler.records("x")) == [
+        "AfterToolCall|toolu_1|None",
+        "BeforeGenerate|-|None",
+        "AfterGenerate|-|None",
+        "BeforeToolCall|toolu_2|None",
+    ]
+
+
+@protocol
+def reports_views() -> Protocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        if not isinstance(step, BeforeToolCall | AfterToolCall):
+            return None
+        view = step.view.call
+        return Decision.proceed(view.content if view is not None else "no view")
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_tool_step_is_given_the_view_inspect_would_make() -> None:
+    handler = Handler(reports_views())
+    await handler.request(request(then=ran("Oslo", "rain", "toolu_1")))
+
+    assert await handler.reply(reply(message(weather("Lima", "toolu_2")))) == Pass()
+
+    explanations = _explanations(await handler.records("x"))
+    assert len(explanations) == 2
+    assert "get_weather" in explanations[0] and "Oslo" in explanations[0]
+    assert "get_weather" in explanations[1] and "Lima" in explanations[1]
+
+
+@pytest.mark.anyio
+async def test_a_tool_the_provider_ran_is_not_judged_as_a_call() -> None:
+    # the provider has run it by the time the reply arrives, so there is no
+    # choice left to offer the sentinel
+    handler = Handler(reports_histories())
+    await handler.request(request(tools=_TOOLS))
+
+    await handler.reply(
+        reply(
+            message(
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_1",
+                    "name": "web_search",
+                    "input": {"query": "weather in Oslo"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_1",
+                    "content": [],
+                },
+                {"type": "text", "text": "It is raining."},
+                stop_reason="end_turn",
+            )
+        )
+    )
+
+    records = await handler.records("x")
+    assert records is not None
+    assert [record.stage for record in records] == ["model_input", "model_output"]
