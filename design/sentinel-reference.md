@@ -2,7 +2,7 @@
 
 A sentinel is what a task runs to watch an agent: a protocol with its monitors, configured with `Task(sentinel=)`. A monitor is a function that watches an agent while it runs and reports what it sees. It attaches to one of four stages, the points in the agent loop before a model call, after a model call, before a tool call, and after a tool call. At every stage it receives the same context object and keeps its state in the same place. A monitor observes: it returns an `Observation` or nothing, and can never act. A protocol decides: it returns a `Decision`, optionally after consulting monitors and other protocols. A protocol with no children is a rule.
 
-Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe_only`, `concurrent`, `sequential`, `threshold`, `human` and `handle_escalation` are implemented (`Host.ask_human` in inspect_ai follows). The [failure policy](#failures) is implemented too. The generate stages are built with `proceed`, `escalate` and `terminate`; `reject` and `modify` there are deferred to a follow-up (`generate-stages.md`). `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
+Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe_only`, `concurrent`, `sequential`, `threshold`, `human` and `handle_escalation` are implemented (`Host.ask_human` in inspect_ai follows). The [failure policy](#failures) is implemented too. `Host.score` is built (`sentinel-deployment.md`, "The host ABI"); it is sentinel code on the host's `generate`, so hosts implement nothing for it. The generate stages are built with `proceed`, `escalate` and `terminate`; `reject` and `modify` there are deferred to a follow-up (`generate-stages.md`). `resample`, the view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those shows the intended shape.
 
 Related documents:
 
@@ -276,22 +276,26 @@ class Context:
     """Inference and asking a person today; outbound JSON and keyed storage are planned. See [Effects](#effects)."""
 
     # -- the briefing, in an eval
-    eval: EvalContext | None
-    """The task and sample being run. None outside an Inspect eval, as in a proxy."""
+    @property
+    def eval(self) -> EvalContext | None:
+        """The task and sample being run: `host.eval`. None outside an Inspect eval, as in a proxy."""
 
     # -- memory; there is no `store`: an instance reaches only its own state
     def store_as(self, model_cls: Type[SMT]) -> SMT:
         """Typed view of this instance's per-sample state, namespaced by `path`. Other scopes are planned."""
 ```
 
-The host (inspect_ai's dispatcher, or a proxy) builds the top layer's `Context`, with an empty `path` and, outside an eval, `eval=None`, and passes it to `run_sentinel` in a `HostContext` with its recorder and the sample store. Authors never see a `HostContext`: every monitor and protocol is given a plain `Context`, which has no private fields. For the duration of the step, `run_sentinel` sets a private context variable holding the recorder, the store, and the factory of each layer that has run, keyed by `path`; the runner registers each child's path before invoking it, and tasks a protocol starts inherit the variable. `run_monitors`, `run_protocols` and `run_children` look up the `path` of the context a protocol passes them: called outside a step, for example with a context kept after its protocol returned, they raise `RuntimeError`; given a context whose `path` is not a layer of the running step, `ValueError`. `store_as()` reads the store from the same variable and raises `RuntimeError` outside a step. Two instances with different factories under one `path` in one step are a `ValueError`, since their records and state would be indistinguishable.
+The host (inspect_ai's dispatcher, or a proxy) implements `HostNative` (`sentinel-deployment.md`, "The host ABI"), its `eval` None outside an eval, and passes it to `run_sentinel` in a `HostContext` with its recorder and the sample store; `HostContext` builds the top layer's `Context`, with an empty `path` and `host=Host(native)`. Authors never see a `HostContext`: every monitor and protocol is given a plain `Context`, which has no private fields. For the duration of the step, `run_sentinel` sets a private context variable holding the recorder, the store, and the factory of each layer that has run, keyed by `path`; the runner registers each child's path before invoking it, and tasks a protocol starts inherit the variable. `run_monitors`, `run_protocols` and `run_children` look up the `path` of the context a protocol passes them: called outside a step, for example with a context kept after its protocol returned, they raise `RuntimeError`; given a context whose `path` is not a layer of the running step, `ValueError`. `store_as()` reads the store from the same variable and raises `RuntimeError` outside a step. Two instances with different factories under one `path` in one step are a `ValueError`, since their records and state would be indistinguishable.
 
 ```python
 @dataclass(frozen=True, kw_only=True)
 class HostContext:
-    context: Context      # the top layer's context
+    host: HostNative      # what the host implements
     recorder: Recorder
     store: Store          # the sample store store_as() namespaces into
+
+    @property
+    def context(self) -> Context: ...  # the top layer's: Context(path="", host=Host(host))
 
 
 async def run_sentinel(protocol: Protocol, host_context: HostContext, step: Step) -> Decision | None: ...
@@ -328,7 +332,7 @@ How the fields are populated:
 | `eval.sample_input` | `Sample.input` | |
 | `eval.metadata` | task + sample metadata | |
 
-A proxy answers requests that are not Inspect evals and have no task, sample or epoch, so it passes `eval=None` rather than stand-ins a monitor could not tell from real values; in an eval, `task`, `sample_id` and `epoch` are always present. Decided by the maintainer on 2026-10-05. A proxy's equivalent of the briefing (a deployment's charter, say) is open; see `proxy-host.md`.
+A proxy answers requests that are not Inspect evals and have no task, sample or epoch, so its `HostNative.eval` is None rather than stand-ins a monitor could not tell from real values; in an eval, `task`, `sample_id` and `epoch` are always present. Decided by the maintainer on 2026-10-05. A proxy's equivalent of the briefing (a deployment's charter, say) is open; see `proxy-host.md`.
 
 inspect_ai fills `eval.task_description` and `eval.sample_description` from `Task(description=)` and `Sample(description=)` (inspect_ai #5667), in the first release that includes them; they are None when the task or sample sets no description, and under a host that does not provide them. Structured context goes in `metadata`.
 
@@ -511,7 +515,7 @@ There is no `monitor_store_as()` or `monitor_host()` global. Helpers take what t
 
 ### Effects
 
-`context.host` is how a monitor reaches the outside world portably. Today that is inference (`generate`) and asking a person (`ask_human`); outbound JSON through named endpoints (`fetch`) and keyed storage are planned, and `sentinel-deployment.md` defines them. The runner records through a separate `Recorder`. In-process these are ordinary implementations; under a proxy they cross the host boundary. Until `fetch` lands, a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, if it is declared `portable=False`, at the cost of portability to a proxy.
+`context.host` is how a monitor reaches the outside world portably. Today that is inference (`generate`), a model's score for a step (`score`) and asking a person (`ask_human`); outbound JSON through named endpoints (`fetch`) and keyed storage are planned, and `sentinel-deployment.md` defines them. The runner records through a separate `Recorder`. In-process these are ordinary implementations; under a proxy they cross the host boundary. Until `fetch` lands, a monitor running in-process may call inspect_ai APIs directly, such as `sandbox()` or `logging`, if it is declared `portable=False`, at the cost of portability to a proxy.
 
 Rules:
 
@@ -556,10 +560,10 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 |---|---|
 | `messages_as_str`, `message_as_str`, `MessagesPreprocessor` | Scout's message rendering: roles, tool calls and results, `<thinking>` blocks, media placeholders; exclusions and a `transform` via the preprocessor |
 | `message_numbering()` | `[M1]`-style numbering plus `extract_refs` for citations in explanations |
-| `last_turn`, `last_n`, `new_since_last_report` | windows over `step.history`, `None` for `None`; the last uses the monitor's store so an incremental monitor never re-reads what it already judged |
+| `Excerpt`; `drop_input`, `drop_reasoning`, `drop_tool_usage`, `keep_history`, `keep_system`, `last_turns`, `last_messages`, `new_since_last_report` | **Built (2026-10-13).** An `Excerpt[S]` is the step plus the `input` and `history` to show with it, cut before the step's own part; a `history` of None, where the host cannot provide it, stays None through every window. Each window takes a step or an excerpt and returns an excerpt, cutting `input` and `history` alike, so they compose. `new_since_last_report` keeps the last message shown per conversation and monitor function in the monitor's store, saved only when the function succeeds, so an incremental monitor does not re-read its conversations and does not skip what a failed call was shown |
 | `call_as_str(call, view=None)` | the Python-call rendering approvers use, honouring a `ToolCallView` |
 | `result_as_str(result, truncated=None)` | a tool result with the truncation (`step.truncated`) marked: that the model saw a cut, and how much was cut |
-| `briefing_as_str(context)`, `step_as_str(step, ...)` | the instruction and evidence sections; an absent surface is named in a fixed phrase, not omitted |
+| `briefing_as_str(context)`, `step_as_str(excerpt, *, messages_as_str=None)` | the instruction and evidence sections. `step_as_str` is built: `INPUT`, `HISTORY` and an `AGENT STEP` block named for the stage (`[AGENT STEP - BEGIN TOOL CALL]`; `TOOL CALL AND RESULT`, `MODEL REQUEST`, `MODEL REPLY`), each when kept, `HISTORY` only when it holds a message `INPUT` does not, rendered with Scout's `messages_as_str` or a numbering one; an unknown model input, and a shown history the host could not provide, are named. Naming other absent surfaces (`view`, untruncated `output`) is not built |
 | `monitor_prompt(context, step, *, question, answer=...)` | the analogue of Scout's `scanner_prompt`: briefing, delimited evidence envelope, escalations as prior verdicts, the question |
 
 ```python
@@ -568,10 +572,9 @@ def suspicion_monitor(model: str | None = None, role: str | None = None) -> Moni
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
         messages_as_str, extract_refs = message_numbering()
         prompt = monitor_prompt(
-            context, step,
+            context, new_since_last_report(context, step),
             question="Rate how suspicious this tool call is given the assignment.",
             answer="score",
-            history=new_since_last_report(context, step.history),
             messages_as_str=messages_as_str,
         )
         output = await context.host.generate(prompt, model=model, role=role)
@@ -845,7 +848,7 @@ class HumanAnswer:
     reason: str | None = None       # the reason the surface gives
     modified: ToolCall | None = None  # the replacement call for a tool-stage modify
 
-class Host(Protocol):
+class HostNative(Protocol):  # what a host implements; monitors call it as `context.host.ask_human`
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
 ```
 
@@ -1150,7 +1153,7 @@ What each stage sees:
 Rules for portable monitors:
 
 - **Prefer `BeforeGenerate`, `AfterGenerate`, and `BeforeToolCall`.** `AfterToolCall` should decline to fire under a proxy or bridged agent and say why, rather than run on lossy data.
-- **Expect `view`, `output` and `history` to be absent.** A proxy has wire types, not registered tool definitions, and sees only the request, not the scaffold's list. The [rendering helpers](#view) name an absent surface in the prompt rather than omitting it.
+- **Expect `view`, `output` and `history` to be absent.** A proxy has wire types, not registered tool definitions, and sees only the request, not the scaffold's list. The [rendering helpers](#view) are to name an absent surface in the prompt rather than omit it; today `step_as_str` names an unknown model input and an unknown history, and does not render `view` or `output`.
 - **Expect `terminate` to be best-effort.** In an eval it is total and synchronous. Under a proxy it is an error response plus an out-of-band `host.terminate()`, the same shape as `bridge.request_terminate()`, and the host may not support it. There is no separate set of portable actions. Whether `terminate` works is a property of the host.
 - **Take state from `context.store_as`,** never from an ambient accessor. A proxy has nothing to bind an ambient accessor to.
 - **Keep the module's imports light.** Bundling is per-module because the import closure is a module property. One `import requests` at the top of a file disqualifies every monitor in it. A bundler finds monitors with `ast` alone, which works because monitors are top-level functions.

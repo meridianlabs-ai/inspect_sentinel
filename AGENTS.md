@@ -44,7 +44,7 @@
 
 Directory: `src/inspect_sentinel/`
 
-Supports Python 3.10+ (the same floor as `inspect-ai`, which is intended to depend on this package). Do not use syntax or stdlib features newer than 3.10.
+Supports Python 3.11+ (the same floor as `inspect-ai`, which is intended to depend on this package). Do not use syntax or stdlib features newer than 3.11.
 
 ### Scripts
 | Command | Description |
