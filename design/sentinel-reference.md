@@ -275,7 +275,7 @@ The host (inspect_ai's dispatcher, or a proxy) implements `HostNative` (`sentine
 class HostContext:
     host: HostNative      # what the host implements
     recorder: Recorder
-    store: Store          # the sample store store_as() namespaces into
+    store: Store          # the sample store store_as() namespaces into; Host.score keeps the sample's nonce in it
 
     @property
     def context(self) -> Context: ...  # the top layer's: Context(path="", host=Host(host))
@@ -460,7 +460,7 @@ Rules:
 
 ### State
 
-Per-sample state lives in the sample `Store`. `context.store_as()` namespaces it by the instance path so two configured instances of the same monitor do not collide. It is the only way in the API offers: `Context` is immutable and has no `store`, so nothing hands a monitor or protocol the agent's state. This is a convention, not isolation, since the `StoreModel` that `store_as()` returns carries the store it reads:
+Per-sample state lives in the sample `Store`. `context.store_as()` namespaces it by the instance path so two configured instances of the same monitor do not collide. It is the only way in the API offers: `Context` is immutable and has no `store`, so nothing hands a monitor or protocol the agent's state. This is a convention, not isolation, since the `StoreModel` that `store_as()` returns carries the store it reads. The package itself keeps one key outside any namespace, `inspect_sentinel:nonce`, the nonce `Host.score` puts on every prompt in the sample; solver code that reads the store, and the eval log, see it:
 
 ```python
 class TrajectoryState(StoreModel):
