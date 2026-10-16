@@ -14,7 +14,7 @@ from inspect_ai.model import (
     ModelOutput,
 )
 from inspect_ai.tool import ToolCall, ToolCallError, ToolInfo, ToolParams
-from inspect_ai.util import json_schema
+from inspect_ai.util import Store, json_schema
 from pydantic import BaseModel, Field, ValidationError, create_model
 
 from ._excerpt import Excerpt, scout_nonce, step_as_str
@@ -78,9 +78,13 @@ _RESERVED = ("explanation",)
 # what providers accept as a tool parameter name (Anthropic rejects others)
 _NAME = re.compile(r"[a-zA-Z0-9_.-]{1,64}")
 
+# the sample store key of the sample's nonce
+_NONCE = "inspect_sentinel:nonce"
+
 
 async def score_step(
     host: HostNative,
+    store: Store,
     step: Step | Excerpt[Step],
     dimensions: str | Mapping[str, str],
     *,
@@ -169,8 +173,10 @@ async def score_step(
             properties=schema.properties or {}, required=schema.required or []
         ),
     )
-    # one per prompt, so the agent cannot learn it from an earlier one
-    nonce = secrets.token_hex(4)
+    # one per sample, so text that recurs from step to step renders the same
+    # and the monitor model's prompt cache keeps working; the agent never sees
+    # a prompt, so it cannot learn the nonce from an earlier one
+    nonce = store.get(_NONCE, secrets.token_hex(4))
     # the excerpt decides what is left out, system messages included
     numbered, extract_refs = message_numbering(
         MessagesPreprocessor(exclude_system=False), **scout_nonce(nonce)

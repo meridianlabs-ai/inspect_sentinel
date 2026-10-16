@@ -128,7 +128,7 @@ class Host(HostNative):
     ) -> Observation:
         """Ask a model to score a step from 0.0 to 1.0, with an explanation.
 
-        The model is asked through `generate`, with the same `model`, `role` and `config`. It is sent a prompt built from `template`, and answers by calling an answer tool whose arguments are checked, so a missing or out-of-range score, or a reply with no answer (or no reply at all), goes back to the model to correct. When the model gives no valid answer within three attempts, `score` raises, and the runner records the monitor as failed. A reply the provider refuses (stop reason `content_filter`) is asked again without using an attempt, up to `retry_refusals` times, after which `score` raises. Needs `inspect_scout` installed, which renders the step and numbers its messages; it is not a dependency of this package yet, so without it `score` raises `ImportError`.
+        The model is asked through `generate`, with the same `model`, `role` and `config`. It is sent a prompt built from `template`, and answers by calling an answer tool whose arguments are checked, so a missing or out-of-range score, or a reply with no answer (or no reply at all), goes back to the model to correct. When the model gives no valid answer within three attempts, `score` raises, and the runner records the monitor as failed. A reply the provider refuses (stop reason `content_filter`) is asked again without using an attempt, up to `retry_refusals` times, after which `score` raises. Needs `inspect_scout` installed, which renders the step and numbers its messages; it is not a dependency of this package yet, so without it `score` raises `ImportError`. Call it while the monitor or protocol runs, since it keeps the sample's nonce in the sample store; outside a step it raises `RuntimeError`.
 
         Pass the step to show the model all of it, or narrow what it sees with the windowing functions, such as `last_turns(step, 6)` or `new_since_last_report(context, step)`.
 
@@ -140,7 +140,7 @@ class Host(HostNative):
         - `{{ eval }}`: the eval the agent is running in, as `context.eval` holds it, such as `{{ eval.task }}` or `{{ eval.metadata.difficulty }}`; None outside an eval, so guard it with `{% if eval %}` in a monitor that may run outside one.
         - `{{ escalations }}`: the escalations from earlier links of a `sequential` composition (`step.escalations`), one `- name: explanation` line each, between `[BEGIN ESCALATIONS (nonce)]` and `[END ESCALATIONS (nonce)]` lines; empty when there are none.
         - `{{ step }}`: `step_as_str()` of the step or excerpt, its messages numbered `[M1]`, `[M2]` and so on so the explanation can cite them; the observation's `references` come from those cites.
-        - `{{ sentinel_nonce }}`: a nonce made for this call, 8 hex characters, on every block marker and, where the installed Scout takes a nonce, every message header (`[M1] USER (3f9a1c7e):`). The agent never sees the prompt, so text it writes that looks like a marker or a header lacks the nonce, and the default template tells the model so. A `sentinel_nonce` in `template_variables` is ignored.
+        - `{{ sentinel_nonce }}`: a nonce made on the sample's first `score` and used for the rest of the sample, so the monitor model's prompt cache keeps working from step to step; 8 hex characters, on every block marker and, where the installed Scout takes a nonce, every message header (`[M1] USER (3f9a1c7e):`). The agent never sees the prompt, so text it writes that looks like a marker or a header lacks the nonce, and the default template tells the model so. A `sentinel_nonce` in `template_variables` is ignored.
         - `{{ dimensions }}`: `dimensions` as given, or each dimension's name followed by its text.
         - `{{ answer_format }}`: the instruction to call the answer tool.
         - Any name in `template_variables`, set to its value.
@@ -161,6 +161,7 @@ class Host(HostNative):
         """
         return await score_step(
             self,
+            active_step("Host.score()").store,
             step,
             dimensions,
             instructions=instructions,
