@@ -1811,3 +1811,15 @@ async def test_each_run_of_a_call_is_judged_once(then: list[dict[str, Any]]) -> 
     await handler.request(_chat_asked("d", *then))
 
     assert [len(await _explained(handler, id)) for id in "bcd"] == [1, 1, 0]
+
+
+def test_a_code_interpreter_in_a_container_the_provider_keeps_is_unreadable() -> None:
+    from inspect_sentinel.sidecar._wire import offered
+
+    body = {
+        "input": [],
+        "tools": [{"type": "code_interpreter", "container": "cntr_abc123"}],
+    }
+
+    with pytest.raises(UnreadableError, match="content that would not be read"):
+        offered("openai", json.dumps(body).encode())
