@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.3...0.1.4) (2026-10-16)
+
+
+### Features
+
+* Host.score marks every block and message header in its prompt with a nonce ([#105](https://github.com/meridianlabs-ai/inspect_sentinel/issues/105)) ([8e8ff62](https://github.com/meridianlabs-ai/inspect_sentinel/commit/8e8ff62a2a1f81ef67acbbe9a50949fdbc65e48a))
+
 ## [0.1.3](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.2...0.1.3) (2026-10-15)
 
 
