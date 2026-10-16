@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import time
 from collections import OrderedDict
 from collections.abc import Mapping
@@ -9,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Generic, Protocol, TypeVar
 
 from inspect_ai.model import ChatMessage
-from inspect_ai.tool import ToolCall, ToolInfo
+from inspect_ai.tool import ToolInfo
 from inspect_ai.util import Store
 from pydantic import JsonValue
 
@@ -43,17 +41,6 @@ class Rejected:
     """Each rejected turn."""
 
 
-def call_key(call: ToolCall) -> str:
-    """A tool call as the client was handed it and sends it back: its id, kind, function and arguments."""
-    return hashlib.sha256(
-        json.dumps(
-            [call.id, call.type, call.function, call.arguments],
-            sort_keys=True,
-            default=str,
-        ).encode()
-    ).hexdigest()
-
-
 def occurrence(call: str, index: int) -> str:
     """A tool call told apart from others with its id: a client can use one id for calls in different turns. `index` is how many calls with the id come before it in the client's conversation, which only grows, so it stays the same on every request."""
     return f"{call}#{index}"
@@ -80,11 +67,8 @@ class Conversation:
     judged: set[str] = field(default_factory=set[str])
     """Digests of the tool results in the conversation the sentinel has been shown and let go on."""
 
-    owed: dict[str, int] = field(default_factory=dict[str, int])
-    """For each tool call the client was handed, by `call_key()`, how many of its results haven't been judged yet. A result judged before can be a new one: a conversation that was compacted can hold a later run of the same call, with the same id and the same result, in its earlier one's place. Every call is counted until its result is judged, as forgetting one would let its result pass unjudged; each count is small."""
-
     issued: dict[str, int] = field(default_factory=dict[str, int])
-    """For the latest call ids the client was handed, how many calls with each id its conversation has held, those it held before this sidecar saw it included. A request that holds fewer was compacted, so a call's place among those with its id no longer tells which of them it is."""
+    """For each call id the client was handed, how many calls with the id its conversation has held, those it held before this sidecar saw it included. A request that holds fewer was compacted, so a call's place among those with its id no longer tells which of them it is. Each is a count, kept for the conversation's life, as forgetting one would hide a compaction."""
 
     made: dict[str, Made] = field(default_factory=dict[str, Made])
     """For the latest tool calls the client was handed, by `occurrence()`, what the model was sent for the generate that made each. The oldest are dropped past `MADE_KEPT`, as each holds what the model was sent, which grows with the conversation."""

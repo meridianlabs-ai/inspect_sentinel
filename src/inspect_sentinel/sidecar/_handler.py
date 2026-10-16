@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from typing import TypeAlias
 
 import anyio
 from inspect_ai.model import (
@@ -37,7 +36,6 @@ from ._state import (
     Rejected,
     Run,
     State,
-    call_key,
     occurrence,
 )
 from ._wire import (
@@ -235,7 +233,6 @@ class Handler:
         if AfterToolCall not in self._watched:
             return None
         made: dict[str, tuple[ChatMessageAssistant, ToolCall, str, int]] = {}
-        results: list[_Result] = []
         held_calls = _calls(client)
         # how many calls with each id have come before, as a client can use
         # one id for calls in different turns, each with words of its own
@@ -257,19 +254,18 @@ class Handler:
                 )
             assistant, call, words, index = found
             # A call's place among those with its id tells it apart from the
-            # others, as a client that runs two calls with one id, the same
-            # arguments and the same result ran them both. A conversation
-            # that lost calls with its id, to compaction, shifted that place,
-            # so the call is then known without it.
-            placed = held_calls.get(call.id, 0) >= conversation.issued.get(call.id, 0)
-            loose = _result_digest(words, call, entry, None)
-            digest = _result_digest(words, call, entry, index) if placed else loose
-            results.append((assistant, call, index, entry, digest, loose, placed))
-        chosen = _to_judge(conversation, results)
-        for position, result in enumerate(results):
-            assistant, call, index, entry, digest, loose, placed = result
-            if position not in chosen:
-                continue
+            # others, as a client can use one id for calls in different
+            # turns. A conversation that lost calls with its id, to
+            # compaction, shifted that place, and a result there can't be
+            # told from one judged before, so it is refused rather than
+            # judged as a guess.
+            if held_calls.get(call.id, 0) < conversation.issued.get(call.id, 0):
+                raise UnreadableError(
+                    f"The request holds fewer calls with the id {call.id!r} than its conversation did, so its results can't be told apart from those judged before."
+                )
+            # the call's occurrence too: a client that runs two calls with one
+            # id, the same arguments and the same result ran them both
+            digest = _result_digest(words, call, entry, index)
             key = (held.run, held.conversation, digest)
             if key in self._judging:
                 while (judging := self._judging.get(key)) is not None:
@@ -278,14 +274,9 @@ class Handler:
                 refusal = _ended(run, held.marks)
                 if refusal is not None:
                     return refusal
-            if digest in conversation.judged and not conversation.owed.get(
-                call_key(call)
-            ):
-                # judged while this request waited
+            if digest in conversation.judged:
                 continue
-            # what the model was sent for the call, unless its place among
-            # the calls with its id no longer says which call it is
-            sent = conversation.made.get(occurrence(call.id, index)) if placed else None
+            sent = conversation.made.get(occurrence(call.id, index))
             step = AfterToolCall(
                 conversation=held.conversation,
                 message=assistant.text,
@@ -307,9 +298,7 @@ class Handler:
                     return self._end(
                         held, run, f"at the result of the call to {call.function}"
                     )
-                # known without its place too, for after compaction
-                conversation.judged.update((digest, loose))
-                _settle(conversation.owed, call_key(call))
+                conversation.judged.add(digest)
             finally:
                 del self._judging[key]
                 judging.set()
@@ -403,16 +392,12 @@ class Handler:
                 seen[call.id] = index + 1
                 made = Made(held.input, held.offered.tools)
                 conversation.made[occurrence(call.id, index)] = made
-                owed = call_key(call)
-                conversation.owed[owed] = conversation.owed.get(owed, 0) + 1
-                # moved to the end, so the ids used least lately go first
                 # counting the calls with its id the client already held,
                 # which this sidecar may never have handed out
-                issued = max(conversation.issued.pop(call.id, 0) + 1, index + 1)
+                issued = max(conversation.issued.get(call.id, 0) + 1, index + 1)
                 conversation.issued[call.id] = issued
-            for kept in (conversation.made, conversation.issued):
-                while len(kept) > MADE_KEPT:
-                    del kept[next(iter(kept))]
+            while len(conversation.made) > MADE_KEPT:
+                del conversation.made[next(iter(conversation.made))]
         return Pass()
 
     def _reject(
@@ -520,43 +505,6 @@ def _opening(messages: Sequence[ChatMessage]) -> str:
     return digest.hexdigest()[:16]
 
 
-_Result: TypeAlias = tuple[
-    ChatMessageAssistant, ToolCall, int, ChatMessageTool, str, str, bool
-]
-# a tool result in a request: the turn that made its call, the call, how
-# many calls with its id came before it, the result, the digest it is known
-# by, its digest without the call's place, and whether the place is known
-
-
-def _to_judge(conversation: Conversation, results: Sequence[_Result]) -> set[int]:
-    # Which of a request's results to judge, by position: each that wasn't
-    # judged before, and then, for the results still owed for calls the
-    # client was handed, the latest of those judged before. A conversation
-    # that was compacted can hold a later run of a call, with the same id
-    # and the same result, in its earlier run's place, which only the count
-    # of results owed tells apart from the earlier one sent again.
-    owed = dict(conversation.owed)
-    chosen: set[int] = set()
-    for position, (_, call, _, _, digest, _, _) in enumerate(results):
-        if digest not in conversation.judged:
-            chosen.add(position)
-            _settle(owed, call_key(call))
-    for position in reversed(range(len(results))):
-        key = call_key(results[position][1])
-        if position not in chosen and owed.get(key, 0) > 0:
-            chosen.add(position)
-            _settle(owed, key)
-    return chosen
-
-
-def _settle(owed: dict[str, int], key: str) -> None:
-    # one result fewer owed for a call
-    if owed.get(key, 0) > 1:
-        owed[key] -= 1
-    else:
-        owed.pop(key, None)
-
-
 def _calls(messages: Sequence[ChatMessage]) -> dict[str, int]:
     # how many tool calls with each id the messages hold
     calls: dict[str, int] = {}
@@ -568,7 +516,7 @@ def _calls(messages: Sequence[ChatMessage]) -> dict[str, int]:
 
 
 def _result_digest(
-    said: str, call: ToolCall, result: ChatMessageTool, index: int | None
+    said: str, call: ToolCall, result: ChatMessageTool, index: int
 ) -> str:
     # everything the step is given from the request, what the model said with
     # the call as well as the call and the result: the client wrote them all

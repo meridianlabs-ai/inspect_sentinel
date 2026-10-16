@@ -1768,7 +1768,7 @@ def test_a_code_interpreter_without_files_is_read() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_later_run_of_a_call_in_a_compacted_conversation_is_judged() -> None:
+async def test_a_conversation_that_lost_calls_with_a_shared_id_is_unreadable() -> None:
     handler = Handler(ends_at_a_second_result())
     await handler.request(_chat_asked("a"))
     await handler.reply(_chat_reply_calling("a"))
@@ -1777,10 +1777,9 @@ async def test_a_later_run_of_a_call_in_a_compacted_conversation_is_judged() -> 
     await handler.reply(_chat_reply_calling("b"))
 
     # and the client compacts its conversation, keeping only the later run,
-    # which looks just like the earlier one
-    answer = await handler.request(_chat_asked("c", _CALLED, _RESULT))
-
-    assert isinstance(answer, Refuse)
+    # which can't be told from the earlier one
+    with pytest.raises(UnreadableError, match="fewer calls with the id 'call_1'"):
+        await handler.request(_chat_asked("c", _CALLED, _RESULT))
 
 
 @protocol
@@ -1792,14 +1791,8 @@ def notes_each_result() -> Protocol:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    "then",
-    [
-        pytest.param([_CALLED, _RESULT, _CALLED, _RESULT], id="as it grew"),
-        pytest.param([_CALLED, _RESULT], id="compacted"),
-    ],
-)
-async def test_each_run_of_a_call_is_judged_once(then: list[dict[str, Any]]) -> None:
+async def test_each_run_of_a_call_is_judged_once() -> None:
+    then = [_CALLED, _RESULT, _CALLED, _RESULT]
     handler = Handler(notes_each_result())
     await handler.request(_chat_asked("a"))
     await handler.reply(_chat_reply_calling("a"))
@@ -1850,7 +1843,7 @@ def ends_at_a_second_result_of_call_1() -> Protocol:
 
 
 @pytest.mark.anyio
-async def test_a_result_owed_is_judged_however_many_calls_follow(
+async def test_compaction_is_noticed_however_many_calls_follow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from inspect_sentinel.sidecar import _handler
@@ -1869,36 +1862,19 @@ async def test_a_result_owed_is_judged_however_many_calls_follow(
     )
 
     # the client compacts its conversation to the later turn alone
-    answer = await handler.request(
-        _chat_asked(
-            "c",
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [*_write_file("Rain.")["tool_calls"], _SNOW],
-            },
-            _RESULT,
-            {"role": "tool", "tool_call_id": "call_2", "content": "Written."},
+    with pytest.raises(UnreadableError, match="fewer calls"):
+        await handler.request(
+            _chat_asked(
+                "c",
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [*_write_file("Rain.")["tool_calls"], _SNOW],
+                },
+                _RESULT,
+                {"role": "tool", "tool_call_id": "call_2", "content": "Written."},
+            )
         )
-    )
-
-    assert isinstance(answer, Refuse)
-
-
-@pytest.mark.anyio
-async def test_a_later_run_of_a_call_in_a_compacted_conversation_is_judged_without_input() -> (
-    None
-):
-    handler = Handler(notes_what_the_model_was_sent())
-    await handler.request(_chat_asked("a"))
-    await handler.reply(_chat_reply_calling("a"))
-    await handler.request(_chat_asked("b", _CALLED, _RESULT))
-    await handler.reply(_chat_reply_calling("b"))
-
-    await handler.request(_chat_asked("c", _CALLED, _RESULT))
-
-    # which of the two calls it is can't be told, so nor what made it
-    assert await _explained(handler, "c") == ["None"]
 
 
 @pytest.mark.anyio
@@ -1915,8 +1891,5 @@ async def test_compaction_of_calls_the_sidecar_never_handed_out_is_noticed() -> 
 
     # compaction drops the call the sidecar never handed out
     second = [_CALLED, _RESULT | {"content": "Written second."}]
-    await handler.request(_chat_asked("c", *first, *second))
-
-    # the second result is judged without what made it, which can't be told,
-    # and the first, judged before, is not judged again
-    assert await _explained(handler, "c") == ["None"]
+    with pytest.raises(UnreadableError, match="fewer calls"):
+        await handler.request(_chat_asked("c", *first, *second))
