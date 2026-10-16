@@ -178,7 +178,7 @@ async def score_step(
     # be sent to the model being monitored: one that knows it can fake markers
     # and headers for the rest of the sample. Keep it out of anything the
     # agent sees, such as a tool result or a decision's message.
-    nonce = secrets.token_hex(4)
+    nonce = store.get(_NONCE, secrets.token_hex(4))
     # the excerpt decides what is left out, system messages included
     numbered, extract_refs = message_numbering(
         MessagesPreprocessor(exclude_system=False), **scout_nonce(nonce)
