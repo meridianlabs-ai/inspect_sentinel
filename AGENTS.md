@@ -34,6 +34,7 @@
 - Body lines starting with `<type>:` are parsed as extra changelog entries—don't begin description lines with a conventional-commit prefix unless that's intended
 - Never edit `CHANGELOG.md`, version numbers, or `.release-please-manifest.json`—Release Please owns them
 - Never replace the `inspect-ai` git reference in `pyproject.toml` with a version floor—`release-pin-deps.yml` does that on the release PR
+- Before opening a non-trivial PR, run at least one code review pass in a fresh context (e.g. `/code-review` or a subagent that hasn't seen the authoring conversation) using a frontier-class model — the authoring context is blind to its own assumptions, and in our experience reviews from small fast-tier models rarely surface real issues. Fix or explicitly dismiss each finding before opening the PR, and disclose the pass in the description (see "Agent review disclosure" below).
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines
 
 ### Agent review disclosure
