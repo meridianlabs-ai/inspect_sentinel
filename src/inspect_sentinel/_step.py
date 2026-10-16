@@ -28,7 +28,7 @@ class HumanDecision:
     decided: Reported[Decision]
     """The `human()` instance that asked (`name`, `path`, `function`) and a detached copy of its decision, which carries nothing of the step it was made at beyond its own fields: `approve` is a `proceed`, with no explanation, and on a `reject` or `terminate` the person's reason is the `explanation` (and, for a `reject`, the `message`). The reason is untrusted text, which can quote the agent, so quote it when rendering it into a prompt.
 
-    It is what the person decided, not what happened to the step: beside other protocols in a `concurrent()`, a peer's `reject` outranks the person's `approve`, so a call a person approved may not have run. Mark only calls that ran, which have a result in the history.
+    It is what the person decided, not what happened to the step: beside other protocols in a `concurrent()`, a peer's `reject` outranks the person's `approve`, so a call a person approved may not have run. Mark only calls that ran, which have a result without an error in the history (a call rejected before it ran also gets a tool message, with an `approval` error, so a tool message alone does not prove the call ran).
 
     A prompt the person cancelled or closed without choosing is recorded as the surface's fail-closed answer, a `reject` or `terminate`, and its `explanation` says so (for example "ACP client cancelled the permission request."). Render the explanation, and do not present such a decision as the person's judgment.
     """
