@@ -36,6 +36,17 @@
 - Never replace the `inspect-ai` git reference in `pyproject.toml` with a version floor—`release-pin-deps.yml` does that on the release PR
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines
 
+### Agent review disclosure
+
+PRs prepared by AI coding agents must disclose agent involvement in the description, including an `### Agent review` section summarizing pre-PR review passes: what model/tool reviewed, whether the review ran in a fresh context and/or used a different model from the author, how many passes, and the findings—issues found, which were fixed, and which were dismissed with a one-line reason each. Multiple passes, each in a fresh context, often catch issues a single pass misses—prefer that for non-trivial changes. If no review pass was run, say so explicitly. Never report a review that didn't happen—a fabricated or content-free claim ("reviewed, looks good") is worse than disclosing none. Example:
+
+```
+### Agent review
+- Reviewer: Claude Opus 5 via /code-review (fresh context), 2 passes
+- Findings: 3 — 2 fixed, 1 dismissed (flagged a missing None check that is
+  guarded upstream)
+```
+
 ## Design
 
 `design/` holds the design documents this package implements. Start with `design/sentinel-overview.md`; `design/sentinel.md` is the full design and `design/sentinel-reference.md` its reference form. Read the relevant section before adding or changing public API, and when an implementation decision departs from the design, update the design document in the same change.
