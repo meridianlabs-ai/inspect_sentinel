@@ -16,16 +16,16 @@ from inspect_ai.tool import ToolCall
 from inspect_ai.util import Store
 
 from inspect_sentinel import (
+    AllMessages,
     Decision,
-    Excerpt,
     Host,
+    LastTurns,
     Observation,
     Reported,
     Step,
-    keep_history,
-    last_turns,
+    StepPreprocessor,
 )
-from inspect_sentinel._excerpt import scout_nonce
+from inspect_sentinel._preprocess import scout_nonce
 
 from ._fakes import (
     FakeHost,
@@ -50,7 +50,7 @@ def answer(**arguments: Any) -> ModelOutput:
 
 async def score(
     host: FakeHost,
-    step: Step | Excerpt[Step],
+    step: Step,
     dimensions: str | dict[str, str],
     **options: Any,
 ) -> Observation:
@@ -145,7 +145,9 @@ async def test_a_mapping_scores_each_dimension() -> None:
 
 
 @pytest.mark.anyio
-async def test_an_excerpt_is_shown_numbered_and_cites_become_references() -> None:
+async def test_a_preprocessed_step_is_shown_numbered_and_cites_become_references() -> (
+    None
+):
     history: list[ChatMessage] = [
         ChatMessageAssistant(content="looking around", id="first"),
         ChatMessageUser(content="clean up", id="user"),
@@ -154,7 +156,14 @@ async def test_an_excerpt_is_shown_numbered_and_cites_become_references() -> Non
     ]
     step = replace(before_tool_call("bash", cmd="ls"), history=history)
     host = FakeHost(outputs=[answer(explanation="as planned in [M1]", suspicion=0.0)])
-    observation = await score(host, keep_history(last_turns(step, 1)), "Is it safe?")
+    observation = await score(
+        host,
+        step,
+        "Is it safe?",
+        preprocessor=StepPreprocessor(
+            input_window=LastTurns(1), history_window=LastTurns(1)
+        ),
+    )
     assert "clean up" not in prompt(host)
     header = f" ({nonce(host)})" if SCOUT_TAKES_NONCE else ""
     assert f"[M1] ASSISTANT{header}:\ndeleting the logs" in prompt(host)
@@ -471,13 +480,20 @@ def escalated() -> Step:
     )
 
 
-# the escalations reach the prompt from an excerpt too
+# the escalations reach the prompt from a windowed step too
 @pytest.mark.parametrize("windowed", [False, True])
 @pytest.mark.anyio
 async def test_earlier_escalations_are_shown_after_the_task(windowed: bool) -> None:
     host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
     step = escalated()
-    await score(host, last_turns(step, 3) if windowed else step, "Safe?")
+    await score(
+        host,
+        step,
+        "Safe?",
+        preprocessor=StepPreprocessor(
+            input_window=LastTurns(3) if windowed else AllMessages()
+        ),
+    )
     n = nonce(host)
     assert (
         f"[END TASK ({n})]\n\n[BEGIN ESCALATIONS ({n})]\n- rules: rm outside /work\n- llm\n[END ESCALATIONS ({n})]\n\n[AGENT STEP - BEGIN TOOL CALL ({n})]"

@@ -77,17 +77,14 @@ Pure functions for rules that check tool calls, and builders of steps for testin
 ### find_words
 ### result_text
 
-## Excerpts
+## Preprocessing
 
-What a monitor shows a model about a step: the windows take a step or an excerpt and narrow it, and compose, and `step_as_str()` renders it.
+What a monitor shows a model about a step: a `StepPreprocessor` says how much of its conversations to show and what to leave out, `preprocess_step()` applies it, and `step_as_str()` renders the result.
 
-### Excerpt
-### drop_input
-### drop_reasoning
-### drop_tool_usage
-### keep_history
-### keep_system
-### last_turns
-### last_messages
-### new_since_last_report
+### StepPreprocessor
+### Window
+### LastTurns
+### LastMessages
+### NewSinceLastReport
+### preprocess_step
 ### step_as_str
