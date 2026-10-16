@@ -23,7 +23,7 @@ class HumanDecision:
     """The id of the step it was made at, as `SentinelEvent.step_id` records it: the tool call id at a tool stage, the assistant message id at `model_output`."""
 
     call_ids: tuple[str, ...]
-    """The tool calls the decision covered: the step's call at a tool stage, and every call the turn makes at `model_output` (none for a turn without calls). How a prompt says which calls a person approved."""
+    """The tool calls the decision covered: the step's call at a tool stage, and every call the turn makes at `model_output`. How a prompt says which calls a person approved. Empty for a review of a turn with no tool calls, which has no stable key to annotate by: `step_id` is then the turn's message id, which is not stable across scaffolds that copy or rebuild their messages."""
 
     decided: Reported[Decision]
     """The `human()` instance that asked (`name`, `path`, `function`) and a detached copy of its decision, which carries nothing of the step it was made at beyond its own fields: `approve` is a `proceed`, with no explanation, and on a `reject` or `terminate` the person's reason is the `explanation` (and, for a `reject`, the `message`). The reason is untrusted text, which can quote the agent, so quote it when rendering it into a prompt.
@@ -206,7 +206,7 @@ Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCal
 def human_decision_for(step: Step, call_id: str) -> HumanDecision | None:
     """The latest decision a person made through `human()` that covers the tool call `call_id`, from `step.human_decisions`.
 
-    A call can be decided about more than once: its turn at `model_output` covers each of its calls, then the call itself before it runs and its result after, so the latest is the most specific. None when no decision covers the call, and also when `step.human_decisions` is None because the host cannot tell; check that field to tell the two apart. Use the result to annotate that exact call, not to judge a new call that resembles it (see `HumanDecision`).
+    A call can be decided about more than once: its turn at `model_output` covers each of its calls, then the call itself before it runs and its result after, so the latest is the most specific. Look decisions up by call id, which the model's provider assigns and which stays the same however a scaffold copies or rebuilds its messages; message ids do not, so there is no lookup by message, and a review of a turn with no tool calls, which stays in `step.human_decisions`, is found by none. None when no decision covers the call, and also when `step.human_decisions` is None because the host cannot tell; check that field to tell the two apart. Use the result to annotate that exact call, not to judge a new call that resembles it (see `HumanDecision`).
 
     Args:
         step: The step being examined.
