@@ -1823,3 +1823,79 @@ def test_a_code_interpreter_in_a_container_the_provider_keeps_is_unreadable() ->
 
     with pytest.raises(UnreadableError, match="content that would not be read"):
         offered("openai", json.dumps(body).encode())
+
+
+_SNOW = {
+    "id": "call_2",
+    "type": "function",
+    "function": {"name": "write_file", "arguments": json.dumps({"text": "Snow."})},
+}
+
+
+class _Calls(StoreModel):
+    judged: dict[str, int] = {}
+
+
+@protocol
+def ends_at_a_second_result_of_call_1() -> Protocol:
+    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+        calls = context.store_as(_Calls)
+        judged = calls.judged | {step.call.id: calls.judged.get(step.call.id, 0) + 1}
+        calls.judged = judged
+        if judged.get("call_1", 0) > 1:
+            return Decision.terminate("a second result of call_1")
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_result_owed_is_judged_however_many_calls_follow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from inspect_sentinel.sidecar import _handler
+
+    # fewer calls kept than the reply below hands out
+    monkeypatch.setattr(_handler, "MADE_KEPT", 1)
+    handler = Handler(ends_at_a_second_result_of_call_1())
+    await handler.request(_chat_asked("a"))
+    await handler.reply(_chat_reply_calling("a"))
+    await handler.request(_chat_asked("b", _CALLED, _RESULT))
+    # the model is handed call_1 again, and another call after it
+    both = json.loads(_chat_reply_calling("b").body)
+    both["choices"][0]["message"]["tool_calls"].append(_SNOW)
+    await handler.reply(
+        replace(_chat_reply_calling("b"), body=json.dumps(both).encode())
+    )
+
+    # the client compacts its conversation to the later turn alone
+    answer = await handler.request(
+        _chat_asked(
+            "c",
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [*_write_file("Rain.")["tool_calls"], _SNOW],
+            },
+            _RESULT,
+            {"role": "tool", "tool_call_id": "call_2", "content": "Written."},
+        )
+    )
+
+    assert isinstance(answer, Refuse)
+
+
+@pytest.mark.anyio
+async def test_a_later_run_of_a_call_in_a_compacted_conversation_is_judged_without_input() -> (
+    None
+):
+    handler = Handler(notes_what_the_model_was_sent())
+    await handler.request(_chat_asked("a"))
+    await handler.reply(_chat_reply_calling("a"))
+    await handler.request(_chat_asked("b", _CALLED, _RESULT))
+    await handler.reply(_chat_reply_calling("b"))
+
+    await handler.request(_chat_asked("c", _CALLED, _RESULT))
+
+    # which of the two calls it is can't be told, so nor what made it
+    assert await _explained(handler, "c") == ["None"]

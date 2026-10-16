@@ -260,6 +260,7 @@ class Handler:
             digest = _result_digest(words, call, entry, index)
             results.append((assistant, call, index, entry, digest))
         chosen = _to_judge(conversation, results)
+        held_calls = _calls(client)
         for position, (assistant, call, index, entry, digest) in enumerate(results):
             if position not in chosen:
                 continue
@@ -276,7 +277,14 @@ class Handler:
             ):
                 # judged while this request waited
                 continue
-            sent = conversation.made.get(occurrence(call.id, index))
+            # what the model was sent for the call, unless the conversation
+            # lost calls with its id, after which its place among them no
+            # longer says which call it is
+            sent = (
+                conversation.made.get(occurrence(call.id, index))
+                if held_calls.get(call.id, 0) >= conversation.issued.get(call.id, 0)
+                else None
+            )
             step = AfterToolCall(
                 conversation=held.conversation,
                 message=assistant.text,
@@ -395,7 +403,10 @@ class Handler:
                 conversation.made[occurrence(call.id, index)] = made
                 owed = call_key(call)
                 conversation.owed[owed] = conversation.owed.get(owed, 0) + 1
-            for kept in (conversation.made, conversation.owed):
+                # moved to the end, so the ids used least lately go first
+                issued = conversation.issued.pop(call.id, 0) + 1
+                conversation.issued[call.id] = issued
+            for kept in (conversation.made, conversation.issued):
                 while len(kept) > MADE_KEPT:
                     del kept[next(iter(kept))]
         return Pass()
