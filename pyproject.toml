@@ -33,6 +33,10 @@ dependencies = [
     # anyio too, but this is a direct import and a transitive dependency is not
     # a promise.
     "anyio>=4.0",
+    # TypeVar defaults (PEP 696) before Python 3.13, so a StepPreprocessor
+    # with no transform is a StepPreprocessor[Step]. Imported directly, so
+    # declared, though pydantic and inspect-ai depend on it too.
+    "typing-extensions>=4.12",
 ]
 
 [project.urls]

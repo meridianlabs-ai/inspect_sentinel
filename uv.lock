@@ -1381,6 +1381,7 @@ dependencies = [
     { name = "anyio" },
     { name = "inspect-ai" },
     { name = "pydantic" },
+    { name = "typing-extensions" },
 ]
 
 [package.optional-dependencies]
@@ -1451,6 +1452,7 @@ requires-dist = [
     { name = "twine", marker = "extra == 'dist'" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
     { name = "types-pyyaml", marker = "extra == 'doc'" },
+    { name = "typing-extensions", specifier = ">=4.12" },
 ]
 provides-extras = ["dev", "dist", "doc"]
 

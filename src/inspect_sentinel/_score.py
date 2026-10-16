@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import secrets
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from inspect_ai.model import (
     ChatMessage,
@@ -17,9 +17,11 @@ from inspect_ai.tool import ToolCall, ToolCallError, ToolInfo, ToolParams
 from inspect_ai.util import Store, json_schema
 from pydantic import BaseModel, Field, ValidationError, create_model
 
-from ._excerpt import Excerpt, scout_nonce, step_as_str
+from ._preprocess import StepPreprocessor, preprocess_step, step_as_str
 from ._report import Observation
 from ._step import Step
+
+S = TypeVar("S", bound=Step)
 
 if TYPE_CHECKING:
     from ._host import HostNative
@@ -85,9 +87,10 @@ _NONCE = "inspect_sentinel:nonce"
 async def score_step(
     host: HostNative,
     store: Store,
-    step: Step | Excerpt[Step],
+    step: S,
     dimensions: str | Mapping[str, str],
     *,
+    preprocessor: StepPreprocessor[S] | None = None,
     instructions: str | None = None,
     policy: str | None = None,
     template: str | None = None,
@@ -99,7 +102,6 @@ async def score_step(
 ) -> Observation:
     # Scout imports duckdb and pandas, so load it only when a monitor scores;
     # jinja2 comes with it
-    from inspect_scout import MessagesPreprocessor, message_numbering
     from jinja2 import Environment, StrictUndefined, meta
 
     if retry_refusals < 0:
@@ -179,9 +181,11 @@ async def score_step(
     # and headers for the rest of the sample. Keep it out of anything the
     # agent sees, such as a tool result or a decision's message.
     nonce = store.get(_NONCE, secrets.token_hex(4))
-    # the excerpt decides what is left out, system messages included
-    numbered, extract_refs = message_numbering(
-        MessagesPreprocessor(exclude_system=False), **scout_nonce(nonce)
+    p = preprocessor or StepPreprocessor()
+    shown, extract_refs = await step_as_str(
+        await preprocess_step(step, p),
+        nonce=nonce,
+        allow_placeholders=p.allow_placeholders,
     )
     eval = host.eval
     values = {
@@ -194,7 +198,7 @@ async def score_step(
         else "",
         "eval": eval,
         "escalations": _escalations(step, nonce),
-        "step": await step_as_str(step, nonce=nonce, messages_as_str=numbered),
+        "step": shown,
         "sentinel_nonce": nonce,
         "dimensions": dimensions
         if isinstance(dimensions, str)
@@ -264,9 +268,9 @@ async def score_step(
     )
 
 
-def _escalations(step: Step | Excerpt[Step], nonce: str) -> str:
+def _escalations(step: Step, nonce: str) -> str:
     # earlier links' verdicts, as inspect_ai's human approval view shows them
-    escalations = (step.step if isinstance(step, Excerpt) else step).escalations
+    escalations = step.escalations
     lines = [
         f"- {e.name}: {e.report.explanation}" if e.report.explanation else f"- {e.name}"
         for e in escalations
