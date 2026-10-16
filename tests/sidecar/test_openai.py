@@ -1765,3 +1765,49 @@ def test_a_code_interpreter_without_files_is_read() -> None:
     body = {"input": [], "tools": [{"type": "code_interpreter", "container": "auto"}]}
 
     assert len(offered("openai", json.dumps(body).encode()).tools) == 1
+
+
+@pytest.mark.anyio
+async def test_a_later_run_of_a_call_in_a_compacted_conversation_is_judged() -> None:
+    handler = Handler(ends_at_a_second_result())
+    await handler.request(_chat_asked("a"))
+    await handler.reply(_chat_reply_calling("a"))
+    await handler.request(_chat_asked("b", _CALLED, _RESULT))
+    # the model is handed the same call again
+    await handler.reply(_chat_reply_calling("b"))
+
+    # and the client compacts its conversation, keeping only the later run,
+    # which looks just like the earlier one
+    answer = await handler.request(_chat_asked("c", _CALLED, _RESULT))
+
+    assert isinstance(answer, Refuse)
+
+
+@protocol
+def notes_each_result() -> Protocol:
+    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+        return Decision.proceed(step.call.id)
+
+    return decide
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "then",
+    [
+        pytest.param([_CALLED, _RESULT, _CALLED, _RESULT], id="as it grew"),
+        pytest.param([_CALLED, _RESULT], id="compacted"),
+    ],
+)
+async def test_each_run_of_a_call_is_judged_once(then: list[dict[str, Any]]) -> None:
+    handler = Handler(notes_each_result())
+    await handler.request(_chat_asked("a"))
+    await handler.reply(_chat_reply_calling("a"))
+    await handler.request(_chat_asked("b", _CALLED, _RESULT))
+    await handler.reply(_chat_reply_calling("b"))
+
+    await handler.request(_chat_asked("c", *then))
+    # and the same again
+    await handler.request(_chat_asked("d", *then))
+
+    assert [len(await _explained(handler, id)) for id in "bcd"] == [1, 1, 0]
