@@ -140,7 +140,7 @@ class Host(HostNative):
         - `{{ eval }}`: the eval the agent is running in, as `context.eval` holds it, such as `{{ eval.task }}` or `{{ eval.metadata.difficulty }}`; None outside an eval, so guard it with `{% if eval %}` in a monitor that may run outside one.
         - `{{ escalations }}`: the escalations from earlier links of a `sequential` composition (`step.escalations`), one `- name: explanation` line each, between `[BEGIN ESCALATIONS (nonce)]` and `[END ESCALATIONS (nonce)]` lines; empty when there are none.
         - `{{ step }}`: `step_as_str()` of the step or excerpt, its messages numbered `[M1]`, `[M2]` and so on so the explanation can cite them; the observation's `references` come from those cites.
-        - `{{ sentinel_nonce }}`: a nonce made on the sample's first `score` and used for the rest of the sample, so the monitor model's prompt cache keeps working from step to step; 8 hex characters, on every block marker and, where the installed Scout takes a nonce, every message header (`[M1] USER (3f9a1c7e):`). The agent never sees the prompt, so text it writes that looks like a marker or a header lacks the nonce, and the default template tells the model so. A `sentinel_nonce` in `template_variables` is ignored.
+        - `{{ sentinel_nonce }}`: a nonce made on the sample's first `score` and used for the rest of the sample, so the monitor model's prompt cache keeps working from step to step; 8 hex characters, on every block marker and, where the installed Scout takes a nonce, every message header (`[M1] USER (3f9a1c7e):`). The agent never sees the prompt, so text it writes that looks like a marker or a header lacks the nonce, and the default template tells the model so. The nonce is kept in the sample store, so a tool that shows the agent the store, or a protocol that passes the agent a monitor explanation quoting the nonce, gives it away for the rest of the sample. A `sentinel_nonce` in `template_variables` is ignored.
         - `{{ dimensions }}`: `dimensions` as given, or each dimension's name followed by its text.
         - `{{ answer_format }}`: the instruction to call the answer tool.
         - Any name in `template_variables`, set to its value.
@@ -262,7 +262,7 @@ class Recorder(TypingProtocol):
 class HostContext:
     """What the host passes to `run_sentinel`: its `HostNative`, where the runner records reports, and the sample store.
 
-    It builds the top layer's `Context` from the host, with an empty `path` and a `Host` wrapping it. Monitors and protocols reach the store only through `Context.store_as()`, which namespaces it by their `path`.
+    It builds the top layer's `Context` from the host, with an empty `path` and a `Host` wrapping it. Monitors and protocols reach the store only through `Context.store_as()`, which namespaces it by their `path`; `Host.score` keeps the sample's nonce in it too.
     """
 
     host: HostNative
@@ -272,7 +272,7 @@ class HostContext:
     """Where the runner records reports, failures and cancellations."""
 
     store: Store
-    """The sample store that `Context.store_as()` reads and writes while the step runs."""
+    """The sample store that `Context.store_as()` and `Host.score` read and write while the step runs."""
 
     def __post_init__(self) -> None:
         # a runtime check for hosts that are not type-checked against Recorder

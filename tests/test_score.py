@@ -52,11 +52,9 @@ async def score(
     host: FakeHost,
     step: Step | Excerpt[Step],
     dimensions: str | dict[str, str],
-    *,
-    store: Store | None = None,
     **options: Any,
 ) -> Observation:
-    with in_step(host=host, store=store) as context:
+    with in_step(host=host) as context:
         return await context.host.score(step, dimensions, **options)
 
 

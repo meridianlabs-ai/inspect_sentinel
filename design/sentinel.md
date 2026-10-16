@@ -1234,6 +1234,8 @@ async def check(context: Context, step: BeforeToolCall) -> Observation | None:
 
 The namespace is the instance path, so renaming a mapping key or wrapping a monitor in another layer moves its state; there is no override. There is no `context.store`: the whole sample store holds the agent's state too, and a monitor or protocol must not read or change state it was not given, so `store_as()` is the only way in the API offers (a convention rather than isolation: the `StoreModel` it returns carries its store). Decided by the maintainer on 2026-10-02; a monitor that needs some of the agent's state is a separate question (an explicit, read-only view of named keys), not yet designed.
 
+The package itself keeps one key in the sample store outside any instance's namespace: `inspect_sentinel:nonce`, the nonce `Host.score` puts on the markers of every prompt in the sample. Solver code that reads the store, and the eval log, see it.
+
 This is where the shape argument from [What the function shape buys](#what-the-function-shape-buys) has to be cashed out rather than assumed. A factory closure is created once per configuration and shared by every sample, so anything captured in it is *task*-scoped whether the author meant it or not. `context.store_as()` is how per-sample state is spelled, and the factory docstring has to say so — the shape makes the sharing more visible, it does not prevent it.
 
 Backing per-sample state with the sample `Store` gets three things for free: it is recorded to the transcript as `StoreEvent`s, so the monitor's reasoning is in the log; it survives checkpoint and resume; and `store_from_events_as()` can reconstruct it from a finished log for analysis.
