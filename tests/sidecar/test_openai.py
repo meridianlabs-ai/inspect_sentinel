@@ -1893,3 +1893,30 @@ async def test_compaction_of_calls_the_sidecar_never_handed_out_is_noticed() -> 
     second = [_CALLED, _RESULT | {"content": "Written second."}]
     with pytest.raises(UnreadableError, match="fewer calls"):
         await handler.request(_chat_asked("c", *first, *second))
+
+
+@pytest.mark.anyio
+async def test_compaction_of_history_the_sidecar_was_only_sent_is_noticed() -> None:
+    handler = Handler(notes_each_result())
+    # two calls with one id, already in the conversation, and no reply since
+    # has handed out a call
+    first = [_CALLED, _RESULT | {"content": "Written first."}]
+    second = [_CALLED, _RESULT | {"content": "Written second."}]
+    await handler.request(_chat_asked("a", *first, *second))
+
+    with pytest.raises(UnreadableError, match="fewer calls"):
+        await handler.request(_chat_asked("b", *second))
+
+
+@pytest.mark.anyio
+async def test_a_retried_reply_does_not_count_its_call_twice() -> None:
+    handler = Handler(notes_each_result())
+    await handler.request(_chat_asked("a"))
+    await handler.reply(_chat_reply_calling("a"))
+    # the client retries the same request, and keeps the second reply only
+    await handler.request(_chat_asked("a2"))
+    await handler.reply(_chat_reply_calling("a2"))
+
+    answer = await handler.request(_chat_asked("b", _CALLED, _RESULT))
+
+    assert answer == Pass()

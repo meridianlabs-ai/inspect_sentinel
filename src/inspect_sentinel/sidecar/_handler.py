@@ -234,6 +234,11 @@ class Handler:
             return None
         made: dict[str, tuple[ChatMessageAssistant, ToolCall, str, int]] = {}
         held_calls = _calls(client)
+        # the calls the client holds count too, those this sidecar never
+        # handed out included
+        for call_id, count in held_calls.items():
+            issued = max(conversation.issued.get(call_id, 0), count)
+            conversation.issued[call_id] = issued
         # how many calls with each id have come before, as a client can use
         # one id for calls in different turns, each with words of its own
         occurrences: dict[str, int] = {}
@@ -392,9 +397,10 @@ class Handler:
                 seen[call.id] = index + 1
                 made = Made(held.input, held.offered.tools)
                 conversation.made[occurrence(call.id, index)] = made
-                # counting the calls with its id the client already held,
-                # which this sidecar may never have handed out
-                issued = max(conversation.issued.get(call.id, 0) + 1, index + 1)
+                # its place, not one more each time: a retry or another
+                # reply to the same request hands out a call in the same
+                # place, of which the client keeps one
+                issued = max(conversation.issued.get(call.id, 0), index + 1)
                 conversation.issued[call.id] = issued
             while len(conversation.made) > MADE_KEPT:
                 del conversation.made[next(iter(conversation.made))]
