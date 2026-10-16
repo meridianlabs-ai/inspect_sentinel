@@ -1229,6 +1229,20 @@ async def test_a_merged_turn_of_content_alone_is_read() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_merged_turn_with_a_name_is_read() -> None:
+    # inspect_ai doesn't read an assistant's name in any turn, merged or not
+    body = _chat_said(
+        _write_file("Rain."),
+        {"role": "tool", "tool_call_id": "call_1", "content": "Written."},
+        {"role": "assistant", "name": "helper", "content": "Done."},
+    )
+
+    messages = await read_request("openai", json.dumps(body).encode())
+
+    assert "Done." in [m.text for m in messages if m.role == "assistant"]
+
+
+@pytest.mark.anyio
 async def test_a_refusal_that_is_not_merged_is_read() -> None:
     body = _chat_said(
         {"role": "assistant", "content": None, "refusal": "A dangerous storm."}

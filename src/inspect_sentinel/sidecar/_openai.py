@@ -355,7 +355,9 @@ def _check_merged(messages: list[object]) -> None:
             dropped = sorted(
                 key
                 for key, value in message.items()
-                if key not in ("role", "content") and value not in (None, "", [], {})
+                # inspect_ai reads no assistant's name, merged or not
+                if key not in ("role", "content", "name")
+                and value not in (None, "", [], {})
             )
             # the earlier turn's refusal too, which is read as its text only
             # while it has no content
