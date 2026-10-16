@@ -103,7 +103,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 | R1 | escalate and `human()` at `AfterGenerate` | not met |
 | R2 | exact `step.input` at `AfterToolCall`, or an explicit failure | partly met |
 | R3 | tool definitions and a truncation signal at `AfterToolCall` | not met |
-| R4 | earlier decisions in the conversation | not met |
+| R4 | earlier decisions in the conversation | live: met by `step.human_decisions` (2026-10-14, `human()` decisions only); replay: designed, not built (R7) |
 | R5 | escalate or terminate on scores, without reject | not met |
 | R6 | a root escalate does not proceed | decided 2026-10-10 (terminates); not built |
 | R7 | replay over existing logs | not met; designed in part |
