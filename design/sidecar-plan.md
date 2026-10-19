@@ -52,20 +52,22 @@ inspect_sentinel
                                 v
                    12 human review                  both repositories
 
+history: inspect_sentinel, after 7, before PR 8's model-history checks
 13 smaller asks: inspect_ai, independently, after accepting each issue
 14 trusted run identity: after 6 and 10, before Middleman; no Hawk dependency
 15 Middleman: inspect_sentinel and hawk, after 3 and 5; scheduled after 14
    Implementation also needs Hawk/METR accepting the passthrough hook
    Middleman streaming follows 9 and 15 and METR accepting chunk delivery
+shared state: inspect_sentinel, before more than one sidecar worker or restart continuity
 ```
 
 PRs 1 to 3 come first, one after another, and land as one pull request with a commit for each, because the endpoint is the first point at which anything runs. After 3, the sidecar's support for Inspect clients (5) and the guardrail (4) land together as one pull request, with a commit for each and one more for the guardrail passing the `sentinel` field on: the guardrail's tests run a real sidecar, and the field can only be tested through LiteLLM once the sidecar writes it. The endpoint for evals (6) and per-call rejection and `modify` (7) land together after that as one pull request, with commits for each, so that one review covers both.
 
-PR 8 then builds the Envoy shim with whole-response holding. PR 9 adds incremental streaming to the shared handler, Envoy and LiteLLM, tested with ordinary provider SDK clients and a small client of the eval endpoint. Neither needs Inspect's sidecar client or changes to `inspect_ai` source. Whole-response holding remains available for policies that need the full turn.
+The [model-facing history](#follow-up-model-facing-history) follow-up comes next: the sidecar fills `step.history` from the traffic it keeps, before PR 8's model-history conformance checks run through Envoy. It needs nothing beyond PR 7. PR 8 then builds the Envoy shim with whole-response holding. PR 9 adds incremental streaming to the shared handler, Envoy and LiteLLM, tested with ordinary provider SDK clients and a small client of the eval endpoint. Neither needs Inspect's sidecar client or changes to `inspect_ai` source. Whole-response holding remains available for policies that need the full turn.
 
 PR 10's technical prerequisites remain 5, 6 and 7; placing it after 9 is a delivery choice, so the proxy behavior and recovery contract are exercised before a client depends on them. From 7 it needs per-call rejection and `modify`, and also that a rejection Inspect puts back into its conversation is not judged as a tool result: before 7, the sidecar would judge each such rejection as a call that ran, and could end the run for a call that never ran. PR 10 establishes the Inspect client with whole-response holding. PR 11 then connects that client to incremental replies and interrupted streams, including transcript and sample-outcome conformance. PR 12 follows both streaming phases and adds human review through the sidecar's host, Inspect's approval UI and external review consumers.
 
-PR 13 needs nothing and can start at any time, with each upstream issue accepted first. PR 14 implements trusted run identity after registration and the Inspect client, using Envoy and LiteLLM first, without waiting for a Hawk change. PR 15 is scheduled after PR 14 and waits on Hawk/METR accepting Middleman's passthrough hook. Extending Middleman to hand over chunks also needs PR 9 and METR accepting that change; it does not block Envoy, LiteLLM, identity or the Inspect client work.
+[Shared and durable state](#follow-up-shared-and-durable-state) is delivered before the sidecar runs as more than one worker or promises that a run outlasts a restart; until then a deployment is one process. PR 13 needs nothing and can start at any time, with each upstream issue accepted first. PR 14 implements trusted run identity after registration and the Inspect client, using Envoy and LiteLLM first, without waiting for a Hawk change. PR 15 is scheduled after PR 14 and waits on Hawk/METR accepting Middleman's passthrough hook. Extending Middleman to hand over chunks also needs PR 9 and METR accepting that change; it does not block Envoy, LiteLLM, identity or the Inspect client work.
 
 ## PR 1: reading provider traffic
 
@@ -142,9 +144,17 @@ Repository: `inspect_sentinel`. Depends on: PRs 2 and 5.
 - Refusing the whole turn when every call in it is rejected, and ending the run after three such turns in a row. A turn in which some calls ran starts the count again (section 4).
 - Tests: edited replies read back by each SDK; the put-back request equal to what Inspect sends in process.
 
+## Follow-up: model-facing history
+
+Repository: `inspect_sentinel`. Depends on: PR 7. Scheduled after PR 7 and before completing PR 8's transcript and model-history conformance checks. The core's as-sent `step.history` landed in sentinel #98, so this waits on no core change.
+
+- Fill `step.history` from the traffic seen for each conversation, keeping the messages from before a compaction, and following Inspect's as-sent history semantics. Keep different runs, sample attempts and conversations separate.
+- Keep `agent_messages` as `None`: the proxy cannot know the scaffold's own list. Do not invent history the sidecar never saw; use `None` where it cannot establish it.
+- Tests: compare the history given to a monitor in process and through the sidecar before and after compaction, on retries within an attempt, and on a fresh sample attempt. A new attempt must not inherit the discarded attempt's history.
+
 ## PR 8: the Envoy shim
 
-Repository: `inspect_sentinel`. Depends on: PRs 3, 6 and 7. Does not depend on PR 10, Middleman or WASM. This is the next implementation step after PRs 6 and 7.
+Repository: `inspect_sentinel`. Depends on: PRs 3, 6 and 7. Does not depend on PR 10, Middleman or WASM. This is the next implementation step after PRs 6 and 7, with the model-facing history follow-up landing before its model-history conformance checks.
 
 - A Python gRPC `ext_proc` shim inside the sidecar, with dependencies in an optional extra. It translates Envoy's exchanges into the shared handler's `Request` and `Reply`, and applies `Pass`, `Replace` and `Refuse`; provider reading, sentinel execution and run state stay in the shared implementation.
 - Anthropic Messages, OpenAI Chat Completions and OpenAI Responses, including request amendments, edited replies, and refusals. Response bodies use `FULL_DUPLEX_STREAMED` from the first version, but the shim initially holds each reply whole (section 5). Incremental release follows in PR 9.
@@ -183,7 +193,8 @@ Keep the integration transparent to eval authors and preserve the existing eval 
 - Acting on the field as Inspect does in process: a call taken out goes back into Inspect's conversation with an approval error, a changed call keeps the model's original, a `terminate` ends the sample, and every step is written into the transcript.
 - `request_result` when the field is missing, and recording a request as not judged when the sidecar cannot say.
 - `run_result` before scoring, and `end_run` after.
-- Tests: in inspect_ai's own suite, with a stand-in sidecar; and the conformance suite in `sidecar.md` section 11, comparing Inspect's transcript in process and through a sidecar with whole-response holding. Incremental transcript conformance belongs to PR 11.
+- Prevent Inspect's completion-response cache from bypassing the sidecar while the client is active. Initially disable that cache, or arrange fresh sidecar judging of a cached completion before the agent can use it. A cached `sentinel` field is not a decision for the current run. This is separate from provider prompt caching, which still sends the model request through the proxy.
+- Tests: in inspect_ai's own suite, with a stand-in sidecar; and the conformance suite in `sidecar.md` section 11, comparing Inspect's transcript in process and through a sidecar with whole-response holding. Include a pre-populated completion cache: a cached tool call cannot execute without the current run's sentinel judging it, and an earlier run's cached decision cannot authorize it. Incremental transcript conformance belongs to PR 11.
 
 ## PR 11: Inspect incremental streaming
 
@@ -251,11 +262,17 @@ Repositories: `inspect_sentinel` and `hawk`. Technical prerequisites: PRs 3 and 
 - In `hawk`: the passthrough hook in Middleman, which is METR's to accept; Middleman letting the `sentinel` field through on its errors; and routing `/sentinel/*` to the sidecar at the load balancer in front of Middleman.
 - A README for the hook, including the load balancer's routing.
 
+## Follow-up: shared and durable state
+
+Repository: `inspect_sentinel`, with deployment configuration and Inspect lifecycle handling where needed. Deliver before running more than one sidecar worker or promising that a run's state survives a restart. The initial deployment remains one process, with no promise of restart continuity.
+
+- Define and implement shared state and the coordination it needs: run termination, the sentinel's store and tallies, conversation amendments and judged results, registered facts, held exchanges, and request results must remain consistent when successive calls reach different workers.
+- Define persistence, recovery and unavailable-state behavior before allowing a run to continue after restart. Losing state must not silently turn a previously ended run into a fresh one. Coordinate terminal-state retention and credential expiry with [PR 14](#pr-14-trusted-run-identity-and-termination-scopes).
+- Tests: alternate a run's requests and replies between workers; check that termination, tallies and amendments survive the handoff and that overlapping duplicate results are judged once. Restart between exchanges and verify the chosen recovery or refusal behavior, including a run that was already terminated.
+
 ## Not planned yet
 
 These need design first. Each names the repositories it would touch.
 
 - A full policy for model calls that Inspect answers from its cache, which never reach the proxy. The initial remote-mode cache behavior must be agreed before PR 10; supporting cached calls with equivalent remote judgment needs further design in `inspect_ai`, and possibly `inspect_sentinel`.
-- Filling `step.history` from each conversation the sidecar keeps, with the turns before a compaction, once the core has the as-sent `step.history` (R10, sentinel #98). `inspect_sentinel`.
 - Tallies kept at the task level. `inspect_sentinel`.
-- A state implementation that processes share and that outlasts a restart. `inspect_sentinel`.
