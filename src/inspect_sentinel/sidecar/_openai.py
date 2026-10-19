@@ -1141,7 +1141,7 @@ def _chat_stream(events: list[dict[str, Any]]) -> object:
 
 
 def _responses_stream(events: list[dict[str, Any]]) -> object:
-    for event in events:
+    for position, event in enumerate(events):
         kind = event.get("type")
         if kind in ("response.failed", "error"):
             raise UnreadableError(
@@ -1151,5 +1151,11 @@ def _responses_stream(events: list[dict[str, Any]]) -> object:
         if kind in ("response.completed", "response.incomplete"):
             response = event.get("response")
             if isinstance(response, dict):
+                # the SDK keeps the last response a stream gives, so a stream
+                # that goes on could have a client act on another one
+                if position != len(events) - 1:
+                    raise UnreadableError(
+                        "The reply stream goes on after its response ended."
+                    )
                 return _response(cast("dict[str, Any]", response))
     raise UnreadableError("The reply stream is not a complete response.")

@@ -214,6 +214,24 @@ async def test_thinking_written_loosely_by_a_proxy_is_read() -> None:
     ]
 
 
+def _responses_stream_going_on(kind: str) -> bytes:
+    # the recorded stream, then again an event of a kind it already has,
+    # giving a call other arguments
+    _, body = openai_recorded("responses stream")
+    again = json.loads(
+        next(
+            line[len("data: ") :]
+            for line in reversed(body.decode().splitlines())
+            if line.startswith("data: ") and f'"type":"{kind}"' in line
+        )
+    )
+    found = again.get("item") or next(
+        item for item in again["response"]["output"] if item["type"] == "function_call"
+    )
+    found["arguments"] = '{"location": "Atlantis"}'
+    return body + f"data: {json.dumps(again)}\n\n".encode()
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("content_type", "body", "match"),
@@ -229,6 +247,18 @@ async def test_thinking_written_loosely_by_a_proxy_is_read() -> None:
             _half(openai_recorded("responses stream")[1]),
             "not a complete response",
             id="responses stream cut short",
+        ),
+        pytest.param(
+            STREAM,
+            _responses_stream_going_on("response.completed"),
+            "goes on after its response ended",
+            id="responses stream with a second response",
+        ),
+        pytest.param(
+            STREAM,
+            _responses_stream_going_on("response.output_item.done"),
+            "goes on after its response ended",
+            id="responses stream with an event after its response",
         ),
         pytest.param(
             STREAM,

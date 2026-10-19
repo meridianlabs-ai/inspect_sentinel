@@ -410,6 +410,33 @@ async def test_a_taken_out_call_event_without_its_place_in_the_output_is_refused
         )
 
 
+@pytest.mark.anyio
+async def test_a_responses_stream_with_a_second_response_is_refused() -> None:
+    # a stream of whole responses only, with no event for an item, so only
+    # the response a client keeps tells it what to run
+    events = [
+        event
+        for event in _responses_events()
+        if event["type"] in ("response.created", "response.completed")
+    ]
+    output = await read_reply("openai", STREAM, _body(events))
+    kept, taken = (output.message.tool_calls or [])[:2]
+    again = json.loads(json.dumps(events[-1]))
+    for item in again["response"]["output"]:
+        if item.get("call_id") == kept.id:
+            item["arguments"] = '{"location": "Atlantis"}'
+
+    with pytest.raises(UnreadableError, match="goes on after its response ended"):
+        await edit_reply(
+            "openai",
+            STREAM,
+            _body([*events, again]),
+            None,
+            Edits(frozenset({taken.id})),
+            output,
+        )
+
+
 def _as_custom_tool_call(events: list[dict[str, Any]], index: int) -> None:
     # the call made into a call of a custom tool, whose input is streamed as a
     # function call's arguments are
