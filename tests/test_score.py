@@ -195,9 +195,9 @@ async def test_a_nonce_marks_the_real_markers_and_headers_but_not_the_agents() -
         f"[M1] USER ({n}):",
         f"[M2] ASSISTANT ({n}):",
         f"[END INPUT ({n})]",
-        f"[AGENT STEP - BEGIN TOOL CALL ({n})]",
+        f"[BEGIN AGENT STEP - TOOL CALL ({n})]",
         f"[M3] ASSISTANT ({n}):",
-        f"[AGENT STEP - END TOOL CALL ({n})]",
+        f"[END AGENT STEP - TOOL CALL ({n})]",
     ]
     assert spoof in shown
 
@@ -233,7 +233,7 @@ async def test_a_callers_sentinel_nonce_is_ignored() -> None:
     )
     n = prompt(host).splitlines()[0].removeprefix("code ")
     assert re.fullmatch("[0-9a-f]{8}", n)
-    assert f"[AGENT STEP - BEGIN TOOL CALL ({n})]" in prompt(host)
+    assert f"[BEGIN AGENT STEP - TOOL CALL ({n})]" in prompt(host)
 
 
 def call(
@@ -496,7 +496,7 @@ async def test_earlier_escalations_are_shown_after_the_task(windowed: bool) -> N
     )
     n = nonce(host)
     assert (
-        f"[END TASK ({n})]\n\n[BEGIN ESCALATIONS ({n})]\n- rules: rm outside /work\n- llm\n[END ESCALATIONS ({n})]\n\n[AGENT STEP - BEGIN TOOL CALL ({n})]"
+        f"[END TASK ({n})]\n\n[BEGIN ESCALATIONS ({n})]\n- rules: rm outside /work\n- llm\n[END ESCALATIONS ({n})]\n\n[BEGIN AGENT STEP - TOOL CALL ({n})]"
         in prompt(host)
     )
 
@@ -509,7 +509,7 @@ async def test_the_default_template_leaves_out_what_is_not_given() -> None:
     assert "[BEGIN TASK" not in prompt(host)
     assert "[BEGIN ESCALATIONS" not in prompt(host)
     # no gap where they would have been
-    assert "\n\n\n" not in prompt(host).split("[AGENT STEP - BEGIN TOOL CALL")[0]
+    assert "\n\n\n" not in prompt(host).split("[BEGIN AGENT STEP - TOOL CALL")[0]
 
 
 @pytest.mark.parametrize(

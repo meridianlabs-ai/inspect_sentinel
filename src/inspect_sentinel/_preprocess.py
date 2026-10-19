@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from inspect import signature
@@ -176,7 +177,7 @@ async def step_as_str(
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
-    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it is empty: `INPUT`, `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the agent loop's own list), then the step itself in a block marked `[AGENT STEP - BEGIN ...]` and `[AGENT STEP - END ...]`. The step block is `TOOL CALL` (the assistant's text and the call) before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REPLY` (the reply) after a generate, and `MODEL REQUEST` before one, which holds `input`, so that step has no `INPUT` block. A list the host could not provide (None) is named in its block. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header where the installed Scout takes a nonce. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
+    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it is empty: `INPUT`, `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the agent loop's own list), then the step itself in a block marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]`. The step block is `TOOL CALL` (the assistant's text and the call) before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REPLY` (the reply) after a generate, and `MODEL REQUEST` before one. A request's block holds the request: its `INPUT` block, then `TOOLS` (the tools offered, as JSON) and `TOOL CHOICE`, so that step has no `INPUT` block of its own before `HISTORY`. A list the host could not provide (None) is named in its block. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header where the installed Scout takes a nonce. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
 
     Args:
         step: The step to render, usually from `preprocess_step()`.
@@ -196,40 +197,42 @@ async def step_as_str(
             return unknown
         return await numbered(messages) if messages else ""
 
-    request = isinstance(step, BeforeGenerate)
-    # rendered in this order, so messages are numbered in it too
-    blocks = [
-        (
-            "",
-            "INPUT",
-            ""
-            if request
-            else await text(
-                step.input, "The model input for this call is not available."
-            ),
-        ),
-        (
-            "",
-            "HISTORY",
-            await text(
-                step.history, "The messages the agent has sent are not available."
-            ),
-        ),
-        (
-            "",
-            "AGENT MESSAGES",
-            await text(
-                step.agent_messages, "The agent's own message list is not available."
-            ),
-        ),
-        ("AGENT STEP - ", _step_block(step), await text(_step_part(step), "")),
-    ]
     mark = "" if nonce is None else f" ({nonce})"
-    return (
-        "\n\n".join(
-            f"[{prefix}BEGIN {name}{mark}]\n{body}\n[{prefix}END {name}{mark}]"
-            for prefix, name, body in blocks
+
+    def blocks(*parts: tuple[str, str]) -> str:
+        return "\n\n".join(
+            f"[BEGIN {name}{mark}]\n{body}\n[END {name}{mark}]"
+            for name, body in parts
             if body
+        )
+
+    # rendered in this order, so messages are numbered in it too
+    unknown_input = "The model input for this call is not available."
+    request = isinstance(step, BeforeGenerate)
+    input = "" if request else await text(step.input, unknown_input)
+    history = await text(
+        step.history, "The messages the agent has sent are not available."
+    )
+    agent_messages = await text(
+        step.agent_messages, "The agent's own message list is not available."
+    )
+    # a request's tools follow its input, so the input stays a prefix the
+    # monitor model's prompt cache can reuse from the last request
+    own = (
+        blocks(
+            ("INPUT", await text(step.input, unknown_input)),
+            ("TOOLS", _tools(step)),
+            ("TOOL CHOICE", _tool_choice(step)),
+        )
+        if isinstance(step, BeforeGenerate)
+        else await text(_step_part(step), "")
+    )
+    return (
+        blocks(
+            ("INPUT", input),
+            ("HISTORY", history),
+            ("AGENT MESSAGES", agent_messages),
+            (f"AGENT STEP - {_step_block(step)}", own),
         ),
         extract_refs,
     )
@@ -333,7 +336,18 @@ def _step_block(step: Step) -> str:
     return "MODEL REQUEST" if isinstance(step, BeforeGenerate) else "MODEL REPLY"
 
 
-def _step_part(step: Step) -> list[ChatMessage] | None:
+def _tools(step: BeforeGenerate) -> str:
+    return json.dumps([t.model_dump(exclude_none=True) for t in step.tools], indent=2)
+
+
+def _tool_choice(step: BeforeGenerate) -> str:
+    choice = step.tool_choice
+    return json.dumps(choice if isinstance(choice, str) else {"name": choice.name})
+
+
+def _step_part(
+    step: AfterGenerate | BeforeToolCall | AfterToolCall,
+) -> list[ChatMessage]:
     if isinstance(step, BeforeToolCall | AfterToolCall):
         # the message holds only this call, under the id of the one that made
         # it, so a cite of it resolves to that message
@@ -341,9 +355,6 @@ def _step_part(step: Step) -> list[ChatMessage] | None:
             id=step.message_id, content=step.message, tool_calls=[step.call]
         )
         return [call, step.result] if isinstance(step, AfterToolCall) else [call]
-    if isinstance(step, BeforeGenerate):
-        return step.input
-    assert isinstance(step, AfterGenerate)
     # a provider can return no choices: show that as an empty reply
     return [
         step.output.message if step.output.choices else ChatMessageAssistant(content="")

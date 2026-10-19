@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import replace
 
 import anyio
@@ -15,7 +16,7 @@ from inspect_ai.model import (
     ContentToolUse,
     ModelOutput,
 )
-from inspect_ai.tool import ToolCall
+from inspect_ai.tool import ToolCall, ToolFunction, ToolInfo
 from inspect_ai.util import Store
 
 from inspect_sentinel import (
@@ -215,7 +216,7 @@ async def test_an_unknown_list_is_named_and_an_empty_one_has_no_block() -> None:
         for block in (UNKNOWN_INPUT, UNKNOWN_HISTORY, UNKNOWN_AGENT_MESSAGES)
     )
     rendered = await render(all_lists([]), ALL)
-    assert "[BEGIN" not in rendered.split("[AGENT STEP")[0]
+    assert "[BEGIN" not in rendered.split("[BEGIN AGENT STEP")[0]
 
 
 def new_since(context: Context) -> StepPreprocessor[Step]:
@@ -502,17 +503,43 @@ async def test_the_step_comes_last_in_a_block_named_for_its_stage(
     step: Step, block: str, contents: list[str]
 ) -> None:
     rendered = await render(step)
-    assert rendered.endswith(f"[AGENT STEP - END {block}]")
-    step_block = rendered.split(f"[AGENT STEP - BEGIN {block}]")[1]
+    assert rendered.endswith(f"[END AGENT STEP - {block}]")
+    step_block = rendered.split(f"[BEGIN AGENT STEP - {block}]")[1]
     assert all(text in step_block for text in contents)
 
 
 @pytest.mark.anyio
-async def test_a_request_holds_the_input_in_its_step_block() -> None:
-    step = replace(before_generate_step(), input=CONVERSATION[1:], agent_messages=None)
+async def test_a_request_holds_its_input_then_its_tools() -> None:
+    tool = ToolInfo(name="bash", description="Run a command.")
+    step = replace(
+        before_generate_step(),
+        input=CONVERSATION[1:],
+        tools=[tool],
+        tool_choice=ToolFunction(name="bash"),
+    )
     rendered = await render(step)
-    assert "[BEGIN INPUT]" not in rendered
-    assert "task" in rendered.split("[AGENT STEP - BEGIN MODEL REQUEST]")[1]
+    before, request = rendered.split("[BEGIN AGENT STEP - MODEL REQUEST]\n")
+    assert "[BEGIN INPUT]" not in before
+    headers = [
+        line for line in request.splitlines() if re.match(r"\[(BEGIN|END|M)", line)
+    ]
+    assert headers == [
+        "[BEGIN INPUT]",
+        "[M1] USER:",
+        "[M2] ASSISTANT:",
+        "[M3] TOOL:",
+        "[M4] ASSISTANT:",
+        "[END INPUT]",
+        "[BEGIN TOOLS]",
+        "[END TOOLS]",
+        "[BEGIN TOOL CHOICE]",
+        "[END TOOL CHOICE]",
+        "[END AGENT STEP - MODEL REQUEST]",
+    ]
+    assert json.loads(
+        request.split("[BEGIN TOOLS]\n")[1].split("\n[END TOOLS]")[0]
+    ) == [tool.model_dump(exclude_none=True)]
+    assert '[BEGIN TOOL CHOICE]\n{"name": "bash"}\n[END TOOL CHOICE]' in request
 
 
 def thinks(text: str, id: str) -> ChatMessageAssistant:
@@ -581,7 +608,7 @@ async def test_omissions_reach_every_list_and_the_steps_own_messages(
         step, replace(preprocessor, agent_messages_window=AllMessages())
     )
     assert not any(text in rendered for text in gone)
-    step_block = rendered.split("[AGENT STEP - BEGIN")[1]
+    step_block = rendered.split("[BEGIN AGENT STEP - ")[1]
     if "thinking about" in gone:
         assert "thinking about" not in step_block
 
@@ -633,8 +660,9 @@ async def test_a_nonce_marks_every_block_and_every_message_header(
         f"[BEGIN INPUT{mark}]",
         f"[BEGIN HISTORY{mark}]",
         f"[BEGIN AGENT MESSAGES{mark}]",
+        f"[BEGIN AGENT STEP - TOOL CALL{mark}]",
     ]
-    assert f"[AGENT STEP - END TOOL CALL{mark}]" in rendered
+    assert rendered.endswith(f"[END AGENT STEP - TOOL CALL{mark}]")
     # Scout 0.5.5 and earlier write no nonce on message headers
     header = mark if scout_nonce("3f9a1c7e") else ""
     assert f"USER{header}:\ngo" in rendered
@@ -650,7 +678,7 @@ async def test_messages_are_numbered_in_block_order_and_cites_resolve() -> None:
             "[BEGIN INPUT]",
             "[BEGIN HISTORY]",
             "[BEGIN AGENT MESSAGES]",
-            "[AGENT STEP - BEGIN TOOL CALL]",
+            "[BEGIN AGENT STEP - TOOL CALL]",
         )
     ]
     assert starts == sorted(starts)
