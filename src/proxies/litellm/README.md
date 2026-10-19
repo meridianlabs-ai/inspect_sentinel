@@ -63,8 +63,8 @@ The calls and their results are described by [`proxy_endpoint.schema.json`](http
 
 When a request comes from an Inspect eval, the sidecar answers with a `sentinel` field that says what was decided, and the guardrail passes it on so that it reaches the eval on every route, streamed or not:
 
-- On a reply that goes on, the field sits beside the reply's own fields, or in the last event of a stream that the provider's SDK reads. LiteLLM drops a field it doesn't know from a Chat Completions chunk, so the guardrail sends that last chunk as written.
-- On a refusal, LiteLLM puts the field in its error, at `error.provider_specific_fields.sentinel`, beside the sentinel's message. A refused Responses stream is answered with a `response.failed` event that holds the field, which the guardrail sends in place of LiteLLM's own.
+- On a reply that goes on, the field sits beside the reply's own fields, or in the last event of a stream that the provider's SDK reads. LiteLLM drops a field it doesn't know from a Chat Completions chunk of its own class, so the guardrail sends that last chunk as an object that keeps every field.
+- On a refusal, LiteLLM puts the field in its error, at `error.provider_specific_fields.sentinel`, beside the sentinel's message. A refused Responses stream is answered with a `response.failed` event that holds the field, which the guardrail sends in place of LiteLLM's own. Its error code follows the refusal's status as LiteLLM's own would, so a client tries again only after a server error.
 
 Any other client is sent the reply, or the refusal, with no field.
 
