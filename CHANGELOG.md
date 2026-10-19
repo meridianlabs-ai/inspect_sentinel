@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.4](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.3...0.1.4) (2026-10-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* Step payloads no longer have an escalations field. Every protocol function takes a third positional parameter, escalations, annotated with the new Escalations alias (a tuple of Reported decisions), and Host.ask_human takes escalations between step and choices.
+* step.sent is renamed step.history, and the previous step.history (the agent loop's own messages) is renamed step.agent_messages, on all four step payloads. keep_history() is renamed keep_agent_messages(), and the "history" exclusion is "agent_messages".
+
+### Features
+
+* Host.score marks every block and message header in its prompt with a nonce ([#105](https://github.com/meridianlabs-ai/inspect_sentinel/issues/105)) ([8e8ff62](https://github.com/meridianlabs-ai/inspect_sentinel/commit/8e8ff62a2a1f81ef67acbbe9a50949fdbc65e48a))
+* protocols receive escalations as a third parameter, and monitors no longer see them ([#97](https://github.com/meridianlabs-ai/inspect_sentinel/issues/97)) ([dacdef3](https://github.com/meridianlabs-ai/inspect_sentinel/commit/dacdef344faf58c5e8278e016637fcffcdcef322))
+* **sidecar:** read, judge and serve model traffic beside a proxy ([#102](https://github.com/meridianlabs-ai/inspect_sentinel/issues/102)) ([68394d3](https://github.com/meridianlabs-ai/inspect_sentinel/commit/68394d3556a4cac27298401702bc11889107fa52))
+* **sidecar:** tell an Inspect eval what its sentinel decided, through a LiteLLM guardrail ([#116](https://github.com/meridianlabs-ai/inspect_sentinel/issues/116)) ([a414ebe](https://github.com/meridianlabs-ai/inspect_sentinel/commit/a414ebe9f6a9c7afbff54634f2df6bc9ec9e1dd6))
+* step.history holds every message the agent sent; the agent loop's list is step.agent_messages ([#98](https://github.com/meridianlabs-ai/inspect_sentinel/issues/98)) ([a2012bd](https://github.com/meridianlabs-ai/inspect_sentinel/commit/a2012bd54465c5911748526c167cc602822eb79b))
+* steps carry the decisions a person made through human() earlier in the conversation ([#96](https://github.com/meridianlabs-ai/inspect_sentinel/issues/96)) ([b5a51e8](https://github.com/meridianlabs-ai/inspect_sentinel/commit/b5a51e8fad9232ae0f7466ddef1c474899163608))
+
+
+### Miscellaneous
+
+* release 0.1.4 instead of 0.2.0 ([#118](https://github.com/meridianlabs-ai/inspect_sentinel/issues/118)) ([44ebb6f](https://github.com/meridianlabs-ai/inspect_sentinel/commit/44ebb6fac08ab6871bb82a702a92e7af50064114))
+
 ## [0.1.3](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.2...0.1.3) (2026-10-15)
 
 
