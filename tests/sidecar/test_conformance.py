@@ -4,8 +4,6 @@ Each test runs a real Inspect eval twice against a stand-in provider. Once with 
 """
 
 import asyncio
-import importlib
-import inspect
 import json
 import threading
 import time
@@ -315,23 +313,6 @@ def _keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "stand-in")
 
 
-def _inspect_ai_sends_agent_messages() -> bool:
-    # Whether the inspect-ai installed builds steps with `agent_messages`,
-    # the field these steps renamed. Its version can't tell: the release
-    # without the rename and inspect-ai's `main` with it share one. Remove
-    # this, and the mark below, once the pinned inspect-ai has the rename.
-    try:
-        dispatch = importlib.import_module("inspect_ai._sentinel._dispatch")
-        return "agent_messages" in inspect.getsource(dispatch)
-    except (ImportError, OSError):
-        return False
-
-
-@pytest.mark.xfail(
-    not _inspect_ai_sends_agent_messages(),
-    reason="the inspect-ai installed builds steps without agent_messages",
-    strict=False,
-)
 @pytest.mark.parametrize("name", _APIS)
 @pytest.mark.parametrize("action", ["reject", "modify"])
 def test_the_model_is_sent_what_inspect_sends_in_its_own_process(
