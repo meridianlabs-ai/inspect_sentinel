@@ -132,6 +132,62 @@ async def test_a_stream_event_is_read_only_if_the_sdk_dispatches_it(
     ]
 
 
+_LATE_INPUT: dict[str, Any] = {
+    "type": "content_block_delta",
+    "index": 0,
+    "delta": {"type": "input_json_delta", "partial_json": '{"location": "Atlantis"}'},
+}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("late", "says"),
+    [
+        ([_LATE_INPUT], "changes a block after it stopped"),
+        (
+            [
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": weather("Atlantis"),
+                }
+            ],
+            "changes a block after it stopped",
+        ),
+        ([], "goes on after its message stopped"),
+    ],
+    ids=[
+        "an input delta after the block stopped",
+        "the block started again",
+        "after the message stopped",
+    ],
+)
+async def test_a_stream_that_changes_what_the_sdk_gave_as_done_is_refused(
+    late: list[dict[str, Any]], says: str
+) -> None:
+    # The SDK gives a client the block as it is at its stop, with Paris, so a
+    # client may run that call while the sidecar would judge the call as the
+    # stream leaves it.
+    stop = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "tool_use"},
+        "usage": {"output_tokens": 1},
+    }
+    start = {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": weather("Paris"),
+    }
+    block = [start, {"type": "content_block_stop", "index": 0}]
+    if late:
+        events = [_START, *block, *late, stop, {"type": "message_stop"}]
+    else:
+        events = [_START, *block, stop, {"type": "message_stop"}, _LATE_INPUT]
+
+    with pytest.raises(UnreadableError, match=says):
+        await read_reply("anthropic", STREAM, _stream(*events))
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("content_type", "body", "says"),
