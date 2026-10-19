@@ -105,7 +105,7 @@ Repository: `inspect_sentinel`, the sidecar and the core package. Depends on: PR
 Repository: `inspect_sentinel`. Depends on: PR 5.
 
 - `GET /sentinel/info`, and JSON-RPC 2.0 at `POST /sentinel/v1`: `register_task`, `request_result`, `run_result` and `end_run` (section 9).
-- Task registration: on unless `--no-runtime-task-registration`, replacing the last unless the task is in the tasks folder, `expiry` capped by `--task-expiry`, a run taking its sample's facts at its first request, and `context.eval` from them.
+- Task registration: on unless `--no-runtime-task-registration`, replacing the last unless the task is in the tasks folder, where it is answered as already registered, with `fixed` true, and nothing is stored, `expiry` capped by `--task-expiry`, a run taking its sample's facts at its first request, and `context.eval` from them.
 - The tasks folder, of tasks files each with a `tasks` list, named by `tasks_folder` or `--tasks-folder` (section 9). Producing the files is asked of the workstream that builds `RemoteSentinel`.
 - `--run-expiry`, dropping registrations Inspect made once their `expiry` passes, and `request_result` answering `dropped` for a while after a request's records go.
 - The configuration file: the `sentinel` stanza, a `server` stanza of the sidecar's settings, and `tasks_folder` (section 10).
@@ -127,7 +127,7 @@ Repository: `inspect_sentinel`. Depends on: PRs 2 and 5.
 
 Repository: `inspect_ai`. Depends on: PRs 5 and 6, and PR 7 for per-call rejection and `modify`.
 
-- The probe, `register_task` and the `required` or `optional` setting at task init (section 9).
+- The probe, `register_task` and the `required` or `optional` setting at task init (section 9). An answer with `fixed` true, for a task in the tasks folder, is a success.
 - `x-inspect-context` and `x-irid` on each model request, only after the probe found a sentinel.
 - Reading the `sentinel` field in each provider: on a reply, in the last event of a stream, and on an error, including where LiteLLM nests it (section 1).
 - Acting on the field as Inspect does in process: a call taken out goes back into Inspect's conversation with an approval error, a changed call keeps the model's original, a `terminate` ends the sample, and every step is written into the transcript.
