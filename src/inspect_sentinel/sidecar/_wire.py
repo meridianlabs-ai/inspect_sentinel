@@ -209,8 +209,8 @@ class Amendment:
     """The model's own call: a content block for Anthropic, an entry of `tool_calls` for Chat Completions, an input item for Responses."""
     result: tuple[Any, ...] = ()
     """For a call taken out, its rejection: a `tool_result` block, a tool message, or an output item, and for a Responses computer call the message that says why. Empty for a changed call."""
-    after: object = None
-    """What came just before the call in the model's turn, as `block_key` names it, or None if the call came first. A call taken out goes back right after it, so that it parts what it parted: Anthropic takes thinking blocks that were apart as they came, and not run together."""
+    after: tuple[object, int] | None = None
+    """What came just before the call in the model's turn, as `block_key` names it, with how many blocks of that name came before it, or None if the call came first. A call taken out goes back right after it, so that it parts what it parted: Anthropic takes thinking blocks that were apart as they came, and not run together. A turn can say the same text twice, so the count tells which one."""
 
 
 @dataclass(frozen=True)
@@ -280,7 +280,10 @@ async def amendments(
             (i for i, element in enumerate(elements) if api.call_of(element)[0] == id),
             0,
         )
-        after = block_key(api, elements[place - 1]) if place > 0 else None
+        after = None
+        if place > 0:
+            keys = [block_key(api, element) for element in elements[:place]]
+            after = (keys[-1], keys[:-1].count(keys[-1]))
         written[id] = Amendment(call, result if id in taken_out else (), after)
     return written
 
@@ -296,8 +299,11 @@ def block_key(api: _Api, element: object) -> object:
             value = block.get(name)
             if isinstance(value, str) and value:
                 return (name, value)
+        # a field left empty is written as null by one writer and left out by
+        # another, as inspect_ai writes a text block's `citations`
         return json.dumps(
-            {k: v for k, v in block.items() if k != "cache_control"}, sort_keys=True
+            {k: v for k, v in block.items() if k != "cache_control" and v is not None},
+            sort_keys=True,
         )
     return json.dumps(element, sort_keys=True, default=str)
 
@@ -530,14 +536,9 @@ def _after(api: _Api, placed: list[Any], amendment: Amendment) -> int | None:
     # may leave out an earlier turn's thinking
     if amendment.after is None:
         return 0
-    return next(
-        (
-            i + 1
-            for i, element in enumerate(placed)
-            if block_key(api, element) == amendment.after
-        ),
-        None,
-    )
+    key, before = amendment.after
+    found = [i for i, element in enumerate(placed) if block_key(api, element) == key]
+    return found[before] + 1 if before < len(found) else None
 
 
 def _inserted(

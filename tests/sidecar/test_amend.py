@@ -392,8 +392,8 @@ async def _interleaved() -> tuple[Edited, list[dict[str, Any]]]:
     return edited, [first, second, paris]
 
 
-def _anthropic_request(content: list[dict[str, Any]]) -> bytes:
-    told = {"type": "tool_result", "tool_use_id": "toolu_2", "content": "Sunny."}
+def _anthropic_request(content: list[dict[str, Any]], ran: str = "toolu_2") -> bytes:
+    told = {"type": "tool_result", "tool_use_id": ran, "content": "Sunny."}
     return json.dumps(
         {
             "model": "m",
@@ -409,7 +409,7 @@ def _anthropic_request(content: list[dict[str, Any]]) -> bytes:
 
 def _blocks(body: bytes) -> list[str]:
     return [
-        block.get("signature") or block["id"]
+        block.get("signature") or block.get("id") or block["text"]
         for block in json.loads(body)["messages"][1]["content"]
     ]
 
@@ -438,3 +438,61 @@ async def test_a_call_goes_back_before_the_next_if_its_thinking_was_left_out() -
 
     assert amended.body is not None
     assert _blocks(amended.body) == ["toolu_1", "toolu_2"]
+
+
+async def _edited(blocks: list[dict[str, Any]], taken_out: dict[str, str]) -> Edited:
+    output, noted = await read_reply_noted("anthropic", JSON, message(*blocks))
+    calls = [block["id"] for block in blocks if block["type"] == "tool_use"]
+    return Edited(
+        sent=1,
+        mark="m",
+        order=tuple(calls),
+        taken_out=taken_out,
+        originals={},
+        modified={},
+        amendments=await amendments(
+            "anthropic-messages", output.message, taken_out, (), noted
+        ),
+    )
+
+
+@pytest.mark.anyio
+async def test_a_call_goes_back_after_text_the_client_holds_without_empty_fields() -> (
+    None
+):
+    # inspect_ai writes a text block's `citations` as null, which a client
+    # leaves out
+    text = {"type": "text", "text": "Let me look."}
+    thinking = _thinking("Now Paris.", "sig_2")
+    paris = weather("Paris", "toolu_2")
+    edited = await _edited(
+        [text, weather("Tokyo", "toolu_1"), thinking, paris],
+        {"toolu_1": "Not Tokyo."},
+    )
+
+    amended = await amend_request(
+        "anthropic", _anthropic_request([text, thinking, paris]), edited=[edited]
+    )
+
+    assert amended.body is not None
+    assert _blocks(amended.body) == ["Let me look.", "toolu_1", "sig_2", "toolu_2"]
+
+
+@pytest.mark.anyio
+async def test_a_call_goes_back_after_the_same_text_it_followed_when_said_twice() -> (
+    None
+):
+    text = {"type": "text", "text": "Checking."}
+    tokyo = weather("Tokyo", "toolu_1")
+    edited = await _edited(
+        [text, tokyo, text, weather("Paris", "toolu_2")], {"toolu_2": "Not Paris."}
+    )
+
+    amended = await amend_request(
+        "anthropic",
+        _anthropic_request([text, tokyo, text], ran="toolu_1"),
+        edited=[edited],
+    )
+
+    assert amended.body is not None
+    assert _blocks(amended.body) == ["Checking.", "toolu_1", "Checking.", "toolu_2"]
