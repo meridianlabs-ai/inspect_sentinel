@@ -72,7 +72,7 @@ A request or a reply reaches the sidecar from a proxy. The handler works out wha
 
 - **A proxy hook** is what a proxy runs, where the proxy can load code. It turns what that proxy hands over into the sidecar's messages, sends them, and carries out the answer in that proxy's terms. It knows nothing about sentinels or about model providers. Each proxy hook is a small package of its own, under `src/proxies`. LiteLLM's is `LiteLLMGuardrail`. Middleman's is `MiddlemanHook`, which needs Middleman to have a passthrough hook (below).
 - **The endpoint for proxies** is the same for every proxy hook. A proxy hook puts each request and each reply to it, and is answered with pass, replace or refuse. The endpoint for proxies uses JSON-RPC 2.0, at `POST /proxy/v1`, with the methods `judge_request` and `judge_reply`. JSON-RPC was chosen to be consistent with the endpoint for evals. The methods and their results are described by `proxy_endpoint.schema.json`, which is written from the endpoint's own models and kept beside it. A proxy hook is tested against that file.
-- **A shim** is for a proxy that can run no code of ours, such as Envoy. It speaks that proxy's own protocol, inside the sidecar. Its dependencies are an optional extra, so only a deployment behind that proxy installs them. No shim is built yet.
+- **A shim** is for a proxy that can run no code of ours, such as Envoy. It speaks that proxy's own protocol, inside the sidecar. Its dependencies are an optional extra, so only a deployment behind that proxy installs them. The Envoy shim is planned in [PR 11](sidecar-plan.md#pr-11-the-envoy-shim); no shim is built yet.
 - **The handler** is the same for every proxy. The endpoint for proxies, or a shim, gives the handler a `Request` or a `Reply`, and the handler returns one of three answers: `Pass`, `Replace` or `Refuse`. The answer says what was decided. It does not say how the proxy should carry that out, because that is the proxy hook's job, or the shim's. A `Refuse` holds what the client is told: the status, the message, the response headers and, for an Inspect client, the `sentinel` field (section 9). The proxy hook puts all of them into the error it sends the client, in the proxy's own form, and does not read them on the way. The `sentinel` field on a generate reply that goes through is put in by the handler, because a proxy hook knows nothing of provider formats and cannot put it in itself. So for an Inspect client the handler never answers a reply with `Pass`: it answers with `Replace`, whose body is the reply with the field added.
 - **The sentinel runner** is the core package's `run_sentinel` function, unchanged. It runs in the sidecar's process. Only steps and decisions pass between the handler and the runner, as plain data, so the runner can be moved to a process of its own later. Reasons to move it would be throughput, keeping a sentinel that fails away from the traffic, or running beside a proxy that is not written in Python.
 
@@ -108,9 +108,12 @@ With each request, the proxy hook tells the sidecar the provider, the model's pu
 - **LiteLLM's notes on the caller are not sent.** LiteLLM keeps the hash of the caller's key and every request header in the same dictionary as the request. The guardrail sends the sidecar only the fields of the request itself, and only the headers that name the run or that the operator has listed. It never sends a credential header.
 - **Which requests are judged is LiteLLM's own setting.** `default_on` judges every request. Without it, LiteLLM calls the guardrail only for a request or a key that names it.
 - **A sidecar that gives no usable answer is judged by LiteLLM's own setting for a guardrail**, `unreachable_fallback`. `fail_closed` refuses the call and `fail_open` lets it through. There is no time limit on the sidecar's answer unless the operator sets one.
-- **LiteLLM writes the error a caller is sent**, so its form is LiteLLM's and differs by route (**measured**, LiteLLM 1.105). A refusal has the sentinel's message and status on every route but one: a streamed `/responses` reply is answered with status 200 and a `response.failed` event that holds the message. With LiteLLM 1.83, a refused streamed reply is answered with a 500 that does not hold the message (**measured**). The `sentinel` field (section 9) reaches the caller on every route, on replies and on refusals, streamed and not (**measured**, LiteLLM 1.105). Three cases need the guardrail to do more than hand LiteLLM an object:
-  - **A streamed `/chat/completions` reply.** LiteLLM writes stream chunks in a way that drops a field added to a chunk, so the guardrail writes the last chunk itself, as `data: {...}`, which LiteLLM sends on as it is.
-  - **A streamed `/responses` refusal.** LiteLLM answers it with status 200 and a `response.failed` event, and writes the guardrail's error into that event as text, so the guardrail sends its own `response.failed` event with the field, instead of raising an error.
+- **A request with an `extra_body` field is refused**, whatever `unreachable_fallback` says. LiteLLM has the provider's SDK merge that field over the request's other fields after the guardrail has run, so what the sidecar judged would not be what the provider is sent. A provider's SDK merges its own `extra_body` before sending, so a client calling through one, Inspect included, never sends the field.
+- **The guardrail gives each exchange an id of its own.** It does not use LiteLLM's id for the call, which a caller can set with `x-litellm-call-id`, so two requests in flight never share the sidecar's record of a request.
+- **LiteLLM writes the error a caller is sent**, so its form is LiteLLM's (**measured**, LiteLLM 1.83 and 1.105). A refusal has the sentinel's message and status, as JSON, on every route but one: a streamed `/responses` reply is answered with status 200 and a `response.failed` event that holds the message. The `sentinel` field (section 9) reaches the caller on every route, on replies and on refusals, streamed and not (**measured**, LiteLLM 1.83 and 1.105, read with the provider SDKs). With LiteLLM 1.83 there is one exception: on `/v1/messages`, a refused reply that isn't streamed holds no field, and Inspect asks the sidecar instead (section 9, "When the field is missing"). Four cases need the guardrail to do more than hand LiteLLM an object:
+  - **A streamed `/chat/completions` reply.** LiteLLM writes a chunk of its own class without a field the class doesn't have, so the guardrail hands it the last chunk, the one with the field, as an object that keeps every field. Every LiteLLM version writes such an object as `data:` and its JSON, and gives it the model name the caller asked for, as on its own chunks. Bytes are passed on as they are only by later versions, and 1.83 would send them as unreadable text.
+  - **A streamed `/chat/completions` or `/v1/messages` refusal.** An error the guardrail raises in a stream reaches the caller as a 500 without the field in LiteLLM 1.83, and in 1.105 as an error written as a stream, which the provider SDKs keep only as text. Every version instead answers a stream whose first event is an error with that error alone, as JSON, under the status the event names. So the guardrail answers a refused stream with one error event in place of the reply.
+  - **A streamed `/responses` refusal.** LiteLLM answers it with status 200 and a `response.failed` event, and writes the guardrail's error into that event as text, so the guardrail sends its own `response.failed` event with the field, instead of raising an error. Its error code follows the refusal's status as LiteLLM's own event would, so that a client such as Inspect tries again only after a server error.
   - **A refusal that is not streamed.** LiteLLM keeps the field, but puts it inside the error, at `error.provider_specific_fields.sentinel`. Inspect looks for it there as well as at the top of the body.
 - **A replaced reply is handed back in LiteLLM's own classes**, because LiteLLM goes on to read its own notes from the reply.
 
@@ -177,7 +180,7 @@ The two model stages are judged within one client request and its response. Each
 
 **Every client's tool-call steps are found the same way.** The sidecar builds `BeforeToolCall` from the calls in the reply it holds, and `AfterToolCall` from the tool results in the next request, whether the client is an Inspect eval or a naked agent. This has been run against real traffic (**measured**). A tool result that no later request carries is never judged. The model never sees that result either, so there is nothing for `AfterToolCall` to stop.
 
-**What a step contains.** Every step is built from the request and the reply the proxy hands over. A step's `input` is the list of messages the model was sent, including any rejected turns the sidecar adds (section 4). A step's `history` is None, because it is the scaffold's own list, which a proxy never sees (section 8). A tool-call step's `view` is the one Inspect would make, as section 8 describes. `AfterToolCall.output` is left empty, because the request carries only the result the model is sent.
+**What a step contains.** Every step is built from the request and the reply the proxy hands over. A step's `input` is the list of messages the model was sent, including any rejected turns the sidecar adds (section 4). A step's `agent_messages` is None, because it is the scaffold's own list, which a proxy never sees (section 8). A tool-call step's `view` is the one Inspect would make, as section 8 describes. `AfterToolCall.output` is left empty, because the request carries only the result the model is sent.
 
 **A tool that the provider runs gets no `BeforeToolCall` step.** Web search, code interpreter and file search are examples. The provider has already run such a tool by the time the reply reaches the proxy, so a `BeforeToolCall` step would offer the sentinel a choice that no longer exists. The sidecar recognises these tools by name. Monitors can still see them in the model's output, which is where Inspect puts them. The one place to stop a tool that the provider runs is the request, before the model is called. A protocol narrows the list of tools offered at the `BeforeGenerate` stage, and the sidecar removes that one tool's definition from the request and leaves the rest of the request alone. A provider accepts a request whose history used a tool that the request no longer offers (**measured**, Anthropic). The narrowing depends on the generate stages and is not built. Not yet checked: OpenAI's provider-run tools; tools reached through a provider-side MCP connector; and a request whose `tool_choice` names the tool being removed.
 
@@ -267,7 +270,7 @@ Neither `modify` nor `reject` is legal after a tool call has run, so the sidecar
 
 ## 5. Holding a turn
 
-A sentinel decides with the whole turn in front of it. Nothing from a reply can reach the client until the decision is made, so something has to hold the reply in the meantime. What holds it depends on the proxy.
+The initial implementation gives a sentinel the whole turn before releasing any of it to the client. Something has to hold the reply in the meantime, and what holds it depends on the proxy. [PR 12](sidecar-plan.md#pr-12-incremental-streaming) adds incremental release for policies that can decide on completed tool calls with the response so far; policies that need the whole response keep it held. That distinction must be explicit, because a call judged before the turn ends cannot be given assistant text that has not arrived yet.
 
 - **Middleman holds the reply itself.** When the sidecar has answered, Middleman passes on the provider's bytes, or the replacement, or an error with a real HTTP status. Middleman holds back the provider's keepalives as well, so during a long generation the client hears nothing until the reply is finished. Middleman decompresses the provider's reply itself and sends replies to its clients uncompressed, so the sidecar handles no compression behind Middleman (**measured**).
 - **Envoy does not hold the reply, so the sidecar does.** Envoy hands over chunks as the provider sends them. Envoy's `ext_proc` filter has four modes for a response body, and only the last of them works for holding a turn:
@@ -286,9 +289,9 @@ A sentinel decides with the whole turn in front of it. Nothing from a reply can 
   - Nothing was released, and then the turn is refused. The SDK raises a typed API error, with the status and the error body the sidecar chose.
   - Some bytes were released, and then the turn is refused. The SDK sees a stream that was cut off.
   - Some content was released, and then an error event is sent inside the stream. The SDK raises a typed API error, although the HTTP status was 200.
-- **A long hold can lose the connection.** While a turn is held, the client is sent nothing. Something between the client and the proxy, such as a load balancer, may close a connection that has been silent for too long, whatever the proxy's own wait is set to. So a decision that takes hours, as when a person is asked, cannot be delivered by holding one request open. It needs another way to reach the client, such as the bullet below, or a refusal the client comes back from. Not designed.
-- **Keeping the connection alive while holding.** Middleman could do this alone, with no change to the sidecar. Middleman would send the success status and its keepalives at once, hold all of the content, and deliver a refusal as an error event inside the stream. The client would no longer wait in silence, but a refusal would no longer have a real HTTP status. Not built.
-- **Releasing part of a turn early.** This means passing on text as the model writes it, while still holding the tool calls. It worked with the earlier Envoy processor: the sentinel's decisions were still enforced. It has two costs. The status line has already been sent, so a refusal cannot have a real status. And when the rest of the turn is refused, the agent is left with half a turn that it cannot act on. Behind Envoy, releasing early needs work in the shim and the handler only, because Envoy already hands over chunks and accepts an answer at any time. Behind Middleman, it also needs Middleman to hand over chunks, which is a larger change to Middleman. The sentinel is the same in both cases, because it judges complete steps. Not built. The Envoy shim is to hold everything at first.
+- **A long hold can lose the connection.** While a turn is held, the client is sent nothing. Something between the client and the proxy, such as a load balancer, may close a connection that has been silent for too long, whatever the proxy's own wait is set to. Keepalives address idle deadlines, but only on a streaming reply: a request held before the provider is called, as for an `AfterToolCall` question, and a non-streaming reply have nothing to carry them. A client's total request deadline can also end a long review. So in [PR 13](sidecar-plan.md#pr-13-human-review) a question outlives the exchange that raised it: after a bounded wait the client is refused with a retryable error, and a retry of the same request finds the question still pending or answered. PR 13 also defines question expiry and what happens to a pending review when its client disconnects.
+- **Keeping the connection alive while holding.** Middleman could do this alone, with no change to the sidecar. Middleman would send the success status and its keepalives at once, hold all of the content, and deliver a refusal as an error event inside the stream. The client would no longer wait in silence, but a refusal would no longer have a real HTTP status. Provider-compatible keepalives during incremental holds are part of [PR 12](sidecar-plan.md#pr-12-incremental-streaming). Not built.
+- **Releasing part of a turn early.** This means passing on text as the model writes it, while still holding the tool calls. It worked with the earlier Envoy processor: the sentinel's decisions were still enforced. It has two costs. The status line has already been sent, so a refusal cannot have a real status. And released content cannot be recalled if a later decision refuses the rest of the turn. [PR 12](sidecar-plan.md#pr-12-incremental-streaming) adds the incremental handler and transport, first through Envoy and LiteLLM, preserving call edits, later-request amendments and Inspect's records. It must establish eligibility, the context of a call judged before the turn ends, and the completion boundary for each provider format. Sentinels still judge complete steps; a policy watching `AfterGenerate` keeps whole-response holding. Behind Envoy the shim already receives chunks. LiteLLM needs its guardrail to hand them over as they arrive. Middleman also needs a change to hand over chunks, which follows its initial integration and does not block the other proxies. Not built. The Envoy shim in PR 11 is to hold everything at first.
 - **Compressed bodies.** This applies to a proxy that hands over the provider's bytes as they came, as Envoy does. The sidecar decodes a reply by its `Content-Encoding` in order to read it. A reply that passes is sent on as the provider's original bytes. A reply that is replaced is sent in an encoding the client accepts, with headers that match the bytes sent. The Envoy shim is to start by asking the provider for an uncompressed reply.
 
 ## 6. Providers that keep the conversation
@@ -339,7 +342,8 @@ The table lists what a sentinel is given when it runs inside an eval's process, 
 | Given in an eval's process | In the sidecar |
 |---|---|
 | `step.call`, `message`, `input` | read from the request and the reply |
-| `step.history` | None: it is the scaffold's own list, which a proxy never sees |
+| `step.agent_messages` | None: it is the scaffold's own list, which a proxy never sees |
+| `step.history` | None until the sidecar fills it from the conversations it keeps (below) |
 | `step.conversation` | the run's key, with the conversation told apart by how it opens (section 7) |
 | `step.view` | the view Inspect would make: the tool's own viewer where the sidecar has it, otherwise inspect_ai's default view (section 9) |
 | `AfterToolCall.output`, the tool's return value before truncation | left empty, because the request carries only the result the model is sent |
@@ -356,9 +360,9 @@ The table lists what a sentinel is given when it runs inside an eval's process, 
 
 **`AfterToolCall.output` is left empty.** Inspect truncates a long tool output before the model is sent it, and only the truncated version is in the model traffic. If the sidecar put the truncated version in `output`, a monitor could read it and believe it was the whole output. Left empty, no monitor makes that mistake. A monitor works from `result`.
 
-**The history is None.** In an eval's process, a step's `history` is the scaffold's own list, which the core defines as unknown behind a proxy. What the sidecar could rebuild from the traffic, the turns each request carried, is what the model was sent, and not the scaffold's list. The core is adding `step.sent` for that: every message an agent instance has sent to the model, in order. Once it has, the sidecar keeps each conversation as requests arrive and fills `step.sent` from it, with the turns a later request no longer carries after a compaction.
+**The agent's messages are None.** In an eval's process, a step's `agent_messages` is the scaffold's own list, which the core defines as unknown behind a proxy. What the sidecar could rebuild from the traffic, the turns each request carried, is what the model was sent, and not the scaffold's list. The core's `step.history` is that: every message an agent instance has sent to the model, in order (R10, sentinel #98; `agent_messages` was named `history` before 0.2.0). The sidecar can keep each conversation as requests arrive and fill `step.history` from it, with the turns a later request no longer carries after a compaction.
 
-**A person who answers.** In an eval, `human()` asks a person through Inspect's approval UI and waits for the answer. The sidecar does the same for an Inspect client. It holds the turn and keeps the open question in the run's state. `RemoteSentinel` picks the question up and shows it in the same approval UI. The person's answer goes back to the sidecar on a credential of the person's own, never on the eval's (section 9, "A client that can't be trusted"), and the sidecar then decides. At the generate stages, Inspect has no way to show a person a whole request or reply, and asking one fails the step there. The sidecar does the same. Where no person can be asked, as for a naked agent, or for any client until asking is built, the step fails closed: the answer is `reject` where that is offered, and `terminate` otherwise, as Inspect's own host answers when nobody can. An escalation never lets a call through without someone deciding. A deployment that wants unattended escalations to go on says so in its sentinel, with `handle_escalation("proceed")` after `human()`. A hold that lasts hours may lose its connection (section 5). How `RemoteSentinel` learns of an open question is not designed.
+**A person who answers.** In an eval, `human()` asks a person through Inspect's approval UI and waits for the answer. [PR 13](sidecar-plan.md#pr-13-human-review), after Envoy and incremental streaming, adds the corresponding sidecar host. It holds the step and publishes a question to a review queue. `RemoteSentinel` discovers the question while its model exchange is waiting and shows it in the same approval UI; an external review tool can consume the queue for an agent running without an eval. The person's answer goes back to the sidecar on a credential of the person's own, never on the agent's or eval's (section 9, "A client that can't be trusted"), and returns to the sentinel runner as a `HumanAnswer`. Queue discovery, answers, expiry, cancellation and records are part of PR 13. It starts with the tool stages: at the generate stages, Inspect still needs a way to show a person a whole request or reply, and asking one fails the step until that rendering is supported. Where no person can be asked, including for any client until review is built and configured, the step fails closed: the answer is `reject` where that is offered, and `terminate` otherwise, as Inspect's own host answers when nobody can. An escalation never lets a call through without someone deciding. A deployment that wants unattended escalations to go on says so in its sentinel, with `handle_escalation("proceed")` after `human()`. A long hold can still lose its connection (section 5).
 
 **A monitor's model calls in a gated deployment.** Some proxies are gateways: they sign callers in and decide which models each caller may use. Middleman is one. Behind a gateway, a monitor's own model calls belong behind the gateway too. The case that makes this matter is an unreleased model under evaluation. Its output is in every step a monitor reads, so a monitor that asked another lab's model for a judgement would be sending that output to the other lab. Most of what is needed is network and access control that such a deployment already has:
 
@@ -366,6 +370,27 @@ The table lists what a sentinel is given when it runs inside an eval's process, 
 - **The gateway's access control decides which monitor models the sidecar can reach.** The sidecar's identity is granted only the models approved for the model under evaluation. That grant is what keeps the model's output inside its lab, and the gateway enforces it.
 - **The sidecar's own calls are not handed back to the sidecar to judge.** Otherwise a monitor's model call would come back to the sidecar that made it. The gateway exempts the calls by the sidecar's signed-in identity, and not by a header the sidecar sets.
 - **A monitor's model is chosen by the model being watched.** The proxy names the model being watched with each request, so one sidecar can serve models from more than one lab.
+
+### Human review: questions for PR 13
+
+[PR 13](sidecar-plan.md#pr-13-human-review) must settle the following before implementing its review contract and surfaces. The surface must show how long a question has been pending; the clock, ordering and grouping need definition.
+
+Some boundaries are already decided. A person's answer uses their own credential, never the agent's or eval's. Before a tool call, `human()` offers `approve`, `reject` and `terminate` by default, with `modify` optional. `reject` applies to that call: other approved calls in the turn can proceed, and the reply is refused whole when every call is rejected or it cannot be edited safely (section 4). `terminate` ends the run, including other calls still held; it cannot undo calls already released. Showing several calls together does not change these semantics. A person's approval is also one protocol's decision, and another protocol can still refuse the call under the configured composition.
+
+A question can be unconditional, or follow an automated assessment. Earlier links' `step.escalations` carry their decisions, and `threshold` includes the monitor observations in its decision metadata. Scores and explanations can therefore accompany a question; how they are presented is still to be decided. An unconditional question need not have an automated assessment.
+
+1. **Reviewer identity and authority.** How is the reviewer authenticated, and how is that person's identity distinguished from the review service delivering their answer? Which runs, questions and actions may they access, how is delegation handled, and what identity evidence is retained? An identity asserted in an answer body alone is not proof of who answered.
+2. **Context beyond the call.** What must be shown by default, and what can the reviewer expand or request: the task or user objective, assistant text and available reasoning, recent messages and tool results, sibling calls, earlier decisions, and relevant environment facts such as the working directory? How are registered task facts distinguished from agent-controlled text and proxy labels? How are unavailable, truncated or compacted context and the absence of a scaffold history made visible, without inventing facts the proxy cannot know?
+3. **Automated assessment.** Does the reviewer see a recommendation, scores by monitor or dimension, commentary, evidence references, or all of these? How are the source, model or monitor version, score meaning and disagreements shown? Missing or failed assessments must be distinguishable from a low score, and the agent's own explanation must be distinguishable from a monitor's judgement. Can an assessment arriving later change the display or invalidate an answer already given?
+4. **Grouping and arrival.** Are calls shown individually, grouped by model turn, or grouped by run and conversation? Can the person inspect sibling calls together before deciding, including their combined effect? Must the entire turn arrive before review begins, or can a group grow as calls complete? How are an incomplete group and siblings already released made visible? A mode that needs a complete turn must account for PR 12's early-release eligibility and may need the `AfterGenerate` stage and its rendering.
+5. **Decision scope and dependent calls.** Which explicit operations are needed beyond a per-call answer: approve selected calls, reject all remaining calls, or a decision on the whole turn? How are calls that depend on each other handled when one is rejected? What holding and stage/action changes would an atomic whole-turn mode require? A rejection of one call must not silently become rejection of its siblings, and a turn-wide operation must be distinguished from terminating the run. The surface must make the target and scope of each button clear.
+6. **Pending age and queue order.** Is age measured from the original escalation, the question becoming ready for review, or assignment to a person? Do retries retain that original age? Are questions listed oldest first, by assessed risk or urgency, or grouped by run, with what tie-breaker? What sorting and filtering can the reviewer choose, how is starvation avoided, and how does the list remain stable while someone is deciding?
+7. **What an answer authorises.** How is an answer bound to the exact call arguments, context and assessment the person saw? Which changes require fresh review, including an edited call, new sibling calls or a refreshed assessment? How are single-call, selected-call and whole-turn answers represented so that an approval cannot silently cover calls that arrived later?
+8. **Ownership, delivery and lifetime.** How does a surface discover or subscribe to questions while a model exchange is waiting, and may several people view or claim the same question? Is one answer enough, or can a policy require more than one reviewer? How are conflicting answers, reassignment, expiry, retries, disconnects, restart and a run ending during review handled? The existing rule that no missing answer implicitly approves a call still applies.
+9. **Reasons and disclosure.** When is a reason required, on approval as well as rejection or termination? Which parts stay in the review record, and which explicit message is sent to the agent? How are private monitor commentary and sensitive context kept separate from that agent-facing message and from records returned to an untrusted client?
+10. **Audit completeness and durability.** What must be retained to reconstruct the review: the context and assessment actually presented, question and call ids, permitted choices, timestamps, authenticated reviewer, answer, reason and final sentinel decision? Must an answer be durably recorded before a call is released, and what happens if recording fails? What retention and protection from later alteration are required? Record the person's answer and the effective decision separately: approval can still be overridden, and a proxy releasing a call does not prove the tool executed.
+
+The resolved contract needs acceptance cases for grouped calls with mixed answers, a call arriving after a group was shown, termination after earlier release, a changed review context, late or conflicting assessments and answers, queue ordering and age, and missing or failed audit writes. Those cases belong to PR 13 alongside its transport and access-control tests.
 
 ## 9. A connection between an eval and its sentinel
 
@@ -395,8 +420,8 @@ If the answer is not this, or no answer comes, Inspect runs the task with no sen
 
 A sentinel in the sidecar is given the sample's details as `context.eval` only when the sample's task has been registered. A task reaches the sidecar in one of two ways.
 
-- **Registered beforehand, by an admin, in the tasks folder.** Before the eval runs, the eval's tasks and their samples are put in a file, and the sidecar reads it at startup. Every task in the file is fixed: nothing can replace it, including Inspect's registration at task init. This is the case for secure environments. The admin can also install the task's package beside the sentinel, so that the sidecar has the task's own tool viewers ("Tool views" below). "The tasks folder" below describes it.
-- **Registered by Inspect at task init.** This is on unless a deployment turns it off, with `--no-runtime-task-registration`. A sidecar where it is off refuses Inspect's registration ("The methods" below). Before the task's first sample starts, Inspect sends the task's facts and every sample's input and metadata.
+- **Registered beforehand, by an admin, in the tasks folder.** Before the eval runs, the eval's tasks and their samples are put in a file, and the sidecar reads it at startup. Every task in the file is fixed: nothing can replace it, including Inspect's registration at task init. Inspect still registers the task as usual, and the sidecar answers that the task is already registered, without storing anything ("The methods" below). This is the case for secure environments. The admin can also install the task's package beside the sentinel, so that the sidecar has the task's own tool viewers ("Tool views" below). "The tasks folder" below describes it.
+- **Registered by Inspect at task init.** This is on unless a deployment turns it off, with `--no-runtime-task-registration`. A sidecar where it is off refuses Inspect's registration of a task that is not in the tasks folder ("The methods" below). Before the task's first sample starts, Inspect sends the task's facts and every sample's input and metadata.
 
 ```json
 {
@@ -457,7 +482,7 @@ An admin registers tasks beforehand in the tasks folder. It holds what Inspect i
 
 ### When registration fails
 
-Registration at task init can fail because the endpoint for evals is down, cannot be reached, or answers with an error. Inspect has a setting for what it does then:
+Registration at task init can fail because the endpoint for evals is down, cannot be reached, or answers with an error. The sidecar answers with an error when runtime registration is off and the task is not in the tasks folder. Registering a task that is in the tasks folder is not a failure. Inspect has a setting for what it does when registration fails:
 
 - **`required`, the default.** The task does not start. Inspect records the failure as the error. This is the setting for an eval whose sentinel needs the samples' inputs or metadata.
 - **`optional`.** Inspect logs a warning, writes into each sample's transcript that its sentinel runs without the sample's details, and starts the task. Inspect still sends `x-inspect-context` on every model request.
@@ -469,7 +494,7 @@ With `optional`, the sidecar sees requests for samples that were never registere
 - **The header's fields are given to the sentinel as `context.proxy.inspect`.** This is the eval id, the task, the sample id, the epoch, the sample's uuid and the attempt. They are unverified, like everything else in `context.proxy`, because the caller set the header. A monitor that needs only the task's name or the epoch reads them there.
 - **Registration that arrives later is accepted.** If Inspect retries the registration once the endpoint is back, the sidecar stores it, and later steps are given `context.eval`. Steps already judged are not judged again.
 
-The setting does not apply where tasks are registered beforehand. There, Inspect does not register tasks itself, and the sidecar refuses a request for a sample it does not know.
+Where a task is registered beforehand, its registration at task init fails only when the endpoint for evals cannot be reached or does not answer, so only then does the setting matter. Whatever the setting, its sentinel is given the file's facts from the first request, and the sidecar refuses a request for a sample of that task that is not in the file.
 
 The `optional` setting may be removed later, if deployments turn out not to need it.
 
@@ -490,7 +515,7 @@ sequenceDiagram
     P-->>I: Probe answer
     I->>P: register_task: facts, samples, expiry
     P->>S: Forward, under the proxy's usual access control
-    Note over S: Store the task's facts under eval_id and task
+    Note over S: Store the task's facts under eval_id and task,<br/>or, for a task in the tasks folder, store nothing
     S-->>P: Registered
     P-->>I: Registered
 ```
@@ -837,7 +862,7 @@ The endpoint for evals uses JSON-RPC 2.0. JSON-RPC was chosen to be consistent w
 
 A call that can be read is always answered with HTTP 200, and the body says whether it succeeded, as JSON-RPC defines. A call may be as large as `--max-body-bytes` allows, 64 MiB unless set otherwise, the same limit as for the endpoint for proxies. A larger call is answered with HTTP 413. A `register_task` for a large dataset may need the limit raised, and so may any limit of the proxy's, or of a load balancer in front of it, which is the operator's to set.
 
-**`register_task`.** Inspect sends a task's facts at task init, where the deployment allows it. "Registering a task" above shows the call. The result says what the sidecar stored:
+**`register_task`.** Inspect sends a task's facts at task init, where the deployment allows it. "Registering a task" above shows the call. For a task that is not in the tasks folder, the result says what the sidecar stored, with `fixed` false:
 
 ```json
 {
@@ -847,6 +872,7 @@ A call that can be read is always answered with HTTP 200, and the body says whet
     "eval_id": "eval_789",
     "task": "philadelphia",
     "samples": 1,
+    "fixed": false,
     "expiry": 604800
   }
 }
@@ -854,7 +880,24 @@ A call that can be read is always answered with HTTP 200, and the body says whet
 
 `expiry` is how long the sidecar will keep the registration once no request names its task. It is less than was asked when `--task-expiry` is shorter.
 
-A registration for a task in the tasks folder is an error, with the code `-32001`, and the file's registration stays. A sidecar started with `--no-runtime-task-registration` answers every `register_task` with that error too.
+A registration for a task in the tasks folder stores nothing, whether runtime registration is on or off. It succeeds, and the result says that the task was already registered, with `fixed` true. Its sentinel is given the file's facts, never the registration's. The registration is not compared with the file, because the answer would tell a caller whether its guess at a task in the folder is right:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "eval_id": "eval_789",
+    "task": "data_exfiltration",
+    "samples": 1,
+    "fixed": true
+  }
+}
+```
+
+`samples` is the number of samples the registration named. There is no `expiry`, because a task in the folder is never dropped. The answer shows that a task of that name is in the folder; a task's name is not treated as secret.
+
+A sidecar started with `--no-runtime-task-registration` answers a `register_task` for a task that is not in the folder with an error, with the code `-32001`.
 
 **`request_result`.** The eval asks what happened to one model request. It identifies the request by the id it sent with it, in Inspect's `x-irid` header:
 
@@ -980,9 +1023,10 @@ Not yet designed:
 
 - whether a sentinel in a sidecar may ever be given the sample's `target`
 - how a state is named when an eval has gone back to an earlier one
-- how `RemoteSentinel` learns of a question put to a person, and how the person's answer reaches the sidecar (section 8)
+- how `RemoteSentinel` learns of a question put to a person, and how the person's answer reaches the sidecar (section 8; scheduled in [PR 13](sidecar-plan.md#pr-13-human-review))
 - how the eval says that a run is new or resumed
 - how a credential is tied to its runs
+- how to catch a task in the tasks folder whose samples no longer match the eval that runs it, without telling a caller whether its guess at the file is right. Comparing Inspect's registration with the file does not work as it stands: inspect_ai rewrites a sample's media paths and gives each chat message a new id when it loads a dataset, so an unchanged eval would not match
 
 Considered and not taken:
 
@@ -1052,7 +1096,7 @@ Considered and not taken:
 - **`RemoteSentinel`**, as section 9 describes: the probe at task init, registering the task where that is allowed, and the setting for a failed registration, `required` or `optional`.
 - **A way to export what Inspect would register, as a tasks file.** A tasks file has to match the samples an eval runs, and at task init Inspect has the loaded task, its arguments and its dataset. Exporting from `inspect eval` the registration it would send gives an admin the file with nothing to reproduce. This is for the workstream that builds `RemoteSentinel`.
 - **Reading the `sentinel` field** on a reply, an error or the last event of a stream, and acting on it as in process: a call taken out goes back into Inspect's copy with an approval error, a changed call keeps the model's original, a `terminate` ends the sample, and every step is written into the transcript.
-- **A person's answer to a sentinel in a sidecar.** Inspect's approval UI shows a question that the sidecar holds, and the answer goes to the sidecar on the person's own credential.
+- **A person's answer to a sentinel in a sidecar.** Inspect's approval UI shows a question that the sidecar holds, and the answer goes to the sidecar on the person's own credential. This follows incremental streaming in [PR 13](sidecar-plan.md#pr-13-human-review).
 - **A public way to obtain the running sample's uuid and attempt id before its first model call**, and before scoring. Inspect already keeps the uuid the same across retries of a sample, and the attempt id changes.
 - **The model request's `x-irid`, available to `RemoteSentinel`**, so that it can ask the sidecar about a request whose response did not carry the `sentinel` field.
 - **Asking the sidecar for records and state**, writing them into the transcript and the sample's store, and ending the run once the sample is scored.

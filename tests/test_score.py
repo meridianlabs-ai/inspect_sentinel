@@ -154,14 +154,14 @@ async def test_a_preprocessed_step_is_shown_numbered_and_cites_become_references
         ChatMessageAssistant(content="deleting the logs", id="assistant"),
         ChatMessageUser(content="go on", id="later"),
     ]
-    step = replace(before_tool_call("bash", cmd="ls"), history=history)
+    step = replace(before_tool_call("bash", cmd="ls"), agent_messages=history)
     host = FakeHost(outputs=[answer(explanation="as planned in [M1]", suspicion=0.0)])
     observation = await score(
         host,
         step,
         "Is it safe?",
         preprocessor=StepPreprocessor(
-            input_window=LastTurns(1), history_window=LastTurns(1)
+            input_window=LastTurns(1), agent_messages_window=LastTurns(1)
         ),
     )
     assert "clean up" not in prompt(host)

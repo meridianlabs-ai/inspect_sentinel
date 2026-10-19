@@ -186,7 +186,7 @@ def before_tool_call(function: str, /, **arguments: Any) -> BeforeToolCall:
         call=ToolCall(id="call_1", function=function, arguments=arguments),
         view=ToolCallView(),
         input=[],
-        history=[],
+        agent_messages=[],
     )
 
 
@@ -213,7 +213,7 @@ def after_tool_call(
         output=result,
         view=before.view,
         input=before.input,
-        history=before.history,
+        agent_messages=before.agent_messages,
     )
 
 
@@ -222,7 +222,7 @@ def before_generate_step() -> BeforeGenerate:
         model="mockllm/model",
         conversation="c",
         input=[ChatMessageUser(content="go")],
-        history=[ChatMessageUser(content="go")],
+        agent_messages=[ChatMessageUser(content="go")],
         tools=[],
         tool_choice="auto",
         config=GenerateConfig(),
@@ -234,7 +234,7 @@ def after_generate_step() -> AfterGenerate:
         model="mockllm/model",
         conversation="c",
         input=[ChatMessageUser(content="go")],
-        history=[ChatMessageUser(content="go")],
+        agent_messages=[ChatMessageUser(content="go")],
         tools=[],
         tool_choice="auto",
         config=GenerateConfig(),

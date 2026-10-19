@@ -87,7 +87,7 @@ REPLIED = ["sys", "task", "reply 1"]
 
 # every list whole, nothing omitted, so a test sees the window alone
 ALL = StepPreprocessor(
-    input_window=AllMessages(), history_window=AllMessages(), omit_system=False
+    input_window=AllMessages(), agent_messages_window=AllMessages(), omit_system=False
 )
 
 
@@ -96,16 +96,18 @@ def texts(messages: list[ChatMessage] | None) -> list[str] | None:
 
 
 def tool_step(
-    input: list[ChatMessage] | None, history: list[ChatMessage] | None
+    input: list[ChatMessage] | None, agent_messages: list[ChatMessage] | None
 ) -> BeforeToolCall:
-    return replace(before_tool_call("bash", cmd="ls"), input=input, history=history)
+    return replace(
+        before_tool_call("bash", cmd="ls"), input=input, agent_messages=agent_messages
+    )
 
 
 Shown = tuple[list[str] | None, list[str] | None]
 
 
 def shown(step: Step) -> Shown:
-    return texts(step.input), texts(step.history)
+    return texts(step.input), texts(step.agent_messages)
 
 
 async def render(
@@ -144,7 +146,9 @@ async def test_each_window_cuts_its_list_as_it_is(
         kept,
         texts(CONVERSATION),
     )
-    assert shown(await preprocess_step(step, replace(ALL, history_window=window))) == (
+    assert shown(
+        await preprocess_step(step, replace(ALL, agent_messages_window=window))
+    ) == (
         texts(CONVERSATION),
         kept,
     )
@@ -157,9 +161,9 @@ def test_a_negative_window_raises(window: type[LastTurns | LastMessages]) -> Non
 
 
 @pytest.mark.parametrize(
-    "preprocessor, input, history, shown_after",
+    "preprocessor, input, agent_messages, shown_after",
     [
-        # by default the whole input and no history
+        # by default the whole input and none of the agent's messages
         (
             StepPreprocessor(),
             CONVERSATION,
@@ -181,11 +185,11 @@ def test_a_negative_window_raises(window: type[LastTurns | LastMessages]) -> Non
 async def test_a_list_with_no_window_is_empty_and_an_unknown_one_stays_none(
     preprocessor: StepPreprocessor,
     input: list[ChatMessage] | None,
-    history: list[ChatMessage] | None,
+    agent_messages: list[ChatMessage] | None,
     shown_after: Shown,
 ) -> None:
     assert (
-        shown(await preprocess_step(tool_step(input, history), preprocessor))
+        shown(await preprocess_step(tool_step(input, agent_messages), preprocessor))
         == shown_after
     )
 
@@ -210,7 +214,7 @@ def new_since(context: Context) -> StepPreprocessor[Step]:
     return replace(
         ALL,
         input_window=NewSinceLastReport(context),
-        history_window=NewSinceLastReport(context),
+        agent_messages_window=NewSinceLastReport(context),
     )
 
 
@@ -250,16 +254,16 @@ async def seen_by(store: Store, steps: list[Step]) -> list[list[Shown]]:
     return seen
 
 
-def shared(input: list[str] | None, history: list[str] | None) -> list[Shown]:
+def shared(input: list[str] | None, agent_messages: list[str] | None) -> list[Shown]:
     # both tool-stage functions were shown the same
-    return [(input, history)] * 2
+    return [(input, agent_messages)] * 2
 
 
 @pytest.mark.anyio
 async def test_new_since_last_report_shows_each_message_once_per_function() -> None:
     steps: list[Step] = [
-        replace(tool_step(input, history), conversation=conversation)
-        for conversation, input, history in [
+        replace(tool_step(input, agent_messages), conversation=conversation)
+        for conversation, input, agent_messages in [
             ("c", CONVERSATION[:3], CONVERSATION[:3]),
             ("c", CONVERSATION, CONVERSATION),
             ("other", None, CONVERSATION[:2]),
@@ -308,7 +312,7 @@ async def test_new_since_last_report_records_per_function() -> None:
         after_generate_step(),
         conversation="c",
         input=CONVERSATION[:2],
-        history=CONVERSATION[:2],
+        agent_messages=CONVERSATION[:2],
     )
     called = replace(tool_step(None, CONVERSATION), conversation="c")
     assert await seen_by(Store(), [generated, called]) == [
@@ -375,9 +379,9 @@ async def test_new_since_last_report_is_recorded_for_a_final_decision(
 
     store = Store()
     seen: list[str | None] = []
-    for history in [CONVERSATION[:3], CONVERSATION]:
+    for agent_messages in [CONVERSATION[:3], CONVERSATION]:
         decision = await run_sentinel(
-            decides(), host_context(store=store), tool_step(None, history)
+            decides(), host_context(store=store), tool_step(None, agent_messages)
         )
         assert decision is not None
         seen.append(decision.explanation)
@@ -420,7 +424,7 @@ async def test_new_since_last_report_is_not_recorded_when_a_childs_final_passes_
         await run_sentinel(
             passed_by(), host_context(store=store), tool_step(None, CONVERSATION)
         )
-    # it never judged the history, so it is shown again
+    # it never judged the agent's messages, so it is shown again
     assert seen == [texts(CONVERSATION)] * 2
 
 
@@ -460,7 +464,7 @@ async def test_the_step_comes_last_in_a_block_named_for_its_stage(
 
 @pytest.mark.anyio
 async def test_a_request_holds_the_input_in_its_step_block() -> None:
-    step = replace(before_generate_step(), input=CONVERSATION[1:], history=None)
+    step = replace(before_generate_step(), input=CONVERSATION[1:], agent_messages=None)
     rendered = await render(step)
     assert "[BEGIN INPUT]" not in rendered
     assert "task" in rendered.split("[AGENT STEP - BEGIN MODEL REQUEST]")[1]
@@ -492,7 +496,7 @@ def thoughtful_reply() -> AfterGenerate:
     return replace(
         after_generate_step(),
         input=conversation,
-        history=conversation,
+        agent_messages=conversation,
         output=ModelOutput(
             model="m", choices=[ChatCompletionChoice(message=thinks("reply", "reply"))]
         ),
@@ -528,7 +532,9 @@ def thoughtful_result() -> Step:
 async def test_omissions_reach_every_list_and_the_steps_own_messages(
     step: Step, preprocessor: StepPreprocessor, gone: list[str]
 ) -> None:
-    rendered = await render(step, replace(preprocessor, history_window=AllMessages()))
+    rendered = await render(
+        step, replace(preprocessor, agent_messages_window=AllMessages())
+    )
     assert not any(text in rendered for text in gone)
     step_block = rendered.split("[AGENT STEP - BEGIN")[1]
     if "thinking about" in gone:
@@ -572,7 +578,7 @@ async def test_a_nonce_marks_every_block_and_every_message_header(
 ) -> None:
     rendered = await render(
         tool_step([user("go")], CONVERSATION),
-        StepPreprocessor(history_window=AllMessages()),
+        StepPreprocessor(agent_messages_window=AllMessages()),
         nonce=nonce,
     )
     mark = "" if nonce is None else f" ({nonce})"
@@ -590,7 +596,9 @@ async def test_a_nonce_marks_every_block_and_every_message_header(
 async def test_messages_are_numbered_in_block_order_and_cites_resolve() -> None:
     step = tool_step([user("summary")], [user("task")])
     rendered, extract_refs = await step_as_str(
-        await preprocess_step(step, StepPreprocessor(history_window=AllMessages()))
+        await preprocess_step(
+            step, StepPreprocessor(agent_messages_window=AllMessages())
+        )
     )
     starts = [
         rendered.index(marker)
@@ -617,6 +625,6 @@ async def test_a_cite_of_the_call_resolves_to_the_message_that_made_it(
     step: BeforeToolCall | AfterToolCall,
 ) -> None:
     _, extract_refs = await step_as_str(
-        replace(step, input=[], history=[], message_id="msg_A7")
+        replace(step, input=[], agent_messages=[], message_id="msg_A7")
     )
     assert [r.id for r in extract_refs("[M1]")] == ["msg_A7"]

@@ -52,6 +52,17 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project.optional-dependencies]
+# What serving a sidecar needs. inspect-ai depends on both too, but they are
+# imported directly here, and a transitive dependency is not a promise.
+# starlette's floor is the first release with a fix for every advisory
+# published against it. uvicorn's is the first that hands a signal on to a
+# second server in the same process, which stopping the sidecar relies on.
+sidecar = ["starlette>=1.3.1", "uvicorn>=0.29.0"]
+# The sidecar reads a provider's traffic with that provider's SDK, as
+# inspect-ai does, so each is installed only where it is wanted. The floors
+# are inspect-ai's own.
+anthropic = ["anthropic>=1.0.0"]
+openai = ["openai>=3.4.0"]
 dev = [
     "ruff",
     "pytest",
@@ -64,6 +75,11 @@ dev = [
     # not a runtime dependency until message rendering settles (it is to move
     # from Scout into inspect_ai, design/pr-series.md)
     "inspect-scout",
+    # the sidecar's tests read recorded Anthropic and OpenAI traffic, call its
+    # server through httpx, and hold its answers to its schema file
+    "inspect_sentinel[anthropic,openai,sidecar]",
+    "httpx",
+    "jsonschema",
     "inspect_sentinel[doc]",
 ]
 doc = [

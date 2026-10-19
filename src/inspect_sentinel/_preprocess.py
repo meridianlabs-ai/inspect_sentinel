@@ -75,7 +75,7 @@ class LastMessages:
 class NewSinceLastReport:
     """Keep the messages after the last one this monitor reported on, so an incremental monitor does not re-read its conversations.
 
-    The last message shown is recorded by id in the monitor's store (by `context.path`), separately for each conversation, for `input` and `history`, and for each function of the monitor. It is recorded only when the function returns or decides final and the runner accepts what it returned, so a function that raises or is cancelled is shown those messages again at the next step. A conversation whose recorded message is gone, as after a compaction, is kept whole. Preprocess with it from the monitor or protocol function the runner is running; elsewhere preprocessing raises `RuntimeError`.
+    The last message shown is recorded by id in the monitor's store (by `context.path`), separately for each conversation, for `input` and `agent_messages`, and for each function of the monitor. It is recorded only when the function returns or decides final and the runner accepts what it returned, so a function that raises or is cancelled is shown those messages again at the next step. A conversation whose recorded message is gone, as after a compaction, is kept whole. Preprocess with it from the monitor or protocol function the runner is running; elsewhere preprocessing raises `RuntimeError`.
     """
 
     context: Context
@@ -83,21 +83,21 @@ class NewSinceLastReport:
 
 
 Window: TypeAlias = AllMessages | LastTurns | LastMessages | NewSinceLastReport
-"""How much of one conversation, `input` or `history`, to show."""
+"""How much of one conversation, `input` or `agent_messages`, to show."""
 
 
 @dataclass(frozen=True, kw_only=True)
 class StepPreprocessor(Generic[S]):
     """What a monitor shows a model about a step.
 
-    `preprocess_step()` applies it, in this order: the windows to `input` and `history`, then the omissions to every message the step holds, then `transform`, which sees the result.
+    `preprocess_step()` applies it, in this order: the windows to `input` and `agent_messages`, then the omissions to every message the step holds, then `transform`, which sees the result.
     """
 
     input_window: Window | None = field(default_factory=AllMessages)
     """How much of `input` to show: all of it by default; None for none."""
 
-    history_window: Window | None = None
-    """How much of `history` to show: none by default."""
+    agent_messages_window: Window | None = None
+    """How much of `agent_messages`, the agent loop's own list, to show: none by default."""
 
     omit_system: bool = True
     """Leave system messages out."""
@@ -117,7 +117,7 @@ async def preprocess_step(
 ) -> S:
     """`step`, thinned as `preprocessor` says (`StepPreprocessor()` when None).
 
-    Each window cuts its list as it is. A list with no window becomes `[]`; a list the host could not provide stays None. The omissions apply to `input`, `history`, a tool call's result and a generate's reply.
+    Each window cuts its list as it is. A list with no window becomes `[]`; a list the host could not provide stays None. The omissions apply to `input`, `agent_messages`, a tool call's result and a generate's reply.
 
     Args:
         step: The step a monitor was given.
@@ -129,7 +129,7 @@ async def preprocess_step(
     p = preprocessor or StepPreprocessor()
 
     def thin(
-        source: Literal["input", "history"],
+        source: Literal["input", "agent_messages"],
         messages: list[ChatMessage] | None,
         window: Window | None,
     ) -> list[ChatMessage] | None:
@@ -142,7 +142,9 @@ async def preprocess_step(
     thinned = replace(
         step,
         input=thin("input", step.input, p.input_window),
-        history=thin("history", step.history, p.history_window),
+        agent_messages=thin(
+            "agent_messages", step.agent_messages, p.agent_messages_window
+        ),
     )
     if isinstance(thinned, AfterToolCall):
         [result] = _omitted([thinned.result], p)
@@ -167,7 +169,7 @@ async def step_as_str(
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
-    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it is empty: `INPUT`, `HISTORY`, then the step itself in a block marked `[AGENT STEP - BEGIN ...]` and `[AGENT STEP - END ...]`. The step block is `TOOL CALL` (the assistant's text and the call) before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REPLY` (the reply) after a generate, and `MODEL REQUEST` before one, which holds `input`, so that step has no `INPUT` block. An input or history the host could not provide (None) is named in its block. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header where the installed Scout takes a nonce. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
+    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it is empty: `INPUT`, `HISTORY` (the agent's messages, `step.agent_messages`), then the step itself in a block marked `[AGENT STEP - BEGIN ...]` and `[AGENT STEP - END ...]`. The step block is `TOOL CALL` (the assistant's text and the call) before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REPLY` (the reply) after a generate, and `MODEL REQUEST` before one, which holds `input`, so that step has no `INPUT` block. An input or agent's messages the host could not provide (None) is named in its block. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header where the installed Scout takes a nonce. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
 
     Args:
         step: The step to render, usually from `preprocess_step()`.
@@ -203,7 +205,8 @@ async def step_as_str(
             "",
             "HISTORY",
             await text(
-                step.history, "The agent's conversation history is not available."
+                step.agent_messages,
+                "The agent's conversation history is not available.",
             ),
         ),
         ("AGENT STEP - ", _step_block(step), await text(_step_part(step), "")),
@@ -229,14 +232,14 @@ def scout_nonce(nonce: str) -> dict[str, str]:
 
 
 class _Marks(StoreModel):
-    # "<conversation>/<input|history>/<function>" -> id of the last message
+    # "<conversation>/<input|agent_messages>/<function>" -> id of the last message
     # shown
     marks: dict[str, str] = Field(default_factory=dict)
 
 
 def _cut(
     step: Step,
-    source: Literal["input", "history"],
+    source: Literal["input", "agent_messages"],
     messages: list[ChatMessage],
     window: Window,
 ) -> list[ChatMessage]:
@@ -261,7 +264,7 @@ def _cut(
 def _after_mark(
     context: Context,
     step: Step,
-    source: Literal["input", "history"],
+    source: Literal["input", "agent_messages"],
     messages: list[ChatMessage],
 ) -> list[ChatMessage]:
     node = current_invocation()

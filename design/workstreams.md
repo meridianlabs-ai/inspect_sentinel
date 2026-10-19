@@ -28,7 +28,7 @@ Touches modules that sentinel, Scout and inspect_ai all import. Agree up front w
 
 Lives in inspect_ai's model path and sentinel's step types. Best after inspect_core, or at least not overlapping its moves in `model/`.
 
-AISI requirements that depend on it ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)): R1, `escalate` and `human()` at `AfterGenerate` (built, sentinel #42 and #89); R5 at `AfterGenerate` (built, in `threshold`); R2 and R3, the producing model call's input and tools at the tool stages (built: found in the transcript, not a separate record; [pr-series.md](pr-series.md), Deferred); R10, the history as each agent instance sent it, its own PR ([pr-series.md](pr-series.md), "Generate stages landing").
+AISI requirements that depend on it ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)): R1, `escalate` and `human()` at `AfterGenerate` (built, sentinel #42 and #89); R5 at `AfterGenerate` (built, in `threshold`); R2 and R3, the producing model call's input and tools at the tool stages (built: found in the transcript, not a separate record; [pr-series.md](pr-series.md), Deferred); R10, the history as each agent instance sent it (built live as `step.history`, [pr-series.md](pr-series.md), "The history as sent"; replay with workstream 10).
 
 ## 3. LLM affordances for monitors
 
@@ -52,6 +52,8 @@ AISI requirement R8 ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-
 Raised by the maintainer on 2026-10-02: a technical spike implementing a monitor host in a proxy, WASM inside an `ext_proc` sidecar beside Envoy first ([proxy-host.md](proxy-host.md), section 4), then an RPC-based interface in another proxy that supports one. Includes the changes to the `Host` interface, `Context` and the rest that proxy deployment needs. It is the later, larger project in workstream 9; coordinate with the bridged-agent work there and with workstream 11.
 
 Since 2026-10-14 the first target is a plain Python sidecar beside the proxy, running the sentinel in its own process: LiteLLM first, through a guardrail, then Middleman, with Envoy later ([sidecar-plan.md](sidecar-plan.md)). WASM is not a priority.
+
+Added to the plan on 2026-10-17: [PR 11, the Envoy shim](sidecar-plan.md#pr-11-the-envoy-shim), [PR 12, incremental streaming](sidecar-plan.md#pr-12-incremental-streaming), and then [PR 13, human review](sidecar-plan.md#pr-13-human-review). Envoy uses the shared handler and can proceed independently of Middleman. Incremental streaming releases text while completed tool calls wait for review, through Envoy and LiteLLM, with whole-response holding retained for policies that need it. Human review follows, through a review queue, Inspect's approval UI and external review consumers. Middleman's streaming extension follows its initial integration and acceptance by METR.
 
 The WASM sidecar spike (sentinel #58, 2026-10-06) answered the WASM question: the unchanged sentinel runner runs as a CPython-in-WASM component in a wasmtime host, with asyncio, many concurrent steps per instance, and an empty sandbox. The WASM phase is now an `ext_proc` sidecar embedding wasmtime rather than proxy-wasm inside Envoy; [proxy-host.md](proxy-host.md), section 4, has the result and what is next.
 
@@ -205,9 +207,11 @@ Reads `SentinelEvent`s and the recorded configuration, so it overlaps the read-m
 
 Let a person decide from outside the eval process: a request with the call, the escalations and the choices, and the answer flowing back to the waiting sample. Decided by the maintainer on 2026-10-02: put human requests on a message queue that other tools consume (Slack, a review app) rather than building the interface ourselves. Inspect's human surfaces today (the panel, ACP and the console) all assume someone at the eval's terminal or client; long-running and remote evals have nobody there. `notify()` already covers telling someone a decision is waiting (see `sequential()` and `human()`, under "Done"); this is answering it.
 
+The sidecar delivery step is [PR 13, human review](sidecar-plan.md#pr-13-human-review), after the Envoy shim and incremental streaming. It adds the waiting host and review queue, connects `RemoteSentinel` to Inspect's existing approval UI, and lets external review tools answer for agents running without an eval. The queue protocol, reviewer credentials and question lifecycle are designed and tested in that step.
+
 AISI requirement R9 ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)), their lowest: a task routes `human()` to its own review surface instead of inspect_ai's `human_approver`, at the tool stages and at `AfterGenerate`.
 
-Open questions: how the reply reaches the sample (a callback endpoint, polling, a relay service); how long a sample waits and what happens when nobody answers (proceed, reject, or the escalate default from pr-series.md "Deferred"); who may answer and how that is authenticated and recorded in the log; and whether the same surface serves inspect's existing human approver as well as `human()`.
+The sidecar's [human-review questions](sidecar.md#human-review-questions-for-pr-13) cover reviewer identity and authority; context and automated assessments; grouping, per-call and turn-wide decisions; pending age and queue ordering; approval validity; question delivery, ownership and lifetime; reasons and disclosure; and audit completeness and durability. The existing per-call rejection and run-termination semantics stay explicit while those questions are settled. The broader workstream also needs to decide whether the same external surface serves Inspect's existing human approver as well as `human()`.
 
 ## 14. Path matching helpers
 
