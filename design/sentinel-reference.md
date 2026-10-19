@@ -281,7 +281,7 @@ The host (inspect_ai's dispatcher, or a proxy) implements `HostNative` (`sentine
 class HostContext:
     host: HostNative      # what the host implements
     recorder: Recorder
-    store: Store          # the sample store store_as() namespaces into
+    store: Store          # the sample store store_as() namespaces into; Host.score keeps the sample's nonce in it
 
     @property
     def context(self) -> Context: ...  # the top layer's: Context(path="", host=Host(host))
@@ -483,6 +483,8 @@ You get three things for free: the state is recorded to the transcript as `Store
 
 The key is the instance path, so renaming a mapping key or wrapping a monitor in another layer moves its state: a resumed sample or a scorer reading under the old path finds nothing.
 
+The package itself keeps one key outside any namespace, `inspect_sentinel:nonce`, the nonce `Host.score` puts on every prompt in the sample; solver code that reads the store, and the eval log, see it.
+
 Per-task state is planned, not built: `store_as()` has no `scope=` today. `pr-series.md`, "Deferred", lists four scopes (the sample in one epoch, which is today's, the sample across epochs, the task, and global), which need a design for concurrency and checkpointing first. The intended shape, illustrative:
 
 ```python
@@ -552,7 +554,7 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 | `Excerpt`; `drop_input`, `drop_reasoning`, `drop_tool_usage`, `keep_agent_messages`, `keep_system`, `last_turns`, `last_messages`, `new_since_last_report` | **Built (2026-10-13).** An `Excerpt[S]` is the step plus the `input` and `agent_messages` to show with it, cut before the step's own part; a `agent_messages` of None, where the host cannot provide it, stays None through every window. Each window takes a step or an excerpt and returns an excerpt, cutting `input` and `agent_messages` alike, so they compose. `new_since_last_report` keeps the last message shown per conversation and monitor function in the monitor's store, saved only when the function succeeds, so an incremental monitor does not re-read its conversations and does not skip what a failed call was shown |
 | `call_as_str(call, view=None)` | the Python-call rendering approvers use, honouring a `ToolCallView` |
 | `result_as_str(result, truncated=None)` | a tool result with the truncation (`step.truncated`) marked: that the model saw a cut, and how much was cut |
-| `briefing_as_str(context)`, `step_as_str(excerpt, *, messages_as_str=None)` | the instruction and evidence sections. `step_as_str` is built: `INPUT`, `HISTORY` and an `AGENT STEP` block named for the stage (`[AGENT STEP - BEGIN TOOL CALL]`; `TOOL CALL AND RESULT`, `MODEL REQUEST`, `MODEL REPLY`), each when kept, `HISTORY` only when it holds a message `INPUT` does not, rendered with Scout's `messages_as_str` or a numbering one; an unknown model input, and a shown history the host could not provide, are named. Naming other absent surfaces (`view`, untruncated `output`) is not built |
+| `briefing_as_str(context)`, `step_as_str(excerpt, *, nonce=None, messages_as_str=None)` | the instruction and evidence sections. `step_as_str` is built: `INPUT`, `HISTORY` and an `AGENT STEP` block named for the stage (`[AGENT STEP - BEGIN TOOL CALL]`; `TOOL CALL AND RESULT`, `MODEL REQUEST`, `MODEL REPLY`), each when kept, `HISTORY` only when it holds a message `INPUT` does not, every marker carrying the nonce when one is given (`[END INPUT (3f9a1c7e)]`), rendered with Scout's `messages_as_str` or a numbering one; an unknown model input, and a shown history the host could not provide, are named. Naming other absent surfaces (`view`, untruncated `output`) is not built |
 | `monitor_prompt(context, step, *, question, answer=...)` | the analogue of Scout's `scanner_prompt`: briefing, delimited evidence envelope, escalations as prior verdicts, the question |
 
 ```python

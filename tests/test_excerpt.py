@@ -42,6 +42,7 @@ from inspect_sentinel import (
     step_as_str,
 )
 from inspect_sentinel._decorators import monitor, protocol
+from inspect_sentinel._excerpt import scout_nonce
 from inspect_sentinel._report import Decision, Observation
 from inspect_sentinel._runner import run_monitors, run_protocols, run_sentinel
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
@@ -826,6 +827,28 @@ async def test_a_history_the_host_could_not_provide_is_named_where_it_would_show
     rendered = await step_as_str(excerpting(step) if excerpting else step)
     assert (UNKNOWN_HISTORY in rendered) == says_unknown
     assert "[AGENT STEP - BEGIN" in rendered
+
+
+@pytest.mark.parametrize("nonce", [None, "3f9a1c7e"])
+@pytest.mark.anyio
+async def test_a_nonce_marks_every_block_and_the_default_renderers_headers(
+    nonce: str | None,
+) -> None:
+    rendered = await step_as_str(
+        keep_agent_messages(tool_step(GO, CONVERSATION)), nonce=nonce
+    )
+    mark = "" if nonce is None else f" ({nonce})"
+    assert [line for line in rendered.splitlines() if line.startswith("[")] == [
+        f"[BEGIN INPUT{mark}]",
+        f"[END INPUT{mark}]",
+        f"[BEGIN HISTORY{mark}]",
+        f"[END HISTORY{mark}]",
+        f"[AGENT STEP - BEGIN TOOL CALL{mark}]",
+        f"[AGENT STEP - END TOOL CALL{mark}]",
+    ]
+    # Scout 0.5.5 and earlier write no nonce on message headers
+    header = mark if scout_nonce("3f9a1c7e") else ""
+    assert f"USER{header}:\ngo" in rendered
 
 
 @pytest.mark.anyio
