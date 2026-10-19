@@ -1,6 +1,6 @@
 import json
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from inspect_ai.model import ModelOutput
@@ -168,6 +168,64 @@ def _responses_events() -> list[dict[str, Any]]:
 def _check(events: list[dict[str, Any]]) -> None:
     body = "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
     _check_responses_stream(written_events(body))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("change", ["taken out", "changed"])
+async def test_a_responses_call_streamed_only_as_done_is_edited_in_every_event(
+    change: str,
+) -> None:
+    events = _responses_events()
+    first = await read_reply("openai", STREAM, _body(events))
+    call = (first.message.tool_calls or [])[1]
+    index = next(
+        event["output_index"]
+        for event in events
+        if event["type"] == "response.output_item.added"
+        and event["item"].get("call_id") == call.id
+    )
+    # the call's done event alone, without the events it began with, which a
+    # client may still act on
+    body = _body(
+        [
+            event
+            for event in events
+            if event.get("output_index") != index
+            or event["type"] == "response.output_item.done"
+        ]
+    )
+    output = await read_reply("openai", STREAM, body)
+    edits = (
+        Edits(frozenset({call.id}))
+        if change == "taken out"
+        else Edits(
+            frozenset(), {call.id: replace(call, arguments={"location": "Oslo"})}
+        )
+    )
+
+    edited = await edit_reply("openai", STREAM, body, None, edits, output)
+
+    items: list[dict[str, Any]] = []
+    for event in written_events(edited):
+        data: dict[str, Any] = event.data or {}
+        response: dict[str, Any] = data.get("response") or {}
+        candidates: list[Any] = [data.get("item"), *(response.get("output") or [])]
+        for item in candidates:
+            if isinstance(item, dict):
+                entry = cast(dict[str, Any], item)
+                if entry.get("call_id") == call.id:
+                    items.append(entry)
+    if change == "taken out":
+        assert items == []
+    else:
+        assert items
+        assert all(
+            json.loads(item["arguments"]) == {"location": "Oslo"} for item in items
+        )
+
+
+def _body(events: list[dict[str, Any]]) -> bytes:
+    return "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
 
 
 def test_a_responses_stream_that_holds_together_passes() -> None:

@@ -302,6 +302,9 @@ def _edit_output(output: list[object], edits: Edits, found: list[str]) -> list[o
     return kept
 
 
+_ITEM_EVENTS = ("response.output_item.added", "response.output_item.done")
+
+
 def _edit_responses_stream(
     events: list[StreamEvent], edits: Edits
 ) -> list[StreamEvent]:
@@ -310,14 +313,23 @@ def _edit_responses_stream(
     # event's index is the item's place in the edited output. A changed call's
     # arguments go out whole in its first delta, or in the item it was added
     # with if it has none.
+    # A call is found by the event it is added with, or the one it is done
+    # with, since a stream may hold a call's done event alone, and a client
+    # may act on either.
     items: dict[int, str] = {}
     for event in events:
         data = event.data or {}
         index = data.get("output_index")
-        if data.get("type") == "response.output_item.added" and isinstance(index, int):
-            id = _call_id(data.get("item"))
-            if id is not None:
-                items[index] = id
+        kind = data.get("type")
+        if kind not in _ITEM_EVENTS or not isinstance(index, int):
+            continue
+        id = _call_id(data.get("item"))
+        if id is None:
+            continue
+        if items.setdefault(index, id) != id:
+            raise UnreadableError(
+                f"The reply stream names two calls at output index {index}."
+            )
     removed = {index for index, id in items.items() if id in edits.removed}
     modified = {index: id for index, id in items.items() if id in edits.modified}
     deltas = {
