@@ -12,7 +12,7 @@ from starlette.applications import Starlette
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision
+from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol, ProtocolGroup
 from inspect_sentinel.sidecar import Handler, Refuse, Request, UnreadableError, _state
@@ -307,7 +307,9 @@ class _Tally(StoreModel):
 
 @protocol
 def counts_lookups() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         context.store_as(_Tally).lookups += 1
         return Decision.proceed()
 
@@ -498,11 +500,15 @@ _gates: list[anyio.Event] = []
 
 @protocol
 def waits_to_be_told() -> ProtocolGroup:
-    async def before(context: Context, step: BeforeGenerate) -> Decision | None:
+    async def before(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
         await _gates[0].wait()
         return Decision.proceed()
 
-    async def call(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def call(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         _gates[2].set()
         await _gates[1].wait()
         return Decision.proceed()

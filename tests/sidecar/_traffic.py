@@ -176,7 +176,9 @@ def weather_rule(action: str = "reject", city: str = "Tokyo") -> Protocol:
 def every_call_rule() -> Protocol:
     """Reject every weather lookup, each with a reason naming its city, so that a turn is refused whole."""
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         city = step.call.arguments.get("location")
         return Decision.reject(f"lookup of {city}", message=f"{city} is not allowed.")
 

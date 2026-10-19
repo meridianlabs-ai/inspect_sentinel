@@ -7,7 +7,7 @@ import pytest
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision
+from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import BeforeGenerate
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, Request, _state
@@ -40,7 +40,9 @@ _TASK = TaskFacts(
 
 @protocol
 def reports_the_eval() -> Protocol:
-    async def decide(context: Context, step: BeforeGenerate) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
         given = context.eval
         if given is None:
             return Decision.proceed("None")

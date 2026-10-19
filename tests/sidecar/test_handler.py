@@ -553,7 +553,9 @@ async def test_explanation_never_reaches_the_client() -> None:
 def city_rule() -> Protocol:
     """Reject a lookup of Tokyo or Lima, each with a reason of its own, end the run at Oslo, and let everything else go."""
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         city = step.call.arguments.get("location")
         if city in ("Tokyo", "Lima"):
             return Decision.reject(f"lookup of {city}", message=f"Not {city}.")

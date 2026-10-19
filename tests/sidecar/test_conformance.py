@@ -24,7 +24,14 @@ from starlette.requests import Request as HttpRequest
 from starlette.responses import Response
 from starlette.routing import Route
 
-from inspect_sentinel import BeforeToolCall, Context, Decision, Protocol, protocol
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Decision,
+    Escalations,
+    Protocol,
+    protocol,
+)
 from inspect_sentinel.sidecar import Handler, Pass, Replace, Reply, Request
 from inspect_sentinel.sidecar._anthropic import settled
 from tests.sidecar._traffic import JSON, STREAM
@@ -49,7 +56,9 @@ def get_weather() -> Tool:
 def tokyo_rule(action: str) -> Protocol:
     """Reject a lookup of Tokyo, or change it to Oslo."""
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") != "Tokyo":
             return Decision.proceed()
         if action == "reject":

@@ -704,12 +704,16 @@ def test_a_stream_with_no_event_for_the_field_cant_carry_it() -> None:
 def rejects_tokyo_and_ends_at_its_result() -> ProtocolGroup:
     """Reject a lookup of Tokyo, and end the run if a result for one is ever judged, as a call that never ran has none."""
 
-    async def before(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def before(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") == "Tokyo":
             return Decision.reject("Tokyo", message="Tokyo is not allowed.")
         return Decision.proceed()
 
-    async def after(context: Context, step: AfterToolCall) -> Decision | None:
+    async def after(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") == "Tokyo":
             return Decision.terminate("a result for Tokyo")
         return Decision.proceed()
@@ -782,13 +786,17 @@ async def test_a_result_for_a_call_taken_out_is_refused() -> None:
 def changes_tokyo_and_ends_at_its_result() -> ProtocolGroup:
     """Change a lookup of Tokyo to Oslo, and end the run if a result is ever judged as Tokyo's, as only the lookup of Oslo ran."""
 
-    async def before(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def before(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") == "Tokyo":
             oslo = replace(step.call, arguments={"location": "Oslo"})
             return Decision(action="modify", modified=oslo)
         return Decision.proceed()
 
-    async def after(context: Context, step: AfterToolCall) -> Decision | None:
+    async def after(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") == "Tokyo":
             return Decision.terminate("a result judged as Tokyo's")
         return Decision.proceed()
