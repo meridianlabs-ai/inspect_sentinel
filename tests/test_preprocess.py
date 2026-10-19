@@ -540,7 +540,9 @@ async def test_a_request_holds_its_input_then_its_tools() -> None:
     before, request = rendered.split("[BEGIN AGENT STEP - MODEL REQUEST]\n")
     assert "[BEGIN INPUT]" not in before
     headers = [
-        line for line in request.splitlines() if re.match(r"\[(BEGIN|END|M)", line)
+        line
+        for line in request.splitlines()
+        if re.match(r"\[(BEGIN|END|M|TOOL CHOICE)", line)
     ]
     assert headers == [
         "[BEGIN INPUT]",
@@ -551,14 +553,12 @@ async def test_a_request_holds_its_input_then_its_tools() -> None:
         "[END INPUT]",
         "[BEGIN TOOLS]",
         "[END TOOLS]",
-        "[BEGIN TOOL CHOICE]",
-        "[END TOOL CHOICE]",
+        '[TOOL CHOICE] {"name": "bash"}',
         "[END AGENT STEP - MODEL REQUEST]",
     ]
     assert json.loads(
         request.split("[BEGIN TOOLS]\n")[1].split("\n[END TOOLS]")[0]
     ) == [tool.model_dump(exclude_none=True)]
-    assert '[BEGIN TOOL CHOICE]\n{"name": "bash"}\n[END TOOL CHOICE]' in request
 
 
 def thinks(text: str, id: str) -> ChatMessageAssistant:

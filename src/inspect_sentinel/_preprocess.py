@@ -177,7 +177,7 @@ async def step_as_str(
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
-    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it is empty: `INPUT`, `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the agent loop's own list), then the step itself in a block marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]`. The step block is `TOOL CALL` (the assistant's text and the call) before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Each of the last two holds the request: its `INPUT` block, then `TOOLS` (the tools offered, as JSON) and `TOOL CHOICE`, and a reply's adds a `REPLY` block, so a generate has no `INPUT` block before `HISTORY`. A list the host could not provide (None) is named in its block. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header where the installed Scout takes a nonce. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
+    Each part is a block between `[BEGIN ...]` and `[END ...]` lines, left out when it is empty: `INPUT`, `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the agent loop's own list), then the step itself in a block marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]`. The step block is `TOOL CALL` (the assistant's text and the call) before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Each of the last two holds the request: its `INPUT` block, then `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`, and a reply's adds a `REPLY` block, so a generate has no `INPUT` block before `HISTORY`. A list the host could not provide (None) is named in its block. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header where the installed Scout takes a nonce. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
 
     Args:
         step: The step to render, usually from `preprocess_step()`.
@@ -220,14 +220,20 @@ async def step_as_str(
     if isinstance(step, BeforeGenerate | AfterGenerate):
         # the tools follow the input, so the input stays a prefix the monitor
         # model's prompt cache can reuse
-        own = blocks(
-            ("INPUT", await text(step.input, unknown_input)),
-            ("TOOLS", _tools(step)),
-            ("TOOL CHOICE", _tool_choice(step)),
-            (
-                "REPLY",
-                await text(_reply(step), "") if isinstance(step, AfterGenerate) else "",
-            ),
+        own = "\n\n".join(
+            [
+                blocks(
+                    ("INPUT", await text(step.input, unknown_input)),
+                    ("TOOLS", _tools(step)),
+                ),
+                # one line, so it needs no end marker
+                f"[TOOL CHOICE{mark}] {_tool_choice(step)}",
+                *(
+                    [blocks(("REPLY", await text(_reply(step), "")))]
+                    if isinstance(step, AfterGenerate)
+                    else []
+                ),
+            ]
         )
     else:
         own = await text(_call(step), "")
