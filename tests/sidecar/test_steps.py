@@ -273,6 +273,26 @@ async def test_each_step_is_given_what_its_conversation_has_sent() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_reply_is_given_what_its_conversation_sent_while_it_waited() -> None:
+    # as the core gives a step what the conversation has sent by the time the
+    # step is judged, a request sent before the reply arrives included
+    handler = Handler(reports_histories())
+    await handler.request(request("a"))
+    await handler.request(request("b", then=ran("Oslo", "rain", "toolu_1")))
+
+    await handler.reply(reply(message({"type": "text", "text": "Rain."}), id="a"))
+
+    (after,) = [
+        explanation.split("|", 3)[3]
+        for explanation in _explanations(await handler.records("a"))
+        if explanation.startswith("AfterGenerate")
+    ]
+    assert after == str(
+        ["You are helpful.", "What is the weather?", "Looking.", "rain"]
+    )
+
+
+@pytest.mark.anyio
 async def test_a_new_attempt_at_a_sample_starts_its_history_afresh() -> None:
     # the model of a new attempt never saw the discarded attempt's turns
     handler = Handler(reports_histories())

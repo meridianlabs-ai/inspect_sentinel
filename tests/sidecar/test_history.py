@@ -4,6 +4,7 @@ from inspect_ai.model import (
     ChatMessageSystem,
     ChatMessageUser,
 )
+from inspect_ai.tool import ToolCall
 
 from inspect_sentinel.sidecar._history import record_sent
 from inspect_sentinel.sidecar._state import Conversation
@@ -64,3 +65,19 @@ def test_a_changed_message_is_a_new_version() -> None:
         _read("u:Weather?", "a:Sunny."),
         _read("u:Weather?", "a:Sunny, 20C."),
     ) == ["u:Weather?", "a:Sunny.", "a:Sunny, 20C."]
+
+
+def test_a_call_whose_arguments_are_written_in_another_order_is_the_same() -> None:
+    # Inspect compares messages by value, and a client may write a call's
+    # arguments in another order when it sends the call again
+    def calling(arguments: dict[str, str]) -> list[ChatMessage]:
+        call = ToolCall(id="call_1", function="get_weather", arguments=arguments)
+        return [
+            *_read("u:Weather?"),
+            ChatMessageAssistant(content="", tool_calls=[call]),
+        ]
+
+    assert _sent(
+        calling({"city": "Oslo", "units": "metric"}),
+        calling({"units": "metric", "city": "Oslo"}),
+    ) == ["u:Weather?", "a:"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from difflib import SequenceMatcher
 
@@ -36,5 +37,8 @@ def record_sent(conversation: Conversation, input: Sequence[ChatMessage]) -> Non
 
 
 def _key(message: ChatMessage) -> str:
-    # what the model is sent of the message
-    return message.model_copy(update=_NOT_SENT).model_dump_json()
+    # what the model is sent of the message, with each object's keys in one
+    # order, as Inspect compares messages by value and a client may write a
+    # call's arguments in another
+    dumped = message.model_copy(update=_NOT_SENT).model_dump(mode="json")
+    return json.dumps(dumped, sort_keys=True)

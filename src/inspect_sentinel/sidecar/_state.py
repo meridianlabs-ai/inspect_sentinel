@@ -197,8 +197,6 @@ class Held:
     """What the proxy said about the request."""
     attempt: Attempt | None = None
     """The attempt at the request, for an eval that names its requests."""
-    history: list[ChatMessage] = field(default_factory=list[ChatMessage])
-    """Every message the conversation had sent the model once the request was sent, for the steps of its reply."""
     exchange: Exchange = field(default_factory=Exchange)
     """What was decided so far during the exchange, for an Inspect client's `sentinel` field."""
 

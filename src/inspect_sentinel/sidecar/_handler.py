@@ -555,7 +555,6 @@ class Handler:
         # the request goes on to the model, as the client sent it with what
         # this sidecar added
         record_sent(conversation, messages)
-        held.history.extend(conversation.sent)
         await self._state.hold(request.id, held)
         # an Inspect client is told of the request's steps with the reply
         return answer
@@ -706,7 +705,9 @@ class Handler:
                 conversation=held.conversation,
                 input=held.input,
                 agent_messages=None,
-                history=list(held.history),
+                # as the core gives it: what the conversation has sent by
+                # now, another request sent meanwhile included
+                history=list(conversation.sent),
                 tools=held.offered.tools,
                 tool_choice=held.offered.tool_choice,
                 config=held.offered.config,
@@ -732,7 +733,7 @@ class Handler:
                 view=self._view(call, run),
                 input=held.input,
                 agent_messages=None,
-                history=list(held.history),
+                history=list(conversation.sent),
                 tools=held.offered.tools,
             )
             decision = await self._judge(held, run, step)
