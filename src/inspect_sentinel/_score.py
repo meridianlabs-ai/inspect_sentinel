@@ -185,7 +185,6 @@ async def score_step(
     shown, extract_refs = await step_as_str(
         await preprocess_step(step, p),
         nonce=nonce,
-        allow_placeholders=p.allow_placeholders,
     )
     eval = host.eval
     values = {

@@ -10,7 +10,6 @@ from inspect_ai.model import (
     ChatMessageSystem,
     ChatMessageTool,
     ChatMessageUser,
-    ContentImage,
     ContentReasoning,
     ContentText,
     ContentToolUse,
@@ -118,7 +117,6 @@ async def render(
     text, _ = await step_as_str(
         await preprocess_step(step, p),
         nonce=nonce,
-        allow_placeholders=p.allow_placeholders,
     )
     return text
 
@@ -564,26 +562,6 @@ async def test_transform_runs_last_on_the_thinned_step() -> None:
     )
     assert seen == [(["reply 1", "result a", "reply 2"], [])]
     assert "result a" not in rendered and "reply 2" in rendered
-
-
-@pytest.mark.parametrize("allow_placeholders", [False, True])
-@pytest.mark.anyio
-async def test_content_without_text_needs_placeholders_allowed(
-    allow_placeholders: bool,
-) -> None:
-    pictured = ChatMessageUser(
-        content=[
-            ContentText(text="look"),
-            ContentImage(image="data:image/png;base64,"),
-        ],
-        id="pictured",
-    )
-    preprocessor = StepPreprocessor(allow_placeholders=allow_placeholders)
-    if allow_placeholders:
-        assert "<image />" in await render(tool_step([pictured], None), preprocessor)
-    else:
-        with pytest.raises(ValueError, match="image"):
-            await render(tool_step([pictured], None), preprocessor)
 
 
 @pytest.mark.parametrize("nonce", [None, "3f9a1c7e"])

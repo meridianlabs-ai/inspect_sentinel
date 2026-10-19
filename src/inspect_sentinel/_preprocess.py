@@ -108,9 +108,6 @@ class StepPreprocessor(Generic[S]):
     omit_tool_usage: bool = False
     """Leave out a provider's own tool use (such as web search) recorded in a message."""
 
-    allow_placeholders: bool = False
-    """Render content that cannot be shown as text (images, audio, video, documents, provider data, unknown types) as a placeholder such as `<image />`. When False, as by default, `step_as_str()` raises instead. `Host.score` passes it to `step_as_str()`; a custom prompt passes it itself."""
-
     transform: Callable[[S], Awaitable[S]] | None = None
     """Any further change, applied last to the thinned step. It returns a step of the same type. The messages it is given are the host's own objects: copy one before changing it."""
 
@@ -166,7 +163,7 @@ async def preprocess_step(
 
 
 async def step_as_str(
-    step: Step, *, nonce: str | None = None, allow_placeholders: bool = False
+    step: Step, *, nonce: str | None = None
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
@@ -175,10 +172,6 @@ async def step_as_str(
     Args:
         step: The step to render, usually from `preprocess_step()`.
         nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker and message header; none by default. Scout needs at least 8 characters.
-        allow_placeholders: Render content that cannot be shown as text as a placeholder such as `<image />`; when False, raise instead.
-
-    Raises:
-        ValueError: If a message holds content that cannot be shown as text and `allow_placeholders` is False.
     """
     # Scout imports duckdb and pandas, so load it only when a monitor renders
     from inspect_scout import MessagesPreprocessor, message_numbering
@@ -192,8 +185,6 @@ async def step_as_str(
     async def text(messages: list[ChatMessage] | None, unknown: str) -> str:
         if messages is None:
             return unknown
-        if not allow_placeholders:
-            _check_renderable(messages)
         return await numbered(messages) if messages else ""
 
     request = isinstance(step, BeforeGenerate)
@@ -235,27 +226,6 @@ def scout_nonce(nonce: str) -> dict[str, str]:
     from inspect_scout import messages_as_str
 
     return {"nonce": nonce} if "nonce" in signature(messages_as_str).parameters else {}
-
-
-# what Scout renders as text; the rest it shows as a placeholder or drops.
-# Stands in for Scout's own allow_placeholders option until it has one
-_RENDERABLE = ("text", "reasoning", "tool_use")
-
-
-def _check_renderable(messages: list[ChatMessage]) -> None:
-    unrenderable = sorted(
-        {
-            content.type
-            for message in messages
-            if not isinstance(message.content, str)
-            for content in message.content
-            if content.type not in _RENDERABLE
-        }
-    )
-    if unrenderable:
-        raise ValueError(
-            f"The step holds content that cannot be shown as text ({', '.join(unrenderable)}), so the monitor model would see less than the agent did. Pass allow_placeholders=True to show it as a placeholder."
-        )
 
 
 class _Marks(StoreModel):
