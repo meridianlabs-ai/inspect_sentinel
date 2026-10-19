@@ -1013,7 +1013,7 @@ The eval copies `store` into the sample's own store, where scorers read it. The 
 }
 ```
 
-The sidecar drops the run's state: its sample's facts, its store, the calls waiting to be put back, and any open question to a person. The records of the run's requests stay for as long as records are kept, so a late `request_result` is still answered. A request that names an ended run is refused, as for a run a sentinel ended. Ending a run that has already ended has no effect, so the eval can safely retry. A run the sidecar never saw is not an error, and `state` is then `unknown`.
+The sidecar drops the run's state: its sample's facts, its store, the calls waiting to be put back, and any open question to a person. The records of the run's requests stay for as long as records are kept, so a late `request_result` is still answered. A request that names an ended run is refused, as for a run a sentinel ended. Ending a run that has already ended has no effect, so the eval can safely retry. A run the sidecar never saw is not an error, and `state` is then `unknown`. Such a run is left as it is, not refused from then on, so an early or mistaken `end_run` doesn't block a run that hasn't reached the sidecar yet.
 
 Inspect does not end a run when a sample fails and Inspect will try it again, because that sample has not been scored, and the new attempt is the same run.
 

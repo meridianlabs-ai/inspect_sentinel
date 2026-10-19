@@ -380,18 +380,20 @@ async def test_a_run_its_eval_ended_is_dropped_and_refused_from_then_on() -> Non
         ended = await _call(client, "end_run", {"run": "sample_123"})
         again = await _call(client, "end_run", {"run": "sample_123"})
         never = await _call(client, "end_run", {"run": "sample_999"})
+        never_again = await _call(client, "end_run", {"run": "sample_999"})
         result = await _call(client, "run_result", {"run": "sample_123"})
     later = await handler.request(_asked("y", irid="irid-2"))
+    unseen = await handler.request(_asked("z", irid="irid-3", sample_uuid="sample_999"))
 
-    assert [answered["result"]["state"] for answered in (ended, again, never)] == [
-        "ended",
-        "ended",
-        "unknown",
-    ]
+    assert [
+        answered["result"]["state"] for answered in (ended, again, never, never_again)
+    ] == ["ended", "ended", "unknown", "unknown"]
     assert result["error"]["code"] == UNKNOWN_RUN
     assert isinstance(later, Refuse)
     assert later.sentinel is not None
     assert later.sentinel["outcome"] == "terminate"
+    # a run the sidecar never saw is left as it was, not refused from then on
+    assert not isinstance(unseen, Refuse)
 
 
 @pytest.mark.anyio

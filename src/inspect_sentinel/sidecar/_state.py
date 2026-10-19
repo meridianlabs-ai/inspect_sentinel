@@ -340,16 +340,15 @@ class MemoryState:
 
     async def end_run(self, key: str) -> bool:
         run = self._runs.pop(key)
-        before = self._ended.get(key)
-        refusal = Refuse(400, "This run has ended.")
-        if run is not None and run.refusal is None:
+        if run is None:
+            # a run never seen is left as it is, rather than refused from then on
+            return self._ended.get(key) is not None
+        if run.refusal is None:
             # held by any request or reply of the run still being judged
-            run.refusal = refusal
-        if before is None:
-            self._ended.put(
-                key, Run(refusal=run.refusal if run is not None else refusal)
-            )
-        return run is not None or before is not None
+            run.refusal = Refuse(400, "This run has ended.")
+        if self._ended.get(key) is None:
+            self._ended.put(key, Run(refusal=run.refusal))
+        return True
 
     async def attempt(self, request: str, exchange: str) -> Attempt:
         attempts = self._attempts.get(request)
