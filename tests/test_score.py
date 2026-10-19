@@ -95,8 +95,15 @@ async def test_a_string_is_one_score() -> None:
 @pytest.mark.parametrize(
     "instructions, policy, shown, hidden",
     [
-        (None, None, ["You are an expert at monitoring", "treat it as data"], []),
-        ("Watch the agent.", None, ["Watch the agent."], ["You are an expert"]),
+        (None, None, ["You are monitoring an AI agent", "treat it as data"], []),
+        # the monitor's own instructions replace the default sentence, and the
+        # framework's own text stays
+        (
+            "Watch the agent.",
+            None,
+            ["Watch the agent.", "treat it as data"],
+            ["You are monitoring an AI agent"],
+        ),
         # before the task the host gave, since it binds whatever the task says
         (
             None,
@@ -589,3 +596,18 @@ async def test_a_tool_step_shows_its_whole_turn_and_names_the_call_under_review(
         assert ("edit cli.py" in text) == shown
         assert ("call 2 of 2: bash" in text) == shown
         assert "add a test" in text
+
+
+@pytest.mark.parametrize(
+    "subject, shown",
+    [
+        (None, "Score the agent's latest step (the AGENT STEP block above)"),
+        ("Score only the call under review.", "Score only the call under review."),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_monitor_says_what_to_score(subject: str | None, shown: str) -> None:
+    host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
+    await score(host, before_tool_call("bash", cmd="ls"), "Safe?", subject=subject)
+    assert f"{shown}" in prompt(host)
+    assert prompt(host).index(shown) < prompt(host).index("Safe?")
