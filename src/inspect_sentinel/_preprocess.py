@@ -176,7 +176,7 @@ async def preprocess_step(
 
 
 async def step_as_str(
-    step: Step, *, nonce: str | None = None
+    step: Step, *, nonce: str | None = None, turn: ChatMessage | None = None
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
@@ -185,6 +185,7 @@ async def step_as_str(
     Args:
         step: The step to render, usually from `preprocess_step()`.
         nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker and message header; none by default. Scout needs at least 8 characters.
+        turn: At a tool stage, the assistant message that made the call, with every call it makes, found in the step's `agent_messages` or `history` before they are windowed. The CALL block then shows the whole turn and names the call under review on an `[UNDER REVIEW]` line, so the monitor model sees the calls made beside it. None shows the step's call alone.
     """
     # Scout imports duckdb and pandas, so load it only when a monitor renders
     from inspect_scout import MessagesPreprocessor, message_numbering
@@ -254,7 +255,13 @@ async def step_as_str(
         if isinstance(step, AfterGenerate):
             parts.append(blocks(("REPLY", await text(_reply(step), ""))))
     else:
-        parts.append(blocks(("CALL", await text([_call(step)], ""))))
+        called = _call(step, turn)
+        under_review = (
+            f"\n[UNDER REVIEW{mark}] call {called.tool_calls.index(step.call) + 1} of {len(called.tool_calls)}: {step.call.function}"
+            if called.tool_calls and len(called.tool_calls) > 1
+            else ""
+        )
+        parts.append(blocks(("CALL", await text([called], "") + under_review)))
         if isinstance(step, AfterToolCall):
             parts.append(blocks(("RESULT", await text([step.result], ""))))
     return (
@@ -380,12 +387,38 @@ def _tool_choice(step: BeforeGenerate | AfterGenerate) -> str:
     return json.dumps(choice if isinstance(choice, str) else {"name": choice.name})
 
 
-def _call(step: BeforeToolCall | AfterToolCall) -> ChatMessage:
-    # the message holds only this call, under the id of the one that made it,
-    # so a cite of it resolves to that message
-    return ChatMessageAssistant(
-        id=step.message_id, content=step.message, tool_calls=[step.call]
+def _call(
+    step: BeforeToolCall | AfterToolCall, turn: ChatMessage | None
+) -> ChatMessageAssistant:
+    # the message holds this call, and with the turn its sibling calls, under
+    # the id of the one that made it, so a cite of it resolves to that message;
+    # the step's own call replaces its copy in the turn, as it may be modified
+    siblings = (
+        turn.tool_calls
+        if isinstance(turn, ChatMessageAssistant)
+        and turn.tool_calls
+        and any(c.id == step.call.id for c in turn.tool_calls)
+        else [step.call]
     )
+    return ChatMessageAssistant(
+        id=step.message_id,
+        content=step.message,
+        tool_calls=[step.call if c.id == step.call.id else c for c in siblings],
+    )
+
+
+def step_turn(step: Step) -> ChatMessage | None:
+    # at a tool stage, the assistant message that made the call, from the
+    # unthinned lists; None at a generate or when neither list holds it
+    if isinstance(step, BeforeGenerate | AfterGenerate):
+        return None
+    for messages in (step.agent_messages, step.history):
+        found = next(
+            (m for m in reversed(messages or []) if m.id == step.message_id), None
+        )
+        if found is not None:
+            return found
+    return None
 
 
 def _reply(step: AfterGenerate) -> list[ChatMessage]:

@@ -573,3 +573,19 @@ async def test_the_agents_text_is_not_read_as_a_template_variable() -> None:
 async def test_scoring_outside_a_step_raises() -> None:
     with pytest.raises(RuntimeError, match="outside a step"):
         await Host(FakeHost()).score(before_tool_call("bash", cmd="ls"), "Safe?")
+
+
+@pytest.mark.anyio
+async def test_a_tool_step_shows_its_whole_turn_and_names_the_call_under_review() -> (
+    None
+):
+    first = ToolCall(id="call_0", function="bash", arguments={"cmd": "edit cli.py"})
+    step = before_tool_call("bash", cmd="add a test")
+    turn = ChatMessageAssistant(id="msg_1", content="", tool_calls=[first, step.call])
+    for agent_messages, shown in (([turn], True), (None, False)):
+        host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
+        await score(host, replace(step, agent_messages=agent_messages), "Safe?")
+        text = prompt(host)
+        assert ("edit cli.py" in text) == shown
+        assert ("call 2 of 2: bash" in text) == shown
+        assert "add a test" in text
