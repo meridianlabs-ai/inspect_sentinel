@@ -466,7 +466,8 @@ def _stream(body: bytes) -> object:
     # the SDK gives a client each block as it is when the block stops, and
     # the message when it stops, and a client may act on either then, so
     # neither may change after
-    done: set[object] = set()
+    done: set[int] = set()
+    started = 0
     for event in sdk_events(body, "anthropic"):
         kind = event.get("type")
         if kind == "ping":
@@ -477,10 +478,26 @@ def _stream(body: bytes) -> object:
             )
         if stopped:
             raise UnreadableError("The reply stream goes on after its message stopped.")
-        if str(kind).startswith("content_block_") and event.get("index") in done:
-            raise UnreadableError("The reply stream changes a block after it stopped.")
-        if kind == "content_block_stop":
-            done.add(event.get("index"))
+        if str(kind).startswith("content_block_"):
+            index = event.get("index")
+            if index in done:
+                raise UnreadableError(
+                    "The reply stream changes a block after it stopped."
+                )
+            # blocks are numbered in order from 0, and the SDK finds a block by
+            # its place in a list, which a negative number counts from the end of
+            if type(index) is not int or not (
+                index == started
+                if kind == "content_block_start"
+                else 0 <= index < started
+            ):
+                raise UnreadableError(
+                    "The reply stream names a block by an index it doesn't have."
+                )
+            if kind == "content_block_start":
+                started += 1
+            elif kind == "content_block_stop":
+                done.add(index)
         stopped = kind == "message_stop"
         if kind == "content_block_delta":
             delta: object = event.get("delta")

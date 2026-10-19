@@ -155,11 +155,28 @@ _LATE_INPUT: dict[str, Any] = {
             "changes a block after it stopped",
         ),
         ([], "goes on after its message stopped"),
+        ([_LATE_INPUT | {"index": -1}], "by an index it doesn't have"),
+        ([_LATE_INPUT | {"index": True}], "by an index it doesn't have"),
+        ([_LATE_INPUT | {"index": 1}], "by an index it doesn't have"),
+        (
+            [
+                {
+                    "type": "content_block_start",
+                    "index": 2,
+                    "content_block": weather("Atlantis"),
+                }
+            ],
+            "by an index it doesn't have",
+        ),
     ],
     ids=[
         "an input delta after the block stopped",
         "the block started again",
         "after the message stopped",
+        "a delta to the last block, by a negative index",
+        "a delta to a block by a boolean",
+        "a delta to a block not started",
+        "a block started out of order",
     ],
 )
 async def test_a_stream_that_changes_what_the_sdk_gave_as_done_is_refused(
@@ -235,13 +252,13 @@ async def test_a_stream_that_changes_what_the_sdk_gave_as_done_is_refused(
         pytest.param(
             STREAM,
             _stream(_TEXT_DELTA, {"type": "message_stop"}),
-            "stream can't be read",
+            "by an index it doesn't have",
             id="stream with no start",
         ),
         pytest.param(
             STREAM,
             _stream(_START, _TEXT_DELTA, {"type": "message_stop"}),
-            "stream can't be read",
+            "by an index it doesn't have",
             id="text for a block that never started",
         ),
         pytest.param(STREAM, b"", "not a complete message", id="empty stream"),
