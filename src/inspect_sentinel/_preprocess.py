@@ -180,7 +180,7 @@ async def step_as_str(
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
-    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL` before a tool call, `TOOL CALL AND RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At a tool stage: `INPUT`, `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the agent loop's own list), `CALL` (the assistant's text and the call) and, after the call, `RESULT`. At a generate: `HISTORY`, `AGENT MESSAGES`, then the request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`, and after the generate, `REPLY`. A list the host could not provide (None) is named in its block. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header where the installed Scout takes a nonce. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
+    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At a tool stage: `INPUT`, `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the agent loop's own list), `CALL` (the assistant's text and the call) and, after the call, `RESULT`. At a generate: `HISTORY`, `AGENT MESSAGES`, then the request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`, and after the generate, `REPLY`. A list the host could not provide (None) is named in its block. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header where the installed Scout takes a nonce. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
 
     Args:
         step: The step to render, usually from `preprocess_step()`.
@@ -353,9 +353,9 @@ def _omitted(messages: list[ChatMessage], p: StepPreprocessor[S]) -> list[ChatMe
 def _step_block(step: Step) -> str:
     # named for what it holds, so the model can tell whether a call has run
     if isinstance(step, BeforeToolCall):
-        return "TOOL CALL"
+        return "TOOL CALL REQUEST"
     if isinstance(step, AfterToolCall):
-        return "TOOL CALL AND RESULT"
+        return "TOOL CALL RESULT"
     if isinstance(step, BeforeGenerate):
         return "MODEL REQUEST"
     return "MODEL REPLY"

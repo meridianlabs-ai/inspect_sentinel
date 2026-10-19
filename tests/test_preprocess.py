@@ -485,10 +485,10 @@ async def test_new_since_last_report_outside_the_runner_raises() -> None:
 @pytest.mark.parametrize(
     "step, block, contents",
     [
-        (tool_step(CONVERSATION, None), "TOOL CALL", ["cmd: ls"]),
+        (tool_step(CONVERSATION, None), "TOOL CALL REQUEST", ["cmd: ls"]),
         (
             after_tool_call("bash", "out.txt", cmd="ls"),
-            "TOOL CALL AND RESULT",
+            "TOOL CALL RESULT",
             ["cmd: ls", "out.txt"],
         ),
         (replace(before_generate_step(), input=[user("go")]), "MODEL REQUEST", ["go"]),
@@ -678,13 +678,13 @@ async def test_a_nonce_marks_every_block_and_every_message_header(
     )
     mark = "" if nonce is None else f" ({nonce})"
     assert [line for line in rendered.splitlines() if line.startswith("[B")] == [
-        f"[BEGIN AGENT STEP - TOOL CALL{mark}]",
+        f"[BEGIN AGENT STEP - TOOL CALL REQUEST{mark}]",
         f"[BEGIN INPUT{mark}]",
         f"[BEGIN HISTORY{mark}]",
         f"[BEGIN AGENT MESSAGES{mark}]",
         f"[BEGIN CALL{mark}]",
     ]
-    assert rendered.endswith(f"[END AGENT STEP - TOOL CALL{mark}]")
+    assert rendered.endswith(f"[END AGENT STEP - TOOL CALL REQUEST{mark}]")
     # Scout 0.5.5 and earlier write no nonce on message headers
     header = mark if scout_nonce("3f9a1c7e") else ""
     assert f"USER{header}:\ngo" in rendered
@@ -697,7 +697,7 @@ async def test_messages_are_numbered_in_block_order_and_cites_resolve() -> None:
     starts = [
         rendered.index(marker)
         for marker in (
-            "[BEGIN AGENT STEP - TOOL CALL]",
+            "[BEGIN AGENT STEP - TOOL CALL REQUEST]",
             "[BEGIN INPUT]",
             "[BEGIN HISTORY]",
             "[BEGIN AGENT MESSAGES]",
