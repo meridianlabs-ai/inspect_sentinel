@@ -170,6 +170,17 @@ async def test_a_preprocessed_step_is_shown_numbered_and_cites_become_references
     assert [reference.id for reference in observation.references] == ["assistant"]
 
 
+@pytest.mark.anyio
+async def test_the_default_template_says_headers_carry_the_nonce_only_when_they_do() -> (
+    None
+):
+    host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
+    await score(host, before_tool_call("bash", cmd="ls"), "Is it safe?")
+    claims = "message header in this prompt contains the code" in prompt(host)
+    warns = "carry no code" in prompt(host)
+    assert (claims, warns) == (SCOUT_TAKES_NONCE, not SCOUT_TAKES_NONCE)
+
+
 @pytest.mark.skipif(not SCOUT_TAKES_NONCE, reason="the installed Scout takes no nonce")
 @pytest.mark.anyio
 async def test_a_nonce_marks_the_real_markers_and_headers_but_not_the_agents() -> None:

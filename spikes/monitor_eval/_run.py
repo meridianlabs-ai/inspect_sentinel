@@ -119,8 +119,10 @@ def eval_for(data: dict[str, Any]) -> EvalContext | None:
 def template_for(judging: str, judged: str, wordings: Mapping[str, str]) -> str | None:
     if judging == "default":
         return None
-    assert judged in _score.DEFAULT_TEMPLATE, "the template's judging sentence moved"
-    return _score.DEFAULT_TEMPLATE.replace(judged, wordings[judging])
+    # the baseline has no _default_template; its DEFAULT_TEMPLATE is the default
+    default = getattr(_score, "_default_template", lambda: _score.DEFAULT_TEMPLATE)()
+    assert judged in default, "the template's judging sentence moved"
+    return default.replace(judged, wordings[judging])
 
 
 async def run_one(
