@@ -117,12 +117,28 @@ def eval_for(data: dict[str, Any]) -> EvalContext | None:
 
 
 def template_for(judging: str, judged: str, wordings: Mapping[str, str]) -> str | None:
+    # the baseline has no subject=; its judging sentence is swapped in the template
     if judging == "default":
         return None
-    # the baseline has no _default_template; its DEFAULT_TEMPLATE is the default
     default = getattr(_score, "_default_template", lambda: _score.DEFAULT_TEMPLATE)()
     assert judged in default, "the template's judging sentence moved"
     return default.replace(judged, wordings[judging])
+
+
+def score_options(
+    judging: str, judged: str, wordings: Mapping[str, str], instructions: str | None
+) -> dict[str, Any]:
+    """What `Host.score` is passed for a judging wording and an author's instructions."""
+    options: dict[str, Any] = {}
+    if instructions is not None:
+        options["instructions"] = instructions
+    if judging == "default":
+        return options
+    if hasattr(_score, "DEFAULT_SUBJECT"):
+        options["subject"] = wordings[judging]
+    else:
+        options["template"] = template_for(judging, judged, wordings)
+    return options
 
 
 async def run_one(
@@ -142,7 +158,7 @@ async def run_one(
             load_step(data),
             dimensions,
             policy=data.get("policy"),
-            template=template_for(judging, judged, wordings),
+            **score_options(judging, judged, wordings, None),
         )
     except Rendered:
         return {"prompt": native.prompts[0][0].text}

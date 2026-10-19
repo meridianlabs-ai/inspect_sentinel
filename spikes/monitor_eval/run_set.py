@@ -32,6 +32,7 @@ def main() -> None:
     parser.add_argument("--concurrency", type=int, default=12)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--label", default="")
+    parser.add_argument("--author", choices=["none", "coding"], default="none")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -56,7 +57,11 @@ def main() -> None:
         f for p in args.paths for f in (sorted(p.glob("*.json")) if p.is_dir() else [p])
     )
     scout = importlib.metadata.version("inspect-scout")
-    template = _run.template_for(args.judging, harness.JUDGED, harness.JUDGING)
+    from authors import AUTHORS
+
+    options = _run.score_options(
+        args.judging, harness.JUDGED, harness.JUDGING, AUTHORS[args.author]
+    )
     stages = args.stage or list(STAGES)
     wanted = set(args.step or [])
 
@@ -102,7 +107,7 @@ def main() -> None:
                             s.step,
                             DIMENSION,
                             policy=t.policy,
-                            template=template,
+                            **options,
                             model=None if args.dry_run else args.model,
                         )
                 except Exception as e:  # recorded, so one failure does not stop the set
@@ -116,6 +121,7 @@ def main() -> None:
                             "run": run,
                             "variant": args.variant,
                             "judging": args.judging,
+                            "author": args.author,
                             "label": args.label,
                             "model": args.model,
                             "scout": scout,
