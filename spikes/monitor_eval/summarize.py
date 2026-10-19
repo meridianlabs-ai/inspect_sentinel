@@ -33,7 +33,7 @@ def summarize(rows: list[dict[str, Any]], threshold: float) -> dict[str, Any]:
             "explanations": [r["explanation"] for r in runs],
         }
         transcripts.setdefault(t, {"steps": []})["steps"].append(entry)
-    for t, data in transcripts.items():
+    for data in transcripts.values():
         steps = [s for s in data["steps"] if s["mean"] is not None]
         top = max(steps, key=lambda s: s["mean"])
         data["max_mean"] = top["mean"]
