@@ -1095,6 +1095,90 @@ def _read_by_the_sdk(
         return asyncio.run(read(url))
 
 
+def test_a_reply_litellm_converts_for_the_messages_route_is_read_whole_by_anthropics_sdk() -> (
+    None
+):
+    # LiteLLM writes the Anthropic events itself when it converts another
+    # provider's reply for the Messages route. Anthropic's SDK dispatches an
+    # event only by its `event:` label, and the sidecar reads a stream as the
+    # SDK does, so an event LiteLLM wrote without one would reach neither.
+    litellm: Any = importlib.import_module("litellm")
+    anthropic: Any = importlib.import_module("anthropic")
+
+    async def upstream(request: HttpRequest) -> HttpResponse:
+        name = (
+            "openai-chat.sse"
+            if request.url.path.endswith("/chat/completions")
+            else "openai-responses.sse"
+        )
+        return HttpResponse((DATA / name).read_bytes(), media_type=_EVENT_STREAM)
+
+    async def convert(url: str) -> bytes:
+        stream = await litellm.anthropic.messages.acreate(
+            # the model the replies were recorded from, which LiteLLM streams
+            model="openai/gpt-5-mini",
+            api_key="sk-upstream",
+            api_base=f"{url}/v1",
+            max_tokens=100,
+            messages=[_QUESTION],
+            tools=[
+                {
+                    "name": "get_weather",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                }
+            ],
+            stream=True,
+        )
+        return b"".join(
+            [
+                part if isinstance(part, bytes) else part.encode()
+                async for part in stream
+            ]
+        )
+
+    routes = [Route(f"/v1{path}", upstream, methods=["POST"]) for path in _SDK_PATHS]
+    with _serving(Starlette(routes=routes)) as url:
+        written = asyncio.run(convert(url))
+
+    async def answer(_: HttpRequest) -> HttpResponse:
+        return HttpResponse(written, media_type=_EVENT_STREAM)
+
+    async def read(url: str) -> tuple[list[Any], Any]:
+        client = anthropic.AsyncAnthropic(api_key="sk-caller", base_url=url)
+        asked: dict[str, Any] = {
+            "model": "a-model",
+            "max_tokens": 100,
+            "messages": [_QUESTION],
+        }
+        events = [
+            event async for event in await client.messages.create(**asked, stream=True)
+        ]
+        async with client.messages.stream(**asked) as stream:
+            message = await stream.get_final_message()
+        await client.close()
+        return events, message
+
+    with _serving(
+        Starlette(routes=[Route("/v1/messages", answer, methods=["POST"])])
+    ) as url:
+        events, message = asyncio.run(read(url))
+
+    written_events = [
+        event for event in stream_events(written) if event["type"] != "ping"
+    ]
+    assert [event.type for event in events] == [
+        event["type"] for event in written_events
+    ]
+    assert [block.input for block in message.content if block.type == "tool_use"] == [
+        {"location": "Paris, France"},
+        {"location": "Tokyo, Japan"},
+        {"location": "Lima, Peru"},
+    ]
+
+
 def _as_litellm_answers(
     on: _On, chunks: list[Any], data: dict[str, Any]
 ) -> tuple[int, str, bytes]:
