@@ -231,21 +231,68 @@ def reports_histories() -> Protocol:
 
 
 @pytest.mark.anyio
-async def test_no_step_is_given_the_agent_messages_or_the_history() -> None:
+async def test_no_step_is_given_the_agent_messages() -> None:
     # the caller's own list is not known behind a proxy, only what each
-    # request carries, which is a step's `input`; the history is not built
-    # from the traffic yet
+    # request carries, which is a step's `input`
     handler = Handler(reports_histories())
     await handler.request(request(then=ran("Oslo", "rain", "toolu_1")))
 
     await handler.reply(reply(message(_LOOKING, weather("Lima", "toolu_2"))))
 
-    assert _explanations(await handler.records("x")) == [
-        "AfterToolCall|toolu_1|None|None",
-        "BeforeGenerate|-|None|None",
-        "AfterGenerate|-|None|None",
-        "BeforeToolCall|toolu_2|None|None",
+    assert [
+        explanation.split("|")[2]
+        for explanation in _explanations(await handler.records("x"))
+    ] == ["None"] * 4
+
+
+@pytest.mark.anyio
+async def test_each_step_is_given_what_its_conversation_has_sent() -> None:
+    # as in Inspect's own process: the history before a generate holds what
+    # earlier requests sent, and from the model's reply on, this request too
+    handler = Handler(reports_histories())
+    await handler.request(request("a"))
+    await handler.reply(reply(message(_LOOKING, weather("Oslo", "toolu_1")), id="a"))
+    await handler.request(request("b", then=ran("Oslo", "rain", "toolu_1")))
+    await handler.reply(reply(message({"type": "text", "text": "Rain."}), id="b"))
+
+    opening = ["You are helpful.", "What is the weather?"]
+    histories = [
+        explanation.split("|", 3)[::3]
+        for explanation in _explanations(await handler.records("a"))
+        + _explanations(await handler.records("b"))
     ]
+    assert histories == [
+        ["BeforeGenerate", "[]"],
+        ["AfterGenerate", str(opening)],
+        ["BeforeToolCall", str(opening)],
+        # the result is judged before the request that holds it is sent
+        ["AfterToolCall", str(opening)],
+        ["BeforeGenerate", str(opening)],
+        ["AfterGenerate", str([*opening, "Looking.", "rain"])],
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_new_attempt_at_a_sample_starts_its_history_afresh() -> None:
+    # the model of a new attempt never saw the discarded attempt's turns
+    handler = Handler(reports_histories())
+
+    async def turn(id: str, attempt: str, **then: Any) -> list[str]:
+        headers = inspect_headers(attempt=attempt)
+        await handler.request(replace(request(id, **then), headers=headers))
+        await handler.reply(reply(message({"type": "text", "text": "Rain."}), id=id))
+        return [
+            explanation.split("|", 3)[3]
+            for explanation in _explanations(await handler.records(id))
+        ]
+
+    await turn("a", "attempt_1")
+    later = await turn("b", "attempt_1", then=ran("Oslo", "rain", "toolu_1"))
+    fresh = await turn("c", "attempt_2")
+
+    opening = ["You are helpful.", "What is the weather?"]
+    assert later[0] == str(opening)
+    assert fresh == ["[]", str(opening)]
 
 
 @protocol

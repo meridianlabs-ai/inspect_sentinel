@@ -29,6 +29,7 @@ from .._step import (
 )
 from .._types import Sentinels
 from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request
+from ._history import record_sent
 from ._host import Record, RunHost, SidecarHost, stage
 from ._inspect_ai import VIEWED_TOOLS, tool_call_view
 from ._inspect_client import (
@@ -534,6 +535,8 @@ class Handler:
                 input=messages,
                 # the caller's own list is not known behind a proxy
                 agent_messages=None,
+                # what was sent before this request, which isn't sent yet
+                history=list(conversation.sent),
                 tools=sends.tools,
                 tool_choice=sends.tool_choice,
                 config=sends.config,
@@ -549,6 +552,10 @@ class Handler:
         refusal = _ended(run, marks)
         if refusal is not None:
             return self._with_field(refusal, proxy, held.exchange, "terminate")
+        # the request goes on to the model, as the client sent it with what
+        # this sidecar added
+        record_sent(conversation, messages)
+        held.history.extend(conversation.sent)
         await self._state.hold(request.id, held)
         # an Inspect client is told of the request's steps with the reply
         return answer
@@ -629,6 +636,8 @@ class Handler:
                 view=self._view(call, run),
                 input=sent.input if sent is not None else None,
                 agent_messages=None,
+                # as before the next generate: without what this request sends
+                history=list(conversation.sent),
                 tools=sent.tools if sent is not None else None,
             )
             judging = self._judging[key] = anyio.Event()
@@ -697,6 +706,7 @@ class Handler:
                 conversation=held.conversation,
                 input=held.input,
                 agent_messages=None,
+                history=list(held.history),
                 tools=held.offered.tools,
                 tool_choice=held.offered.tool_choice,
                 config=held.offered.config,
@@ -722,6 +732,7 @@ class Handler:
                 view=self._view(call, run),
                 input=held.input,
                 agent_messages=None,
+                history=list(held.history),
                 tools=held.offered.tools,
             )
             decision = await self._judge(held, run, step)

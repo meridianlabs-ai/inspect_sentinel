@@ -132,6 +132,15 @@ class Conversation:
     made: dict[str, Made] = field(default_factory=dict[str, Made])
     """For the latest tool calls the client was handed, by `occurrence()`, what the model was sent for the generate that made each. The oldest are dropped past `MADE_KEPT`, as each holds what the model was sent, which grows with the conversation."""
 
+    sent: list[ChatMessage] = field(default_factory=list[ChatMessage])
+    """Every message the conversation's requests sent the model, in the order first sent, each once: a step's `history`. Messages a compaction dropped from later requests are kept."""
+
+    last_sent: list[ChatMessage] = field(default_factory=list[ChatMessage])
+    """What the latest request sent the model, each message as first sent, which the next request is matched against."""
+
+    last_sent_keys: list[str] = field(default_factory=list[str])
+    """What the model was sent of each message of `last_sent`, as they are compared."""
+
 
 @dataclass
 class Run:
@@ -188,6 +197,8 @@ class Held:
     """What the proxy said about the request."""
     attempt: Attempt | None = None
     """The attempt at the request, for an eval that names its requests."""
+    history: list[ChatMessage] = field(default_factory=list[ChatMessage])
+    """Every message the conversation had sent the model once the request was sent, for the steps of its reply."""
     exchange: Exchange = field(default_factory=Exchange)
     """What was decided so far during the exchange, for an Inspect client's `sentinel` field."""
 
