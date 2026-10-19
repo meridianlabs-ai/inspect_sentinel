@@ -111,6 +111,7 @@ _NOT_SHOWN = frozenset(
 _JSON = "application/json"
 _LINE_END = re.compile(r"\r\n|\r|\n")
 _STREAM = "text/event-stream"
+_EXTRA_BODY = "A request with an `extra_body` field can't be judged, so it is refused."
 # the code a failed Responses stream gives for each status of a refusal, as
 # LiteLLM's own failed event gives them; any other client error is an
 # invalid request, and only a server error is one a client tries again
@@ -203,19 +204,29 @@ class LiteLLMGuardrail(CustomGuardrail):
         """Put a request to the sidecar. LiteLLM sends on `data`, which is changed in place when the sidecar replaces the request.
 
         Raises:
-            HTTPException: The request is refused, or the sidecar gave no usable answer and `unreachable_fallback` is `fail_closed`. LiteLLM answers the caller with it in the error format of the route.
+            HTTPException: The request is refused, by the sidecar or because it sets `extra_body`, or the sidecar gave no usable answer and `unreachable_fallback` is `fail_closed`. LiteLLM answers the caller with it in the error format of the route.
         """
         _withhold_inspect_headers(data)
         api = _APIS.get(call_type)
         if api is None:
             return data
+        if data.get("extra_body"):
+            # LiteLLM has the provider's SDK merge `extra_body` over the
+            # request's own fields after this, so what the sidecar judged
+            # would not be what the provider is sent. A provider's SDK merges
+            # its own `extra_body` before sending, so a client calling through
+            # one never sends this field. Refused whatever
+            # `unreachable_fallback` says, since nothing could judge it.
+            raise HTTPException(400, _EXTRA_BODY)
         try:
             record = _record(data)
             sent = _body(data, record)
             shown, as_sent = _readable_request(api[1], sent)
             headers = _headers(record)
             told: dict[str, Any] = {
-                "id": str(data.get("litellm_call_id") or uuid.uuid4()),
+                # LiteLLM's own id for the call is the caller's to set, so two
+                # requests in flight could share it
+                "id": str(uuid.uuid4()),
                 "provider": api[0],
                 "format": api[1],
                 "model": str(data.get("model") or ""),

@@ -44,6 +44,8 @@ from inspect_sentinel_litellm import LiteLLMGuardrail as LiteLLMGuardrail
 
 Requests to LiteLLM's `/v1/messages`, `/chat/completions` and `/responses` routes, and their replies, streamed or not. A request to another route goes on unread.
 
+A request on those routes with an `extra_body` field is refused, whatever `unreachable_fallback` says, because LiteLLM merges that field over the request after the sidecar has judged it. A client that calls through a provider's SDK never sends one: the SDK merges its own `extra_body` into the request before sending it.
+
 A streamed reply is held whole until the sidecar has answered, so a reply that is refused is refused before any of it has gone out.
 
 ## What it sends

@@ -485,7 +485,6 @@ def test_calls_the_guardrail_makes_fit_the_schema_file(
     _fits(_METHODS["judge_request"]["params"], request)
     _fits(_METHODS["judge_reply"]["params"], reply)
     told = {
-        "id": "call-1",
         "provider": on.provider,
         "format": on.format,
         "model": "a-model",
@@ -493,6 +492,9 @@ def test_calls_the_guardrail_makes_fit_the_schema_file(
     }
     assert {name: request[name] for name in told} == told
     assert {name: reply[name] for name in told} == told
+    # the guardrail's own id for the exchange, never LiteLLM's, which a
+    # caller can set
+    assert reply["id"] == request["id"] != "call-1"
     # LiteLLM names no runs of its own: the sidecar finds the run in
     # Inspect's header
     assert "run" not in request
@@ -522,6 +524,76 @@ def test_calls_the_guardrail_makes_fit_the_schema_file(
             assert list(stream_events(body)) == [
                 _written(chunk) for chunk in on.stream()
             ]
+
+
+def test_requests_that_share_litellms_call_id_are_told_apart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Any] = []
+    passed = _result({"action": "pass"})
+    # LiteLLM takes its call id from the caller's `x-litellm-call-id`
+    first, second = _data(_CHAT), _data(_CHAT)
+
+    async def both(guardrail: Any) -> None:
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, first, "acompletion")
+            await guardrail.async_pre_call_hook(_USER, None, second, "acompletion")
+            for data in (first, second):
+                await guardrail.async_post_call_success_hook(data, _USER, _CHAT.whole())
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_scripted(calls, *[passed] * 4)) as url:
+        asyncio.run(both(_make(monkeypatch, url)))
+
+    ids = [call["params"]["id"] for call in calls]
+    # each reply is asked about under its own request's id
+    assert ids[0] != ids[1]
+    assert ids[2:] == ids[:2]
+
+
+@pytest.mark.parametrize("fallback", ["fail_closed", "fail_open"])
+@pytest.mark.parametrize("on", [_MESSAGES, _CHAT, _RESPONSES])
+def test_a_request_that_sets_extra_body_is_refused_unasked(
+    monkeypatch: pytest.MonkeyPatch, on: _On, fallback: str
+) -> None:
+    calls: list[Any] = []
+    data = _data(on)
+    # LiteLLM would have this replace the messages the sidecar was shown
+    data["extra_body"] = {"messages": [{"role": "user", "content": "Other."}]}
+
+    with _serving(_scripted(calls)) as url:
+        with pytest.raises(HTTPException) as refused:
+            _exchange(
+                _make(monkeypatch, url, unreachable_fallback=fallback),
+                on,
+                data,
+                False,
+            )
+
+    assert refused.value.status_code == 400
+    assert "extra_body" in str(refused.value.detail)
+    assert calls == []
+
+
+def test_a_request_with_an_empty_extra_body_is_asked_about(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Any] = []
+    data = _data(_CHAT)
+    data["extra_body"] = {}
+
+    async def ask(guardrail: Any) -> Any:
+        try:
+            return await guardrail.async_pre_call_hook(_USER, None, data, "acompletion")
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_scripted(calls, _result({"action": "pass"}))) as url:
+        sent = asyncio.run(ask(_make(monkeypatch, url)))
+
+    assert sent is data
+    assert [call["method"] for call in calls] == ["judge_request"]
 
 
 def test_request_is_put_as_it_will_go_to_the_provider(
