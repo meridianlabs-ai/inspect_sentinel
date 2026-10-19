@@ -536,6 +536,26 @@ def test_calls_the_guardrail_makes_fit_the_schema_file(
             ]
 
 
+@pytest.mark.parametrize("fallback", ["fail_closed", "fail_open"])
+def test_a_request_whose_inspect_header_cant_be_read_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fallback: str
+) -> None:
+    # anyone can write the header, so it can't be a way past the sentinel
+    data = _data(_CHAT, {"x-inspect-context": "not json", "x-irid": "request-1"})
+
+    with _sidecar("Oslo", tmp_path) as url:
+        with pytest.raises(HTTPException) as refused:
+            _exchange(
+                _make(monkeypatch, url, unreachable_fallback=fallback),
+                _CHAT,
+                data,
+                False,
+            )
+
+    assert refused.value.status_code == 400
+    assert "x-inspect-context" in str(refused.value.detail)
+
+
 def test_requests_that_share_litellms_call_id_are_told_apart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

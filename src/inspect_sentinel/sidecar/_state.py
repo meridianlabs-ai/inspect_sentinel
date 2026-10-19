@@ -88,8 +88,8 @@ class Run:
     )
     """The run's conversations, by key."""
 
-    in_a_row: int = 0
-    """Rejected turns since a reply last passed."""
+    in_a_row: dict[str, int] = field(default_factory=dict[str, int])
+    """Rejected turns since a reply last passed, by the attempt an eval names, or `""`. A new attempt at a sample starts its own count, as its model never saw the earlier attempt's turns."""
 
     refusal: Refuse | None = None
     """What every later request is refused with, once a sentinel has ended a run an eval names."""
@@ -109,6 +109,8 @@ class Held:
     conversation: str
     named: bool
     """Whether an eval named the run."""
+    attempt: str
+    """The attempt at the sample an eval names, or `""`."""
     answered: bool
     """Whether the request continues one whose reply was passed on, so that it holds a turn the model wrote."""
     model: str

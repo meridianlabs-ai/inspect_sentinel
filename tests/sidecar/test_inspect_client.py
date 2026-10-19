@@ -3,6 +3,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from inspect_ai.util import StoreModel
 
 from inspect_sentinel._context import Context, InspectSample, ProxyContext
 from inspect_sentinel._decorators import protocol
@@ -431,13 +432,93 @@ async def test_a_client_that_didnt_put_a_withheld_turn_back_is_told_of_it() -> N
         json.dumps(SAMPLE | {"epoch": "2"}),
     ],
 )
-async def test_a_header_that_cant_be_read_leaves_the_request_unjudged(
-    value: str,
-) -> None:
-    with pytest.raises(UnreadableError, match="x-inspect-context"):
-        await Handler(weather_rule()).request(
-            replace(request(), headers={"x-inspect-context": value})
+async def test_a_header_that_cant_be_read_is_refused(value: str) -> None:
+    # refused, not left unjudged, which a proxy set to fail open would let go
+    answer = await Handler(weather_rule()).request(
+        replace(request(), headers={"x-inspect-context": value})
+    )
+
+    assert answer == Refuse(
+        400, "The request's x-inspect-context header isn't one this sidecar can read."
+    )
+
+
+@pytest.mark.anyio
+async def test_a_new_attempt_is_not_told_of_a_turn_rejected_in_the_last() -> None:
+    handler = Handler(weather_rule("reject", "Tokyo"))
+    await handler.request(_from_inspect(request("a")))
+    await handler.reply(reply(message(weather("Tokyo", "toolu_9")), id="a"))
+
+    # a retry of the request within the attempt is told of it
+    retried = await handler.request(_from_inspect(request("b")))
+    # Inspect's retry of the sample opens as the attempt it replaces did
+    afresh = await handler.request(_from_inspect(request("c"), attempt="attempt_2"))
+
+    assert isinstance(retried, Replace)
+    assert afresh == Pass()
+
+
+@pytest.mark.anyio
+async def test_a_new_attempt_counts_its_rejected_turns_in_a_row_afresh() -> None:
+    handler = Handler(weather_rule("reject", "Tokyo"))
+
+    async def rejected(id: str, attempt: str) -> Refuse:
+        await handler.request(_from_inspect(request(id), attempt=attempt))
+        answer = await handler.reply(
+            reply(message(weather("Tokyo", f"toolu_{id}")), id=id)
         )
+        assert isinstance(answer, Refuse)
+        return answer
+
+    await rejected("a", "attempt_1")
+    await rejected("b", "attempt_1")
+    third = await rejected("c", "attempt_2")
+
+    # the third rejected turn of the sample, but the first of its attempt
+    assert third.message == (
+        "A sentinel rejected the call to get_weather: Tokyo is not allowed."
+    )
+
+
+class _Lookups(StoreModel):
+    count: int = 0
+
+
+@protocol
+def counts_lookups_and_ends_at_storms() -> Protocol:
+    async def decide(context: Context, step: Step) -> Decision | None:
+        if isinstance(step, AfterToolCall) and "storm" in step.result.text:
+            return Decision.terminate("a storm")
+        if isinstance(step, BeforeToolCall):
+            lookups = context.store_as(_Lookups)
+            lookups.count += 1
+            return Decision.reject("counted", message=f"Lookup {lookups.count}.")
+        return None
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_new_attempt_keeps_the_runs_store_and_its_end() -> None:
+    handler = Handler(counts_lookups_and_ends_at_storms())
+    await handler.request(_from_inspect(request("a")))
+    await handler.reply(reply(message(weather("Oslo", "toolu_1")), id="a"))
+
+    # the store is the sample's, across its attempts
+    await handler.request(_from_inspect(request("b"), attempt="attempt_2"))
+    counted = await handler.reply(reply(message(weather("Oslo", "toolu_2")), id="b"))
+    # and a run a sentinel ended stays ended for a later attempt
+    await handler.request(
+        _from_inspect(request("c", then=ran("Oslo", "A storm.")), attempt="attempt_2")
+    )
+    ended = await handler.request(_from_inspect(request("d"), attempt="attempt_3"))
+
+    assert isinstance(counted, Refuse)
+    assert counted.message == "A sentinel rejected the call to get_weather: Lookup 2."
+    assert isinstance(ended, Refuse)
+    assert ended.message == (
+        "A sentinel ended this run at the result of the call to get_weather."
+    )
 
 
 @protocol

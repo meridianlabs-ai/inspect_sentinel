@@ -29,7 +29,7 @@ guardrails:
 | `api_base` | the sidecar's address. The sidecar listens on port 8900 unless it is started with another |
 | `mode` | both `pre_call` and `post_call`. A sentinel judges the tool calls in a reply, so the guardrail has to be shown replies as well as requests |
 | `default_on` | `true` to judge every request. Without it, LiteLLM judges only a request or a key that names the guardrail |
-| `unreachable_fallback` | optional: `fail_closed` refuses a call when the sidecar gives no usable answer, and `fail_open` lets it through. `fail_closed` unless set |
+| `unreachable_fallback` | optional: `fail_closed` refuses a call when the sidecar gives no usable answer, and `fail_open` lets it through. A replaced request that LiteLLM can't take counts as no usable answer, and with `fail_open` its reply goes on unjudged. `fail_closed` unless set |
 | `timeout` | optional: how many seconds the sidecar may take to answer. No limit unless set, because a sentinel may ask a person |
 | `sidecar_headers` | optional: request headers to show the sidecar besides Inspect's own, as a list of names, or prefixes ending in `*` |
 | `max_reply_bytes` | optional: the largest reply that is held to be judged. 32 MiB unless set |

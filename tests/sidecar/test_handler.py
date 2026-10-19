@@ -914,8 +914,9 @@ def reports_the_conversation() -> Protocol:
 @pytest.mark.parametrize(
     ("sample", "expected"),
     [
-        # a conversation is told apart within the run by how it opens
-        ("sample-uuid", r"sample-uuid/[0-9a-f]{16}"),
+        # a conversation is told apart within the run by the attempt at the
+        # sample it is part of, and then by how it opens
+        ("sample-uuid", r"sample-uuid/attempt_1/[0-9a-f]{16}"),
         # how the conversation opens stands in for a run no eval names
         (None, r"[0-9a-f]{16}"),
     ],

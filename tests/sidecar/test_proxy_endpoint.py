@@ -207,7 +207,9 @@ async def test_run_is_the_sample_the_eval_names() -> None:
         await _call(client, "judge_request", _REQUEST | {"headers": _FROM_INSPECT})
         answered = await _call(client, "judge_reply", _reply(message(weather("Oslo"))))
 
-    assert re.search(r": sample_123/[0-9a-f]{16}$", answered["result"]["message"])
+    assert re.search(
+        r": sample_123/attempt_1/[0-9a-f]{16}$", answered["result"]["message"]
+    )
 
 
 @pytest.mark.anyio

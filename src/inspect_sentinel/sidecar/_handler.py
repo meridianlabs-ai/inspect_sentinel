@@ -121,7 +121,9 @@ class Handler:
 
         If turns were rejected earlier in the conversation this request continues, they are added where they happened, so the model is still told.
 
-        A request with `x-inspect-context` belongs to the sample it names, which is its run. A refusal then carries the `sentinel` field.
+        A request with `x-inspect-context` belongs to the sample it names, which is its run. A refusal then carries the `sentinel` field. A request whose header can't be read is refused, rather than judged as another client's would be: it says it is an eval's, and a proxy set to let through what can't be judged would let it through unjudged.
+
+        A conversation belongs to one attempt at the sample. A new attempt starts its conversations, and its count of rejected turns in a row, afresh, while the run's store, and the run's end if a sentinel ended it, carry over. A client that retries a request within the attempt keeps the attempt's conversation.
 
         A request of a run that a sentinel has ended is refused, and the sentinel is not asked again. For a run no eval names, that is a request which continues the conversation the run was ended in.
 
@@ -129,7 +131,7 @@ class Handler:
             request: The request, as the proxy handed it over.
 
         Raises:
-            UnreadableError: If the request, or its `x-inspect-context` header, can't be read, so neither it nor its reply could be judged.
+            UnreadableError: If the request can't be read, so neither it nor its reply could be judged.
             TimeLimitError: If the handler has a time limit and the sentinel didn't finish within it.
         """
         with anyio.move_on_after(self._time_limit):
@@ -139,7 +141,7 @@ class Handler:
     async def reply(self, reply: Reply) -> Answer:
         """Judge a reply before the proxy passes any of it on.
 
-        The reply is put to the sentinel as an `AfterGenerate` step, then each tool call in it as a `BeforeToolCall` step, in order, leaving out a stage nothing in the sentinel watches. The first call that is rejected refuses the whole turn, and the rejection is kept for the later requests of its conversation. The third rejected turn in a row ends the run. A provider's error is passed on unjudged.
+        The reply is put to the sentinel as an `AfterGenerate` step, then each tool call in it as a `BeforeToolCall` step, in order, leaving out a stage nothing in the sentinel watches. The first call that is rejected refuses the whole turn, and the rejection is kept for the later requests of its conversation. The third rejected turn in a row within an attempt at a sample ends the run. A provider's error is passed on unjudged.
 
         For an Inspect client, a reply that goes on is answered with `Replace`, the reply with the `sentinel` field added, and a refusal carries the field. The field holds every step judged during the exchange, the request's first.
 
@@ -167,7 +169,10 @@ class Handler:
         return await self._state.records(id)
 
     async def _request(self, request: Request) -> Answer:
-        sample = inspect_sample(request.headers)
+        try:
+            sample = inspect_sample(request.headers)
+        except UnreadableError as ex:
+            return Refuse(400, str(ex))
         proxy = ProxyContext(
             provider=request.provider,
             model=request.model,
@@ -181,8 +186,11 @@ class Handler:
         # an Inspect eval names the run: its sample, across retries
         named = sample is not None
         key = sample.sample_uuid if sample is not None else opening
-        # a conversation is told apart within a named run by how it opens
-        conversation_key = f"{key}/{opening}" if named else key
+        attempt = sample.attempt if sample is not None else ""
+        # a conversation is told apart within a named run by the attempt it
+        # is part of, since a retry opens as the attempt it replaces did, and
+        # then by how it opens
+        conversation_key = f"{key}/{attempt}/{opening}" if named else key
         run = await self._state.run(key)
         conversation = run.conversations.setdefault(conversation_key, Conversation())
         messages = await read_request(
@@ -223,6 +231,7 @@ class Handler:
             run=key,
             conversation=conversation_key,
             named=named,
+            attempt=attempt,
             answered=any(mark in run.answered for mark in marks[:-1]),
             model=_model(request.provider, request.model),
             recorder=await self._state.recorder(request.id),
@@ -442,7 +451,7 @@ class Handler:
         conversation: Conversation,
         message: ChatMessageAssistant | None,
     ) -> Pass:
-        run.in_a_row = 0
+        run.in_a_row.pop(held.attempt, None)
         if not held.named:
             run.answered.add(held.mark)
         if message is not None:
@@ -478,8 +487,8 @@ class Handler:
             for other in message.tool_calls or []
         }
         held.exchange.withheld = Withheld(message, told)
-        run.in_a_row += 1
-        if run.in_a_row >= _MAX_CONSECUTIVE_REJECTIONS:
+        in_a_row = run.in_a_row[held.attempt] = run.in_a_row.get(held.attempt, 0) + 1
+        if in_a_row >= _MAX_CONSECUTIVE_REJECTIONS:
             return self._end(
                 held,
                 run,
@@ -542,7 +551,7 @@ class Handler:
     def _end(self, held: Held, run: Run, where: str) -> Refuse:
         for conversation in run.conversations.values():
             conversation.rejected.clear()
-        run.in_a_row = 0
+        run.in_a_row.clear()
         refusal = Refuse(400, f"A sentinel ended this run {where}.")
         if held.named:
             run.refusal = refusal
