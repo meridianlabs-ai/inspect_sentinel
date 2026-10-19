@@ -319,7 +319,12 @@ def serve(handler: Handler, arguments: argparse.Namespace) -> None:
         uvicorn.Server(uvicorn.Config(app, host=arguments.host, port=port))
         for app, port in apps(handler, arguments)
     ]
-    anyio.run(_serve_all, servers)
+    try:
+        anyio.run(_serve_all, servers)
+    except KeyboardInterrupt:
+        # a server that stops for Ctrl-C raises it again once it has stopped,
+        # and stopping is what was asked, as `uvicorn.run` takes it
+        pass
 
 
 async def _serve_all(servers: list[uvicorn.Server]) -> None:

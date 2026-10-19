@@ -1,6 +1,11 @@
 import argparse
 import json
 import logging
+import os
+import signal
+import socket
+import subprocess
+import sys
 import threading
 import time
 from dataclasses import replace
@@ -16,6 +21,7 @@ from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, Refuse
+from inspect_sentinel.sidecar._eval_endpoint import TOKEN_VARIABLE
 from inspect_sentinel.sidecar._proxy_endpoint import proxy_app
 from inspect_sentinel.sidecar._registration import RegistrationError, TaskFacts
 from inspect_sentinel.sidecar._serve import (
@@ -335,3 +341,64 @@ def test_a_configuration_in_json_indented_with_tabs_is_read(tmp_path: Path) -> N
     arguments = parse_arguments(["--sentinel", str(config)])
 
     assert (arguments.sentinel_config, arguments.port) == ({"name": "no_tokyo"}, 9000)
+
+
+_RULE = """
+from inspect_sentinel import BeforeToolCall, Context, Decision, Escalations, protocol
+
+
+@protocol
+def lets_all_through():
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        return Decision.proceed()
+
+    return decide
+"""
+
+
+@pytest.mark.parametrize("ports", [1, 2], ids=["one port", "a port for evals"])
+def test_ctrl_c_stops_the_sidecar_cleanly(ports: int, tmp_path: Path) -> None:
+    (tmp_path / "lets_all_through.py").write_text(_RULE)
+    free: list[int] = []
+    for _ in range(ports):
+        with socket.socket() as found:
+            found.bind(("127.0.0.1", 0))
+            free.append(found.getsockname()[1])
+    given = ["--port", str(free[0])]
+    if ports == 2:
+        given += ["--eval-port", str(free[1])]
+    serving = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import lets_all_through\n"
+            "from inspect_sentinel.sidecar.__main__ import main\n"
+            "main()",
+            "--sentinel",
+            "lets_all_through",
+            *given,
+        ],
+        cwd=tmp_path,
+        env=os.environ | {TOKEN_VARIABLE: "s3cret"},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                httpx.get(f"http://127.0.0.1:{free[0]}/health", timeout=1)
+                break
+            except httpx.HTTPError:
+                assert serving.poll() is None and time.monotonic() < deadline
+                time.sleep(0.1)
+        serving.send_signal(signal.SIGINT)
+        _, errors = serving.communicate(timeout=30)
+    finally:
+        if serving.poll() is None:
+            serving.kill()
+
+    assert serving.returncode == 0
+    assert b"Traceback" not in errors
