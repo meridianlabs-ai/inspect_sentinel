@@ -135,6 +135,21 @@ Repository: `inspect_ai`. Depends on: PRs 5, 6 and 7 (above).
 - `run_result` before scoring, and `end_run` after.
 - Tests: in inspect_ai's own suite, with a stand-in sidecar; and the conformance suite in `sidecar.md` section 11, comparing Inspect's transcript in process and through a sidecar.
 
+## Follow-up: trusted run identity and termination scopes
+
+Repositories: `inspect_sentinel`, `inspect_ai`, and the deployment's proxy or gateway where needed. Design and implement in a separate PR after PRs 6 and 8, once registration and the Inspect client are available. Tracked in [#117](https://github.com/meridianlabs-ai/inspect_sentinel/issues/117), following the run-identity review on PR #116; it does not block PRs 4 and 5.
+
+In ordinary Inspect evals, the trusted host sets the run identity. A caller that can make its own authenticated proxy requests can instead supply a fresh `sample_uuid` and escape a prior run's termination, or claim another run's identity. Registration replay and re-registration need an explicit lifecycle contract too; the reproduced UUID-switch case does not establish that the current registration implementation clears an existing run.
+
+- Define who may create, name, restart or resume a run, using authentication and authorization and keeping privileged registration or run-creation credentials outside the agent.
+- Bind a canonical run to authorized eval, task, sample and epoch context during registration or privileged sample startup. Consider a scoped credential or a trusted proxy identity without prescribing a new token protocol. A protected model route must not treat missing identity as permission to create an anonymous run.
+- Use fixed server-owned task definitions where appropriate, and distinguish permission to supply task facts from authority over a run. Preserve prior decisions for the same canonical execution across registration replay or replacement, while allowing authorized independent runs and epochs.
+- Consider explicit termination scopes: the current run, a dataset sample across epochs within an eval/task, or a whole task execution within an eval. Specify authorization, effects on concurrent samples, host cancellation and scoring before adding broader scopes.
+- Define how credential lifetime, retained termination state, expiry and restart interact. Do not infer shared identity by matching conversation contents, since legitimate independent epochs can have identical conversations.
+- Tests: identity changes, omitted required identity and re-registration cannot evade decisions without run-creation authority; one principal cannot claim another's run; authorized independent executions stay separate; any broader termination scope covers every execution it names.
+
+Malformed Inspect context failing closed remains a separate fix for PR #116 and is not deferred by this follow-up.
+
 ## PR 9: smaller asks of inspect_ai
 
 Repository: `inspect_ai`. Depends on: nothing. Each can be its own pull request, and each needs an accepted issue in inspect_ai first.
@@ -205,9 +220,7 @@ Done when a tool call stays held while its review question is visible, approval 
 
 These need design first. Each names the repositories it would touch.
 
-- How Inspect says that a run is new or resumed. `inspect_sentinel` and `inspect_ai`.
 - Model calls that Inspect answers from its cache, which never reach the proxy. `inspect_ai`, and possibly `inspect_sentinel`.
 - Filling `step.history` from each conversation the sidecar keeps, with the turns before a compaction, once the core has the as-sent `step.history` (R10, sentinel #98). `inspect_sentinel`.
 - Tallies kept at the task level. `inspect_sentinel`.
-- A credential tied to the evals it may name. `inspect_sentinel`.
 - A state implementation that processes share and that outlasts a restart. `inspect_sentinel`.
