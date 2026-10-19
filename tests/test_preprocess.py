@@ -490,11 +490,11 @@ async def test_new_since_last_report_outside_the_runner_raises() -> None:
             ["cmd: ls", "out.txt"],
         ),
         (replace(before_generate_step(), input=[user("go")]), "MODEL REQUEST", ["go"]),
-        (after_generate_step(), "MODEL REPLY", ["ASSISTANT:\ndone"]),
+        (after_generate_step(), "MODEL REPLY", ["go", "ASSISTANT:\ndone"]),
         (
             replace(after_generate_step(), output=ModelOutput(model="m", choices=[])),
             "MODEL REPLY",
-            ["ASSISTANT:"],
+            ["go", "ASSISTANT:"],
         ),
     ],
 )
@@ -506,6 +506,25 @@ async def test_the_step_comes_last_in_a_block_named_for_its_stage(
     assert rendered.endswith(f"[END AGENT STEP - {block}]")
     step_block = rendered.split(f"[BEGIN AGENT STEP - {block}]")[1]
     assert all(text in step_block for text in contents)
+
+
+@pytest.mark.anyio
+async def test_a_reply_holds_its_request_then_the_reply() -> None:
+    request = replace(
+        before_generate_step(),
+        input=CONVERSATION[1:],
+        tools=[ToolInfo(name="bash", description="Run a command.")],
+    )
+    reply = replace(after_generate_step(), input=request.input, tools=request.tools)
+    asked, answered = await render(request), await render(reply)
+    # the reply's block is the request's, with the reply added
+    assert answered == asked.replace(
+        "[BEGIN AGENT STEP - MODEL REQUEST]", "[BEGIN AGENT STEP - MODEL REPLY]"
+    ).replace(
+        "[END AGENT STEP - MODEL REQUEST]",
+        "\n[BEGIN REPLY]\n[M5] ASSISTANT:\ndone\n\n[END REPLY]\n"
+        "[END AGENT STEP - MODEL REPLY]",
+    )
 
 
 @pytest.mark.anyio
