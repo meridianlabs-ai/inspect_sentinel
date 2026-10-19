@@ -482,6 +482,16 @@ def _check_streamed_call(
             heard.append(str(entry.get(field)))
     for data in others:
         kind = data.get("type")
+        # a client may follow an event to its call by the item id, or by a
+        # field the event shares with the call's item
+        if data.get("item_id", out.get("id")) != out.get("id") or any(
+            out.get(key) != value
+            for key, value in data.items()
+            if key in out and key not in ("type", "status", field)
+        ):
+            raise UnreadableError(
+                "The edited reply stream gives a call other details in an event than in the output."
+            )
         if prefix and kind == f"{prefix}.delta":
             streamed += str(data.get("delta", ""))
         elif prefix and kind == f"{prefix}.done":

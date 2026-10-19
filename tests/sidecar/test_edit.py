@@ -323,6 +323,31 @@ def _items_at(event: dict[str, Any], index: int) -> list[dict[str, Any]]:
     return [cast(dict[str, Any], item) for item in found if isinstance(item, dict)]
 
 
+@pytest.mark.parametrize(
+    ("event", "change"),
+    [
+        ("response.function_call_arguments.delta", {"item_id": "fc_other"}),
+        ("response.function_call_arguments.done", {"item_id": "fc_other"}),
+        # as the API's reference gives the done event, though the SDK doesn't
+        ("response.function_call_arguments.done", {"name": "delete_files"}),
+    ],
+    ids=["a delta's item", "a done event's item", "a done event's name"],
+)
+def test_a_responses_call_whose_argument_events_name_another_call_is_refused(
+    event: str, change: dict[str, str]
+) -> None:
+    events = _responses_events()
+    index = _call_index(events)
+    next(
+        found
+        for found in events
+        if found["type"] == event and found["output_index"] == index
+    ).update(change)
+
+    with pytest.raises(UnreadableError, match="other details"):
+        _check(events)
+
+
 def _as_custom_tool_call(events: list[dict[str, Any]], index: int) -> None:
     # the call made into a call of a custom tool, whose input is streamed as a
     # function call's arguments are
