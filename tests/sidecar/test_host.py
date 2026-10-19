@@ -28,7 +28,7 @@ _CALL = BeforeToolCall(
     call=ToolCall(id="toolu_1", function="get_weather", arguments={}),
     view=ToolCallView(),
     input=None,
-    history=None,
+    agent_messages=None,
 )
 
 
@@ -69,7 +69,7 @@ async def test_a_person_cannot_be_asked_at_a_generate_stage() -> None:
         model="anthropic/claude-test",
         conversation="c",
         input=[ChatMessageUser(content="Hello")],
-        history=None,
+        agent_messages=None,
         tools=[],
         tool_choice="none",
         config=GenerateConfig(),

@@ -585,7 +585,7 @@ def reports_result() -> Protocol:
                     str(step.result.error is not None),
                     str(step.output),
                     _roles(step.input),
-                    _roles(step.history),
+                    _roles(step.agent_messages),
                     str(step.truncated),
                 ]
             )

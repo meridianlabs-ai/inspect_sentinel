@@ -102,7 +102,7 @@ def reports_generates() -> Protocol:
                 [
                     step.model,
                     _roles(step.input),
-                    str(step.history),
+                    str(step.agent_messages),
                     str([tool.name for tool in step.tools]),
                     str(step.tool_choice),
                     str(step.config.max_tokens),
@@ -204,26 +204,28 @@ _LOOKING = {"type": "text", "text": "Looking."}
 def reports_histories() -> Protocol:
     async def decide(context: Context, step: Step) -> Decision | None:
         call = step.call.id if isinstance(step, BeforeToolCall | AfterToolCall) else "-"
-        texts = None if step.history is None else [m.text for m in step.history]
-        return Decision.proceed(f"{type(step).__name__}|{call}|{texts}")
+        lists = [step.agent_messages, step.history]
+        texts = [None if m is None else [message.text for message in m] for m in lists]
+        return Decision.proceed(f"{type(step).__name__}|{call}|{texts[0]}|{texts[1]}")
 
     return decide
 
 
 @pytest.mark.anyio
-async def test_no_step_is_given_a_history() -> None:
+async def test_no_step_is_given_the_agent_messages_or_the_history() -> None:
     # the caller's own list is not known behind a proxy, only what each
-    # request carries, which is a step's `input`
+    # request carries, which is a step's `input`; the history is not built
+    # from the traffic yet
     handler = Handler(reports_histories())
     await handler.request(request(then=ran("Oslo", "rain", "toolu_1")))
 
     await handler.reply(reply(message(_LOOKING, weather("Lima", "toolu_2"))))
 
     assert _explanations(await handler.records("x")) == [
-        "AfterToolCall|toolu_1|None",
-        "BeforeGenerate|-|None",
-        "AfterGenerate|-|None",
-        "BeforeToolCall|toolu_2|None",
+        "AfterToolCall|toolu_1|None|None",
+        "BeforeGenerate|-|None|None",
+        "AfterGenerate|-|None|None",
+        "BeforeToolCall|toolu_2|None|None",
     ]
 
 

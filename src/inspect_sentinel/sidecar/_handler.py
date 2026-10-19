@@ -208,7 +208,7 @@ class Handler:
                 conversation=conversation_key,
                 input=messages,
                 # the caller's own list is not known behind a proxy
-                history=None,
+                agent_messages=None,
                 tools=sends.tools,
                 tool_choice=sends.tool_choice,
                 config=sends.config,
@@ -292,7 +292,7 @@ class Handler:
                 output="",
                 view=tool_call_view(call),
                 input=sent.input if sent is not None else None,
-                history=None,
+                agent_messages=None,
                 tools=sent.tools if sent is not None else None,
             )
             judging = self._judging[key] = anyio.Event()
@@ -339,7 +339,7 @@ class Handler:
                 model=held.model,
                 conversation=held.conversation,
                 input=held.input,
-                history=None,
+                agent_messages=None,
                 tools=held.offered.tools,
                 tool_choice=held.offered.tool_choice,
                 config=held.offered.config,
@@ -362,7 +362,7 @@ class Handler:
                 call=call,
                 view=tool_call_view(call),
                 input=held.input,
-                history=None,
+                agent_messages=None,
                 tools=held.offered.tools,
             )
             decision = await self._judge(held, run, step)
