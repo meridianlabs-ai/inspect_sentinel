@@ -10,6 +10,31 @@ from ._report import Decision, Reported
 
 
 @dataclass(frozen=True)
+class HumanDecision:
+    """A decision a person made through `human()` at an earlier step of the agent's conversation. `human_decisions` on a step holds them, and `human_decision_for()` finds the one covering a call.
+
+    Use it to annotate the past call it covers when rendering the conversation into a prompt, such as "reviewed by a person: approved", so a monitor does not flag already-reviewed history again. It is not a standing permission: never lower suspicion of a new call because it resembles one a person approved. The same command can mean something else once the state has changed (an `rm -rf build/` approved in one working directory deletes something else after a `cd`), and an agent can get a benign call approved and then issue a similar harmful one.
+    """
+
+    stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
+    """The stage of the step it was made at, as `SentinelEvent.stage` records it: `tool_call`, `tool_result` or `model_output`, the stages `human()` asks at."""
+
+    step_id: str
+    """The id of the step it was made at, as `SentinelEvent.step_id` records it: the tool call id at a tool stage, the assistant message id at `model_output`."""
+
+    call_ids: tuple[str, ...]
+    """The tool calls the decision covered: the step's call at a tool stage, and every call the turn makes at `model_output`. How a prompt says which calls a person approved. Empty for a review of a turn with no tool calls, which has no stable key to annotate by: `step_id` is then the turn's message id, which is not stable across scaffolds that copy or rebuild their messages."""
+
+    decided: Reported[Decision]
+    """The `human()` instance that asked (`name`, `path`, `function`) and a detached copy of its decision, which carries nothing of the step it was made at beyond its own fields: `approve` is a `proceed`, with no explanation, and on a `reject` or `terminate` the person's reason is the `explanation` (and, for a `reject`, the `message`). The reason is untrusted text, which can quote the agent, so quote it when rendering it into a prompt.
+
+    It is what the person decided, not what happened to the step: beside other protocols in a `concurrent()`, a peer's `reject` outranks the person's `approve`, so a call a person approved may not have run. Mark only calls that ran, which have a result without an error in the history (a call rejected before it ran also gets a tool message, with an `approval` error, so a tool message alone does not prove the call ran).
+
+    A prompt the person cancelled or closed without choosing is recorded as the surface's fail-closed answer, a `reject` or `terminate`, and its `explanation` says so (for example "ACP client cancelled the permission request."). Render the explanation, and do not present such a decision as the person's judgment.
+    """
+
+
+@dataclass(frozen=True)
 class BeforeGenerate:
     """A generate by the agent's model, before the request is sent and before the cache lookup.
 
@@ -30,6 +55,11 @@ class BeforeGenerate:
 
     history: list[ChatMessage] | None = field(default=None, kw_only=True)
     """Every message this agent instance has sent to the model so far, in the order sent: the inputs of all its model calls taken together, each message once, where it was first sent. The opening prompts as the model saw them come first, a message the scaffold rewrote before sending shows as it was sent, and turns a compaction later dropped are still here. A message sent again changed (the same id with different content) appears again as its new version, where that version was sent; a message the host rebuilds with a fresh id for every call, such as a configured system message, is not repeated while it is unchanged and at the same position as in the call before, nor when its latest rebuilt copy is sent again later; a scaffold that alternates between two rebuilt copies of one message can see it repeated. inspect_ai sends an earlier assistant turn without its reasoning under `reasoning_history="last"`, so such a turn appears once with its reasoning and once without. A message the scaffold changes in place after sending it shows its current content. The model's outputs appear once a later call sends them back. It does not yet include `input`, which is about to be sent. Only this agent instance's model calls count: a sub-agent or a parallel agent has its own conversation, and a compaction summary, a scorer or a monitor is not an agent turn. A model call the scaffold makes itself inside its agent loop does count; a scaffold keeps one out by running it as an agent of its own, through `inspect_ai.agent.run()`. Sub-agents inside one bridged CLI share its conversation. `None` when the host cannot produce it: under a proxy, which sees one request at a time, or in a replay from a log, which does not yet record which model calls were agent turns. In-process Inspect always provides it. The messages are the host's own, mostly shared with `agent_messages`; monitors must not mutate them."""
+
+    human_decisions: tuple[HumanDecision, ...] | None = field(
+        default=None, kw_only=True
+    )
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, for annotating the past calls a person already reviewed when rendering the conversation, so a monitor does not flag them again; `human_decision_for()` finds the one covering a call. Not a standing permission: mark the exact call, and never lower suspicion of a new call that resembles an approved one (see `HumanDecision`). A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. A prompt the person cancelled or closed without choosing is recorded as the surface's fail-closed answer, with an explanation that says so; render it, never as the person's judgment. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     tools: list[ToolInfo]
     """The tools the model is offered, after `tool_choice` filtering. In-process these are the host's own objects; monitors must not mutate them."""
@@ -65,6 +95,11 @@ class AfterGenerate:
 
     history: list[ChatMessage] | None = field(default=None, kw_only=True)
     """Every message this agent instance has sent to the model so far, in the order sent, or `None` when the host cannot produce it, as for `BeforeGenerate.history`. It includes `input`; `output` is not in it yet. Monitors must not mutate them."""
+
+    human_decisions: tuple[HumanDecision, ...] | None = field(
+        default=None, kw_only=True
+    )
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, for annotating the past calls a person already reviewed when rendering the conversation, so a monitor does not flag them again; `human_decision_for()` finds the one covering a call. Not a standing permission: mark the exact call, and never lower suspicion of a new call that resembles an approved one (see `HumanDecision`). A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. A prompt the person cancelled or closed without choosing is recorded as the surface's fail-closed answer, with an explanation that says so; render it, never as the person's judgment. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     tools: list[ToolInfo]
     """The tools the model was offered; monitors must not mutate them."""
@@ -118,6 +153,11 @@ class BeforeToolCall:
     history: list[ChatMessage] | None = field(default=None, kw_only=True)
     """Every message this agent instance has sent to the model so far, in the order sent: the inputs of all its model calls taken together, each message once, where it was first sent. The opening prompts as the model saw them come first, a message the scaffold rewrote before sending shows as it was sent, and turns a compaction later dropped are still here. A message sent again changed (the same id with different content) appears again as its new version, where that version was sent; a message the host rebuilds with a fresh id for every call, such as a configured system message, is not repeated while it is unchanged and at the same position as in the call before, nor when its latest rebuilt copy is sent again later; a scaffold that alternates between two rebuilt copies of one message can see it repeated. inspect_ai sends an earlier assistant turn without its reasoning under `reasoning_history="last"`, so such a turn appears once with its reasoning and once without. A message the scaffold changes in place after sending it shows its current content. The model's outputs appear once a later call sends them back. It includes the input of the call that produced this tool call. Only this agent instance's model calls count: a sub-agent or a parallel agent has its own conversation, and a compaction summary, a scorer or a monitor is not an agent turn. A model call the scaffold makes itself inside its agent loop does count; a scaffold keeps one out by running it as an agent of its own, through `inspect_ai.agent.run()`. Sub-agents inside one bridged CLI share its conversation. `None` when the host cannot produce it: under a proxy, which sees one request at a time, or in a replay from a log, which does not yet record which model calls were agent turns. In-process Inspect always provides it. The messages are the host's own, mostly shared with `agent_messages`; monitors must not mutate them."""
 
+    human_decisions: tuple[HumanDecision, ...] | None = field(
+        default=None, kw_only=True
+    )
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, for annotating the past calls a person already reviewed when rendering the conversation, so a monitor does not flag them again; `human_decision_for()` finds the one covering a call. Not a standing permission: mark the exact call, and never lower suspicion of a new call that resembles an approved one (see `HumanDecision`). A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. A prompt the person cancelled or closed without choosing is recorded as the surface's fail-closed answer, with an explanation that says so; render it, never as the person's judgment. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
+
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
@@ -156,6 +196,11 @@ class AfterToolCall:
     history: list[ChatMessage] | None = field(default=None, kw_only=True)
     """Every message this agent instance has sent to the model so far, in the order sent, or `None` when the host cannot produce it, as for `BeforeToolCall.history`. It includes the input of the call that produced this tool call; `result` is not in it yet. Monitors must not mutate them."""
 
+    human_decisions: tuple[HumanDecision, ...] | None = field(
+        default=None, kw_only=True
+    )
+    """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, for annotating the past calls a person already reviewed when rendering the conversation, so a monitor does not flag them again; `human_decision_for()` finds the one covering a call. Not a standing permission: mark the exact call, and never lower suspicion of a new call that resembles an approved one (see `HumanDecision`). A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. A prompt the person cancelled or closed without choosing is recorded as the surface's fail-closed answer, with an explanation that says so; render it, never as the person's judgment. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
+
     escalations: tuple[Reported[Decision], ...] = ()
     """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
@@ -168,3 +213,18 @@ class AfterToolCall:
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall
 """The union, for code that handles any stage: a protocol, or a host."""
+
+
+def human_decision_for(step: Step, call_id: str) -> HumanDecision | None:
+    """The latest decision a person made through `human()` that covers the tool call `call_id`, from `step.human_decisions`.
+
+    A call can be decided about more than once: its turn at `model_output` covers each of its calls, then the call itself before it runs and its result after, so the latest is the most specific. Look decisions up by call id, which the model's provider assigns and which stays the same however a scaffold copies or rebuilds its messages; message ids do not, so there is no lookup by message, and a review of a turn with no tool calls, which stays in `step.human_decisions`, is found by none. None when no decision covers the call, and also when `step.human_decisions` is None because the host cannot tell; check that field to tell the two apart. Use the result to annotate that exact call, not to judge a new call that resembles it (see `HumanDecision`).
+
+    Args:
+        step: The step being examined.
+        call_id: The id of a tool call earlier in the conversation, as `ToolCall.id`.
+    """
+    for decision in reversed(step.human_decisions or ()):
+        if call_id in decision.call_ids:
+            return decision
+    return None
