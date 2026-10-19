@@ -3,10 +3,10 @@
 ## [0.1.4](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.3...0.1.4) (2026-10-19)
 
 
-### ⚠ BREAKING CHANGES
+### Breaking Changes
 
-* Step payloads no longer have an escalations field. Every protocol function takes a third positional parameter, escalations, annotated with the new Escalations alias (a tuple of Reported decisions), and Host.ask_human takes escalations between step and choices.
-* step.sent is renamed step.history, and the previous step.history (the agent loop's own messages) is renamed step.agent_messages, on all four step payloads. keep_history() is renamed keep_agent_messages(), and the "history" exclusion is "agent_messages".
+* Protocols take escalations as a third parameter, `(step, context, escalations)`, instead of reading them from the step ([#97](https://github.com/meridianlabs-ai/inspect_sentinel/issues/97))
+* `step.history` now holds the messages the agent sent; the agent loop's own list is `step.agent_messages` ([#98](https://github.com/meridianlabs-ai/inspect_sentinel/issues/98))
 
 ### Features
 
