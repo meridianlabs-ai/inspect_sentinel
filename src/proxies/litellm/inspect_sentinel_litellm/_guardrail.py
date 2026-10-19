@@ -36,7 +36,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.utils import (  # pyright: ignore[reportMissingTypeStubs]
     all_litellm_params,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
@@ -111,6 +111,25 @@ _NOT_SHOWN = frozenset(
 _JSON = "application/json"
 _LINE_END = re.compile(r"\r\n|\r|\n")
 _STREAM = "text/event-stream"
+# the code a failed Responses stream gives for each status of a refusal, as
+# LiteLLM's own failed event gives them; any other client error is an
+# invalid request, and only a server error is one a client tries again
+_ERROR_CODES = {
+    401: "authentication_error",
+    403: "permission_error",
+    404: "not_found_error",
+    408: "request_timeout",
+    429: "rate_limit_exceeded",
+}
+
+
+class _Written(BaseModel):
+    """An event as the sidecar wrote it, every field kept.
+
+    Every LiteLLM version writes an object for the caller as `data:` and its JSON, while bytes are passed on as they are only by later versions. LiteLLM's own classes are not used, since it writes some of them without a field the class doesn't have.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
 
 class SidecarError(Exception):
@@ -282,7 +301,8 @@ class LiteLLMGuardrail(CustomGuardrail):
                     raise
                 # LiteLLM answers a refused Responses stream with its own
                 # `response.failed` event, holding the refusal as text, so the
-                # guardrail sends one with the sentinel field instead
+                # guardrail sends one with the sentinel field instead. LiteLLM
+                # then logs the call as one that succeeded
                 yield _response_failed(held, refused)
                 return
         for chunk in held:
@@ -679,10 +699,10 @@ def _replaced_stream(held: list[Any], body: bytes, format: str) -> list[Any]:
     # replaced event is made in the class the reply had for that kind of event
     try:
         replaced = [
-            # LiteLLM writes a Chat Completions chunk with a writer that drops
-            # a field its class doesn't have, so the chunk that carries the
-            # sentinel field is sent as written, which LiteLLM passes on as it is
-            f"data: {json.dumps(event)}\n\n".encode()
+            # LiteLLM writes a Chat Completions chunk of its own class without
+            # a field the class doesn't have, so the chunk that carries the
+            # sentinel field is one that keeps every field
+            _Written(**event)
             if format == _CHAT and "sentinel" in event
             else classes[event.get("type")](**event)
             for event in _events(body)
@@ -730,7 +750,7 @@ def _refusal(answer: dict[str, Any]) -> HTTPException:
     return refused
 
 
-def _response_failed(held: list[Any], refused: HTTPException) -> bytes:
+def _response_failed(held: list[Any], refused: HTTPException) -> _Written:
     # the event that ends a Responses stream that failed, built on the
     # response the stream began, with the refusal and the sentinel field
     events = [
@@ -746,7 +766,10 @@ def _response_failed(held: list[Any], refused: HTTPException) -> bytes:
     response: dict[str, Any] = {
         **begun,
         "status": "failed",
-        "error": {"code": "server_error", "message": str(refused.detail)},
+        "error": {
+            "code": _error_code(refused.status_code),
+            "message": str(refused.detail),
+        },
     }
     sequence = max((event.get("sequence_number", 0) for event in events), default=0)
     event: dict[str, Any] = {
@@ -757,7 +780,13 @@ def _response_failed(held: list[Any], refused: HTTPException) -> bytes:
     extra = getattr(refused, "provider_specific_fields", None)
     if isinstance(extra, dict) and "sentinel" in extra:
         event["sentinel"] = cast("dict[str, Any]", extra)["sentinel"]
-    return f"event: response.failed\ndata: {json.dumps(event)}\n\n".encode()
+    return _Written(**event)
+
+
+def _error_code(status: int) -> str:
+    if 400 <= status < 500:
+        return _ERROR_CODES.get(status, "invalid_request_error")
+    return "server_error"
 
 
 def _failed(reason: str) -> SidecarError:

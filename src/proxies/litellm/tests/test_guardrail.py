@@ -6,6 +6,7 @@ These tests run in an environment of their own, with one LiteLLM version, and im
 import asyncio
 import base64
 import importlib
+import inspect
 import json
 import os
 import re
@@ -23,6 +24,7 @@ from typing import Any
 
 import httpx
 import jsonschema
+import openai
 import pytest
 import uvicorn
 from fastapi import HTTPException
@@ -31,6 +33,7 @@ from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request as HttpRequest
 from starlette.responses import JSONResponse
+from starlette.responses import Response as HttpResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp
 
@@ -419,11 +422,8 @@ def _refused(
     let_go: list[Any] = []
     if on is _RESPONSES and streamed:
         _exchange(guardrail, on, data, streamed, let_go)
-        failed = let_go.pop()
-        assert isinstance(failed, bytes)
-        name, data_line = failed.decode().strip().split("\n")
-        assert name == "event: response.failed"
-        event = json.loads(data_line.removeprefix("data: "))
+        event = _written(let_go.pop())
+        assert event["type"] == "response.failed"
         assert event["response"]["status"] == "failed"
         return 200, event["response"]["error"]["message"], event.get("sentinel"), let_go
     with pytest.raises(HTTPException) as refused:
@@ -683,13 +683,15 @@ def test_a_responses_stream_is_failed_as_the_response_it_began() -> None:
     refused = HTTPException(403, "Not allowed.")
     setattr(refused, "provider_specific_fields", {"sentinel": _FIELD})  # noqa: B010
 
-    written = _guardrail._response_failed(begun, refused)  # pyright: ignore[reportPrivateUsage]
+    event = _written(_guardrail._response_failed(begun, refused))  # pyright: ignore[reportPrivateUsage]
 
-    event = json.loads(written.decode().split("data: ", 1)[1])
     created = _written(begun[0])["response"]
     assert event["response"]["id"] == created["id"]
     assert event["sequence_number"] == _written(begun[-1])["sequence_number"] + 1
-    assert event["response"]["error"]["message"] == "Not allowed."
+    assert event["response"]["error"] == {
+        "code": "permission_error",
+        "message": "Not allowed.",
+    }
     assert event["sentinel"] == _FIELD
 
 
@@ -707,11 +709,115 @@ def test_a_replaced_chat_stream_sends_the_chunk_with_the_field_as_written(
     with _serving(_scripted([], *answers)) as url:
         _, let_go = _exchange(_make(monkeypatch, url), _CHAT, _data(_CHAT), True)
 
-    # LiteLLM writes its own chunks without a field they don't have, and
-    # passes on as it is a chunk already written
+    # LiteLLM writes its own chunks without a field they don't have, so only
+    # the chunk with the field is in a class that keeps every field
     *chunks, last = let_go
-    assert not any(isinstance(chunk, bytes) for chunk in chunks)
-    assert json.loads(last.decode().removeprefix("data: ")) == events[-1]
+    assert all(isinstance(chunk, _litellm.ModelResponseStream) for chunk in chunks)
+    assert not isinstance(last, _litellm.ModelResponseStream)
+    assert _written(last) == events[-1]
+
+
+# where OpenAI's SDK sends a streamed request, under the base URL it is given
+_SDK_PATHS = ("/chat/completions", "/responses")
+
+
+def _as_litellm_writes(on: _On, chunks: list[Any], data: dict[str, Any]) -> bytes:
+    """What LiteLLM's proxy writes for the caller from the chunks a guardrail lets go, with the LiteLLM version installed."""
+    proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
+    asked: dict[str, Any] = {}
+    taken = inspect.signature(proxy.async_data_generator).parameters
+    if on is _RESPONSES and "responses_stream_errors" in taken:
+        # as the Responses route asks it to
+        asked["responses_stream_errors"] = True
+
+    async def write() -> bytes:
+        written = proxy.async_data_generator(_chunks(chunks), _USER, data, **asked)
+        return b"".join(
+            [
+                part if isinstance(part, bytes) else part.encode()
+                async for part in written
+            ]
+        )
+
+    return asyncio.run(write())
+
+
+def _read_by_the_sdk(on: _On, written: bytes) -> list[Any]:
+    """The events OpenAI's SDK reads from a stream LiteLLM wrote."""
+
+    async def answer(_: HttpRequest) -> HttpResponse:
+        return HttpResponse(written, media_type="text/event-stream")
+
+    async def read(url: str) -> list[Any]:
+        client = openai.AsyncOpenAI(api_key="sk-caller", base_url=url)
+        if on is _CHAT:
+            stream: Any = await client.chat.completions.create(
+                model="a-model",
+                messages=[{"role": "user", "content": "What is the weather?"}],
+                stream=True,
+            )
+        else:
+            stream = await client.responses.create(
+                model="a-model", input="What is the weather?", stream=True
+            )
+        events: list[Any] = [event async for event in stream]
+        await client.close()
+        return events
+
+    routes = [Route(path, answer, methods=["POST"]) for path in _SDK_PATHS]
+    with _serving(Starlette(routes=routes)) as url:
+        return asyncio.run(read(url))
+
+
+def test_a_chat_stream_with_the_field_is_read_by_the_sdk_from_what_litellm_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = [_written(chunk) for chunk in _CHAT.stream()]
+    events[-1] = events[-1] | {"sentinel": _FIELD}
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
+    answers = (
+        _result({"action": "pass"}),
+        _result({"action": "replace", "body": base64.b64encode(body).decode()}),
+    )
+    data = _data(_CHAT)
+
+    with _serving(_scripted([], *answers)) as url:
+        _, let_go = _exchange(_make(monkeypatch, url), _CHAT, data, True)
+    chunks = _read_by_the_sdk(_CHAT, _as_litellm_writes(_CHAT, let_go, data))
+
+    assert len(chunks) == len(events)
+    extra: dict[str, Any] = chunks[-1].model_extra or {}
+    assert extra.get("sentinel") == _FIELD
+    # LiteLLM names the model the caller asked for on every chunk
+    assert {chunk.model for chunk in chunks} == {"a-model"}
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        (400, "invalid_request_error"),
+        (403, "permission_error"),
+        (503, "server_error"),
+    ],
+)
+def test_a_refused_responses_stream_is_read_by_the_sdk_from_what_litellm_writes(
+    monkeypatch: pytest.MonkeyPatch, status: int, code: str
+) -> None:
+    refusal = _REFUSAL | {"status": status, "sentinel": _FIELD}
+    answers = (_result({"action": "pass"}), _result(refusal))
+    data = _data(_RESPONSES)
+
+    with _serving(_scripted([], *answers)) as url:
+        _, let_go = _exchange(_make(monkeypatch, url), _RESPONSES, data, True)
+    events = _read_by_the_sdk(_RESPONSES, _as_litellm_writes(_RESPONSES, let_go, data))
+
+    *_, last = events
+    assert last.type == "response.failed"
+    # only a server error is one a client tries again
+    assert last.response.error.code == code
+    assert last.response.error.message == "Not allowed."
+    extra: dict[str, Any] = last.model_extra or {}
+    assert extra.get("sentinel") == _FIELD
 
 
 _NOT_BASE64 = {"action": "replace", "body": "not base64!"}
@@ -1180,10 +1286,21 @@ def _sidecar_for_evals(seen: list[dict[str, Any]]) -> Starlette:
     )
 
 
+def _without_eval_route(proxy: Any) -> None:
+    # a guardrail made earlier in this process, while LiteLLM's proxy was
+    # loaded, added a route that passes calls to another sidecar
+    proxy.app.router.routes[:] = [
+        route
+        for route in proxy.app.router.routes
+        if getattr(route, "path", None) != "/sentinel/{rest:path}"
+    ]
+
+
 def test_eval_routes_reach_the_sidecar_through_litellm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
+    _without_eval_route(proxy)
     routes: Any = importlib.import_module("litellm.proxy._types").LiteLLMRoutes
     seen: list[dict[str, Any]] = []
 
@@ -1230,12 +1347,7 @@ def test_eval_route_answers_502_when_the_sidecar_cannot_be_reached(
     proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
     # nothing listens here
     guardrail = _make(monkeypatch, "http://127.0.0.1:9")
-    # a route added earlier in this process would pass calls to another sidecar
-    proxy.app.router.routes[:] = [
-        route
-        for route in proxy.app.router.routes
-        if getattr(route, "path", None) != "/sentinel/{rest:path}"
-    ]
+    _without_eval_route(proxy)
     guardrail.serve_eval_routes()
 
     async def call() -> Any:
