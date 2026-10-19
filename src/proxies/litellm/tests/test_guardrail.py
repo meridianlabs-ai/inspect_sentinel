@@ -661,6 +661,87 @@ def test_a_request_that_sets_a_field_litellm_rewrites_it_from_is_refused_unasked
     assert calls == []
 
 
+@pytest.mark.parametrize("fallback", ["fail_closed", "fail_open"])
+@pytest.mark.parametrize(
+    "server_url",
+    ["litellm_proxy", "litellm_proxy/mcp/github", "https://litellm.example/mcp/github"],
+    ids=["gateway", "gateway server", "gateway url"],
+)
+@pytest.mark.parametrize("on", [_MESSAGES, _CHAT, _RESPONSES])
+def test_a_request_with_an_mcp_tool_litellms_gateway_would_run_is_refused_unasked(
+    monkeypatch: pytest.MonkeyPatch, on: _On, server_url: str, fallback: str
+) -> None:
+    calls: list[Any] = []
+    data = _data(on)
+    # LiteLLM would run the model's calls to it, and send the provider the
+    # results in requests no guardrail is shown
+    data["tools"] = [
+        {"type": "mcp", "server_label": "github", "server_url": server_url}
+    ]
+
+    with _serving(_scripted(calls)) as url:
+        with pytest.raises(HTTPException) as refused:
+            _exchange(
+                _make(monkeypatch, url, unreachable_fallback=fallback),
+                on,
+                data,
+                False,
+            )
+
+    assert refused.value.status_code == 400
+    assert "MCP gateway" in str(refused.value.detail)
+    assert calls == []
+
+
+def test_a_request_with_an_mcp_tool_the_provider_runs_is_asked_about(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Any] = []
+    data = _data(_RESPONSES)
+    # the provider calls this server itself, which LiteLLM leaves alone
+    tool = {
+        "type": "mcp",
+        "server_label": "wiki",
+        "server_url": "https://mcp.example/mcp",
+    }
+    data["tools"] = [tool]
+    data["proxy_server_request"]["body"]["tools"] = [tool]
+
+    async def ask(guardrail: Any) -> Any:
+        try:
+            return await guardrail.async_pre_call_hook(_USER, None, data, "aresponses")
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_scripted(calls, _result({"action": "pass"}))) as url:
+        sent = asyncio.run(ask(_make(monkeypatch, url)))
+
+    assert sent is data
+    assert [call["method"] for call in calls] == ["judge_request"]
+
+
+def test_a_litellm_without_the_gateways_test_has_every_mcp_tool_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler: Any = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    ).LiteLLM_Proxy_MCP_Handler
+    monkeypatch.delattr(handler, "_should_use_litellm_mcp_gateway")
+    calls: list[Any] = []
+    data = _data(_RESPONSES)
+    # one the gateway would leave to the provider, were LiteLLM to say so
+    data["tools"] = [
+        {"type": "mcp", "server_label": "wiki", "server_url": "https://mcp.example/mcp"}
+    ]
+
+    with _serving(_scripted(calls)) as url:
+        with pytest.raises(HTTPException) as refused:
+            _exchange(_make(monkeypatch, url), _RESPONSES, data, False)
+
+    assert "MCP gateway" in str(refused.value.detail)
+    assert calls == []
+
+
 def test_a_request_with_an_empty_extra_body_is_asked_about(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

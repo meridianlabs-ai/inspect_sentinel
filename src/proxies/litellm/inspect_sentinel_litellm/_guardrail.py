@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import importlib
 import json
 import logging
 import re
@@ -154,6 +155,35 @@ _ERROR_CODES = {
 }
 
 
+_GATEWAY_TOOLS = (
+    "A request with an MCP tool that LiteLLM's MCP gateway would run can't be "
+    "judged, so it is refused."
+)
+
+
+def _gateway_runs(tools: object) -> bool:
+    # whether LiteLLM's MCP gateway would take the request's MCP tools, by
+    # the test LiteLLM itself makes before handing them to it, on every route
+    if not isinstance(tools, list) or not tools:
+        return False
+    listed = cast("list[Any]", tools)
+    try:
+        module = importlib.import_module(
+            "litellm.responses.mcp.litellm_proxy_mcp_handler"
+        )
+        claims: Any = module.LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway
+    except (ImportError, AttributeError):
+        # a LiteLLM that doesn't make the test might hand any MCP tool to it
+        for tool in listed:
+            if (
+                isinstance(tool, dict)
+                and cast("dict[str, Any]", tool).get("type") == "mcp"
+            ):
+                return True
+        return False
+    return bool(claims(tools=listed))
+
+
 class _Written(BaseModel):
     """An event as the sidecar wrote it, every field kept.
 
@@ -234,7 +264,7 @@ class LiteLLMGuardrail(CustomGuardrail):
         """Put a request to the sidecar. LiteLLM sends on `data`, which is changed in place when the sidecar replaces the request.
 
         Raises:
-            HTTPException: The request is refused, by the sidecar or because it sets a field LiteLLM rewrites it from, such as `extra_body`, or the sidecar gave no usable answer and `unreachable_fallback` is `fail_closed`. LiteLLM answers the caller with it in the error format of the route.
+            HTTPException: The request is refused, by the sidecar, because it sets a field LiteLLM rewrites it from, such as `extra_body`, or because it has an MCP tool that LiteLLM's MCP gateway would run, or the sidecar gave no usable answer and `unreachable_fallback` is `fail_closed`. LiteLLM answers the caller with it in the error format of the route.
         """
         _withhold_inspect_headers(data)
         api = _APIS.get(call_type)
@@ -253,6 +283,12 @@ class LiteLLMGuardrail(CustomGuardrail):
             raise HTTPException(
                 400, f"A request that sets {named} can't be judged, so it is refused."
             )
+        if _gateway_runs(data.get("tools")):
+            # LiteLLM's MCP gateway would run the model's calls to these tools
+            # itself, and send the provider requests no guardrail is shown,
+            # so the sidecar could judge neither. Refused whatever
+            # `unreachable_fallback` says.
+            raise HTTPException(400, _GATEWAY_TOOLS)
         try:
             record = _record(data)
             sent = _body(data, record)

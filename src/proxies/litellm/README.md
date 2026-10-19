@@ -46,6 +46,8 @@ Requests to LiteLLM's `/v1/messages`, `/chat/completions` and `/responses` route
 
 A request on those routes is refused, whatever `unreachable_fallback` says, when it sets a field that LiteLLM rewrites the request from after the sidecar has judged it, since the provider would be sent something the sidecar never saw. These are `extra_body`, which the provider's SDK merges over the request; `ensure_alternating_roles` and the continue messages it inserts; the fields that load a stored prompt, such as `prompt_id`; `litellm_system_prompt`; the custom prompt template fields, such as `roles` and `final_prompt_value`; and `supports_system_message`. A client that calls through a provider's SDK sends none of them: the SDK merges its own `extra_body` into the request before sending it. A deployment that relies on LiteLLM's prompt management can't use it through the guardrail.
 
+A request with an MCP tool that LiteLLM's own MCP gateway would run is refused too, whatever `unreachable_fallback` says. LiteLLM runs the model's calls to such a tool itself, and sends the provider follow-up requests that no guardrail is shown. The guardrail asks LiteLLM's own test, so it refuses what the installed LiteLLM would hand to its gateway: a `server_url` of `litellm_proxy`, or one ending in `/mcp/<name>`. An MCP tool that the provider calls itself goes to the sidecar as usual.
+
 A streamed reply is held whole until the sidecar has answered, so a reply that is refused is refused before any of it has gone out.
 
 ## What it sends
