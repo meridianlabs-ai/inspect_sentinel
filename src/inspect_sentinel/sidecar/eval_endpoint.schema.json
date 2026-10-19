@@ -1159,7 +1159,7 @@
       "type": "object"
     },
     "RegisterTaskResult": {
-      "description": "What the sidecar stored.",
+      "description": "What the sidecar stored, or that the task was registered beforehand and nothing was stored.",
       "properties": {
         "eval_id": {
           "title": "Eval Id",
@@ -1170,21 +1170,34 @@
           "type": "string"
         },
         "samples": {
-          "description": "How many samples were registered.",
+          "description": "How many samples the registration named.",
           "title": "Samples",
           "type": "integer"
         },
+        "fixed": {
+          "description": "Whether the task was registered beforehand, in the tasks folder. Its sentinel is then given the folder's facts, the registration is not compared with them, and nothing is stored.",
+          "title": "Fixed",
+          "type": "boolean"
+        },
         "expiry": {
-          "description": "How long the registration is kept once no request has named the task, in seconds: what was asked, or less if the sidecar keeps none that long.",
-          "title": "Expiry",
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How long the registration is kept once no request has named the task, in seconds: what was asked, or less if the sidecar keeps none that long. Absent when `fixed`, as a task registered beforehand is never dropped.",
+          "title": "Expiry"
         }
       },
       "required": [
         "eval_id",
         "task",
         "samples",
-        "expiry"
+        "fixed"
       ],
       "title": "RegisterTaskResult",
       "type": "object"
@@ -1699,7 +1712,7 @@
   "errors": {
     "-32001": {
       "name": "registration_refused",
-      "description": "The sidecar takes no registration of this task: it was registered beforehand, or the sidecar takes no registrations from evals."
+      "description": "The sidecar takes no tasks registered by an eval, and this task was not registered beforehand."
     },
     "-32002": {
       "name": "unknown_run",

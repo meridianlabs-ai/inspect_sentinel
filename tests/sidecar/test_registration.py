@@ -252,11 +252,12 @@ async def test_a_task_registered_beforehand_is_found_for_any_eval() -> None:
 async def test_a_task_registered_beforehand_cant_be_replaced() -> None:
     handler = Handler(reports_the_eval(), tasks={"philadelphia": _FILE_TASK})
 
-    with pytest.raises(RegistrationError, match="beforehand"):
-        await handler.register_task(
-            "eval_789", _TASK.model_copy(update={"task_description": "Changed."})
-        )
+    kept = await handler.register_task(
+        "eval_789", _TASK.model_copy(update={"task_description": "Changed."})
+    )
     await handler.request(_asked("a"))
+
+    assert kept is None
 
     assert (await _eval_seen(handler, "a"))["task_description"] == (
         "File the weather report."
@@ -277,6 +278,19 @@ async def test_a_sidecar_can_take_no_registrations_from_evals() -> None:
 
     with pytest.raises(RegistrationError, match="takes no tasks"):
         await handler.register_task("eval_789", _TASK)
+
+
+@pytest.mark.anyio
+async def test_a_sidecar_that_takes_no_registrations_still_answers_a_task_registered_beforehand() -> (
+    None
+):
+    handler = Handler(
+        reports_the_eval(),
+        tasks={"philadelphia": _FILE_TASK},
+        runtime_task_registration=False,
+    )
+
+    assert await handler.register_task("eval_789", _TASK) is None
 
 
 _YAML = """

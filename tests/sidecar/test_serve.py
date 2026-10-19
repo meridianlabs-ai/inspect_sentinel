@@ -180,10 +180,13 @@ async def test_tasks_registered_beforehand_are_read_from_the_tasks_folder(
         )
     )
 
-    with pytest.raises(RegistrationError, match="beforehand"):
+    # already registered, so nothing is kept
+    assert (
         await handler.register_task(
             "eval_789", TaskFacts(task="philadelphia", samples=[])
         )
+        is None
+    )
     # a task the file doesn't hold is kept no longer than the limit set
     assert (
         await handler.register_task(

@@ -82,7 +82,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--tasks-folder",
         metavar="FOLDER",
-        help="A folder of YAML or JSON tasks files, each with a `tasks` list: the tasks registered beforehand, which an eval can't replace. A request for a sample of one of them that its file doesn't hold is refused.",
+        help="A folder of YAML or JSON tasks files, each with a `tasks` list: the tasks registered beforehand, which an eval can't replace: its registration of one is answered as already registered. A request for a sample of one of them that its file doesn't hold is refused.",
     )
     parser.add_argument(
         "--no-runtime-task-registration",

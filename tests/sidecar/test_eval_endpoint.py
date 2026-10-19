@@ -116,16 +116,41 @@ async def test_a_task_is_registered() -> None:
         "eval_id": "eval_789",
         "task": "philadelphia",
         "samples": 1,
+        "fixed": False,
         # no longer than the sidecar keeps any
         "expiry": 86400,
     }
 
 
 @pytest.mark.anyio
-async def test_a_task_registered_beforehand_is_refused() -> None:
+@pytest.mark.parametrize("runtime_task_registration", [True, False])
+async def test_a_task_registered_beforehand_is_already_registered(
+    runtime_task_registration: bool,
+) -> None:
     task = FileTask.model_validate({"task": "philadelphia", "samples": []})
+    handler = Handler(
+        weather_rule(),
+        tasks={"philadelphia": task},
+        runtime_task_registration=runtime_task_registration,
+    )
 
-    async with _client(Handler(weather_rule(), tasks={"philadelphia": task})) as client:
+    async with _client(handler) as client:
+        answered = await _call(client, "register_task", _REGISTRATION)
+
+    # never dropped, so no expiry
+    assert answered["result"] == {
+        "eval_id": "eval_789",
+        "task": "philadelphia",
+        "samples": 1,
+        "fixed": True,
+    }
+
+
+@pytest.mark.anyio
+async def test_a_sidecar_that_takes_no_registrations_refuses_another_task() -> None:
+    async with _client(
+        Handler(weather_rule(), runtime_task_registration=False)
+    ) as client:
         answered = await _call(client, "register_task", _REGISTRATION)
 
     assert answered["error"]["code"] == REGISTRATION_REFUSED

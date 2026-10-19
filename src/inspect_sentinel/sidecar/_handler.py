@@ -323,7 +323,7 @@ class Handler:
 
     async def register_task(
         self, eval_id: str, facts: TaskFacts, expiry: float | None = None
-    ) -> float:
+    ) -> float | None:
         """Keep a task an eval registered, so that its runs' sentinels are told which sample each is.
 
         A registration replaces the eval's last one for the task. A run that has already found its sample keeps what it found.
@@ -333,19 +333,19 @@ class Handler:
             facts: The task and its samples.
             expiry: How long to keep it once no request has named the task, in seconds. A day if not given.
 
+        A task registered beforehand is already registered, so its registration stores nothing and is not compared with the file, since the answer would tell a caller whether its guess at the file is right. This holds whether or not the handler takes registrations from evals.
+
         Returns:
-            How long it is kept once no request has named the task: `expiry`, or less if that is longer than the handler keeps any.
+            How long it is kept once no request has named the task: `expiry`, or less if that is longer than the handler keeps any. None for a task registered beforehand, which is never dropped.
 
         Raises:
-            RegistrationError: If the handler takes no registrations from evals, or the task was registered beforehand.
+            RegistrationError: If the handler takes no registrations from evals and the task was not registered beforehand.
         """
+        if facts.task in self._tasks:
+            return None
         if not self._runtime_task_registration:
             raise RegistrationError(
                 "This sidecar takes no tasks registered by an eval."
-            )
-        if facts.task in self._tasks:
-            raise RegistrationError(
-                f"The task {facts.task!r} is registered with this sidecar beforehand, and an eval can't replace it."
             )
         granted = min(expiry if expiry is not None else TASK_EXPIRY, self._task_expiry)
         await self._state.register(eval_id, facts.task, facts, granted)

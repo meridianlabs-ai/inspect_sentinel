@@ -52,13 +52,17 @@ class RegisterTaskParams(TaskFacts):
 
 
 class RegisterTaskResult(BaseModel):
-    """What the sidecar stored."""
+    """What the sidecar stored, or that the task was registered beforehand and nothing was stored."""
 
     eval_id: str
     task: str
-    samples: int = Field(description="How many samples were registered.")
-    expiry: float = Field(
-        description="How long the registration is kept once no request has named the task, in seconds: what was asked, or less if the sidecar keeps none that long."
+    samples: int = Field(description="How many samples the registration named.")
+    fixed: bool = Field(
+        description="Whether the task was registered beforehand, in the tasks folder. Its sentinel is then given the folder's facts, the registration is not compared with them, and nothing is stored."
+    )
+    expiry: float | None = Field(
+        default=None,
+        description="How long the registration is kept once no request has named the task, in seconds: what was asked, or less if the sidecar keeps none that long. Absent when `fixed`, as a task registered beforehand is never dropped.",
     )
 
 
@@ -142,7 +146,7 @@ _RESULTS = frozenset({"request_result", "run_result"})
 _ERRORS: dict[int, tuple[str, str]] = {
     REGISTRATION_REFUSED: (
         "registration_refused",
-        "The sidecar takes no registration of this task: it was registered beforehand, or the sidecar takes no registrations from evals.",
+        "The sidecar takes no tasks registered by an eval, and this task was not registered beforehand.",
     ),
     UNKNOWN_RUN: (
         "unknown_run",
@@ -226,6 +230,7 @@ async def _answer(handler: Handler, method: str, params: dict[str, Any]) -> Base
             eval_id=given.eval_id,
             task=given.task,
             samples=len(given.samples),
+            fixed=granted is None,
             expiry=granted,
         )
     if isinstance(given, RequestResultParams):
