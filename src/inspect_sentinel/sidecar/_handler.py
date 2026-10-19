@@ -256,7 +256,7 @@ class Handler:
         elif not isinstance(answer, Refuse):
             attempt.decide("proceed")
             attempt.proposed = held.exchange.proposed
-        elif _ended(await self._state.run(held.run), held.marks) is not None:
+        elif held.exchange.ended:
             attempt.decide("terminate")
             attempt.withheld = held.exchange.withheld
         else:
@@ -414,7 +414,7 @@ class Handler:
         refusal = _ended(run, marks)
         if refusal is not None:
             # the run has ended, and the sentinel is not asked again
-            return self._with_field(refusal, proxy, Exchange(), run)
+            return self._with_field(refusal, proxy, Exchange(), "terminate")
         if sample is not None:
             found = await self._eval(sample)
             if run.eval is None:
@@ -508,7 +508,7 @@ class Handler:
             held, run, conversation, client, said, restored, ran
         )
         if ended is not None:
-            return self._with_field(ended, proxy, held.exchange, run)
+            return self._with_field(ended, proxy, held.exchange, "terminate")
         if BeforeGenerate in self._watched:
             before = BeforeGenerate(
                 model=held.model,
@@ -525,12 +525,12 @@ class Handler:
                     self._end(held, run, "before the model was called"),
                     proxy,
                     held.exchange,
-                    run,
+                    "terminate",
                 )
         # another exchange of the run may have ended it while this one waited
         refusal = _ended(run, marks)
         if refusal is not None:
-            return self._with_field(refusal, proxy, held.exchange, run)
+            return self._with_field(refusal, proxy, held.exchange, "terminate")
         await self._state.hold(request.id, held)
         # an Inspect client is told of the request's steps with the reply
         return answer
@@ -633,9 +633,9 @@ class Handler:
             return answer
         if held.proxy.inspect is None:
             return answer
-        run = await self._state.run(held.run)
         if isinstance(answer, Refuse):
-            return self._with_field(answer, held.proxy, held.exchange, run)
+            outcome = "terminate" if held.exchange.ended else "reject"
+            return self._with_field(answer, held.proxy, held.exchange, outcome)
         body = answer.body if isinstance(answer, Replace) else reply.body
         field = self._field(held.exchange, "proceed")
         try:
@@ -670,6 +670,7 @@ class Handler:
         refusal = _ended(run, held.marks)
         if refusal is not None:
             # a sentinel ended the run while the model was answering
+            held.exchange.ended = True
             return refusal
 
         if AfterGenerate in self._watched:
@@ -687,7 +688,7 @@ class Handler:
                 return self._end(held, run, "at the model's reply")
 
         if not output.choices:
-            return _ended(run, held.marks) or self._passed(
+            return self._ended_meanwhile(held, run) or self._passed(
                 held, run, conversation, None
             )
         message = output.message
@@ -716,8 +717,7 @@ class Handler:
                 modified[call.id] = decision.modified
             else:
                 rejected.append((call, decision))
-        # another exchange of the run may have ended it while this one waited
-        refusal = _ended(run, held.marks)
+        refusal = self._ended_meanwhile(held, run)
         if refusal is not None:
             return refusal
         if not rejected and not modified:
@@ -899,13 +899,15 @@ class Handler:
         return decision
 
     def _with_field(
-        self, refusal: Refuse, proxy: ProxyContext, exchange: Exchange, run: Run
+        self,
+        refusal: Refuse,
+        proxy: ProxyContext,
+        exchange: Exchange,
+        outcome: Literal["reject", "terminate"],
     ) -> Refuse:
         # an Inspect client is told what was decided, with the refusal
         if proxy.inspect is None:
             return refusal
-        # a run an eval names is remembered as ended
-        outcome = "terminate" if run.refusal is not None else "reject"
         return replace(refusal, sentinel=self._field(exchange, outcome))
 
     def _field(
@@ -913,7 +915,15 @@ class Handler:
     ) -> dict[str, Any]:
         return sentinel_field(exchange, outcome, trimmed=not self._eval_results)
 
+    def _ended_meanwhile(self, held: Held, run: Run) -> Refuse | None:
+        # another exchange of the run may have ended it while this one waited
+        refusal = _ended(run, held.marks)
+        if refusal is not None:
+            held.exchange.ended = True
+        return refusal
+
     def _end(self, held: Held, run: Run, where: str) -> Refuse:
+        held.exchange.ended = True
         for conversation in run.conversations.values():
             conversation.rejected.clear()
             conversation.edited.clear()

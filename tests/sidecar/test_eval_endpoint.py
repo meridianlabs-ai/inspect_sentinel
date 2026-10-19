@@ -221,6 +221,24 @@ async def test_a_request_whose_reply_was_judged_is_decided(
     assert [record["call"] for record in result["recorded"]] == ["toolu_1"]
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("action", "outcome"), [("reject", "reject"), ("terminate", "terminate")]
+)
+async def test_a_request_of_a_run_no_eval_names_is_decided_as_judged(
+    action: str, outcome: str
+) -> None:
+    # A run no eval names, ended at its first turn, is not remembered as
+    # ended, so what was decided is told from the judging itself.
+    handler = Handler(weather_rule(action, "Tokyo"))
+    await handler.request(replace(request("x"), headers={"x-irid": "irid-1"}))
+    await handler.reply(reply(_message("Tokyo")))
+
+    result = await _request_result(handler)
+
+    assert (result["state"], result["outcome"]) == ("decided", outcome)
+
+
 def _message(city: str) -> bytes:
     return message(weather(city))
 

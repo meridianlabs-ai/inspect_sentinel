@@ -100,6 +100,8 @@ class Exchange:
     """The turn as the model proposed it, if the client was handed it with calls taken out."""
     message: str | None = None
     """What the model is told of the rejection, if the turn was refused for one."""
+    ended: bool = False
+    """Whether the reply was refused because the run ended, by a sentinel's decision while it was judged or before, rather than for a rejection."""
 
 
 class SentinelStep(BaseModel):
