@@ -267,6 +267,19 @@ async def test_a_request_that_cant_be_read_was_not_judged() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_request_whose_inspect_header_cant_be_read_was_not_judged() -> None:
+    handler = Handler(weather_rule())
+    headers = {"x-inspect-context": "{not json", "x-irid": "irid-1"}
+
+    # refused, so a proxy that lets through what can't be judged doesn't
+    answer = await handler.request(replace(request("x"), headers=headers))
+
+    assert isinstance(answer, Refuse)
+    result = await _request_result(handler)
+    assert (result["state"], result["reason"]) == ("not_judged", "unreadable")
+
+
+@pytest.mark.anyio
 async def test_a_retried_request_holds_every_attempts_records() -> None:
     handler = Handler(weather_rule("reject", "Tokyo"), reject_status=503)
     await handler.request(_asked("x1"))

@@ -207,8 +207,15 @@ class Handler:
             # an attempt that is never judged has records too: none
             await self._state.recorder(request.id)
         try:
+            sample = inspect_sample(request.headers)
+        except UnreadableError as ex:
+            # refused rather than raised, but never judged, so not a terminate
+            if attempt is not None:
+                attempt.not_judged("unreadable")
+            return Refuse(400, str(ex))
+        try:
             answer = await self._within_limit(
-                self._request(request, attempt), "request", request.id
+                self._request(request, sample, attempt), "request", request.id
             )
         except Exception as ex:
             if attempt is not None:
@@ -386,11 +393,9 @@ class Handler:
             )
         return found
 
-    async def _request(self, request: Request, attempt: Attempt | None) -> Answer:
-        try:
-            sample = inspect_sample(request.headers)
-        except UnreadableError as ex:
-            return Refuse(400, str(ex))
+    async def _request(
+        self, request: Request, sample: InspectSample | None, attempt: Attempt | None
+    ) -> Answer:
         proxy = ProxyContext(
             provider=request.provider,
             model=request.model,
