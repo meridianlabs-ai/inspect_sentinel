@@ -416,9 +416,8 @@ def _check_responses_stream(events: list[StreamEvent]) -> None:
         raise UnreadableError("The edited reply stream doesn't hold together.") from ex
     # an item is checked whichever of its events the stream holds, since a
     # stream may hold an item's done event alone
-    items: dict[int, list[dict[str, Any]]] = {}
-    streamed: dict[int, str] = {}
-    said: dict[int, list[str]] = {}
+    items: dict[int, list[tuple[str, dict[str, Any]]]] = {}
+    others: dict[int, list[dict[str, Any]]] = {}
     final: list[object] = []
     for event in events:
         data = event.data or {}
@@ -430,38 +429,76 @@ def _check_responses_stream(events: list[StreamEvent]) -> None:
             final = cast("list[object]", response.get("output") or [])
         if not isinstance(index, int):
             continue
-        if kind == "response.output_item.added" and isinstance(item, dict):
-            entry = cast("dict[str, Any]", item)
-            items.setdefault(index, []).append(entry)
-            streamed[index] = str(entry.get("arguments") or "")
-        elif kind == "response.function_call_arguments.delta":
-            streamed[index] = streamed.get(index, "") + str(data.get("delta", ""))
-        elif kind == "response.function_call_arguments.done":
-            said.setdefault(index, []).append(str(data.get("arguments")))
-        elif kind == "response.output_item.done" and isinstance(item, dict):
-            entry = cast("dict[str, Any]", item)
-            items.setdefault(index, []).append(entry)
-            arguments = entry.get("arguments")
-            if arguments is not None:
-                said.setdefault(index, []).append(str(arguments))
-    for index in sorted(set(items) | set(streamed) | set(said)):
-        if index >= len(final) or any(
-            _identity(final[index]) != _identity(entry)
-            for entry in items.get(index, [])
+        if kind in _ITEM_EVENTS and isinstance(item, dict):
+            items.setdefault(index, []).append((kind, cast("dict[str, Any]", item)))
+        else:
+            others.setdefault(index, []).append(data)
+    for index in sorted(set(items) | set(others)):
+        out = final[index] if index < len(final) else None
+        if not isinstance(out, dict) or any(
+            _identity(cast("dict[str, Any]", out)) != _identity(entry)
+            for _, entry in items.get(index, [])
         ):
             raise UnreadableError(
                 "The edited reply stream names an item at a place it doesn't have in the output."
             )
-        if _identity(final[index])[0] != "function_call":
-            continue
-        out = str(cast("dict[str, Any]", final[index]).get("arguments"))
-        heard = said.get(index, []) + [out]
-        if streamed.get(index) and streamed[index] != out:
-            heard.append(streamed[index])
-        if len(set(heard)) != 1:
-            raise UnreadableError(
-                "The edited reply stream gives a call different arguments in different events."
+        # a call the client runs, which the client may run as any of its
+        # events gives it
+        if "call_id" in out:
+            _check_streamed_call(
+                cast("dict[str, Any]", out), items.get(index, []), others.get(index, [])
             )
+
+
+_STREAMED = {
+    "function_call": ("arguments", "response.function_call_arguments"),
+    "custom_tool_call": ("input", "response.custom_tool_call_input"),
+}
+"""The field each kind of call streams in deltas, and the prefix of the events that stream it."""
+
+
+def _check_streamed_call(
+    out: dict[str, Any],
+    items: list[tuple[str, dict[str, Any]]],
+    others: list[dict[str, Any]],
+) -> None:
+    field, prefix = _STREAMED.get(str(out.get("type")), ("", ""))
+    heard: list[str] = []
+    streamed = ""
+    for kind, entry in items:
+        if any(
+            out.get(key) != value
+            for key, value in entry.items()
+            if key not in ("status", field)
+        ):
+            raise UnreadableError(
+                "The edited reply stream gives a call other details in an event than in the output."
+            )
+        if not field:
+            continue
+        if kind == "response.output_item.added":
+            streamed = str(entry.get(field) or "")
+        elif entry.get(field) is not None:
+            heard.append(str(entry.get(field)))
+    for data in others:
+        kind = data.get("type")
+        if prefix and kind == f"{prefix}.delta":
+            streamed += str(data.get("delta", ""))
+        elif prefix and kind == f"{prefix}.done":
+            heard.append(str(data.get(field)))
+        else:
+            raise UnreadableError(
+                f"The edited reply stream gives a call's details in a {kind!r} event, which this sidecar can't check."
+            )
+    if not field:
+        return
+    whole = str(out.get(field))
+    if streamed and streamed != whole:
+        heard.append(streamed)
+    if len({*heard, whole}) != 1:
+        raise UnreadableError(
+            "The edited reply stream gives a call different arguments in different events."
+        )
 
 
 def _identity(item: object) -> tuple[object, object]:

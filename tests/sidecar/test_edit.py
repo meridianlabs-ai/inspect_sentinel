@@ -293,6 +293,129 @@ def test_a_responses_call_streamed_only_as_done_that_disagrees_with_its_output_i
         _check(events)
 
 
+@pytest.mark.parametrize(
+    "event", ["response.output_item.added", "response.output_item.done"]
+)
+def test_a_responses_call_named_otherwise_in_an_event_than_in_its_output_is_refused(
+    event: str,
+) -> None:
+    events = _responses_events()
+    index = _call_index(events)
+    next(
+        found
+        for found in events
+        if found["type"] == event and found["output_index"] == index
+    )["item"]["name"] = "delete_files"
+
+    with pytest.raises(UnreadableError, match="other details"):
+        _check(events)
+
+
+def _items_at(event: dict[str, Any], index: int) -> list[dict[str, Any]]:
+    # the items an event holds at an output index, as an item event or in the
+    # response it ends with
+    response: dict[str, Any] = event.get("response") or {}
+    output: list[Any] = response.get("output") or []
+    found: list[Any] = [
+        event.get("item") if event.get("output_index") == index else None,
+        *output[index : index + 1],
+    ]
+    return [cast(dict[str, Any], item) for item in found if isinstance(item, dict)]
+
+
+def _as_custom_tool_call(events: list[dict[str, Any]], index: int) -> None:
+    # the call made into a call of a custom tool, whose input is streamed as a
+    # function call's arguments are
+    for event in events:
+        for item in _items_at(event, index):
+            if item.get("type") == "function_call":
+                item["type"] = "custom_tool_call"
+                item["input"] = item.pop("arguments")
+        if event.get("output_index") == index:
+            if event["type"] == "response.function_call_arguments.delta":
+                event["type"] = "response.custom_tool_call_input.delta"
+            elif event["type"] == "response.function_call_arguments.done":
+                event["type"] = "response.custom_tool_call_input.done"
+                event["input"] = event.pop("arguments")
+
+
+def _as_computer_call(events: list[dict[str, Any]], index: int) -> None:
+    # the call made into a computer call, which has no deltas
+    events[:] = [
+        event
+        for event in events
+        if event.get("output_index") != index or event["type"] in _ITEM_EVENTS
+    ]
+    for event in events:
+        for item in _items_at(event, index):
+            if item.get("type") == "function_call":
+                item["type"] = "computer_call"
+                del item["name"], item["arguments"]
+                item["action"] = {"type": "click", "button": "left", "x": 10, "y": 20}
+                item["pending_safety_checks"] = []
+
+
+_ITEM_EVENTS = ("response.output_item.added", "response.output_item.done")
+
+
+@pytest.mark.parametrize("kind", ["custom tool", "computer"])
+def test_a_responses_call_of_another_kind_that_holds_together_passes(
+    kind: str,
+) -> None:
+    events = _responses_events()
+    index = _call_index(events)
+    (_as_custom_tool_call if kind == "custom tool" else _as_computer_call)(
+        events, index
+    )
+
+    _check(events)
+
+
+def test_a_custom_tool_call_whose_deltas_disagree_with_its_output_is_refused() -> None:
+    events = _responses_events()
+    index = _call_index(events)
+    _as_custom_tool_call(events, index)
+    next(
+        event
+        for event in events
+        if event["type"] == "response.custom_tool_call_input.delta"
+        and event["output_index"] == index
+    )["delta"] = "rm -rf /"
+
+    with pytest.raises(UnreadableError, match="different arguments"):
+        _check(events)
+
+
+def test_a_computer_call_whose_done_action_disagrees_with_its_output_is_refused() -> (
+    None
+):
+    events = _responses_events()
+    index = _call_index(events)
+    _as_computer_call(events, index)
+    _done_item(events, index)["action"] = {"type": "keypress", "keys": ["ENTER"]}
+
+    with pytest.raises(UnreadableError, match="other details"):
+        _check(events)
+
+
+def test_a_call_streamed_in_events_that_cant_be_checked_is_refused() -> None:
+    events = _responses_events()
+    index = _call_index(events)
+    events.insert(
+        -1,
+        {
+            "type": "response.shell_call_command.delta",
+            "output_index": index,
+            "command_index": 0,
+            "delta": "rm -rf /",
+            "sequence_number": 0,
+        },
+    )
+
+    with pytest.raises(UnreadableError, match="can't check"):
+        _check(events)
+
+
 @pytest.mark.anyio
 async def test_a_kept_call_streamed_only_as_done_must_agree_once_another_is_taken_out() -> (
     None
