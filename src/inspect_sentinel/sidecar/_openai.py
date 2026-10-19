@@ -414,7 +414,9 @@ def _check_responses_stream(events: list[StreamEvent]) -> None:
                 )
     except Exception as ex:
         raise UnreadableError("The edited reply stream doesn't hold together.") from ex
-    added: dict[int, dict[str, Any]] = {}
+    # an item is checked whichever of its events the stream holds, since a
+    # stream may hold an item's done event alone
+    items: dict[int, list[dict[str, Any]]] = {}
     streamed: dict[int, str] = {}
     said: dict[int, list[str]] = {}
     final: list[object] = []
@@ -429,22 +431,28 @@ def _check_responses_stream(events: list[StreamEvent]) -> None:
         if not isinstance(index, int):
             continue
         if kind == "response.output_item.added" and isinstance(item, dict):
-            added[index] = cast("dict[str, Any]", item)
-            streamed[index] = str(added[index].get("arguments") or "")
+            entry = cast("dict[str, Any]", item)
+            items.setdefault(index, []).append(entry)
+            streamed[index] = str(entry.get("arguments") or "")
         elif kind == "response.function_call_arguments.delta":
             streamed[index] = streamed.get(index, "") + str(data.get("delta", ""))
         elif kind == "response.function_call_arguments.done":
             said.setdefault(index, []).append(str(data.get("arguments")))
         elif kind == "response.output_item.done" and isinstance(item, dict):
-            arguments = cast("dict[str, Any]", item).get("arguments")
+            entry = cast("dict[str, Any]", item)
+            items.setdefault(index, []).append(entry)
+            arguments = entry.get("arguments")
             if arguments is not None:
                 said.setdefault(index, []).append(str(arguments))
-    for index, item in added.items():
-        if index >= len(final) or _identity(final[index]) != _identity(item):
+    for index in sorted(set(items) | set(streamed) | set(said)):
+        if index >= len(final) or any(
+            _identity(final[index]) != _identity(entry)
+            for entry in items.get(index, [])
+        ):
             raise UnreadableError(
                 "The edited reply stream names an item at a place it doesn't have in the output."
             )
-        if item.get("type") != "function_call":
+        if _identity(final[index])[0] != "function_call":
             continue
         out = str(cast("dict[str, Any]", final[index]).get("arguments"))
         heard = said.get(index, []) + [out]

@@ -245,6 +245,79 @@ def test_a_responses_stream_whose_deltas_disagree_with_its_output_is_refused() -
         _check(events)
 
 
+def _done_only(events: list[dict[str, Any]], index: int) -> list[dict[str, Any]]:
+    # an item's done event alone, without the events it began with
+    return [
+        event
+        for event in events
+        if event.get("output_index") != index
+        or event["type"] == "response.output_item.done"
+    ]
+
+
+def _done_item(events: list[dict[str, Any]], index: int) -> dict[str, Any]:
+    return next(
+        event["item"]
+        for event in events
+        if event["type"] == "response.output_item.done"
+        and event["output_index"] == index
+    )
+
+
+def _call_index(events: list[dict[str, Any]]) -> int:
+    return next(
+        event["output_index"]
+        for event in events
+        if event["type"] == "response.output_item.done"
+        and event["item"]["type"] == "function_call"
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "says"),
+    [
+        ({"arguments": '{"location": "Atlantis"}'}, "different arguments"),
+        ({"call_id": "call_other"}, "a place it doesn't have"),
+    ],
+    ids=["its arguments", "its call"],
+)
+def test_a_responses_call_streamed_only_as_done_that_disagrees_with_its_output_is_refused(
+    change: dict[str, str], says: str
+) -> None:
+    events = _responses_events()
+    index = _call_index(events)
+    events = _done_only(events, index)
+    _done_item(events, index).update(change)
+
+    with pytest.raises(UnreadableError, match=says):
+        _check(events)
+
+
+@pytest.mark.anyio
+async def test_a_kept_call_streamed_only_as_done_must_agree_once_another_is_taken_out() -> (
+    None
+):
+    events = _responses_events()
+    output = await read_reply("openai", STREAM, _body(events))
+    kept, taken = (output.message.tool_calls or [])[:2]
+    index = next(
+        event["output_index"]
+        for event in events
+        if event["type"] == "response.output_item.done"
+        and event["item"].get("call_id") == kept.id
+    )
+    events = _done_only(events, index)
+    # the arguments a client acting on the done event would run, which are not
+    # the ones the sentinel judged
+    _done_item(events, index)["arguments"] = '{"location": "Atlantis"}'
+    body = _body(events)
+
+    with pytest.raises(UnreadableError, match="different arguments"):
+        await edit_reply(
+            "openai", STREAM, body, None, Edits(frozenset({taken.id})), output
+        )
+
+
 def test_a_responses_stream_with_an_item_out_of_place_is_refused() -> None:
     events = _responses_events()
     for event in events:
