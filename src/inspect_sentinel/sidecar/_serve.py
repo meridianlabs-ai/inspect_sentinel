@@ -10,11 +10,10 @@ from typing import Any, cast
 
 import anyio
 import uvicorn
-import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.applications import Starlette
 
-from .._config import sentinel_from_config
+from .._config import parse_config_file, sentinel_from_config
 from ._eval_endpoint import TOKEN_VARIABLE, eval_routes
 from ._handler import Handler
 from ._host import SidecarHost
@@ -216,10 +215,9 @@ def read_configuration(config: str) -> tuple[Any, ServerSettings | None, str | N
     if not path.is_file():
         # a registered name, which the core loader finds
         return config, None, None
-    try:
-        content: object = yaml.safe_load(path.read_text())
-    except yaml.YAMLError as ex:
-        raise ValueError(f"{config}: could not parse the file: {ex}") from None
+    # read as the core loader reads a sentinel file, so that a key given
+    # twice is an error here too, rather than the last one silently winning
+    content = parse_config_file(str(path))
     if not isinstance(content, dict) or set(cast("dict[str, Any]", content)) == {
         "sentinel"
     }:

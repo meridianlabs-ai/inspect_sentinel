@@ -338,10 +338,21 @@ def test_a_tasks_file_is_read_as_yaml_or_json(tmp_path: Path, suffix: str) -> No
     [
         ("tasks: [{task: a, samples: []}, {task: a, samples: []}]", "named twice"),
         ("tasks: [{task: a}]", "not a tasks file"),
-        ("[oops", "not a tasks file"),
+        ("[oops", "could not parse"),
         ("tasks: [{task: a, samples: [{sample_id: 1}]}]", "not a tasks file"),
+        (
+            "tasks: [{task: a, samples: [{sample_id: 1, sample_input: Hi, "
+            "metadata: {desk: news, desk: weather}}]}]",
+            "duplicate key 'desk'",
+        ),
     ],
-    ids=["a task twice", "no samples", "not YAML", "a sample without input"],
+    ids=[
+        "a task twice",
+        "no samples",
+        "not YAML",
+        "a sample without input",
+        "a key twice",
+    ],
 )
 def test_a_tasks_file_that_cant_be_read(tmp_path: Path, text: str, says: str) -> None:
     path = tmp_path / "tasks.yaml"

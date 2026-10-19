@@ -301,6 +301,10 @@ def test_a_registered_name_is_found_as_an_eval_finds_it() -> None:
         ("server:\n  port: 9000\n", "and nothing else"),
         ("sentinel:\n  name: no_tokyo\ntasks_folder: [a]\n", "a folder's path"),
         ("sentinel: [oops\n", "could not parse"),
+        (
+            "sentinel:\n  name: no_tokyo\n  name: no_paris\nserver:\n  port: 9000\n",
+            "duplicate key 'name'",
+        ),
     ],
     ids=[
         "a setting the server doesn't have",
@@ -308,6 +312,8 @@ def test_a_registered_name_is_found_as_an_eval_finds_it() -> None:
         "no sentinel",
         "a tasks folder that isn't a path",
         "not YAML",
+        # read as the core reads a sentinel file, not with the last one winning
+        "a key twice",
     ],
 )
 def test_a_configuration_that_cant_be_read(
@@ -318,3 +324,14 @@ def test_a_configuration_that_cant_be_read(
 
     with pytest.raises(ValueError, match=says):
         parse_arguments(["--sentinel", str(config)])
+
+
+def test_a_configuration_in_json_indented_with_tabs_is_read(tmp_path: Path) -> None:
+    config = tmp_path / "sentinel.json"
+    config.write_text(
+        '{\n\t"sentinel": {"name": "no_tokyo"},\n\t"server": {"port": 9000}\n}\n'
+    )
+
+    arguments = parse_arguments(["--sentinel", str(config)])
+
+    assert (arguments.sentinel_config, arguments.port) == ({"name": "no_tokyo"}, 9000)

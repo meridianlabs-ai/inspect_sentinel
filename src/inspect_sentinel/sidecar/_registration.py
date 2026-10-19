@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import yaml
 from inspect_ai.model import ChatMessage
 from pydantic import BaseModel, Field, ValidationError
 
+from .._config import parse_config_file
 from .._context import EvalContext, InspectSample
 
 TASK_EXPIRY = 24 * 60 * 60
@@ -131,11 +131,11 @@ def read_tasks_file(path: str | Path) -> dict[str, FileTask]:
     Raises:
         ValueError: If the file can't be read as a tasks file, or names a task twice.
     """
-    text = Path(path).read_text()
+    # read as a sentinel file is, so that a key given twice is an error
+    parsed = parse_config_file(str(path))
     try:
-        parsed: object = yaml.safe_load(text)
         given = TasksFile.model_validate(parsed)
-    except (yaml.YAMLError, ValidationError) as ex:
+    except ValidationError as ex:
         raise ValueError(f"{path}: not a tasks file: {ex}") from None
     tasks: dict[str, FileTask] = {}
     for task in given.tasks:
