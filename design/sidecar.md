@@ -264,7 +264,7 @@ Which later requests belong to the ended run depends on whether the run has a na
 
 A run stays ended for as long as the sidecar holds the run's state (section 10). Nothing an eval sends can undo it, because no method of the endpoint for evals changes a decision (section 9).
 
-### `modify`: keep the original, replace one block
+### `modify`: keep the original, change one call's arguments
 
 A `modify` decision changes the arguments of one tool call. In Inspect's own process, a modify can change only the arguments: one that changes the function fails the sample, and the core package's validator refuses it. To carry it out, the sidecar keeps the provider's original document and changes only the call's arguments in it. The client runs the changed call. On every later request of the conversation, the sidecar puts the model's original call back, so the model sees what it proposed followed by the result of what ran, as it would in process. The `AfterToolCall` step of that result is given the call that ran, as in Inspect's own process, whichever of the two the client holds. An Inspect client keeps the original in its own copy, from the `sentinel` field, so the sidecar has nothing to put back.
 
