@@ -21,7 +21,7 @@ Some mistakes would only show up once the monitor is deployed. Sentinel's check 
 A portable function computes anything, and affects the outside world only through `context`:
 
 - `context.host.generate()` to call a model, `context.host.score()` to have a model score the step (it needs `inspect_scout` installed, for now), and `context.host.ask_human()` to ask a person.
-- `context.store_as()` to keep state across a sample's steps. Don't keep state in files: in a proxy a write is lost.
+- `context.store_as()` to keep state across a sample's steps. Don't keep state in files: in a proxy a write is lost. To know what the agent has been sent, read `step.history` rather than accumulating it; a proxy sees one request at a time, so `step.history` is `None` there, and a portable monitor handles that.
 - Outbound HTTP through `context.host.fetch()` and named endpoints is planned; until then a monitor that needs an HTTP API is not portable.
 
 Configuration comes through the factory's parameters, which the log records, not the environment. A monitor may read files bundled with it (read-only); it cannot read the host's other files.
