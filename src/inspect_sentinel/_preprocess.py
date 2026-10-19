@@ -58,7 +58,10 @@ class LastTurns:
 
 @dataclass(frozen=True)
 class LastMessages:
-    """Keep the last `n` messages of a conversation."""
+    """Keep the last `n` messages of a conversation.
+
+    The cut can fall between a tool call and its result, so the kept messages can start with a result whose call is not shown, and the monitor model sees output without the command that produced it. Prefer `LastTurns`, which keeps each call with its result, unless the count of messages matters more than that.
+    """
 
     n: int
     """How many messages to keep."""
