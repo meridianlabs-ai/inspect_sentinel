@@ -52,6 +52,8 @@ class Made:
 
     input: list[ChatMessage]
     tools: list[ToolInfo]
+    message_id: str
+    """The id the reply holding the call was given, so the call's two steps share it."""
 
 
 @dataclass

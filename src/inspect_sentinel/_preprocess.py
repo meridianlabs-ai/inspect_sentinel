@@ -293,8 +293,10 @@ def _after_mark(
         node.on_success.append(
             lambda: setattr(store, "marks", {**store.marks, key: last})
         )
+    # from the last copy: `history` holds each edited version of a message
+    # under its one id
     return (
-        messages[ids.index(seen) + 1 :]
+        messages[len(ids) - ids[::-1].index(seen) :]
         if seen is not None and seen in ids
         else messages
     )

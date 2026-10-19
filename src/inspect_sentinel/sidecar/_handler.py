@@ -282,11 +282,14 @@ class Handler:
             if digest in conversation.judged:
                 continue
             sent = conversation.made.get(occurrence(call.id, index))
-            assert assistant.id is not None
+            # a call this sidecar did not hand out has only the id its
+            # reading of the request gave it
+            message_id = sent.message_id if sent is not None else assistant.id
+            assert message_id is not None
             step = AfterToolCall(
                 conversation=held.conversation,
                 message=assistant.text,
-                message_id=assistant.id,
+                message_id=message_id,
                 call=call,
                 result=entry,
                 # left empty: only what the model is sent crosses the wire, and
@@ -399,7 +402,8 @@ class Handler:
             for call in message.tool_calls or []:
                 index = seen.get(call.id, 0)
                 seen[call.id] = index + 1
-                made = Made(held.input, held.offered.tools)
+                assert message.id is not None
+                made = Made(held.input, held.offered.tools, message.id)
                 conversation.made[occurrence(call.id, index)] = made
                 # its place, not one more each time: a retry or another
                 # reply to the same request hands out a call in the same

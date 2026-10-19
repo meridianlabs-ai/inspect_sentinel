@@ -314,6 +314,43 @@ async def test_new_since_last_report_records_the_last_message_with_an_id() -> No
     ]
 
 
+@monitor
+def sent_since() -> MonitorGroup:
+    async def calls(context: Context, step: BeforeToolCall) -> Observation | None:
+        thinned = await preprocess_step(
+            step,
+            StepPreprocessor(
+                input_window=None, history_window=NewSinceLastReport(context)
+            ),
+        )
+        return Observation.score(0.0, json.dumps(texts(thinned.history)))
+
+    return MonitorGroup(calls)
+
+
+@pytest.mark.anyio
+async def test_new_since_last_report_resumes_after_the_last_version_of_a_message() -> (
+    None
+):
+    # `history` holds each version of an edited message under its one id
+    first = ChatMessageUser(content="v1", id="edited")
+    second = ChatMessageUser(content="v2", id="edited")
+    histories = [
+        [first, user("next")],
+        [first, user("next"), second],
+        [first, user("next"), second],
+    ]
+    store = Store()
+    seen: list[list[str]] = []
+    for history in histories:
+        step = replace(tool_step(None, None), history=history)
+        with in_step(store=store) as context:
+            observations = await run_monitors({"judge": sent_since()}, context, step)
+        [observation] = observations.succeeded
+        seen.append(json.loads(observation.report.explanation or ""))
+    assert seen == [["v1", "next"], ["v2"], []]
+
+
 @pytest.mark.anyio
 async def test_new_since_last_report_records_per_function() -> None:
     generated = replace(
