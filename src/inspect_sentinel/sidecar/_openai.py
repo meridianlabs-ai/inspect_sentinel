@@ -28,7 +28,7 @@ from ._wire import (
     check_internal,
     check_internal_kept,
     json_object,
-    stream_events,
+    sdk_events,
     write_events,
     written_events,
 )
@@ -38,7 +38,7 @@ async def read_reply(
     content_type: str, body: bytes, chat: bool | None = None
 ) -> ModelOutput:
     if content_type.startswith("text/event-stream"):
-        events = list(stream_events(body))
+        events = sdk_events(body, "openai")
         if chat is None:
             chat = any(
                 event.get("object") == "chat.completion.chunk" for event in events

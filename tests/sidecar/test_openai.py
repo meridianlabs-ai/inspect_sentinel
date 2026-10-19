@@ -214,6 +214,47 @@ async def test_thinking_written_loosely_by_a_proxy_is_read() -> None:
     ]
 
 
+def _chat_chunk(index: int, function: dict[str, str]) -> bytes:
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-5-mini",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"tool_calls": [{"index": index, "function": function}]},
+                "finish_reason": None,
+            }
+        ],
+    }
+    return f"data: {json.dumps(chunk)}".encode()
+
+
+_DONE = b"data: [DONE]\n\n"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "where",
+    ["after [DONE]", "unfinished at the end"],
+)
+async def test_a_chat_chunk_the_sdk_never_dispatches_is_not_read(where: str) -> None:
+    _, body = openai_recorded("chat stream")
+    late = _chat_chunk(0, {"name": "_safe"})
+    if where == "after [DONE]":
+        body += late + b"\n\n"
+    else:
+        # an event is dispatched at the blank line that ends it
+        body = body.replace(_DONE, b"") + late
+
+    output = await read_reply("openai", STREAM, body)
+
+    assert {call.function for call in output.message.tool_calls or []} == {
+        "get_weather"
+    }
+
+
 def _responses_stream_going_on(kind: str) -> bytes:
     # the recorded stream, then again an event of a kind it already has,
     # giving a call other arguments

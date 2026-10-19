@@ -25,7 +25,7 @@ from ._wire import (
     check_internal_kept,
     json_object,
     made_event,
-    stream_events,
+    sdk_events,
     write_events,
     written_events,
 )
@@ -463,7 +463,7 @@ def _stream(body: bytes) -> object:
     )
     snapshot: Any = None
     stopped = False
-    for event in stream_events(body):
+    for event in sdk_events(body, "anthropic"):
         kind = event.get("type")
         if kind == "ping":
             continue

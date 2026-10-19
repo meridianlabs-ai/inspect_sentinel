@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
@@ -875,6 +876,61 @@ def _check_edited(output: ModelOutput, edited: ModelOutput, edits: Edits) -> Non
         or edited.stop_reason != output.stop_reason
     ):
         raise UnreadableError("The edited reply doesn't read back as intended.")
+
+
+def sdk_events(
+    body: bytes, sdk: Literal["openai", "anthropic"]
+) -> list[dict[str, Any]]:
+    """The events a client of a provider's SDK is given from a reply stream.
+
+    The SDK's own stream decodes and dispatches them, so an event the SDK leaves out is left out here too: one after OpenAI's `[DONE]`, one the Anthropic SDK doesn't dispatch by its `event:` label, or one the stream ends before finishing.
+
+    Raises:
+        UnreadableError: If the SDK raises on the stream, as it does for an error from the provider, or if an event is not a JSON object.
+    """
+    import importlib
+
+    streaming: Any = importlib.import_module(f"{sdk}._streaming")
+    http: Any = getattr(streaming, "httpx2", None) or streaming.httpx
+    response = http.Response(
+        200,
+        content=body,
+        request=http.Request("POST", _NOWHERE),
+        headers={"content-type": "text/event-stream"},
+    )
+    stream = streaming.Stream(
+        cast_to=object, response=response, client=_sdk_client(sdk)
+    )
+    errors: Any = importlib.import_module(sdk).APIError
+    try:
+        events: list[object] = list(stream)
+    except errors as ex:
+        raise UnreadableError(
+            "The reply stream ended in an error from the provider."
+        ) from ex
+    except ValueError as ex:
+        raise UnreadableError(
+            "The reply stream holds an event that is not JSON."
+        ) from ex
+    if not all(isinstance(event, dict) for event in events):
+        raise UnreadableError(
+            "The reply stream holds an event that is not a JSON object."
+        )
+    return cast("list[dict[str, Any]]", events)
+
+
+_NOWHERE = "http://sidecar.invalid"
+
+
+@functools.cache
+def _sdk_client(sdk: str) -> Any:
+    # a stream asks its client only how to decode events and raise errors, so
+    # this one never sends a request
+    import importlib
+
+    module: Any = importlib.import_module(sdk)
+    client = module.OpenAI if sdk == "openai" else module.Anthropic
+    return client(api_key="unused", base_url=_NOWHERE)
 
 
 def stream_events(body: bytes) -> Iterator[dict[str, Any]]:

@@ -84,6 +84,56 @@ _UNKNOWN_BLOCK: dict[str, Any] = {
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
+    ("label", "location"),
+    [
+        ("event: content_block_delta\n", "Atlantis"),
+        ("event: ping\n", "Paris"),
+        ("", "Paris"),
+    ],
+    ids=["labelled as a delta", "labelled as a ping", "with no label"],
+)
+async def test_a_stream_event_is_read_only_if_the_sdk_dispatches_it(
+    label: str, location: str
+) -> None:
+    # The SDK dispatches an event by its `event:` label, not by its data, so an
+    # input delta labelled otherwise doesn't replace the input the tool block
+    # began with, for the sidecar as for a client.
+    start = {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": weather("Paris"),
+    }
+    delta = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+            "type": "input_json_delta",
+            "partial_json": '{"location": "Atlantis"}',
+        },
+    }
+    body = (
+        _stream(_START, start)
+        + f"{label}data: {json.dumps(delta)}\n\n".encode()
+        + _stream(
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use"},
+                "usage": {"output_tokens": 1},
+            },
+            {"type": "message_stop"},
+        )
+    )
+
+    output = await read_reply("anthropic", STREAM, body)
+
+    assert [call.arguments for call in output.message.tool_calls or []] == [
+        {"location": location}
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
     ("content_type", "body", "says"),
     [
         pytest.param(JSON, b"not json", "not JSON", id="not JSON"),
@@ -139,7 +189,13 @@ _UNKNOWN_BLOCK: dict[str, Any] = {
             id="text for a block that never started",
         ),
         pytest.param(STREAM, b"", "not a complete message", id="empty stream"),
-        pytest.param(STREAM, b"data: {oops\n\n", "not JSON", id="event not JSON"),
+        # labelled, since the SDK reads no event without a label it knows
+        pytest.param(
+            STREAM,
+            b"event: message_start\ndata: {oops\n\n",
+            "not JSON",
+            id="event not JSON",
+        ),
         pytest.param(
             STREAM,
             _stream(_START, {"type": "error", "error": {"type": "overloaded_error"}}),
