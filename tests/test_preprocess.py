@@ -87,8 +87,13 @@ REPLIED = ["sys", "task", "reply 1"]
 
 # every list whole, nothing omitted, so a test sees the window alone
 ALL = StepPreprocessor(
-    input_window=AllMessages(), agent_messages_window=AllMessages(), omit_system=False
+    input_window=AllMessages(),
+    history_window=AllMessages(),
+    agent_messages_window=AllMessages(),
+    omit_system=False,
 )
+
+LISTS = ("input", "history", "agent_messages")
 
 
 def texts(messages: list[ChatMessage] | None) -> list[str] | None:
@@ -103,11 +108,19 @@ def tool_step(
     )
 
 
+def all_lists(messages: list[ChatMessage] | None) -> BeforeToolCall:
+    return replace(tool_step(messages, messages), history=messages)
+
+
 Shown = tuple[list[str] | None, list[str] | None]
 
 
 def shown(step: Step) -> Shown:
     return texts(step.input), texts(step.agent_messages)
+
+
+def every(step: Step) -> dict[str, list[str] | None]:
+    return {name: texts(getattr(step, name)) for name in LISTS}
 
 
 async def render(
@@ -137,21 +150,14 @@ async def render(
         (LastMessages(9), texts(CONVERSATION)),
     ],
 )
+@pytest.mark.parametrize("name", LISTS)
 @pytest.mark.anyio
 async def test_each_window_cuts_its_list_as_it_is(
-    window: Window, kept: list[str]
+    window: Window, kept: list[str], name: str
 ) -> None:
-    step = tool_step(CONVERSATION, CONVERSATION)
-    assert shown(await preprocess_step(step, replace(ALL, input_window=window))) == (
-        kept,
-        texts(CONVERSATION),
-    )
-    assert shown(
-        await preprocess_step(step, replace(ALL, agent_messages_window=window))
-    ) == (
-        texts(CONVERSATION),
-        kept,
-    )
+    step = all_lists(CONVERSATION)
+    thinned = await preprocess_step(step, replace(ALL, **{f"{name}_window": window}))
+    assert every(thinned) == {**every(step), name: kept}
 
 
 @pytest.mark.parametrize("window", [LastTurns, LastMessages])
@@ -160,54 +166,56 @@ def test_a_negative_window_raises(window: type[LastTurns | LastMessages]) -> Non
         window(-1)
 
 
+WHOLE = [m.text for m in CONVERSATION]
+
+
 @pytest.mark.parametrize(
-    "preprocessor, input, agent_messages, shown_after",
+    "preprocessor, given, shown_after",
     [
-        # by default the whole input and none of the agent's messages
+        # by default the whole input and nothing else
         (
             StepPreprocessor(),
             CONVERSATION,
-            CONVERSATION,
-            (texts(CONVERSATION[1:]), texts([])),
+            {"input": WHOLE[1:], "history": [], "agent_messages": []},
         ),
         (
             replace(ALL, input_window=None),
             CONVERSATION,
-            CONVERSATION,
-            (texts([]), texts(CONVERSATION)),
+            {"input": [], "history": WHOLE, "agent_messages": WHOLE},
         ),
         # a list the host could not provide stays None, windowed or not
-        (StepPreprocessor(), None, None, (None, None)),
-        (ALL, None, None, (None, None)),
+        (StepPreprocessor(), None, dict.fromkeys(LISTS)),
+        (ALL, None, dict.fromkeys(LISTS)),
     ],
 )
 @pytest.mark.anyio
 async def test_a_list_with_no_window_is_empty_and_an_unknown_one_stays_none(
     preprocessor: StepPreprocessor,
-    input: list[ChatMessage] | None,
-    agent_messages: list[ChatMessage] | None,
-    shown_after: Shown,
+    given: list[ChatMessage] | None,
+    shown_after: dict[str, list[str] | None],
 ) -> None:
-    assert (
-        shown(await preprocess_step(tool_step(input, agent_messages), preprocessor))
-        == shown_after
-    )
+    step = all_lists(given)
+    assert every(await preprocess_step(step, preprocessor)) == shown_after
 
 
 UNKNOWN_INPUT = (
     "[BEGIN INPUT]\nThe model input for this call is not available.\n[END INPUT]"
 )
 UNKNOWN_HISTORY = (
-    "[BEGIN HISTORY]\nThe agent's conversation history is not available.\n[END HISTORY]"
+    "[BEGIN HISTORY]\nThe messages the agent has sent are not available.\n[END HISTORY]"
 )
+UNKNOWN_AGENT_MESSAGES = "[BEGIN AGENT MESSAGES]\nThe agent's own message list is not available.\n[END AGENT MESSAGES]"
 
 
 @pytest.mark.anyio
 async def test_an_unknown_list_is_named_and_an_empty_one_has_no_block() -> None:
-    rendered = await render(tool_step(None, None))
-    assert UNKNOWN_INPUT in rendered and UNKNOWN_HISTORY in rendered
-    rendered = await render(tool_step([], []))
-    assert "[BEGIN INPUT]" not in rendered and "[BEGIN HISTORY]" not in rendered
+    rendered = await render(all_lists(None))
+    assert all(
+        block in rendered
+        for block in (UNKNOWN_INPUT, UNKNOWN_HISTORY, UNKNOWN_AGENT_MESSAGES)
+    )
+    rendered = await render(all_lists([]), ALL)
+    assert "[BEGIN" not in rendered.split("[AGENT STEP")[0]
 
 
 def new_since(context: Context) -> StepPreprocessor[Step]:
@@ -577,14 +585,17 @@ async def test_a_nonce_marks_every_block_and_every_message_header(
     nonce: str | None,
 ) -> None:
     rendered = await render(
-        tool_step([user("go")], CONVERSATION),
-        StepPreprocessor(agent_messages_window=AllMessages()),
+        replace(tool_step([user("go")], CONVERSATION), history=CONVERSATION),
+        StepPreprocessor(
+            history_window=AllMessages(), agent_messages_window=AllMessages()
+        ),
         nonce=nonce,
     )
     mark = "" if nonce is None else f" ({nonce})"
     assert [line for line in rendered.splitlines() if line.startswith("[B")] == [
         f"[BEGIN INPUT{mark}]",
         f"[BEGIN HISTORY{mark}]",
+        f"[BEGIN AGENT MESSAGES{mark}]",
     ]
     assert f"[AGENT STEP - END TOOL CALL{mark}]" in rendered
     # Scout 0.5.5 and earlier write no nonce on message headers
@@ -594,23 +605,21 @@ async def test_a_nonce_marks_every_block_and_every_message_header(
 
 @pytest.mark.anyio
 async def test_messages_are_numbered_in_block_order_and_cites_resolve() -> None:
-    step = tool_step([user("summary")], [user("task")])
-    rendered, extract_refs = await step_as_str(
-        await preprocess_step(
-            step, StepPreprocessor(agent_messages_window=AllMessages())
-        )
-    )
+    step = replace(tool_step([user("summary")], [user("task")]), history=[user("sent")])
+    rendered, extract_refs = await step_as_str(await preprocess_step(step, ALL))
     starts = [
         rendered.index(marker)
         for marker in (
             "[BEGIN INPUT]",
             "[BEGIN HISTORY]",
+            "[BEGIN AGENT MESSAGES]",
             "[AGENT STEP - BEGIN TOOL CALL]",
         )
     ]
     assert starts == sorted(starts)
-    assert [r.id for r in extract_refs("see [M1], [M2] and [M3]")] == [
+    assert [r.id for r in extract_refs("see [M1], [M2], [M3] and [M4]")] == [
         "summary",
+        "sent",
         "task",
         "msg_1",
     ]

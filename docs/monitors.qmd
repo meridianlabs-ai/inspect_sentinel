@@ -24,7 +24,7 @@ How to write a monitor: a `@monitor` factory returning a function that takes a `
 - Monitor or protocol? Keeping thresholds out of monitors
 - Several functions in one monitor: `MonitorGroup`
 - An LLM monitor's `model=` and `role=` parameters, passed to `context.host.generate()` or `context.host.score()`: a model name and a model role (see [The Host and Model Roles](host.qmd))
-- Prompting an LLM monitor safely: separating instructions from evidence; a `StepPreprocessor` (windows `LastTurns`, `LastMessages` and `NewSinceLastReport` for the input and the agent's messages, omissions, a `transform`) that chooses what a model sees, `preprocess_step()` to apply it and `step_as_str()` to render it; `monitor_prompt()` (planned)
+- Prompting an LLM monitor safely: separating instructions from evidence; a `StepPreprocessor` (windows `LastTurns`, `LastMessages` and `NewSinceLastReport` for the input, `history` and `agent_messages`, omissions, a `transform`) that chooses what a model sees, `preprocess_step()` to apply it and `step_as_str()` to render it; `monitor_prompt()` (planned)
 - Failures: a monitor that raises is recorded as failed and the step goes on; a protocol that reads its scores fails unless it checks `observations.failed`
 - Testing a monitor
 
