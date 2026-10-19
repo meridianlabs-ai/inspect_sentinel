@@ -348,6 +348,68 @@ def test_a_responses_call_whose_argument_events_name_another_call_is_refused(
         _check(events)
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "index",
+    [None, -1, "1", True],
+    ids=["none", "negative", "a string", "a boolean"],
+)
+async def test_a_responses_call_event_without_its_place_in_the_output_is_refused(
+    index: object,
+) -> None:
+    events = _responses_events()
+    output = await read_reply("openai", STREAM, _body(events))
+    kept, taken = (output.message.tool_calls or [])[:2]
+    done = next(
+        event
+        for event in events
+        if event["type"] == "response.function_call_arguments.done"
+        and event["item_id"]
+        == next(
+            found["item"]["id"]
+            for found in events
+            if found["type"] == "response.output_item.done"
+            and found["item"].get("call_id") == kept.id
+        )
+    )
+    # arguments the sentinel didn't judge, for a client that follows the
+    # event's item id to the call
+    done["arguments"] = '{"location": "Atlantis"}'
+    if index is None:
+        del done["output_index"]
+    else:
+        done["output_index"] = index
+
+    with pytest.raises(UnreadableError, match="without its place"):
+        await edit_reply(
+            "openai", STREAM, _body(events), None, Edits(frozenset({taken.id})), output
+        )
+
+
+@pytest.mark.anyio
+async def test_a_taken_out_call_event_without_its_place_in_the_output_is_refused() -> (
+    None
+):
+    events = _responses_events()
+    output = await read_reply("openai", STREAM, _body(events))
+    taken = (output.message.tool_calls or [])[0]
+    item = next(
+        found["item"]["id"]
+        for found in events
+        if found["type"] == "response.output_item.done"
+        and found["item"].get("call_id") == taken.id
+    )
+    # which would go out as it came, with the rejected call's arguments
+    for event in events:
+        if event.get("item_id") == item:
+            del event["output_index"]
+
+    with pytest.raises(UnreadableError, match="without its place"):
+        await edit_reply(
+            "openai", STREAM, _body(events), None, Edits(frozenset({taken.id})), output
+        )
+
+
 def _as_custom_tool_call(events: list[dict[str, Any]], index: int) -> None:
     # the call made into a call of a custom tool, whose input is streamed as a
     # function call's arguments are

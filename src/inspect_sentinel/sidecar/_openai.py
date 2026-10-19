@@ -316,6 +316,7 @@ def _edit_responses_stream(
     # A call is found by the event it is added with, or the one it is done
     # with, since a stream may hold a call's done event alone, and a client
     # may act on either.
+    _check_indexes(events)
     items: dict[int, str] = {}
     for event in events:
         data = event.data or {}
@@ -391,6 +392,22 @@ def _edit_responses_stream(
     return written
 
 
+def _check_indexes(events: list[StreamEvent]) -> None:
+    # An event is edited and checked as the item at its output index, so one
+    # that names an item without a place in the output would go out as it
+    # came, though a client may follow its item id to a call. Every event the
+    # SDK has for an item gives its index.
+    for event in events:
+        data = event.data or {}
+        index = data.get("output_index")
+        if ("item_id" in data or "item" in data or index is not None) and (
+            type(index) is not int or index < 0
+        ):
+            raise UnreadableError(
+                "The reply stream has an event for an item without its place in the output."
+            )
+
+
 def _check_responses_stream(events: list[StreamEvent]) -> None:
     # What a client acts on in a Responses stream is not only the response
     # the stream ends with, which is all that is read to judge it: the SDK
@@ -414,6 +431,7 @@ def _check_responses_stream(events: list[StreamEvent]) -> None:
                 )
     except Exception as ex:
         raise UnreadableError("The edited reply stream doesn't hold together.") from ex
+    _check_indexes(events)
     # an item is checked whichever of its events the stream holds, since a
     # stream may hold an item's done event alone
     items: dict[int, list[tuple[str, dict[str, Any]]]] = {}
