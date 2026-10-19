@@ -1605,7 +1605,7 @@ StepPreprocessor(
     input_window=AllMessages(),        # the default; LastTurns(n), LastMessages(n), NewSinceLastReport(context), or None
     history_window=None,               # the default: none of what the agent sent; a window shows it
     agent_messages_window=None,        # the default: none of the agent loop's own list; a window shows it
-    omit_system=True,                  # as Scout leaves system messages out
+    omit_system=False,                 # shown: a system message often holds the operator's rules
     omit_reasoning=False,              # in the step's own reply too
     omit_tool_usage=False,             # a provider's own tool use, such as web search
     transform=None,                    # S -> S, applied last to the thinned step

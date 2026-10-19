@@ -177,7 +177,7 @@ WHOLE = [m.text for m in CONVERSATION]
         (
             StepPreprocessor(),
             CONVERSATION,
-            {"input": WHOLE[1:], "history": [], "agent_messages": []},
+            {"input": WHOLE, "history": [], "agent_messages": []},
         ),
         (
             replace(ALL, input_window=None),
@@ -615,10 +615,10 @@ def thoughtful_result() -> Step:
 @pytest.mark.parametrize(
     "preprocessor, gone",
     [
-        (StepPreprocessor(), ["be helpful"]),
-        (StepPreprocessor(omit_system=False), []),
-        (StepPreprocessor(omit_reasoning=True), ["be helpful", "thinking about"]),
-        (StepPreprocessor(omit_tool_usage=True), ["be helpful", "searched"]),
+        (StepPreprocessor(), []),
+        (StepPreprocessor(omit_system=True), ["be helpful"]),
+        (StepPreprocessor(omit_reasoning=True), ["thinking about"]),
+        (StepPreprocessor(omit_tool_usage=True), ["searched"]),
     ],
 )
 @pytest.mark.anyio

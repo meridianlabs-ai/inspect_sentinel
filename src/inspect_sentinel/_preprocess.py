@@ -109,8 +109,8 @@ class StepPreprocessor(Generic[S]):
     agent_messages_window: Window | None = None
     """How much of `agent_messages`, the agent loop's own list, to show: none by default."""
 
-    omit_system: bool = True
-    """Leave system messages out."""
+    omit_system: bool = False
+    """Leave system messages out. They are shown by default, since a system message often holds the operator's rules for the agent ("never push", "work only in /work"), which the monitor judges the agent against."""
 
     omit_reasoning: bool = False
     """Leave the model's reasoning out."""
