@@ -640,6 +640,29 @@ def test_a_stream_keeps_its_line_ends_and_each_events_other_lines() -> None:
     )
 
 
+@pytest.mark.anyio
+async def test_a_reply_judged_that_cant_carry_the_field_goes_on_without_it() -> None:
+    handler = Handler(weather_rule("reject", "Tokyo"))
+    sent = anthropic_recorded("single-tool-call")
+    # a stream whose last event never came, which is read all the same
+    cut = b"".join(
+        event + b"\n\n"
+        for event in sent.split(b"\n\n")
+        if event and b"message_delta" not in event
+    )
+    await handler.request(_from_inspect(request("a")))
+
+    answer = await handler.reply(reply(cut, id="a", content_type=STREAM))
+    # the turn was passed, so the conversation goes on from it
+    after = await handler.request(
+        _from_inspect(request("b", then=ran("Paris", "Sunny.")))
+    )
+
+    assert answer == Pass()
+    assert after == Pass()
+    assert await handler.records("a") is not None
+
+
 def test_a_stream_with_no_event_for_the_field_cant_carry_it() -> None:
     with pytest.raises(UnreadableError, match="no event"):
         with_sentinel(STREAM, b'data: {"type": "ping"}\n\n', {"version": 1})

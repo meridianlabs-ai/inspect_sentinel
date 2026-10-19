@@ -143,7 +143,7 @@ class Handler:
 
         The reply is put to the sentinel as an `AfterGenerate` step, then each tool call in it as a `BeforeToolCall` step, in order, leaving out a stage nothing in the sentinel watches. The first call that is rejected refuses the whole turn, and the rejection is kept for the later requests of its conversation. The third rejected turn in a row within an attempt at a sample ends the run. A provider's error is passed on unjudged.
 
-        For an Inspect client, a reply that goes on is answered with `Replace`, the reply with the `sentinel` field added, and a refusal carries the field. The field holds every step judged during the exchange, the request's first.
+        For an Inspect client, a reply that goes on is answered with `Replace`, the reply with the `sentinel` field added, and a refusal carries the field. The field holds every step judged during the exchange, the request's first. A reply that goes on but has no event the field can go in, such as a stream that never sends its last event, is handed over as judged, without the field.
 
         Args:
             reply: The reply, as the proxy handed it over.
@@ -370,7 +370,13 @@ class Handler:
             return self._with_field(answer, held.proxy, held.exchange, run)
         body = answer.body if isinstance(answer, Replace) else reply.body
         field = self._field(held.exchange, "proceed")
-        return Replace(with_sentinel(reply.content_type, body, field))
+        try:
+            return Replace(with_sentinel(reply.content_type, body, field))
+        except UnreadableError:
+            # The reply was judged and goes on, and the run already counts it
+            # as passed, so the client is handed it as judged, without the
+            # field. Inspect then asks what was decided, by `request_result`.
+            return answer
 
     async def _judge_reply(self, reply: Reply, held: Held | None) -> Answer:
         if reply.status != 200:
