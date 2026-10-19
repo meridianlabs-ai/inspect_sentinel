@@ -216,7 +216,9 @@ async def test_an_unknown_list_is_named_and_an_empty_one_has_no_block() -> None:
         for block in (UNKNOWN_INPUT, UNKNOWN_HISTORY, UNKNOWN_AGENT_MESSAGES)
     )
     rendered = await render(all_lists([]), ALL)
-    assert "[BEGIN" not in rendered.split("[BEGIN AGENT STEP")[0]
+    assert not any(
+        f"[BEGIN {name}]" in rendered for name in ("INPUT", "HISTORY", "AGENT MESSAGES")
+    )
 
 
 def new_since(context: Context) -> StepPreprocessor[Step]:
@@ -499,13 +501,14 @@ async def test_new_since_last_report_outside_the_runner_raises() -> None:
     ],
 )
 @pytest.mark.anyio
-async def test_the_step_comes_last_in_a_block_named_for_its_stage(
+async def test_everything_is_in_one_block_named_for_the_stage(
     step: Step, block: str, contents: list[str]
 ) -> None:
-    rendered = await render(step)
-    assert rendered.endswith(f"[END AGENT STEP - {block}]")
-    step_block = rendered.split(f"[BEGIN AGENT STEP - {block}]")[1]
-    assert all(text in step_block for text in contents)
+    rendered = await render(step, ALL)
+    assert rendered.startswith(f"[BEGIN AGENT STEP - {block}]\n")
+    assert rendered.endswith(f"\n[END AGENT STEP - {block}]")
+    assert rendered.count("[BEGIN AGENT STEP") == 1
+    assert all(text in rendered for text in contents)
 
 
 @pytest.mark.anyio
@@ -537,8 +540,7 @@ async def test_a_request_holds_its_input_then_its_tools() -> None:
         tool_choice=ToolFunction(name="bash"),
     )
     rendered = await render(step)
-    before, request = rendered.split("[BEGIN AGENT STEP - MODEL REQUEST]\n")
-    assert "[BEGIN INPUT]" not in before
+    _, request = rendered.split("[BEGIN AGENT STEP - MODEL REQUEST]\n")
     headers = [
         line
         for line in request.splitlines()
@@ -676,10 +678,11 @@ async def test_a_nonce_marks_every_block_and_every_message_header(
     )
     mark = "" if nonce is None else f" ({nonce})"
     assert [line for line in rendered.splitlines() if line.startswith("[B")] == [
+        f"[BEGIN AGENT STEP - TOOL CALL{mark}]",
         f"[BEGIN INPUT{mark}]",
         f"[BEGIN HISTORY{mark}]",
         f"[BEGIN AGENT MESSAGES{mark}]",
-        f"[BEGIN AGENT STEP - TOOL CALL{mark}]",
+        f"[BEGIN CALL{mark}]",
     ]
     assert rendered.endswith(f"[END AGENT STEP - TOOL CALL{mark}]")
     # Scout 0.5.5 and earlier write no nonce on message headers
@@ -694,10 +697,11 @@ async def test_messages_are_numbered_in_block_order_and_cites_resolve() -> None:
     starts = [
         rendered.index(marker)
         for marker in (
+            "[BEGIN AGENT STEP - TOOL CALL]",
             "[BEGIN INPUT]",
             "[BEGIN HISTORY]",
             "[BEGIN AGENT MESSAGES]",
-            "[BEGIN AGENT STEP - TOOL CALL]",
+            "[BEGIN CALL]",
         )
     ]
     assert starts == sorted(starts)
