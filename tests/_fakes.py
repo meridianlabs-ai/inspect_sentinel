@@ -182,6 +182,7 @@ def before_tool_call(function: str, /, **arguments: Any) -> BeforeToolCall:
     return BeforeToolCall(
         conversation="conversation",
         message="",
+        message_id="msg_1",
         call=ToolCall(id="call_1", function=function, arguments=arguments),
         view=ToolCallView(),
         input=[],
@@ -201,6 +202,7 @@ def after_tool_call(
     return AfterToolCall(
         conversation=before.conversation,
         message=before.message,
+        message_id=before.message_id,
         call=before.call,
         result=ChatMessageTool(
             content=result,

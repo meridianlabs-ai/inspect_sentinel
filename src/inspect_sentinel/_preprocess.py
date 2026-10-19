@@ -318,7 +318,11 @@ def _step_block(step: Step) -> str:
 
 def _step_part(step: Step) -> list[ChatMessage] | None:
     if isinstance(step, BeforeToolCall | AfterToolCall):
-        call = ChatMessageAssistant(content=step.message, tool_calls=[step.call])
+        # the message holds only this call, under the id of the one that made
+        # it, so a cite of it resolves to that message
+        call = ChatMessageAssistant(
+            id=step.message_id, content=step.message, tool_calls=[step.call]
+        )
         return [call, step.result] if isinstance(step, AfterToolCall) else [call]
     if isinstance(step, BeforeGenerate):
         return step.input

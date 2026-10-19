@@ -172,6 +172,7 @@ class AfterGenerate:
 class BeforeToolCall:
     conversation: str
     message: str                # assistant text alongside the call
+    message_id: str             # id of the assistant message that made the call
     call: ToolCall              # the call as it will execute
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
@@ -184,6 +185,7 @@ class BeforeToolCall:
 class AfterToolCall:
     conversation: str
     message: str
+    message_id: str
     call: ToolCall              # the call as executed (after any `modify`)
     result: ChatMessageTool     # what the model will see, after truncation
     output: ToolResult          # the tool's untruncated return value
@@ -547,7 +549,7 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 | `StepPreprocessor`; `AllMessages`, `LastTurns`, `LastMessages`, `NewSinceLastReport`; `preprocess_step` | **Built (2026-10-16).** A `StepPreprocessor[S]` holds an `input_window` (default `AllMessages()`) and a `history_window` (default None: no history), each cutting its list as it is, a list with no window becoming `[]` and an unknown one staying None; `omit_system` (default True), `omit_reasoning` and `omit_tool_usage`; and a `transform` (S to S, applied last), the escape hatch for anything else. `preprocess_step` applies it and returns a thinned step of the same type. `NewSinceLastReport(context)` keeps the last message shown per conversation and monitor function in the monitor's store, saved only when the function succeeds, so an incremental monitor does not re-read its conversations and does not skip what a failed call was shown |
 | `call_as_str(call, view=None)` | the Python-call rendering approvers use, honouring a `ToolCallView` |
 | `result_as_str(result, truncated=None)` | a tool result with the truncation (`step.truncated`) marked: that the model saw a cut, and how much was cut |
-| `briefing_as_str(context)`, `step_as_str(step, *, nonce=None)` | the instruction and evidence sections. `step_as_str` is built, and returns the text with an `extract_refs` for `[M1]`-style cites: `INPUT`, `HISTORY` and an `AGENT STEP` block named for the stage (`[AGENT STEP - BEGIN TOOL CALL]`; `TOOL CALL AND RESULT`, `MODEL REQUEST`, `MODEL REPLY`), each when it has something to show (a request's input is its `MODEL REQUEST` block), each list rendered as it is, every marker carrying the nonce when one is given (`[END INPUT (3f9a1c7e)]`), numbered with Scout's `message_numbering`; an input or history the host could not provide is named. Naming other absent surfaces (`view`, untruncated `output`) is not built |
+| `briefing_as_str(context)`, `step_as_str(step, *, nonce=None)` | the instruction and evidence sections. `step_as_str` is built, and returns the text with an `extract_refs` for `[M1]`-style cites: `INPUT`, `HISTORY` and an `AGENT STEP` block named for the stage (`[AGENT STEP - BEGIN TOOL CALL]`; `TOOL CALL AND RESULT`, `MODEL REQUEST`, `MODEL REPLY`), each when it has something to show (a request's input is its `MODEL REQUEST` block), each list rendered as it is, every marker carrying the nonce when one is given (`[END INPUT (3f9a1c7e)]`), numbered with Scout's `message_numbering`, the call's message in a tool stage's block under the step's `message_id`; an input or history the host could not provide is named. Naming other absent surfaces (`view`, untruncated `output`) is not built |
 | `monitor_prompt(context, step, *, question, answer=..., preprocessor=None)` | the analogue of Scout's `scanner_prompt`: briefing, delimited evidence envelope, escalations as prior verdicts, the question |
 
 ```python

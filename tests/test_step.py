@@ -46,6 +46,7 @@ def test_before_tool_call_defaults_to_no_escalations() -> None:
     step = BeforeToolCall(
         conversation="conv",
         message="ok",
+        message_id="msg_1",
         call=_call(),
         view=ToolCallView(),
         input=model_input,
@@ -66,6 +67,7 @@ def test_before_tool_call_carries_escalations() -> None:
     step = BeforeToolCall(
         conversation="conv",
         message="ok",
+        message_id="msg_1",
         call=_call(),
         view=ToolCallView(),
         input=_input(),
@@ -79,6 +81,7 @@ def test_after_tool_call_holds_result_and_untruncated_output() -> None:
     step = AfterToolCall(
         conversation="conv",
         message="ok",
+        message_id="msg_1",
         call=_call(),
         result=ChatMessageTool(content="short", tool_call_id="c1"),
         output="the full untruncated output",
@@ -95,6 +98,7 @@ def test_after_tool_call_output_may_be_structured_content() -> None:
     step = AfterToolCall(
         conversation="conv",
         message="ok",
+        message_id="msg_1",
         call=_call(),
         result=ChatMessageTool(content="a b", tool_call_id="c1"),
         output=output,
@@ -109,6 +113,7 @@ def test_tool_steps_default_to_no_tools_and_no_truncation() -> None:
     before = BeforeToolCall(
         conversation="conv",
         message="ok",
+        message_id="msg_1",
         call=_call(),
         view=ToolCallView(),
         input=None,
@@ -117,6 +122,7 @@ def test_tool_steps_default_to_no_tools_and_no_truncation() -> None:
     after = AfterToolCall(
         conversation="conv",
         message="ok",
+        message_id="msg_1",
         call=_call(),
         result=ChatMessageTool(content="out", tool_call_id="c1"),
         output="out",

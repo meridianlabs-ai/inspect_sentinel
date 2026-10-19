@@ -97,6 +97,9 @@ class BeforeToolCall:
     message: str
     """Assistant text alongside the call."""
 
+    message_id: str
+    """Id of the assistant message that made the call, so a monitor model can cite it."""
+
     call: ToolCall
     """The call as it will execute."""
 
@@ -125,6 +128,9 @@ class AfterToolCall:
 
     message: str
     """Assistant text alongside the call."""
+
+    message_id: str
+    """Id of the assistant message that made the call, so a monitor model can cite it."""
 
     call: ToolCall
     """The call as executed, after any `modify`."""

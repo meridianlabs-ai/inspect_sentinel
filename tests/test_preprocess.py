@@ -20,6 +20,7 @@ from inspect_ai.util import Store
 
 from inspect_sentinel import (
     AfterGenerate,
+    AfterToolCall,
     AllMessages,
     BeforeToolCall,
     Context,
@@ -600,4 +601,22 @@ async def test_messages_are_numbered_in_block_order_and_cites_resolve() -> None:
         )
     ]
     assert starts == sorted(starts)
-    assert [r.id for r in extract_refs("see [M1] and [M2]")] == ["summary", "task"]
+    assert [r.id for r in extract_refs("see [M1], [M2] and [M3]")] == [
+        "summary",
+        "task",
+        "msg_1",
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "step",
+    [before_tool_call("bash", cmd="ls"), after_tool_call("bash", "out", cmd="ls")],
+)
+async def test_a_cite_of_the_call_resolves_to_the_message_that_made_it(
+    step: BeforeToolCall | AfterToolCall,
+) -> None:
+    _, extract_refs = await step_as_str(
+        replace(step, input=[], history=[], message_id="msg_A7")
+    )
+    assert [r.id for r in extract_refs("[M1]")] == ["msg_A7"]
