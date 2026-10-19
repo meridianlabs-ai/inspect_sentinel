@@ -9,6 +9,7 @@ from ._config import config_from_sentinel, sentinel_from_config
 from ._context import validate_instance_name
 from ._decorators import step_types, watched_stages
 from ._host import HostContext, HostNative, Recorder
+from ._human_decisions import kept_human_decision, supersedes
 from ._resolve import resolve_sentinel
 from ._runner import run_sentinel
 from ._types import Sentinels
@@ -18,11 +19,13 @@ __all__ = [
     "HostContext",
     "HostNative",
     "config_from_sentinel",
+    "kept_human_decision",
     "Sentinels",
     "sentinel_from_config",
     "validate_instance_name",
     "resolve_sentinel",
     "run_sentinel",
     "step_types",
+    "supersedes",
     "watched_stages",
 ]

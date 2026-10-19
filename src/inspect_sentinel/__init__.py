@@ -48,8 +48,10 @@ from ._step import (
     AfterToolCall,
     BeforeGenerate,
     BeforeToolCall,
+    HumanDecision,
     Step,
     Truncation,
+    human_decision_for,
 )
 from ._types import (
     Monitor,
@@ -81,6 +83,7 @@ __all__ = [
     "Failed",
     "Host",
     "HumanAnswer",
+    "HumanDecision",
     "Monitor",
     "MonitorFailedError",
     "MonitorGroup",
@@ -105,6 +108,7 @@ __all__ = [
     "find_words",
     "handle_escalation",
     "human",
+    "human_decision_for",
     "monitor",
     "observe_only",
     "protocol",
