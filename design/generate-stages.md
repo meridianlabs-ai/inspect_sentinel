@@ -160,7 +160,6 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 | `tool_choice` | as sent (`"none"` when there are no tools) | same |
 | `config` | the resolved `GenerateConfig`: the task's, the model's and the call's, with `max_tokens` filled | same |
 | `output` | — | the `ModelOutput` returned; `output.message` is the subject |
-| `escalations` | inside a `sequential` | same |
 
 `AfterGenerate` repeats the request so that `resample` can regenerate with exactly what the agent was given.
 

@@ -10,7 +10,7 @@ from inspect_ai.util import StoreModel
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision
+from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 from inspect_sentinel._types import Protocol, ProtocolGroup
 from inspect_sentinel.sidecar import (
@@ -143,7 +143,9 @@ async def test_a_failing_protocol_is_not_swallowed() -> None:
 def takes(seconds: float) -> Protocol:
     """Wait before rejecting a call, as a monitor that asks a slow model does."""
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         await anyio.sleep(seconds)
         return Decision.reject("slow", message="Decided late.")
 
@@ -180,7 +182,9 @@ class Seen(StoreModel):
 
 @protocol
 def third_lookup_ends_the_run() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         seen = context.store_as(Seen)
         seen.lookups += 1
         if seen.lookups >= 3:
@@ -209,7 +213,9 @@ async def test_state_is_kept_for_a_run_and_apart_from_other_runs() -> None:
 
 @protocol
 def reports_context() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         roles = [m.role for m in step.input or []]
         return Decision.reject(
             "context", message=f"{context.eval}|{context.path!r}|{roles}"
@@ -409,7 +415,9 @@ async def test_every_rejected_turn_in_a_row_is_added() -> None:
 
 @protocol
 def reports_input() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") == "Tokyo":
             return Decision.reject("first try", message="Tokyo is not allowed.")
         return Decision.reject("input", message=str([m.role for m in step.input or []]))
@@ -489,7 +497,9 @@ async def test_a_reply_that_passes_starts_the_count_again() -> None:
 
 @protocol
 def rejects_without_a_message() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.reject("a reason kept for the log")
 
     return decide
@@ -575,7 +585,9 @@ def _roles(messages: list[Any] | None) -> str:
 
 @protocol
 def reports_result() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.proceed(
             "|".join(
                 [
@@ -629,7 +641,9 @@ class Results(StoreModel):
 
 @protocol
 def second_result_ends_the_run() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         results = context.store_as(Results)
         results.seen += 1
         if results.seen >= 2:
@@ -686,12 +700,16 @@ async def test_a_result_without_its_call_cannot_be_judged() -> None:
 
 @protocol
 def failures_end_the_next_call() -> ProtocolGroup:
-    async def before(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def before(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         if context.store_as(Results).failed:
             return Decision.terminate("an earlier call failed")
         return Decision.proceed()
 
-    async def after(context: Context, step: AfterToolCall) -> Decision | None:
+    async def after(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.result.error is not None:
             context.store_as(Results).failed += 1
         return Decision.proceed()
@@ -724,12 +742,16 @@ async def test_state_is_shared_by_the_steps_of_a_run(
 
 @protocol
 def rejects_tokyo_and_ends_at_any_result() -> ProtocolGroup:
-    async def before(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def before(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") == "Tokyo":
             return Decision.reject("Tokyo", message="Tokyo is not allowed.")
         return Decision.proceed()
 
-    async def after(context: Context, step: AfterToolCall) -> Decision | None:
+    async def after(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.terminate("a result")
 
     return ProtocolGroup(before, after)
@@ -752,12 +774,16 @@ async def test_what_the_model_is_told_of_a_rejection_is_not_judged_as_a_result()
 
 @protocol
 def rejects_tokyo_and_reports_what_led_to_a_result() -> ProtocolGroup:
-    async def before(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def before(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") == "Tokyo":
             return Decision.reject("Tokyo", message="Tokyo is not allowed.")
         return Decision.proceed()
 
-    async def after(context: Context, step: AfterToolCall) -> Decision | None:
+    async def after(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         tools = None if step.tools is None else [tool.name for tool in step.tools]
         return Decision.proceed(f"{_roles(step.input)}|{tools}")
 
@@ -904,7 +930,9 @@ async def test_a_run_with_no_name_ended_on_its_first_turn_is_judged_afresh() -> 
 
 @protocol
 def reports_the_conversation() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.reject("run", message=step.conversation)
 
     return decide
@@ -966,12 +994,16 @@ async def test_a_result_for_a_call_that_reuses_a_rejected_calls_id_is_judged() -
 
 @protocol
 def rejects_tokyo_and_ends_at_a_storm() -> ProtocolGroup:
-    async def before(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def before(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") == "Tokyo":
             return Decision.reject("Tokyo", message="Tokyo is not allowed.")
         return Decision.proceed()
 
-    async def after(context: Context, step: AfterToolCall) -> Decision | None:
+    async def after(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         if "storm" in step.result.text:
             return Decision.terminate("a storm")
         return Decision.proceed()
@@ -1024,7 +1056,9 @@ def _tokyo() -> anyio.Event:
 @protocol
 def ends_at_tokyo_after_oslo_waits() -> Protocol:
     # Oslo is judged only once Tokyo has ended the run
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         if isinstance(step, BeforeToolCall):
             if step.call.arguments.get("location") == "Tokyo":
                 _tokyo().set()
@@ -1170,7 +1204,9 @@ async def test_a_server_tool_answered_in_the_next_reply_is_read() -> None:
 
 @protocol
 def notes_results() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.proceed(step.call.id)
 
     return decide
@@ -1198,7 +1234,9 @@ class _Gate:
 
 @protocol
 def holds_the_first_result() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         _Gate.judged += 1
         _Gate.reached.set()
         await _Gate.open.wait()
@@ -1231,7 +1269,9 @@ async def test_a_result_two_requests_hold_at_once_is_judged_once() -> None:
 
 @protocol
 def ends_at_a_storm_the_model_mentions() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         if "storm" in step.message:
             return Decision.terminate("a storm")
         return Decision.proceed()
@@ -1257,7 +1297,9 @@ async def test_a_result_is_judged_again_beside_what_the_model_said_anew() -> Non
 
 @protocol
 def holds_then_ends_the_run() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         _Gate.judged += 1
         _Gate.reached.set()
         await _Gate.open.wait()

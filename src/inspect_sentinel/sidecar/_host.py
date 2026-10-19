@@ -10,7 +10,7 @@ from inspect_ai.tool import ToolChoice, ToolInfo
 
 from .._context import Context, EvalContext
 from .._host import HumanAnswer
-from .._report import Decision, Failed, Report, Reported
+from .._report import Decision, Escalations, Failed, Report, Reported
 from .._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 
 logger = logging.getLogger(__name__)
@@ -73,13 +73,16 @@ class SidecarHost:
             config=config or GenerateConfig(),
         )
 
-    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
+    async def ask_human(
+        self, step: Step, escalations: Escalations, choices: Sequence[str]
+    ) -> HumanAnswer:
         """Answer for a person who can't be asked: `reject` if it is offered, otherwise `terminate`.
 
         An escalation never lets a call through without someone deciding, so the step fails closed, as Inspect's own host does when nobody can answer. A deployment that wants unattended escalations to go on says so in its sentinel, for example with `handle_escalation("proceed")` after `human()`.
 
         Args:
             step: The step to decide about.
+            escalations: The escalations the asking protocol was handed; unused, since no person is asked.
             choices: What a person could have picked.
         """
         if not isinstance(step, BeforeToolCall | AfterToolCall):

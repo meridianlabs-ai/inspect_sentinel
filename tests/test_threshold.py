@@ -14,7 +14,13 @@ from inspect_sentinel._protocols import (
     sequential,
     threshold,
 )
-from inspect_sentinel._report import Action, Decision, Observation, Suspicion
+from inspect_sentinel._report import (
+    Action,
+    Decision,
+    Escalations,
+    Observation,
+    Suspicion,
+)
 from inspect_sentinel._runner import run_protocols
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol, ProtocolGroup
@@ -100,7 +106,9 @@ def th_before_and_after() -> MonitorGroup:
 
 @protocol
 def th_says() -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         return Decision.proceed()
 
     return decide
@@ -292,7 +300,7 @@ async def test_a_person_reviewing_an_escalation_sees_every_score() -> None:
         host=host,
     )
     assert decision == Decision.proceed()
-    [escalation] = host.asked[0].step.escalations
+    [escalation] = host.asked[0].escalations
     assert escalation.report.action == "escalate"
     assert escalation.report.metadata == {
         "observations": [

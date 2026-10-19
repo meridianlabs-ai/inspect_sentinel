@@ -11,7 +11,7 @@ import uvicorn
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision
+from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, Refuse
@@ -75,7 +75,9 @@ def test_health_checks_stay_out_of_the_access_log() -> None:
 
 @protocol
 def no_tokyo() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") == "Tokyo":
             return Decision.reject("Tokyo", message="Tokyo is not allowed.")
         return Decision.proceed()

@@ -295,12 +295,14 @@ def _serving(app: ASGIApp) -> Generator[str]:
 
 
 _RULE = """
-from inspect_sentinel import BeforeToolCall, Context, Decision, protocol
+from inspect_sentinel import BeforeToolCall, Context, Decision, Escalations, protocol
 
 
 @protocol
 def weather_rule():
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") == {city!r}:
             return Decision.reject("a lookup", message={message!r})
         return Decision.proceed()

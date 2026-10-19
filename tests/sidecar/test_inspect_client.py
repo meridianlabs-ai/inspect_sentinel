@@ -8,7 +8,7 @@ from inspect_ai.util import StoreModel
 from inspect_sentinel._context import Context, InspectSample, ProxyContext
 from inspect_sentinel._decorators import protocol
 from inspect_sentinel._protocols import concurrent
-from inspect_sentinel._report import Decision
+from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 from inspect_sentinel._types import Protocol, ProtocolGroup
 from inspect_sentinel.sidecar import (
@@ -295,10 +295,14 @@ async def test_a_run_ended_at_a_result_is_refused_with_the_result_step() -> None
 
 @protocol
 def ends_before_the_model() -> ProtocolGroup:
-    async def result(context: Context, step: AfterToolCall) -> Decision | None:
+    async def result(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.proceed()
 
-    async def before(context: Context, step: BeforeGenerate) -> Decision | None:
+    async def before(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
         return Decision.terminate("never")
 
     return ProtocolGroup(result, before)
@@ -306,7 +310,9 @@ def ends_before_the_model() -> ProtocolGroup:
 
 @protocol
 def watches_every_stage() -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         return Decision.proceed()
 
     return decide
@@ -486,7 +492,9 @@ class _Lookups(StoreModel):
 
 @protocol
 def counts_lookups_and_ends_at_storms() -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         if isinstance(step, AfterToolCall) and "storm" in step.result.text:
             return Decision.terminate("a storm")
         if isinstance(step, BeforeToolCall):
@@ -523,7 +531,9 @@ async def test_a_new_attempt_keeps_the_runs_store_and_its_end() -> None:
 
 @protocol
 def reports_the_proxy() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         proxy = context.proxy
         assert proxy is not None
         return Decision.reject("proxy", message=repr(proxy))

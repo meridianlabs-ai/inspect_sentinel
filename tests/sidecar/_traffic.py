@@ -6,7 +6,7 @@ from typing import Any
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision
+from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Refuse, Reply, Request
@@ -151,7 +151,9 @@ def reply(
 def weather_rule(action: str = "reject", city: str = "Tokyo") -> Protocol:
     """Decide `action` for a weather lookup of `city`, and let everything else go."""
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") != city:
             return Decision.proceed()
         if action == "reject":
@@ -173,7 +175,9 @@ def weather_rule(action: str = "reject", city: str = "Tokyo") -> Protocol:
 def storm_rule(action: str = "terminate") -> Protocol:
     """Decide `action` for a result that reports a storm, and let everything else go."""
 
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         if "storm" not in step.result.text:
             return Decision.proceed()
         if action == "terminate":
