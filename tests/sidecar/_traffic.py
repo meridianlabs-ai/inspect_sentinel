@@ -165,8 +165,22 @@ def weather_rule(action: str = "reject", city: str = "Tokyo") -> Protocol:
         if action == "escalate":
             return Decision.escalate(f"lookup of {city}")
         if action == "modify":
-            return Decision(action="modify", modified=step.call)
+            changed = replace(step.call, arguments={"location": "Oslo"})
+            return Decision(action="modify", modified=changed)
         raise RuntimeError("the rule broke")
+
+    return decide
+
+
+@protocol
+def every_call_rule() -> Protocol:
+    """Reject every weather lookup, each with a reason naming its city, so that a turn is refused whole."""
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        city = step.call.arguments.get("location")
+        return Decision.reject(f"lookup of {city}", message=f"{city} is not allowed.")
 
     return decide
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from collections.abc import Awaitable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import anyio
@@ -11,11 +11,12 @@ from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
     ChatMessageTool,
+    ModelOutput,
 )
-from inspect_ai.tool import ToolCall
+from inspect_ai.tool import ToolCall, ToolCallView
 from pydantic import JsonValue
 
-from .._context import ProxyContext
+from .._context import EvalContext, InspectSample, ProxyContext
 from .._host import HostNative
 from .._integration import HostContext, resolve_sentinel, run_sentinel, watched_stages
 from .._report import Decision
@@ -28,8 +29,8 @@ from .._step import (
 )
 from .._types import Sentinels
 from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request
-from ._host import Record, SidecarHost, stage
-from ._inspect_ai import tool_call_view
+from ._host import Record, RunHost, SidecarHost, stage
+from ._inspect_ai import VIEWED_TOOLS, tool_call_view
 from ._inspect_client import (
     Exchange,
     Judged,
@@ -38,25 +39,42 @@ from ._inspect_client import (
     sentinel_field,
     with_sentinel,
 )
+from ._registration import (
+    MAX_TASK_EXPIRY,
+    MAX_TASK_REGISTRATIONS,
+    TASK_EXPIRY,
+    FileTask,
+    RegistrationError,
+    TaskFacts,
+    UnregisteredSampleError,
+)
 from ._state import (
     MADE_KEPT,
+    Attempt,
     Conversation,
     Held,
     Made,
     MemoryState,
+    NotJudged,
     Rejected,
     Run,
     State,
     occurrence,
 )
 from ._wire import (
+    Edited,
+    Edits,
     UnreadableError,
-    add_rejections,
+    amend_request,
+    amendments,
     call_texts,
+    edit_reply,
+    held_rejections,
     offered,
     read_opening,
     read_reply_noted,
     read_request,
+    request_format,
     request_marks,
 )
 
@@ -64,8 +82,47 @@ from ._wire import (
 # it: a model that keeps proposing rejected calls would otherwise never stop
 _MAX_CONSECUTIVE_REJECTIONS = 3
 
-_REJECTED = "This call was rejected."
+# what inspect_ai tells the model of a rejected call that has no message
+_REJECTED = "Tool call not approved."
 _NOT_RUN = "This call was not run, because another call in the same turn was rejected."
+
+
+REQUEST_ID = "x-irid"
+"""The header an Inspect eval names each of its model requests in."""
+
+
+@dataclass(frozen=True)
+class RequestResult:
+    """What happened to a request an eval names."""
+
+    latest: Attempt
+    """The latest attempt at it."""
+    records: list[Record]
+    """What was recorded, every attempt's in order."""
+
+
+@dataclass(frozen=True)
+class RunResult:
+    """What a run came to."""
+
+    outcome: Literal["proceed", "terminate"]
+    """`terminate` if a sentinel ended the run."""
+    store: dict[str, Any]
+    """The sentinel's store, by the keys the sentinel wrote."""
+
+
+def _not_judged(ex: Exception) -> NotJudged:
+    if isinstance(ex, UnreadableError):
+        return "unreadable"
+    if isinstance(ex, UnregisteredSampleError):
+        return "unregistered"
+    if isinstance(ex, TimeLimitError):
+        return "time_limit"
+    return "error"
+
+
+class ModifyError(Exception):
+    """The sentinel decided to change a tool call that the sidecar can't change in the reply, such as one that is not a function call, so the reply was not judged."""
 
 
 class TimeLimitError(TimeoutError):
@@ -91,6 +148,10 @@ class Handler:
         reject_status: int = 400,
         time_limit: float | None = None,
         eval_results: bool = True,
+        tasks: Mapping[str, FileTask] | None = None,
+        runtime_task_registration: bool = True,
+        task_expiry: float = MAX_TASK_EXPIRY,
+        max_task_registrations: int = MAX_TASK_REGISTRATIONS,
     ) -> None:
         """Create a handler.
 
@@ -101,6 +162,10 @@ class Handler:
             reject_status: The HTTP status a rejected turn is refused with. The default, 400, is one a client takes as final. A status a client retries by itself, such as 503, brings the client back with the same request, which then goes on with the rejection added.
             time_limit: The longest the sentinel may take to judge one request or one reply, in seconds, after which it is cancelled. None, the default, is no limit.
             eval_results: Whether an Inspect client's `sentinel` field holds the results: the explanations, references and metadata of the decisions, and what each monitor and protocol recorded. Without them, it holds only what Inspect acts on. A monitor's explanation tells an agent what the monitor looks for, so a client that can't be trusted is not sent them.
+            tasks: Tasks registered beforehand, by name, as the tasks folder's files hold them. Nothing an eval registers replaces one, and a request for a sample one doesn't hold is refused.
+            runtime_task_registration: Whether an eval may register its tasks itself, at task init.
+            task_expiry: The longest a task an eval registered is kept once no request has named it, in seconds, whatever the registration asks.
+            max_task_registrations: How many tasks registered by evals are kept at once. A registration past it is refused.
         """
         self._protocol = resolve_sentinel(sentinel)
         # a stage nothing watches is never built, as in Inspect's own process
@@ -110,6 +175,10 @@ class Handler:
         self._reject_status = reject_status
         self._time_limit = time_limit
         self._eval_results = eval_results
+        self._tasks = dict(tasks or {})
+        self._runtime_task_registration = runtime_task_registration
+        self._task_expiry = task_expiry
+        self._max_task_registrations = max_task_registrations
         # the tool results being judged now, by run, conversation and digest,
         # so that a request holding one waits for the request judging it
         self._judging: dict[tuple[str, str, str], anyio.Event] = {}
@@ -132,16 +201,42 @@ class Handler:
 
         Raises:
             UnreadableError: If the request can't be read, so neither it nor its reply could be judged.
+            UnregisteredSampleError: If the request names a sample that a task registered beforehand doesn't hold.
             TimeLimitError: If the handler has a time limit and the sentinel didn't finish within it.
         """
-        with anyio.move_on_after(self._time_limit):
-            return await self._request(request)
-        raise self._out_of_time("request", request.id)
+        id = request.headers.get(REQUEST_ID)
+        attempt = None
+        if id:
+            attempt = await self._state.attempt(id, request.id)
+            # an attempt that is never judged has records too: none
+            await self._state.recorder(request.id)
+        try:
+            sample = inspect_sample(request.headers)
+        except UnreadableError as ex:
+            # refused rather than raised, but never judged, so not a terminate
+            if attempt is not None:
+                attempt.not_judged("unreadable")
+            return Refuse(400, str(ex))
+        try:
+            answer = await self._within_limit(
+                self._request(request, sample, attempt), "request", request.id
+            )
+        except Exception as ex:
+            if attempt is not None:
+                attempt.not_judged(_not_judged(ex))
+            raise
+        if attempt is not None:
+            if isinstance(answer, Refuse):
+                # a request is refused only when its run has ended
+                attempt.decide("terminate")
+            else:
+                attempt.state = "awaiting_reply"
+        return answer
 
     async def reply(self, reply: Reply) -> Answer:
         """Judge a reply before the proxy passes any of it on.
 
-        The reply is put to the sentinel as an `AfterGenerate` step, then each tool call in it as a `BeforeToolCall` step, in order, leaving out a stage nothing in the sentinel watches. The first call that is rejected refuses the whole turn, and the rejection is kept for the later requests of its conversation. The third rejected turn in a row within an attempt at a sample ends the run. A provider's error is passed on unjudged.
+        The reply is put to the sentinel as an `AfterGenerate` step, then each tool call in it as a `BeforeToolCall` step, in order, leaving out a stage nothing in the sentinel watches. Every call is judged, as in Inspect's own process, unless one ends the run. The rejected calls are taken out of the reply and the rest of the turn goes on, answered with `Replace`, as the other calls of a turn still run in Inspect's own process. Each later request of the conversation that holds the turn has the calls taken out put back, each with its rejection as its result. A turn whose every call is rejected is refused whole, as is one that can't be edited, and its rejections are added to the later requests of its conversation. The third turn refused whole in a row within an attempt at a sample ends the run; a turn in which a call ran starts the count again. A provider's error is passed on unjudged.
 
         For an Inspect client, a reply that goes on is answered with `Replace`, the reply with the `sentinel` field added, and a refusal carries the field. The field holds every step judged during the exchange, the request's first. A reply that goes on but has no event the field can go in, such as a stream that never sends its last event, is handed over as judged, without the field.
 
@@ -150,12 +245,94 @@ class Handler:
 
         Raises:
             UnreadableError: If the reply can't be read, or answers a request this handler was never shown or no longer keeps.
-            NotImplementedError: If the sentinel decides `modify`, which a sidecar can't carry out yet.
+            ModifyError: If the sentinel decides `modify` of a call the sidecar can't change, and rejects none of the turn's calls.
             TimeLimitError: If the handler has a time limit and the sentinel didn't finish within it.
         """
+        held = await self._state.release(reply.id)
+        attempt = held.attempt if held is not None else None
+        if attempt is not None:
+            attempt.state = "judging"
+        try:
+            answer = await self._within_limit(
+                self._reply(reply, held), "reply", reply.id
+            )
+        except Exception as ex:
+            if attempt is not None:
+                attempt.not_judged(_not_judged(ex))
+            raise
+        if attempt is None or held is None:
+            return answer
+        if reply.status != 200:
+            attempt.not_judged("provider_error")
+        elif not isinstance(answer, Refuse):
+            attempt.decide("proceed")
+            attempt.proposed = held.exchange.proposed
+        elif held.exchange.ended:
+            attempt.decide("terminate")
+            attempt.withheld = held.exchange.withheld
+        else:
+            attempt.decide("reject", held.exchange.message)
+            attempt.withheld = held.exchange.withheld
+        return answer
+
+    async def request_result(
+        self, id: str
+    ) -> RequestResult | Literal["dropped", "unknown"]:
+        """What happened to a request an eval names, by the eval's id for it.
+
+        Args:
+            id: The eval's id for the request, as its `x-irid` header gave it. A client that retries a request sends it again under the same id.
+
+        Returns:
+            Where the latest attempt stands, and every attempt's records in order; `dropped` if they were kept and no longer are; or `unknown` if the request was never seen.
+        """
+        attempts = await self._state.attempts(id)
+        if attempts is None:
+            return "unknown"
+        if attempts == "dropped":
+            return "dropped"
+        records: list[Record] = []
+        for attempt in attempts:
+            kept = await self._state.records(attempt.exchange)
+            if kept is None:
+                return "dropped"
+            records.extend(kept)
+        return RequestResult(attempts[-1], records)
+
+    async def run_result(self, run: str) -> RunResult | None:
+        """What a run came to, and the sentinel's store, for an eval to copy into its sample's store before scoring.
+
+        Args:
+            run: The run, as the eval names it: its sample's uuid.
+
+        Returns:
+            The run's outcome and store, or None if nothing is kept for it.
+        """
+        kept = await self._state.existing_run(_run_key(True, run))
+        if kept is None:
+            return None
+        return RunResult(
+            "terminate" if kept.refusal is not None else "proceed",
+            dict(kept.store.items()),
+        )
+
+    async def end_run(self, run: str) -> Literal["ended", "unknown"]:
+        """Drop a run's state, once its eval has scored the sample. A later request of the run is refused, as for a run a sentinel ended.
+
+        Args:
+            run: The run, as the eval names it: its sample's uuid.
+
+        Returns:
+            `ended`, or `unknown` for a run the handler never saw. Ending a run again has no effect.
+        """
+        return "ended" if await self._state.end_run(_run_key(True, run)) else "unknown"
+
+    async def _within_limit(
+        self, judging: Awaitable[Answer], what: str, id: str
+    ) -> Answer:
         with anyio.move_on_after(self._time_limit):
-            return await self._reply(reply)
-        raise self._out_of_time("reply", reply.id)
+            return await judging
+        raise self._out_of_time(what, id)
 
     async def records(self, id: str) -> list[Record] | None:
         """What was recorded while a request and its reply were judged.
@@ -168,11 +345,68 @@ class Handler:
         """
         return await self._state.records(id)
 
-    async def _request(self, request: Request) -> Answer:
-        try:
-            sample = inspect_sample(request.headers)
-        except UnreadableError as ex:
-            return Refuse(400, str(ex))
+    async def register_task(
+        self, eval_id: str, facts: TaskFacts, expiry: float | None = None
+    ) -> float | None:
+        """Keep a task an eval registered, so that its runs' sentinels are told which sample each is.
+
+        A registration replaces the eval's last one for the task. A run that has already found its sample keeps what it found.
+
+        Args:
+            eval_id: The eval's id, as its requests name it.
+            facts: The task and its samples.
+            expiry: How long to keep it once no request has named the task, in seconds. A day if not given.
+
+        A task registered beforehand is already registered, so its registration stores nothing and is not compared with the file, since the answer would tell a caller whether its guess at the file is right. This holds whether or not the handler takes registrations from evals.
+
+        Returns:
+            How long it is kept once no request has named the task: `expiry`, or less if that is longer than the handler keeps any. None for a task registered beforehand, which is never dropped.
+
+        Raises:
+            RegistrationError: If the handler takes no registrations from evals and the task was not registered beforehand, or already keeps as many as it takes.
+        """
+        if facts.task in self._tasks:
+            return None
+        if not self._runtime_task_registration:
+            raise RegistrationError(
+                "This sidecar takes no tasks registered by an eval."
+            )
+        granted = min(expiry if expiry is not None else TASK_EXPIRY, self._task_expiry)
+        if not await self._state.register(
+            eval_id, facts.task, facts, granted, self._max_task_registrations
+        ):
+            raise RegistrationError(
+                f"This sidecar already keeps the {self._max_task_registrations} tasks registered by evals that it takes. One is taken again once a kept task expires."
+            )
+        return granted
+
+    def _view(self, call: ToolCall, run: Run) -> ToolCallView:
+        # A request names a tool only by the name the model sees. A task
+        # registered beforehand can name the tool that is; otherwise the name
+        # is taken for inspect_ai's own tool of that name, if it has a viewer.
+        task = self._tasks.get(run.eval.task) if run.eval is not None else None
+        tool = task.tools.get(call.function) if task is not None else None
+        if tool is None and call.function in VIEWED_TOOLS:
+            tool = f"inspect_ai/{call.function}"
+        return tool_call_view(call, tool)
+
+    async def _eval(self, sample: InspectSample) -> EvalContext | None:
+        # the sample a request names, from the task's registration; asking
+        # counts as the task being named, so its registration is kept
+        fixed = self._tasks.get(sample.task)
+        if fixed is None:
+            facts = await self._state.registration(sample.eval_id, sample.task)
+            return facts.eval_context(sample) if facts is not None else None
+        found = fixed.eval_context(sample)
+        if found is None:
+            raise UnregisteredSampleError(
+                f"The task {sample.task!r} is registered with this sidecar beforehand, without the sample {sample.sample_id!r}."
+            )
+        return found
+
+    async def _request(
+        self, request: Request, sample: InspectSample | None, attempt: Attempt | None
+    ) -> Answer:
         proxy = ProxyContext(
             provider=request.provider,
             model=request.model,
@@ -186,22 +420,28 @@ class Handler:
         # an Inspect eval names the run: its sample, across retries
         named = sample is not None
         key = sample.sample_uuid if sample is not None else opening
-        attempt = sample.attempt if sample is not None else ""
+        sample_attempt = sample.attempt if sample is not None else ""
         # a conversation is told apart within a named run by the attempt it
         # is part of, since a retry opens as the attempt it replaces did, and
         # then by how it opens
-        conversation_key = f"{key}/{attempt}/{opening}" if named else key
-        run = await self._state.run(key)
+        conversation_key = f"{key}/{sample_attempt}/{opening}" if named else key
+        run_key = _run_key(named, key)
+        run = await self._state.run(run_key)
+        marks = request_marks(request.provider, request.body, request.format)
+        refusal = _ended(run, marks)
+        if refusal is not None:
+            # the run has ended, and the sentinel is not asked again
+            return self._with_field(refusal, proxy, Exchange(), "terminate")
+        if sample is not None:
+            found = await self._eval(sample)
+            if run.eval is None:
+                # a run keeps the facts it first found
+                run.eval = found
         conversation = run.conversations.setdefault(conversation_key, Conversation())
         messages = await read_request(
             request.provider, request.body, request.format, start=conversation.noted
         )
         sends = offered(request.provider, request.body, request.format)
-        marks = request_marks(request.provider, request.body, request.format)
-        refusal = _ended(run, marks)
-        if refusal is not None:
-            # the run has ended, and the sentinel is not asked again
-            return self._with_field(refusal, proxy, Exchange(), run)
 
         answer: Answer = Pass()
         # only what the client sent holds results to judge: what the sidecar
@@ -212,39 +452,81 @@ class Handler:
         # client that was handed a rejected turn, as an Inspect eval is in the
         # sentinel field, may already have put it back itself.
         holds = {_digest(message) for message in messages}
-        told = {
-            rejected.sent: turns
+        continued = [
+            rejected
             for rejected in conversation.rejected
             if rejected.sent < len(marks) and marks[rejected.sent] == rejected.mark
-            if (turns := [t for t in rejected.turns if _digest(t[0]) not in holds])
+        ]
+        told = {
+            rejected.sent: turns
+            for rejected in continued
+            if rejected.added
+            and (turns := [t for t in rejected.turns if _digest(t[0]) not in holds])
         }
-        if told:
-            body = await add_rejections(
-                request.provider, request.body, told, request.format
+        # the rejections of refused turns the client put back itself
+        refused = {
+            id: amendment
+            for rejected in continued
+            for turn, written in zip(rejected.turns, rejected.written, strict=True)
+            if _digest(turn[0]) in holds
+            for id, amendment in written.items()
+        }
+        edited = [
+            turn
+            for turn in conversation.edited
+            if turn.sent < len(marks) and marks[turn.sent] == turn.mark
+        ]
+        # A request that holds a call of an edited turn, which isn't held where
+        # the turn was made, as when a client rewrote earlier entries of its
+        # conversation, can't be matched with the edit: its results would be
+        # judged as of a call that didn't run.
+        if _edit_lost(run, edited, client):
+            raise UnreadableError(
+                "The request holds a call this sidecar changed or took out, after earlier entries of its conversation changed, so which call ran can't be told."
             )
+        amended = await amend_request(
+            request.provider,
+            request.body,
+            inserted=told,
+            edited=edited,
+            format=request.format,
+        )
+        if amended.body is not None:
             messages = await read_request(
-                request.provider, body, request.format, start=conversation.noted
+                request.provider,
+                amended.body,
+                request.format,
+                start=conversation.noted,
             )
-            answer = Replace(body)
+            answer = Replace(amended.body)
 
         held = Held(
-            run=key,
+            run=run_key,
             conversation=conversation_key,
             named=named,
-            attempt=attempt,
+            sample_attempt=sample_attempt,
             answered=any(mark in run.answered for mark in marks[:-1]),
             model=_model(request.provider, request.model),
+            format=request_format(request.provider, request.body, request.format),
             recorder=await self._state.recorder(request.id),
             input=messages,
             calls=_calls(client),
             offered=sends,
             marks=marks,
             proxy=proxy,
+            attempt=attempt,
         )
         said = call_texts(request.provider, request.body, request.format)
-        ended = await self._results(held, run, conversation, client, said)
+        # a changed call's result is of the call that ran, whichever the client holds
+        ran = {id: call for turn in edited for id, call in turn.modified.items()}
+        restored = amended.restored | held_rejections(
+            request.provider, request.body, refused, request.format
+        )
+        ended = await self._results(
+            held, run, conversation, client, said, restored, ran
+        )
         if ended is not None:
-            return self._with_field(ended, proxy, held.exchange, run)
+            return self._with_field(ended, proxy, held.exchange, "terminate")
         if BeforeGenerate in self._watched:
             before = BeforeGenerate(
                 model=held.model,
@@ -261,12 +543,12 @@ class Handler:
                     self._end(held, run, "before the model was called"),
                     proxy,
                     held.exchange,
-                    run,
+                    "terminate",
                 )
         # another exchange of the run may have ended it while this one waited
         refusal = _ended(run, marks)
         if refusal is not None:
-            return self._with_field(refusal, proxy, held.exchange, run)
+            return self._with_field(refusal, proxy, held.exchange, "terminate")
         await self._state.hold(request.id, held)
         # an Inspect client is told of the request's steps with the reply
         return answer
@@ -278,6 +560,8 @@ class Handler:
         conversation: Conversation,
         client: list[ChatMessage],
         said: Mapping[str, Sequence[str]],
+        restored: frozenset[str] = frozenset(),
+        ran: Mapping[str, ToolCall] | None = None,
     ) -> Refuse | None:
         if AfterToolCall not in self._watched:
             return None
@@ -307,6 +591,7 @@ class Handler:
                     f"The request holds a result for a call it doesn't hold: {entry.tool_call_id!r}."
                 )
             assistant, call, words, index = found
+            call = (ran or {}).get(call.id, call)
             # A call's place among those with its id tells it apart from the
             # others, as a client can use one id for calls in different
             # turns. A conversation that lost calls with its id, to
@@ -328,7 +613,9 @@ class Handler:
                 refusal = _ended(run, held.marks)
                 if refusal is not None:
                     return refusal
-            if digest in conversation.judged:
+            # a rejection the client put back itself is the sidecar's own
+            # writing, not the result of a call that ran
+            if digest in conversation.judged or entry.tool_call_id in restored:
                 continue
             sent = conversation.made.get(occurrence(call.id, index))
             step = AfterToolCall(
@@ -339,7 +626,7 @@ class Handler:
                 # left empty: only what the model is sent crosses the wire, and
                 # a monitor must not take that for everything the tool returned
                 output="",
-                view=tool_call_view(call),
+                view=self._view(call, run),
                 input=sent.input if sent is not None else None,
                 agent_messages=None,
                 tools=sent.tools if sent is not None else None,
@@ -358,16 +645,15 @@ class Handler:
                 judging.set()
         return None
 
-    async def _reply(self, reply: Reply) -> Answer:
-        held = await self._state.release(reply.id)
+    async def _reply(self, reply: Reply, held: Held | None) -> Answer:
         answer = await self._judge_reply(reply, held)
         if held is None or reply.status != 200:
             return answer
         if held.proxy.inspect is None:
             return answer
-        run = await self._state.run(held.run)
         if isinstance(answer, Refuse):
-            return self._with_field(answer, held.proxy, held.exchange, run)
+            outcome = "terminate" if held.exchange.ended else "reject"
+            return self._with_field(answer, held.proxy, held.exchange, outcome)
         body = answer.body if isinstance(answer, Replace) else reply.body
         field = self._field(held.exchange, "proceed")
         try:
@@ -388,6 +674,8 @@ class Handler:
             )
         run = await self._state.run(held.run)
         conversation = run.conversations.setdefault(held.conversation, Conversation())
+        # what the reply is read from, which an edit of it is read back from
+        start = conversation.noted
         output, noted = await read_reply_noted(
             reply.provider,
             reply.content_type,
@@ -400,6 +688,7 @@ class Handler:
         refusal = _ended(run, held.marks)
         if refusal is not None:
             # a sentinel ended the run while the model was answering
+            held.exchange.ended = True
             return refusal
 
         if AfterGenerate in self._watched:
@@ -417,18 +706,20 @@ class Handler:
                 return self._end(held, run, "at the model's reply")
 
         if not output.choices:
-            return _ended(run, held.marks) or self._passed(
+            return self._ended_meanwhile(held, run) or self._passed(
                 held, run, conversation, None
             )
         message = output.message
         # the reply is still read, and kept as passed, when no call is judged
         calls = (message.tool_calls or []) if BeforeToolCall in self._watched else []
+        rejected: list[tuple[ToolCall, Decision]] = []
+        modified: dict[str, ToolCall] = {}
         for call in calls:
             step = BeforeToolCall(
                 conversation=held.conversation,
                 message=message.text,
                 call=call,
-                view=tool_call_view(call),
+                view=self._view(call, run),
                 input=held.input,
                 agent_messages=None,
                 tools=held.offered.tools,
@@ -438,17 +729,32 @@ class Handler:
                 continue
             if decision.action == "terminate":
                 return self._end(held, run, f"at the call to {call.function}")
-            if decision.action != "reject":
-                raise NotImplementedError(
-                    f"A sidecar can't carry out a {decision.action!r} decision yet."
-                )
-            # the turn is refused, so the client is never handed the call
+            # the client is never handed the call as the model proposed it
             held.exchange.judged[-1].original = call
-            # another exchange of the run may have ended it while this one waited
-            return _ended(run, held.marks) or self._reject(
-                held, run, conversation, message, noted, call, decision
+            if decision.action == "modify" and decision.modified is not None:
+                modified[call.id] = decision.modified
+            else:
+                rejected.append((call, decision))
+        refusal = self._ended_meanwhile(held, run)
+        if refusal is not None:
+            return refusal
+        if not rejected and not modified:
+            return self._passed(held, run, conversation, message)
+        taken = {call.id for call, _ in rejected}
+        if all(call.id in taken for call in message.tool_calls or []):
+            return await self._reject(held, run, conversation, message, noted, rejected)
+        try:
+            return await self._edit(
+                reply, held, run, conversation, output, start, noted, rejected, modified
             )
-        return _ended(run, held.marks) or self._passed(held, run, conversation, message)
+        except UnreadableError as ex:
+            if not rejected:
+                raise ModifyError(
+                    "The sentinel changed a call this sidecar can't change in the reply."
+                ) from ex
+            # the reply couldn't be edited as the sentinel decided, so the turn
+            # is refused whole, as it was before calls could be taken out
+            return await self._reject(held, run, conversation, message, noted, rejected)
 
     def _passed(
         self,
@@ -457,7 +763,7 @@ class Handler:
         conversation: Conversation,
         message: ChatMessageAssistant | None,
     ) -> Pass:
-        run.in_a_row.pop(held.attempt, None)
+        run.in_a_row.pop(held.sample_attempt, None)
         if not held.named:
             run.answered.add(held.mark)
         if message is not None:
@@ -476,25 +782,95 @@ class Handler:
                 del conversation.made[next(iter(conversation.made))]
         return Pass()
 
-    def _reject(
+    async def _edit(
+        self,
+        reply: Reply,
+        held: Held,
+        run: Run,
+        conversation: Conversation,
+        output: ModelOutput,
+        start: JsonValue | None,
+        noted: JsonValue | None,
+        rejected: Sequence[tuple[ToolCall, Decision]],
+        modified: Mapping[str, ToolCall],
+    ) -> Replace:
+        # The rejected calls are taken out and the changed calls go out
+        # changed, and the rest of the turn goes on, as in Inspect's own
+        # process, where the other calls in a turn still run. The model's
+        # message keeps its own calls there, so later requests have them put
+        # back.
+        message = output.message
+        reasons = {
+            call.id: decision.message or _REJECTED for call, decision in rejected
+        }
+        written = await amendments(held.format, message, reasons, modified, noted)
+        body = await edit_reply(
+            reply.provider,
+            reply.content_type,
+            reply.body,
+            reply.format,
+            Edits(frozenset(reasons), modified),
+            output,
+            start=start,
+        )
+        calls = message.tool_calls or []
+        conversation.edited.append(
+            Edited(
+                sent=held.sent,
+                mark=held.mark,
+                order=tuple(call.id for call in calls),
+                taken_out=reasons,
+                originals={call.id: call for call in calls if call.id in modified},
+                modified=dict(modified),
+                amendments=written,
+            )
+        )
+        held.exchange.proposed = Withheld(message, reasons)
+        handed = message.model_copy(
+            update={
+                "tool_calls": [
+                    modified.get(call.id, call)
+                    for call in calls
+                    if call.id not in reasons
+                ]
+            }
+        )
+        # some of the turn ran, which is progress, so it counts as a pass
+        self._passed(held, run, conversation, handed)
+        return Replace(body)
+
+    async def _reject(
         self,
         held: Held,
         run: Run,
         conversation: Conversation,
         message: ChatMessageAssistant,
         noted: JsonValue | None,
-        call: ToolCall,
-        decision: Decision,
+        rejected: Sequence[tuple[ToolCall, Decision]],
     ) -> Refuse:
         # only `message` is for the agent; a decision's explanation is for the log
-        why = decision.message or _REJECTED
+        reasons = {
+            call.id: decision.message or _REJECTED for call, decision in rejected
+        }
         told = {
-            other.id: why if other.id == call.id else _NOT_RUN
+            other.id: reasons.get(other.id, _NOT_RUN)
             for other in message.tool_calls or []
         }
+        # the first rejection is the one the client is refused with
+        call, _ = rejected[0]
+        why = reasons[call.id]
+        count = run.in_a_row.get(held.sample_attempt, 0) + 1
+        ends = count >= _MAX_CONSECUTIVE_REJECTIONS
+        # made before anything is kept, since making it can fail, and a turn
+        # kept without it would leave every later request of the conversation
+        # unreadable
+        written = (
+            None if ends else await amendments(held.format, message, told, (), noted)
+        )
         held.exchange.withheld = Withheld(message, told)
-        in_a_row = run.in_a_row[held.attempt] = run.in_a_row.get(held.attempt, 0) + 1
-        if in_a_row >= _MAX_CONSECUTIVE_REJECTIONS:
+        held.exchange.message = why
+        run.in_a_row[held.sample_attempt] = count
+        if written is None:
             return self._end(
                 held,
                 run,
@@ -502,18 +878,19 @@ class Handler:
             )
         # a client that comes back after a rejection sends the same request, so
         # its rejected turns in a row share a point
-        rejected = next(
+        point = next(
             (
                 known
                 for known in conversation.rejected
-                if (known.sent, known.mark) == (held.sent, held.mark)
+                if (known.sent, known.mark) == (held.sent, held.mark) and known.added
             ),
             None,
         )
-        if rejected is None:
-            rejected = Rejected(held.sent, held.mark, [])
-            conversation.rejected.append(rejected)
-        rejected.turns.append((message, told, noted))
+        if point is None:
+            point = Rejected(held.sent, held.mark, [])
+            conversation.rejected.append(point)
+        point.turns.append((message, told, noted))
+        point.written.append(written)
         return Refuse(
             self._reject_status,
             f"A sentinel rejected the call to {call.function}: {why}",
@@ -524,7 +901,7 @@ class Handler:
         decision = await run_sentinel(
             self._protocol,
             HostContext(
-                host=self._host,
+                host=RunHost(self._host, run.eval),
                 recorder=held.recorder,
                 store=run.store,
                 proxy=held.proxy,
@@ -540,13 +917,15 @@ class Handler:
         return decision
 
     def _with_field(
-        self, refusal: Refuse, proxy: ProxyContext, exchange: Exchange, run: Run
+        self,
+        refusal: Refuse,
+        proxy: ProxyContext,
+        exchange: Exchange,
+        outcome: Literal["reject", "terminate"],
     ) -> Refuse:
         # an Inspect client is told what was decided, with the refusal
         if proxy.inspect is None:
             return refusal
-        # a run an eval names is remembered as ended
-        outcome = "terminate" if run.refusal is not None else "reject"
         return replace(refusal, sentinel=self._field(exchange, outcome))
 
     def _field(
@@ -554,25 +933,51 @@ class Handler:
     ) -> dict[str, Any]:
         return sentinel_field(exchange, outcome, trimmed=not self._eval_results)
 
+    def _ended_meanwhile(self, held: Held, run: Run) -> Refuse | None:
+        # another exchange of the run may have ended it while this one waited
+        refusal = _ended(run, held.marks)
+        if refusal is not None:
+            held.exchange.ended = True
+        return refusal
+
     def _end(self, held: Held, run: Run, where: str) -> Refuse:
-        for conversation in run.conversations.values():
-            conversation.rejected.clear()
-        run.in_a_row.clear()
+        held.exchange.ended = True
         refusal = Refuse(400, f"A sentinel ended this run {where}.")
+        run.in_a_row.clear()
         if held.named:
             run.refusal = refusal
-        elif held.answered:
+            # nothing of the run goes on, so nothing is put back again
+            for conversation in run.conversations.values():
+                conversation.rejected.clear()
+                conversation.edited.clear()
+            return refusal
+        if held.answered:
             run.ended_at[held.mark] = refusal
         # A run no eval names, ended before any reply in its
         # conversation was passed on, is not remembered as ended. Its
         # conversation is still only how it opens, which is all another
         # conversation with the same key has too, and nothing tells them apart.
+        # Other conversations with the same key go on, and still need their
+        # turns put back, or told from results. So the rejected turns where
+        # this one ended are only no longer added to a request sent there.
+        conversation = run.conversations.get(held.conversation)
+        for point in conversation.rejected if conversation is not None else []:
+            if (point.sent, point.mark) == (held.sent, held.mark):
+                point.added = False
         return refusal
 
     def _out_of_time(self, what: str, id: str) -> TimeLimitError:
         return TimeLimitError(
             f"The sentinel didn't finish judging the {what} {id!r} within {self._time_limit} seconds."
         )
+
+
+def _run_key(named: bool, key: str) -> str:
+    # Runs an eval names and runs it doesn't are kept apart. A run no eval
+    # names is keyed by how its conversation opens, which anyone who knows the
+    # opening can work out, so the eval endpoint, which takes a sample's uuid,
+    # must never reach one.
+    return f"{'sample' if named else 'opening'}:{key}"
 
 
 def _ended(run: Run, marks: Sequence[str]) -> Refuse | None:
@@ -622,6 +1027,23 @@ def _digest(message: ChatMessage) -> str:
             [message.role, message.text, calls, result], sort_keys=True, default=str
         ).encode()
     ).hexdigest()
+
+
+def _edit_lost(
+    run: Run, edited: Sequence[Edited], messages: Sequence[ChatMessage]
+) -> bool:
+    # whether the messages hold a call id of an edited turn of the run that
+    # isn't among those the request continues from
+    ids = set(_calls(messages)) | {
+        message.tool_call_id
+        for message in messages
+        if isinstance(message, ChatMessageTool) and message.tool_call_id is not None
+    }
+    return any(
+        turn not in edited and ids.intersection(turn.order)
+        for conversation in run.conversations.values()
+        for turn in conversation.edited
+    )
 
 
 def _calls(messages: Sequence[ChatMessage]) -> dict[str, int]:

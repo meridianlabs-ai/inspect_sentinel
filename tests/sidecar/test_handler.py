@@ -16,17 +16,21 @@ from inspect_sentinel._types import Protocol, ProtocolGroup
 from inspect_sentinel.sidecar import (
     Answer,
     Handler,
+    ModifyError,
     Pass,
     Record,
     Refuse,
     Replace,
     TimeLimitError,
     UnreadableError,
+    _handler,
     read_reply,
 )
 from tests.sidecar._traffic import (
+    JSON,
     STREAM,
     anthropic_recorded,
+    every_call_rule,
     message,
     plain,
     ran,
@@ -49,14 +53,6 @@ async def test_request_passes() -> None:
 @pytest.mark.parametrize(
     ("action", "city", "expected"),
     [
-        (
-            "reject",
-            "Tokyo",
-            Refuse(
-                400,
-                "A sentinel rejected the call to get_weather: Tokyo is not allowed.",
-            ),
-        ),
         # a decision's explanation is for the log, so the client isn't told it
         ("terminate", "Tokyo", _ENDED),
         # nobody is left to take an escalate at the top, so the run is ended
@@ -78,7 +74,7 @@ async def test_recorded_reply_is_judged_call_by_call(
 
 
 @pytest.mark.anyio
-async def test_first_refused_call_ends_the_judging() -> None:
+async def test_every_call_is_judged_after_a_rejected_one() -> None:
     handler = Handler(weather_rule("reject", "Tokyo"))
     await handler.request(request())
 
@@ -88,10 +84,11 @@ async def test_first_refused_call_ends_the_judging() -> None:
     records = await handler.records("x")
     assert records is not None
     calls = (await read_reply("anthropic", STREAM, body)).message.tool_calls or []
-    # Paris and Tokyo were judged; Lima, after the refusal, was not
+    # Lima too, after Tokyo was rejected, as in Inspect's own process
     assert [(record.stage, record.call) for record in records] == [
         ("tool_call", calls[0].id),
         ("tool_call", calls[1].id),
+        ("tool_call", calls[2].id),
     ]
 
 
@@ -122,11 +119,77 @@ async def test_reply_to_an_unseen_request_cannot_be_judged() -> None:
 
 
 @pytest.mark.anyio
-async def test_modify_is_not_carried_out_yet() -> None:
+async def test_a_changed_call_goes_out_changed() -> None:
     handler = Handler(weather_rule("modify", "Tokyo"))
     await handler.request(request())
 
-    with pytest.raises(NotImplementedError, match="'modify'"):
+    answer = await handler.reply(
+        reply(message(weather("Tokyo", "toolu_1"), weather("Paris", "toolu_2")))
+    )
+
+    assert isinstance(answer, Replace)
+    handed = await read_reply("anthropic", JSON, answer.body)
+    assert [(call.id, call.arguments) for call in handed.message.tool_calls or []] == [
+        ("toolu_1", {"location": "Oslo"}),
+        ("toolu_2", {"location": "Paris"}),
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_changed_call_goes_back_as_the_model_proposed_it() -> None:
+    handler = Handler(weather_rule("modify", "Tokyo"))
+    await handler.request(request("a"))
+    await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
+
+    # the client ran the call as it was handed it
+    again = await handler.request(request("b", then=ran("Oslo", "Sunny.", "toolu_1")))
+
+    assert isinstance(again, Replace)
+    assistant = _messages(again.body)[1]
+    calls = [block for block in assistant["content"] if block["type"] == "tool_use"]
+    assert [call["input"] for call in calls] == [{"location": "Tokyo"}]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("rewritten", ["the opening", "an earlier result"])
+async def test_a_changed_call_held_after_earlier_entries_changed_is_unreadable(
+    rewritten: str,
+) -> None:
+    handler = Handler(weather_rule("modify", "Tokyo"))
+    # a run an eval names, so that a rewritten opening stays in it; a run no
+    # eval names is told by its opening, and one that opens anew is another
+    sample = "sample-uuid"
+    await handler.request(request("a", sample=sample))
+    await handler.reply(reply(message(weather("Paris", "toolu_0")), id="a"))
+    await handler.request(
+        request("b", then=ran("Paris", "Sunny.", "toolu_0"), sample=sample)
+    )
+    await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="b"))
+    # the client rewrote an entry before the changed call, as a compaction
+    # may, and kept the call as it ran
+    opening = (
+        "Earlier: weather." if rewritten == "the opening" else "What is the weather?"
+    )
+    said = "Sunny." if rewritten == "the opening" else "(summarised)"
+    then = [*ran("Paris", said, "toolu_0"), *ran("Oslo", "Rain.", "toolu_1")]
+
+    # its result can't be told to be the changed call's, so isn't judged
+    with pytest.raises(UnreadableError, match="which call ran"):
+        await handler.request(request("c", opening, then=then, sample=sample))
+
+
+@pytest.mark.anyio
+async def test_a_change_that_cant_be_made_is_not_judged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unable(*args: object, **kwargs: object) -> bytes:
+        raise UnreadableError("can't")
+
+    monkeypatch.setattr("inspect_sentinel.sidecar._handler.edit_reply", unable)
+    handler = Handler(weather_rule("modify", "Tokyo"))
+    await handler.request(request())
+
+    with pytest.raises(ModifyError):
         await handler.reply(reply(message(weather("Tokyo"))))
 
 
@@ -242,7 +305,7 @@ def _messages(body: bytes) -> list[dict[str, Any]]:
 
 @pytest.mark.anyio
 async def test_rejection_is_added_to_the_next_request_of_the_run() -> None:
-    handler = Handler(weather_rule("reject", "Tokyo"), reject_status=503)
+    handler = Handler(every_call_rule(), reject_status=503)
     first = request("a")
     await handler.request(first)
 
@@ -251,8 +314,9 @@ async def test_rejection_is_added_to_the_next_request_of_the_run() -> None:
     )
     again = await handler.request(request("b"))
 
+    # refused with the first rejection
     assert refused == Refuse(
-        503, "A sentinel rejected the call to get_weather: Tokyo is not allowed."
+        503, "A sentinel rejected the call to get_weather: Paris is not allowed."
     )
     assert isinstance(again, Replace)
     sent, added = _messages(first.body), _messages(again.body)
@@ -266,18 +330,45 @@ async def test_rejection_is_added_to_the_next_request_of_the_run() -> None:
         block["tool_use_id"]: (block["is_error"], block["content"])
         for block in results["content"]
     }
-    not_run = (
-        "This call was not run, because another call in the same turn was rejected."
-    )
     assert told == {
-        calls[0]["id"]: (True, not_run),
+        calls[0]["id"]: (True, "Paris is not allowed."),
         calls[1]["id"]: (True, "Tokyo is not allowed."),
-        calls[2]["id"]: (True, not_run),
+        calls[2]["id"]: (True, "Lima is not allowed."),
     }
     # everything else in the request is as the client sent it
     assert {k: v for k, v in json.loads(again.body).items() if k != "messages"} == {
         k: v for k, v in json.loads(first.body).items() if k != "messages"
     }
+
+
+@pytest.mark.anyio
+async def test_a_rejection_that_cant_be_written_keeps_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = Handler(every_call_rule())
+    parallel = anthropic_recorded("parallel-tool-calls")
+
+    async def unwritable(*_: Any) -> Any:
+        raise UnreadableError("The turn can't be written.")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(_handler, "amendments", unwritable)
+        await handler.request(request("a"))
+        with pytest.raises(UnreadableError):
+            await handler.reply(reply(parallel, id="a", content_type=STREAM))
+
+    # nothing of the turn was kept, so the conversation goes on as before it,
+    # and the turn doesn't count toward the three in a row
+    assert await handler.request(request("b")) == Pass()
+    first = await handler.reply(reply(parallel, id="b", content_type=STREAM))
+    await handler.request(request("c"))
+    second = await handler.reply(reply(parallel, id="c", content_type=STREAM))
+
+    assert [first, second] == [
+        Refuse(
+            400, "A sentinel rejected the call to get_weather: Paris is not allowed."
+        )
+    ] * 2
 
 
 def _ids(body: bytes) -> list[str]:
@@ -513,7 +604,188 @@ async def test_explanation_never_reaches_the_client() -> None:
     answer = await handler.reply(reply(message(weather("Oslo"))))
 
     assert answer == Refuse(
-        400, "A sentinel rejected the call to get_weather: This call was rejected."
+        400, "A sentinel rejected the call to get_weather: Tool call not approved."
+    )
+
+
+@protocol
+def city_rule() -> Protocol:
+    """Reject a lookup of Tokyo or Lima, each with a reason of its own, end the run at Oslo, and let everything else go."""
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        city = step.call.arguments.get("location")
+        if city in ("Tokyo", "Lima"):
+            return Decision.reject(f"lookup of {city}", message=f"Not {city}.")
+        if city == "Oslo":
+            return Decision.terminate("lookup of Oslo")
+        return Decision.proceed()
+
+    return decide
+
+
+def _calls(body: bytes) -> list[str]:
+    """The ids of the calls in an Anthropic reply that was not streamed."""
+    return [
+        block["id"]
+        for block in json.loads(body)["content"]
+        if block["type"] == "tool_use"
+    ]
+
+
+def _results(body: bytes) -> dict[str, str]:
+    """What the last message of an Anthropic request says of each call, by id."""
+    return {
+        block["tool_use_id"]: block["content"]
+        for block in _messages(body)[-1]["content"]
+        if block["type"] == "tool_result"
+    }
+
+
+_TOKYO_PARIS_LIMA = message(
+    weather("Tokyo", "toolu_1"), weather("Paris", "toolu_2"), weather("Lima", "toolu_3")
+)
+
+
+@pytest.mark.anyio
+async def test_a_turn_with_rejected_calls_goes_on_without_them() -> None:
+    handler = Handler(city_rule())
+    await handler.request(request("a"))
+
+    answer = await handler.reply(reply(_TOKYO_PARIS_LIMA, id="a"))
+
+    # Paris runs, as the other calls of a turn do in Inspect's own process
+    assert isinstance(answer, Replace)
+    assert _calls(answer.body) == ["toolu_2"]
+
+
+@pytest.mark.anyio
+async def test_the_calls_taken_out_are_put_back_each_with_its_own_reason() -> None:
+    handler = Handler(city_rule())
+    await handler.request(request("a"))
+    await handler.reply(reply(_TOKYO_PARIS_LIMA, id="a"))
+
+    # the client ran the one call it was handed
+    again = await handler.request(request("b", then=ran("Paris", "Sunny.", "toolu_2")))
+
+    assert isinstance(again, Replace)
+    assistant = _messages(again.body)[1]
+    assert [
+        block["id"] for block in assistant["content"] if block["type"] == "tool_use"
+    ] == [
+        "toolu_1",
+        "toolu_2",
+        "toolu_3",
+    ]
+    assert _results(again.body) == {
+        "toolu_1": "Not Tokyo.",
+        "toolu_2": "Sunny.",
+        "toolu_3": "Not Lima.",
+    }
+
+
+@pytest.mark.anyio
+async def test_calls_taken_out_are_put_back_after_another_conversation_is_ended() -> (
+    None
+):
+    # Two conversations of a run no eval names, which open alike and so share
+    # it. Ending one leaves the other's turns to be put back.
+    handler = Handler(city_rule())
+    await handler.request(request("a"))
+    await handler.reply(reply(_TOKYO_PARIS_LIMA, id="a"))
+    await handler.request(request("other"))
+    ended = await handler.reply(reply(message(weather("Oslo", "toolu_9")), id="other"))
+
+    again = await handler.request(request("b", then=ran("Paris", "Sunny.", "toolu_2")))
+
+    assert isinstance(ended, Refuse) and "ended this run" in ended.message
+    assert isinstance(again, Replace)
+    assert _results(again.body) == {
+        "toolu_1": "Not Tokyo.",
+        "toolu_2": "Sunny.",
+        "toolu_3": "Not Lima.",
+    }
+
+
+@pytest.mark.anyio
+async def test_a_turn_that_cant_be_edited_is_refused_whole(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unable(*args: object, **kwargs: object) -> bytes:
+        raise UnreadableError("can't")
+
+    monkeypatch.setattr("inspect_sentinel.sidecar._handler.edit_reply", unable)
+    handler = Handler(city_rule())
+    await handler.request(request("a"))
+
+    refused = await handler.reply(reply(_TOKYO_PARIS_LIMA, id="a"))
+    again = await handler.request(request("b"))
+
+    assert refused == Refuse(
+        400, "A sentinel rejected the call to get_weather: Not Tokyo."
+    )
+    assert isinstance(again, Replace)
+    assert _results(again.body) == {
+        "toolu_1": "Not Tokyo.",
+        "toolu_2": (
+            "This call was not run, because another call in the same turn was rejected."
+        ),
+        "toolu_3": "Not Lima.",
+    }
+
+
+@pytest.mark.anyio
+async def test_turns_with_a_call_that_ran_never_end_the_run() -> None:
+    handler = Handler(city_rule())
+    then: list[dict[str, Any]] = []
+    for turn in range(5):
+        await handler.request(request(f"a{turn}", then=then))
+        # the model proposes Tokyo again each time, beside Paris
+        proposed = message(
+            weather("Tokyo", f"toolu_{turn}a"), weather("Paris", f"toolu_{turn}b")
+        )
+        answer = await handler.reply(reply(proposed, id=f"a{turn}"))
+        assert isinstance(answer, Replace)
+        then = then + ran("Paris", "Sunny.", f"toolu_{turn}b")
+
+
+@pytest.mark.anyio
+async def test_three_turns_with_every_call_rejected_end_the_run() -> None:
+    handler = Handler(city_rule())
+    answers: list[Answer] = []
+    for turn in range(3):
+        await handler.request(request(f"a{turn}"))
+        answers.append(
+            await handler.reply(
+                reply(
+                    message(weather("Tokyo", "toolu_1"), weather("Lima", "toolu_2")),
+                    id=f"a{turn}",
+                )
+            )
+        )
+
+    assert (
+        answers[:2]
+        == [Refuse(400, "A sentinel rejected the call to get_weather: Not Tokyo.")] * 2
+    )
+    assert answers[2] == Refuse(
+        400,
+        "A sentinel ended this run at the call to get_weather after 3 rejected turns in a row.",
+    )
+
+
+@pytest.mark.anyio
+async def test_a_call_after_a_rejected_one_can_end_the_run() -> None:
+    handler = Handler(city_rule())
+    await handler.request(request("a"))
+
+    answer = await handler.reply(
+        reply(message(weather("Tokyo", "toolu_1"), weather("Oslo", "toolu_2")), id="a")
+    )
+
+    assert answer == Refuse(
+        400, "A sentinel ended this run at the call to get_weather."
     )
 
 
@@ -773,6 +1045,52 @@ async def test_what_the_model_is_told_of_a_rejection_is_not_judged_as_a_result()
 
 
 @protocol
+def rejects_tokyo_ends_at_oslo_and_at_any_result() -> ProtocolGroup:
+    async def before(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        city = step.call.arguments.get("location")
+        if city == "Tokyo":
+            return Decision.reject("Tokyo", message="Tokyo is not allowed.")
+        if city == "Oslo":
+            return Decision.terminate("Oslo")
+        return Decision.proceed()
+
+    async def after(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
+        return Decision.terminate("a result")
+
+    return ProtocolGroup(before, after)
+
+
+@pytest.mark.anyio
+async def test_a_rejection_put_back_is_known_after_another_conversation_is_ended() -> (
+    None
+):
+    # Two conversations of a run no eval names send the same first request.
+    # One has its turn refused whole; the other is ended at its first turn.
+    handler = Handler(rejects_tokyo_ends_at_oslo_and_at_any_result())
+    await handler.request(request("a"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+    # the first, with its rejected turn put back, as a client may do itself
+    put_back = await handler.request(request("a-again"))
+    assert isinstance(put_back, Replace)
+    await handler.request(request("b"))
+    ended = await handler.reply(reply(message(weather("Oslo", "toolu_9")), id="b"))
+
+    held = await handler.request(replace(request("c"), body=put_back.body))
+    fresh = await handler.request(request("d"))
+
+    assert isinstance(ended, Refuse) and "ended this run" in ended.message
+    # the sidecar's own rejection, not a result to judge
+    assert held == Pass()
+    assert await handler.records("c") == []
+    # the same first request again may be a fresh start, so nothing is added
+    assert fresh == Pass()
+
+
+@protocol
 def rejects_tokyo_and_reports_what_led_to_a_result() -> ProtocolGroup:
     async def before(
         context: Context, step: BeforeToolCall, escalations: Escalations
@@ -863,7 +1181,7 @@ async def test_every_later_request_of_a_sample_that_ended_is_refused() -> None:
     assert [plain(answer) for answer in (ended, again, subagent)] == [_ENDED] * 3
     assert other == Pass()
     # the sentinel was not asked again
-    assert await handler.records("b") is None
+    assert not await handler.records("b")
 
 
 @pytest.mark.anyio

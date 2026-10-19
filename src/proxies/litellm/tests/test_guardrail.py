@@ -18,7 +18,7 @@ import time
 import urllib.request
 from collections.abc import AsyncIterator, Callable, Generator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -303,8 +303,9 @@ def weather_rule():
     async def decide(
         context: Context, step: BeforeToolCall, escalations: Escalations
     ) -> Decision | None:
-        if step.call.arguments.get("location") == {city!r}:
-            return Decision.reject("a lookup", message={message!r})
+        location = step.call.arguments.get("location")
+        if {city!r} in (None, location):
+            return Decision.reject("a lookup", message=f"{{location}} is not allowed.")
         return Decision.proceed()
 
     return decide
@@ -323,10 +324,10 @@ def _sidecar_python() -> Path:
 
 
 @contextmanager
-def _sidecar(city: str, tmp_path: Path) -> Generator[str]:
-    """The address of a real sidecar, whose sentinel rejects a weather lookup of `city`."""
+def _sidecar(city: str | None, tmp_path: Path) -> Generator[str]:
+    """The address of a real sidecar, whose sentinel rejects a weather lookup of `city`, or every lookup for None."""
     rule = tmp_path / "weather_rule.py"
-    rule.write_text(_RULE.format(city=city, message=f"{city} is not allowed."))
+    rule.write_text(_RULE.format(city=city))
     with socket.socket() as free:
         free.bind(("127.0.0.1", 0))
         port = free.getsockname()[1]
@@ -421,6 +422,89 @@ def _error_event(chunk: Any) -> dict[str, Any]:
     return json.loads(chunk.removeprefix("data: "))["error"]
 
 
+# The Messages route's replies above make one call; these make three, Paris,
+# Tokyo and Lima, as the recorded OpenAI replies do.
+_THREE_CALLS = replace(
+    _MESSAGES,
+    whole=lambda: (
+        json.loads(
+            message(
+                weather("Paris", "toolu_1"),
+                weather("Tokyo", "toolu_2"),
+                weather("Lima", "toolu_3"),
+            )
+        )
+        | {"_hidden_params": _notes()}
+    ),
+    stream=lambda: [anthropic_recorded("parallel-tool-calls")],
+)
+
+
+def _events_out(sent: list[Any]) -> list[dict[str, Any]]:
+    # each event of a stream as the caller is sent it: bytes as they are, and
+    # LiteLLM's own objects as LiteLLM writes them
+    events: list[dict[str, Any]] = []
+    for chunk in sent:
+        if isinstance(chunk, bytes):
+            events += stream_events(chunk)
+        else:
+            events.append(_written(chunk))
+    return events
+
+
+def _call_ids(on: _On, reply: Any, streamed: bool) -> list[str]:
+    """The ids of the calls a reply makes, in order, as the caller is sent it."""
+    if not streamed:
+        whole: Any = cast(Any, reply) if isinstance(reply, dict) else _written(reply)
+        if on.format == "anthropic-messages":
+            return [b["id"] for b in whole["content"] if b["type"] == "tool_use"]
+        if on.format == "openai-chat":
+            return [c["id"] for c in whole["choices"][0]["message"]["tool_calls"]]
+        return [i["call_id"] for i in whole["output"] if i["type"] == "function_call"]
+    ids: list[str] = []
+    event: Any
+    for event in _events_out(reply):
+        if event.get("type") == "content_block_start":
+            block: Any = event["content_block"]
+            if block["type"] == "tool_use":
+                ids.append(block["id"])
+        choice: Any
+        for choice in cast(list[Any], event.get("choices") or []):
+            delta: Any = choice.get("delta") or {}
+            call: Any
+            for call in cast(list[Any], delta.get("tool_calls") or []):
+                if call.get("id"):
+                    ids.append(call["id"])
+        if event.get("type") == "response.output_item.added":
+            if event["item"]["type"] == "function_call":
+                ids.append(event["item"]["call_id"])
+    return ids
+
+
+@pytest.mark.parametrize(
+    ("on", "streamed"),
+    [
+        pytest.param(
+            route, streamed, id=f"{route.format}{', streamed' if streamed else ''}"
+        )
+        for route in (_THREE_CALLS, _CHAT, _RESPONSES)
+        for streamed in (False, True)
+    ],
+)
+def test_a_reply_with_a_rejected_call_goes_on_without_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, on: _On, streamed: bool
+) -> None:
+    proposed = _call_ids(on, on.stream() if streamed else on.whole(), streamed)
+    # the recorded Responses stream is the one reply that names the country too
+    city = "Tokyo, Japan" if on is _RESPONSES and streamed else "Tokyo"
+
+    with _sidecar(city, tmp_path) as url:
+        _, reply = _exchange(_make(monkeypatch, url), on, _data(on), streamed)
+
+    # the second call, Tokyo, is taken out, and the others go on
+    assert _call_ids(on, reply, streamed) == [proposed[0], proposed[2]]
+
+
 def _refused(
     guardrail: Any, on: _On, data: dict[str, Any], streamed: bool
 ) -> tuple[int, Any, Any, list[Any]]:
@@ -458,7 +542,8 @@ def test_reply_the_sentinel_rejects_is_refused_in_its_words(
     # the recorded Responses stream is the one reply that names the country too
     city = "Paris, France" if on is _RESPONSES and streamed else "Paris"
 
-    with _sidecar(city, tmp_path) as url:
+    # every call, so that the turn is refused whole; the first is Paris
+    with _sidecar(None, tmp_path) as url:
         status, message, _, let_go = _refused(
             _make(monkeypatch, url), on, _data(on), streamed
         )
@@ -1008,6 +1093,90 @@ def _read_by_the_sdk(
     routes = [Route(path, answer, methods=["POST"]) for path in _SDK_PATHS]
     with _serving(Starlette(routes=routes)) as url:
         return asyncio.run(read(url))
+
+
+def test_a_reply_litellm_converts_for_the_messages_route_is_read_whole_by_anthropics_sdk() -> (
+    None
+):
+    # LiteLLM writes the Anthropic events itself when it converts another
+    # provider's reply for the Messages route. Anthropic's SDK dispatches an
+    # event only by its `event:` label, and the sidecar reads a stream as the
+    # SDK does, so an event LiteLLM wrote without one would reach neither.
+    litellm: Any = importlib.import_module("litellm")
+    anthropic: Any = importlib.import_module("anthropic")
+
+    async def upstream(request: HttpRequest) -> HttpResponse:
+        name = (
+            "openai-chat.sse"
+            if request.url.path.endswith("/chat/completions")
+            else "openai-responses.sse"
+        )
+        return HttpResponse((DATA / name).read_bytes(), media_type=_EVENT_STREAM)
+
+    async def convert(url: str) -> bytes:
+        stream = await litellm.anthropic.messages.acreate(
+            # the model the replies were recorded from, which LiteLLM streams
+            model="openai/gpt-5-mini",
+            api_key="sk-upstream",
+            api_base=f"{url}/v1",
+            max_tokens=100,
+            messages=[_QUESTION],
+            tools=[
+                {
+                    "name": "get_weather",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                }
+            ],
+            stream=True,
+        )
+        return b"".join(
+            [
+                part if isinstance(part, bytes) else part.encode()
+                async for part in stream
+            ]
+        )
+
+    routes = [Route(f"/v1{path}", upstream, methods=["POST"]) for path in _SDK_PATHS]
+    with _serving(Starlette(routes=routes)) as url:
+        written = asyncio.run(convert(url))
+
+    async def answer(_: HttpRequest) -> HttpResponse:
+        return HttpResponse(written, media_type=_EVENT_STREAM)
+
+    async def read(url: str) -> tuple[list[Any], Any]:
+        client = anthropic.AsyncAnthropic(api_key="sk-caller", base_url=url)
+        asked: dict[str, Any] = {
+            "model": "a-model",
+            "max_tokens": 100,
+            "messages": [_QUESTION],
+        }
+        events = [
+            event async for event in await client.messages.create(**asked, stream=True)
+        ]
+        async with client.messages.stream(**asked) as stream:
+            message = await stream.get_final_message()
+        await client.close()
+        return events, message
+
+    with _serving(
+        Starlette(routes=[Route("/v1/messages", answer, methods=["POST"])])
+    ) as url:
+        events, message = asyncio.run(read(url))
+
+    written_events = [
+        event for event in stream_events(written) if event["type"] != "ping"
+    ]
+    assert [event.type for event in events] == [
+        event["type"] for event in written_events
+    ]
+    assert [block.input for block in message.content if block.type == "tool_use"] == [
+        {"location": "Paris, France"},
+        {"location": "Tokyo, Japan"},
+        {"location": "Lima, Peru"},
+    ]
 
 
 def _as_litellm_answers(

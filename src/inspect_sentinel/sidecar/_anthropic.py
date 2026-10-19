@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from collections.abc import Sequence
 from typing import Any, cast
 
@@ -15,11 +16,18 @@ from inspect_ai.model import (
 
 from ._inspect_ai import anthropic_message
 from ._wire import (
+    Edits,
+    Spliced,
+    StreamEvent,
     UnreadableError,
+    check_found,
     check_internal,
     check_internal_kept,
     json_object,
-    stream_events,
+    made_event,
+    sdk_events,
+    write_events,
+    written_events,
 )
 
 # The content kinds that inspect_ai's Anthropic converter reads, in a reply or
@@ -115,6 +123,201 @@ async def rejected_turn(
     for result in results:
         blocks.extend(cast("list[Any]", (await anthropic_message(result))["content"]))
     return [await anthropic_message(message), {"role": "user", "content": blocks}]
+
+
+def edit_reply(content_type: str, body: bytes, edits: Edits) -> bytes:
+    """A reply with the `tool_use` blocks of `edits` taken out or given new input, streamed or not.
+
+    Raises:
+        UnreadableError: If the reply doesn't hold every call of `edits` as a `tool_use` block, or is a stream whose `message_start` already holds content.
+    """
+    if content_type.startswith("text/event-stream"):
+        return _edit_stream(written_events(body), edits)
+    reply = json_object(body, "reply")
+    content: object = reply.get("content")
+    if not isinstance(content, list):
+        raise UnreadableError("The reply has no list of content.")
+    found: list[str] = []
+    blocks: list[object] = []
+    for block in cast("list[object]", content):
+        call = _tool_use(block)
+        if call is None:
+            blocks.append(block)
+            continue
+        if call in edits.removed:
+            found.append(call)
+            continue
+        if call in edits.modified:
+            found.append(call)
+            block = {
+                **cast("dict[str, Any]", block),
+                "input": edits.modified[call].arguments,
+            }
+        blocks.append(block)
+    check_found(found, edits)
+    reply["content"] = blocks
+    return json.dumps(reply).encode()
+
+
+def _tool_use(block: object) -> str | None:
+    # the id of a call the client runs, which inspect_ai reads as a tool call
+    entry = cast("dict[str, Any]", block) if isinstance(block, dict) else {}
+    if entry.get("type") == "tool_use":
+        id: object = entry.get("id")
+        return id if isinstance(id, str) else None
+    return None
+
+
+def _edit_stream(events: list[StreamEvent], edits: Edits) -> bytes:
+    # each block is told apart by its index, which the later blocks' events
+    # are moved down by for each block taken out before them
+    removed: set[int] = set()
+    modified: dict[int, str] = {}
+    found: list[str] = []
+    for event in events:
+        data = event.data or {}
+        if data.get("type") == "message_start" and (
+            cast("dict[str, Any]", data.get("message") or {}).get("content")
+        ):
+            raise UnreadableError(
+                "The reply stream holds content in its message_start, which this sidecar can't change."
+            )
+        if data.get("type") != "content_block_start":
+            continue
+        call = _tool_use(data.get("content_block"))
+        index: object = data.get("index")
+        if call is not None and call in edits.targets and isinstance(index, int):
+            found.append(call)
+            if call in edits.removed:
+                removed.add(index)
+            else:
+                modified[index] = call
+    check_found(found, edits)
+    written: list[StreamEvent] = []
+    for event in events:
+        data = event.data or {}
+        index = data.get("index")
+        kind = str(data.get("type", ""))
+        if not kind.startswith("content_block_") or not isinstance(index, int):
+            written.append(event)
+            continue
+        if index in removed:
+            continue
+        if index in modified and kind == "content_block_delta":
+            # its input goes out whole, in one delta after its start
+            continue
+        moved = index - sum(1 for taken in removed if taken < index)
+        if moved != index:
+            data["index"] = moved
+            event.changed = True
+        if index in modified and kind == "content_block_start":
+            block = cast("dict[str, Any]", data["content_block"])
+            data["content_block"] = {**block, "input": {}}
+            event.changed = True
+            written.append(event)
+            arguments = edits.modified[modified[index]].arguments
+            delta = {"type": "input_json_delta", "partial_json": json.dumps(arguments)}
+            written.append(
+                made_event(
+                    event,
+                    {"type": "content_block_delta", "index": moved, "delta": delta},
+                )
+            )
+            continue
+        written.append(event)
+    return write_events(written)
+
+
+def turn_at(entries: list[Any], sent: int) -> Spliced | None:
+    # the assistant message at `sent`, and the user message after it that
+    # holds the results of its calls
+    turn: object = entries[sent] if sent < len(entries) else None
+    if not isinstance(turn, dict):
+        return None
+    message = cast("dict[str, Any]", turn)
+    content: object = message.get("content")
+    if message.get("role") != "assistant" or not isinstance(content, list):
+        return None
+    after: object = entries[sent + 1] if sent + 1 < len(entries) else None
+    following = cast("dict[str, Any]", after) if isinstance(after, dict) else None
+    results: list[Any] = []
+    if following is not None and following.get("role") == "user":
+        said: object = following.get("content")
+        if isinstance(said, list):
+            results = list(cast("list[Any]", said))
+        elif isinstance(said, str) and said:
+            results = [{"type": "text", "text": said}]
+    else:
+        following = None
+
+    def rebuild(calls: list[Any], told: list[Any]) -> list[Any]:
+        written: list[Any] = [{**message, "content": calls}]
+        if following is not None:
+            written.append({**following, "content": told})
+        elif told:
+            written.append({"role": "user", "content": told})
+        return written
+
+    return Spliced(
+        sent,
+        sent + (2 if following is not None else 1),
+        list(cast("list[Any]", content)),
+        results,
+        rebuild,
+    )
+
+
+def call_ids(entry: object) -> list[str]:
+    message = cast("dict[str, Any]", entry) if isinstance(entry, dict) else {}
+    content: object = message.get("content")
+    if message.get("role") != "assistant" or not isinstance(content, list):
+        return []
+    return [id for block in cast("list[object]", content) if (id := _tool_use(block))]
+
+
+def call_of(element: object) -> tuple[str | None, object, object, object]:
+    id = _tool_use(element)
+    if id is None:
+        return None, None, None, None
+    block = cast("dict[str, Any]", element)
+    return id, block.get("type"), block.get("name"), block.get("input")
+
+
+def result_of(element: object) -> tuple[str | None, object]:
+    # the whole block, but for the cache mark inspect_ai's provider moves
+    block = cast("dict[str, Any]", element) if isinstance(element, dict) else {}
+    if block.get("type") != "tool_result":
+        return None, None
+    whole = {key: value for key, value in block.items() if key != "cache_control"}
+    return block.get("tool_use_id"), whole
+
+
+def results_in(entry: object) -> list[object]:
+    message = cast("dict[str, Any]", entry) if isinstance(entry, dict) else {}
+    content: object = message.get("content")
+    if message.get("role") != "user" or not isinstance(content, list):
+        return []
+    return [
+        block
+        for block in cast("list[object]", content)
+        if result_of(block)[0] is not None
+    ]
+
+
+def pick(rendered: list[Any], id: str) -> tuple[Any, tuple[Any, ...]]:
+    # a call's block, and its result's, from a turn inspect_ai wrote
+    blocks = cast("list[Any]", cast("dict[str, Any]", rendered[0])["content"])
+    call = next(block for block in blocks if _tool_use(block) == id)
+    told: list[Any] = []
+    for message in rendered[1:]:
+        content: object = cast("dict[str, Any]", message).get("content")
+        if isinstance(content, list):
+            told += [
+                block
+                for block in cast("list[Any]", content)
+                if result_of(block)[0] == id
+            ]
+    return call, tuple(told)
 
 
 def settled(entry: object) -> object:
@@ -260,7 +463,12 @@ def _stream(body: bytes) -> object:
     )
     snapshot: Any = None
     stopped = False
-    for event in stream_events(body):
+    # the SDK gives a client each block as it is when the block stops, and
+    # the message when it stops, and a client may act on either then, so
+    # neither may change after
+    done: set[int] = set()
+    started = 0
+    for event in sdk_events(body, "anthropic"):
         kind = event.get("type")
         if kind == "ping":
             continue
@@ -268,7 +476,29 @@ def _stream(body: bytes) -> object:
             raise UnreadableError(
                 "The reply stream ended in an error from the provider."
             )
-        stopped = stopped or kind == "message_stop"
+        if stopped:
+            raise UnreadableError("The reply stream goes on after its message stopped.")
+        if str(kind).startswith("content_block_"):
+            index = event.get("index")
+            if index in done:
+                raise UnreadableError(
+                    "The reply stream changes a block after it stopped."
+                )
+            # blocks are numbered in order from 0, and the SDK finds a block by
+            # its place in a list, which a negative number counts from the end of
+            if type(index) is not int or not (
+                index == started
+                if kind == "content_block_start"
+                else 0 <= index < started
+            ):
+                raise UnreadableError(
+                    "The reply stream names a block by an index it doesn't have."
+                )
+            if kind == "content_block_start":
+                started += 1
+            elif kind == "content_block_stop":
+                done.add(index)
+        stopped = kind == "message_stop"
         if kind == "content_block_delta":
             delta: object = event.get("delta")
             delta_kind = _kind(delta)

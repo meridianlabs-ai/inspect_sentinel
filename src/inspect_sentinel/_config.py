@@ -74,12 +74,24 @@ def _from_string(config: str) -> Sentinels:
     )
 
 
-def _read_file(path: str) -> object:
+def parse_config_file(path: str) -> object:
+    """A YAML or JSON file's content, read as a sentinel config file is: JSON allows tab indentation, which YAML doesn't, and a key that appears twice in one mapping is an error rather than the last one winning.
+
+    Args:
+        path: The file.
+
+    Raises:
+        ValueError: If the file can't be parsed, or a mapping in it has a key twice.
+    """
     text = resource(path, type="file")
     try:
-        content = _unique_keys(_parse(text), path, "")
+        return _unique_keys(_parse(text), path, "")
     except (json.JSONDecodeError, yaml.YAMLError) as ex:
         raise ValueError(f"{path}: could not parse the file: {ex}") from ex
+
+
+def _read_file(path: str) -> object:
+    content = parse_config_file(path)
     if not isinstance(content, dict) or set(cast(dict[str, Any], content)) != {
         "sentinel"
     }:

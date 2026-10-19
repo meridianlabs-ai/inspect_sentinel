@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from typing import Any, cast
 
@@ -19,11 +20,17 @@ from inspect_ai.model import (
 
 from ._inspect_ai import internal_text, is_assistant_item, without_reasoning
 from ._wire import (
+    Edits,
+    Spliced,
+    StreamEvent,
     UnreadableError,
+    check_found,
     check_internal,
     check_internal_kept,
     json_object,
-    stream_events,
+    sdk_events,
+    write_events,
+    written_events,
 )
 
 
@@ -31,7 +38,7 @@ async def read_reply(
     content_type: str, body: bytes, chat: bool | None = None
 ) -> ModelOutput:
     if content_type.startswith("text/event-stream"):
-        events = list(stream_events(body))
+        events = sdk_events(body, "openai")
         if chat is None:
             chat = any(
                 event.get("object") == "chat.completion.chunk" for event in events
@@ -81,6 +88,450 @@ async def read_reply(
             "The reply holds more than one choice, and only the first would be judged."
         )
     return output
+
+
+def edit_reply(
+    content_type: str, body: bytes, chat: bool | None, edits: Edits
+) -> bytes:
+    """A reply with the calls of `edits` taken out or given new arguments, streamed or not, in either API.
+
+    Raises:
+        UnreadableError: If the reply doesn't hold every call of `edits`, a call to change is not a function call, or an edited Responses stream doesn't hold together.
+    """
+    if content_type.startswith("text/event-stream"):
+        events = written_events(body)
+        if chat is None:
+            chat = any(
+                (event.data or {}).get("object") == "chat.completion.chunk"
+                for event in events
+            )
+        if chat:
+            return _edit_chunks(events, edits)
+        edited = _edit_responses_stream(events, edits)
+        _check_responses_stream(edited)
+        return write_events(edited)
+    reply = json_object(body, "reply")
+    if chat is None:
+        chat = reply.get("object") == "chat.completion"
+    found: list[str] = []
+    if chat:
+        for choice in cast("list[dict[str, Any]]", reply.get("choices") or []):
+            message = cast("dict[str, Any]", choice.get("message") or {})
+            calls: object = message.get("tool_calls")
+            if isinstance(calls, list):
+                message["tool_calls"] = _edit_chat_calls(
+                    cast("list[object]", calls), edits, found
+                )
+    else:
+        output: object = reply.get("output")
+        if isinstance(output, list):
+            reply["output"] = _edit_output(cast("list[object]", output), edits, found)
+    check_found(found, edits)
+    return json.dumps(reply).encode()
+
+
+def _edit_chat_calls(
+    calls: list[object], edits: Edits, found: list[str]
+) -> list[object]:
+    kept: list[object] = []
+    for call in calls:
+        id = _id(call, "id")
+        if id is None or id not in edits.targets:
+            kept.append(call)
+            continue
+        found.append(id)
+        if id in edits.removed:
+            continue
+        entry = cast("dict[str, Any]", call)
+        function: object = entry.get("function")
+        if entry.get("type", "function") != "function" or not isinstance(
+            function, dict
+        ):
+            raise UnreadableError(
+                f"The call {id!r} is not a function call, whose arguments this sidecar can change."
+            )
+        arguments = json.dumps(edits.modified[id].arguments)
+        kept.append(
+            {
+                **entry,
+                "function": {
+                    **cast("dict[str, Any]", function),
+                    "arguments": arguments,
+                },
+            }
+        )
+    return kept
+
+
+def _id(entry: object, key: str) -> str | None:
+    value: object = (
+        cast("dict[str, Any]", entry).get(key) if isinstance(entry, dict) else None
+    )
+    return value if isinstance(value, str) else None
+
+
+def _edit_chunks(events: list[StreamEvent], edits: Edits) -> bytes:
+    # A call is told apart by its index, named with its id in its first
+    # fragment. A later call's index is moved down for each call taken out
+    # before it, and a changed call's arguments go out whole in its first
+    # fragment.
+    ids: dict[int, str] = {}
+    for event in events:
+        for call in _fragments(event):
+            index = call.get("index")
+            if not isinstance(index, int):
+                raise UnreadableError("A call in the reply stream has no index.")
+            if index not in ids:
+                id = call.get("id")
+                if not isinstance(id, str):
+                    raise UnreadableError(
+                        "A call in the reply stream starts without an id."
+                    )
+                ids[index] = id
+    removed = {index for index, id in ids.items() if id in edits.removed}
+    for index, id in ids.items():
+        if id in edits.modified and _fragments_kind(events, index) != "function":
+            raise UnreadableError(
+                f"The call {id!r} is not a function call, whose arguments this sidecar can change."
+            )
+    check_found(ids.values(), edits)
+    started: set[int] = set()
+    for event in events:
+        for choice in _choices(event):
+            delta = cast("dict[str, Any]", choice.get("delta") or {})
+            calls = cast("list[dict[str, Any]]", delta.get("tool_calls") or [])
+            if not calls:
+                continue
+            kept: list[dict[str, Any]] = []
+            for call in calls:
+                index = cast(int, call.get("index"))
+                if index in removed:
+                    continue
+                call = dict(call)
+                moved = index - sum(1 for taken in removed if taken < index)
+                call["index"] = moved
+                id = ids[index]
+                if id in edits.modified:
+                    function = dict(cast("dict[str, Any]", call.get("function") or {}))
+                    if index not in started:
+                        function["arguments"] = json.dumps(edits.modified[id].arguments)
+                    else:
+                        function.pop("arguments", None)
+                    call["function"] = function
+                    if not function:
+                        del call["function"]
+                    if set(call) == {"index"}:
+                        continue
+                started.add(index)
+                kept.append(call)
+            if kept != calls:
+                event.changed = True
+            if kept:
+                delta["tool_calls"] = kept
+            else:
+                del delta["tool_calls"]
+    return write_events(events)
+
+
+def _choices(event: StreamEvent) -> list[dict[str, Any]]:
+    choices: object = (event.data or {}).get("choices")
+    if not isinstance(choices, list):
+        return []
+    return [
+        cast("dict[str, Any]", choice)
+        for choice in cast("list[object]", choices)
+        if isinstance(choice, dict)
+    ]
+
+
+def _fragments(event: StreamEvent) -> list[dict[str, Any]]:
+    fragments: list[dict[str, Any]] = []
+    for choice in _choices(event):
+        calls: object = cast("dict[str, Any]", choice.get("delta") or {}).get(
+            "tool_calls"
+        )
+        if isinstance(calls, list):
+            fragments += [
+                cast("dict[str, Any]", call)
+                for call in cast("list[object]", calls)
+                if isinstance(call, dict)
+            ]
+    return fragments
+
+
+def _fragments_kind(events: list[StreamEvent], index: int) -> object:
+    # a call's type, from the first of its fragments that names it
+    for event in events:
+        for call in _fragments(event):
+            if call.get("index") == index and "type" in call:
+                return call["type"]
+    return "function"
+
+
+def _call_id(item: object) -> str | None:
+    # the id of a call in a Responses output, which inspect_ai reads as the
+    # tool call's id; an output of a call has one too, and is left as it is
+    if not isinstance(item, dict):
+        return None
+    entry = cast("dict[str, Any]", item)
+    if str(entry.get("type", "")).endswith("_output"):
+        return None
+    id = entry.get("call_id")
+    return id if isinstance(id, str) else None
+
+
+def _edit_output(output: list[object], edits: Edits, found: list[str]) -> list[object]:
+    kept: list[object] = []
+    for item in output:
+        id = _call_id(item)
+        if id is None:
+            kept.append(item)
+            continue
+        if id in edits.removed:
+            found.append(id)
+            continue
+        if id in edits.modified:
+            entry = cast("dict[str, Any]", item)
+            if entry.get("type") != "function_call":
+                raise UnreadableError(
+                    f"The call {id!r} is not a function call, whose arguments this sidecar can change."
+                )
+            found.append(id)
+            item = {**entry, "arguments": json.dumps(edits.modified[id].arguments)}
+        kept.append(item)
+    return kept
+
+
+_ITEM_EVENTS = ("response.output_item.added", "response.output_item.done")
+
+
+def _edit_responses_stream(
+    events: list[StreamEvent], edits: Edits
+) -> list[StreamEvent]:
+    # An item is told apart by its output index, which the later items' events
+    # are moved down by for each item taken out before them, so that each
+    # event's index is the item's place in the edited output. A changed call's
+    # arguments go out whole in its first delta, or in the item it was added
+    # with if it has none.
+    # A call is found by the event it is added with, or the one it is done
+    # with, since a stream may hold a call's done event alone, and a client
+    # may act on either.
+    _check_indexes(events)
+    items: dict[int, str] = {}
+    for event in events:
+        data = event.data or {}
+        index = data.get("output_index")
+        kind = data.get("type")
+        if kind not in _ITEM_EVENTS or not isinstance(index, int):
+            continue
+        id = _call_id(data.get("item"))
+        if id is None:
+            continue
+        if items.setdefault(index, id) != id:
+            raise UnreadableError(
+                f"The reply stream names two calls at output index {index}."
+            )
+    removed = {index for index, id in items.items() if id in edits.removed}
+    modified = {index: id for index, id in items.items() if id in edits.modified}
+    deltas = {
+        index
+        for event in events
+        if (event.data or {}).get("type") == "response.function_call_arguments.delta"
+        and isinstance(index := (event.data or {}).get("output_index"), int)
+    }
+    found: list[str] = list(items.values())
+    written: list[StreamEvent] = []
+    started: set[int] = set()
+    for event in events:
+        data = event.data
+        if data is None:
+            written.append(event)
+            continue
+        response = data.get("response")
+        if isinstance(response, dict):
+            output = cast("dict[str, Any]", response).get("output")
+            if isinstance(output, list) and output:
+                edited = _edit_output(cast("list[object]", output), edits, found)
+                if edited != output:
+                    response["output"] = edited
+                    event.changed = True
+        index = data.get("output_index")
+        if not isinstance(index, int):
+            written.append(event)
+            continue
+        if index in removed:
+            continue
+        moved = index - sum(1 for taken in removed if taken < index)
+        if moved != index:
+            data["output_index"] = moved
+            event.changed = True
+        if index in modified:
+            arguments = json.dumps(edits.modified[modified[index]].arguments)
+            kind = data.get("type")
+            item = data.get("item")
+            if kind == "response.function_call_arguments.delta":
+                if index in started:
+                    continue
+                started.add(index)
+                data["delta"] = arguments
+                event.changed = True
+            elif kind == "response.function_call_arguments.done":
+                data["arguments"] = arguments
+                event.changed = True
+            elif kind in ("response.output_item.added", "response.output_item.done"):
+                item = cast("dict[str, Any]", item) if isinstance(item, dict) else {}
+                if item.get("type") != "function_call":
+                    raise UnreadableError(
+                        f"The call {modified[index]!r} is not a function call, whose arguments this sidecar can change."
+                    )
+                added = kind == "response.output_item.added" and index in deltas
+                data["item"] = {**item, "arguments": "" if added else arguments}
+                event.changed = True
+        written.append(event)
+    check_found(found, edits)
+    return written
+
+
+def _check_indexes(events: list[StreamEvent]) -> None:
+    # An event is edited and checked as the item at its output index, so one
+    # that names an item without a place in the output would go out as it
+    # came, though a client may follow its item id to a call. Every event the
+    # SDK has for an item gives its index.
+    for event in events:
+        data = event.data or {}
+        index = data.get("output_index")
+        if ("item_id" in data or "item" in data or index is not None) and (
+            type(index) is not int or index < 0
+        ):
+            raise UnreadableError(
+                "The reply stream has an event for an item without its place in the output."
+            )
+
+
+def _check_responses_stream(events: list[StreamEvent]) -> None:
+    # What a client acts on in a Responses stream is not only the response
+    # the stream ends with, which is all that is read to judge it: the SDK
+    # builds each item from the events, and a client may act on an item when
+    # it is done. So an edited stream must hold together: the SDK takes every
+    # event, each item is at its place in the output, and each call's
+    # arguments are the same in its deltas, its done events and the output.
+    from openai import omit
+    from openai._models import construct_type
+    from openai.lib.streaming.responses._responses import ResponseStreamState
+    from openai.types.responses import ResponseStreamEvent
+
+    state: Any = ResponseStreamState(input_tools=omit, text_format=omit)
+    try:
+        for event in events:
+            if event.data is not None:
+                state.handle_event(
+                    construct_type(
+                        type_=cast(Any, ResponseStreamEvent), value=event.data
+                    )
+                )
+    except Exception as ex:
+        raise UnreadableError("The edited reply stream doesn't hold together.") from ex
+    _check_indexes(events)
+    # an item is checked whichever of its events the stream holds, since a
+    # stream may hold an item's done event alone
+    items: dict[int, list[tuple[str, dict[str, Any]]]] = {}
+    others: dict[int, list[dict[str, Any]]] = {}
+    final: list[object] = []
+    for event in events:
+        data = event.data or {}
+        index = data.get("output_index")
+        kind = data.get("type")
+        item = data.get("item")
+        if kind in ("response.completed", "response.incomplete"):
+            response = cast("dict[str, Any]", data.get("response") or {})
+            final = cast("list[object]", response.get("output") or [])
+        if not isinstance(index, int):
+            continue
+        if kind in _ITEM_EVENTS and isinstance(item, dict):
+            items.setdefault(index, []).append((kind, cast("dict[str, Any]", item)))
+        else:
+            others.setdefault(index, []).append(data)
+    for index in sorted(set(items) | set(others)):
+        out = final[index] if index < len(final) else None
+        if not isinstance(out, dict) or any(
+            _identity(cast("dict[str, Any]", out)) != _identity(entry)
+            for _, entry in items.get(index, [])
+        ):
+            raise UnreadableError(
+                "The edited reply stream names an item at a place it doesn't have in the output."
+            )
+        # a call the client runs, which the client may run as any of its
+        # events gives it
+        if "call_id" in out:
+            _check_streamed_call(
+                cast("dict[str, Any]", out), items.get(index, []), others.get(index, [])
+            )
+
+
+_STREAMED = {
+    "function_call": ("arguments", "response.function_call_arguments"),
+    "custom_tool_call": ("input", "response.custom_tool_call_input"),
+}
+"""The field each kind of call streams in deltas, and the prefix of the events that stream it."""
+
+
+def _check_streamed_call(
+    out: dict[str, Any],
+    items: list[tuple[str, dict[str, Any]]],
+    others: list[dict[str, Any]],
+) -> None:
+    field, prefix = _STREAMED.get(str(out.get("type")), ("", ""))
+    heard: list[str] = []
+    streamed = ""
+    for kind, entry in items:
+        if any(
+            out.get(key) != value
+            for key, value in entry.items()
+            if key not in ("status", field)
+        ):
+            raise UnreadableError(
+                "The edited reply stream gives a call other details in an event than in the output."
+            )
+        if not field:
+            continue
+        if kind == "response.output_item.added":
+            streamed = str(entry.get(field) or "")
+        elif entry.get(field) is not None:
+            heard.append(str(entry.get(field)))
+    for data in others:
+        kind = data.get("type")
+        # a client may follow an event to its call by the item id, or by a
+        # field the event shares with the call's item
+        if data.get("item_id", out.get("id")) != out.get("id") or any(
+            out.get(key) != value
+            for key, value in data.items()
+            if key in out and key not in ("type", "status", field)
+        ):
+            raise UnreadableError(
+                "The edited reply stream gives a call other details in an event than in the output."
+            )
+        if prefix and kind == f"{prefix}.delta":
+            streamed += str(data.get("delta", ""))
+        elif prefix and kind == f"{prefix}.done":
+            heard.append(str(data.get(field)))
+        else:
+            raise UnreadableError(
+                f"The edited reply stream gives a call's details in a {kind!r} event, which this sidecar can't check."
+            )
+    if not field:
+        return
+    whole = str(out.get(field))
+    if streamed and streamed != whole:
+        heard.append(streamed)
+    if len({*heard, whole}) != 1:
+        raise UnreadableError(
+            "The edited reply stream gives a call different arguments in different events."
+        )
+
+
+def _identity(item: object) -> tuple[object, object]:
+    entry = cast("dict[str, Any]", item) if isinstance(item, dict) else {}
+    return entry.get("type"), entry.get("call_id") or entry.get("id")
 
 
 async def read_chat_request(request: dict[str, Any]) -> list[ChatMessage]:
@@ -255,6 +706,165 @@ def _whole(part: dict[str, Any]) -> bool:
     return isinstance(source, str) and source != ""
 
 
+def chat_turn_at(entries: list[Any], sent: int) -> Spliced | None:
+    # the assistant message at `sent`, and the tool messages after it
+    turn: object = entries[sent] if sent < len(entries) else None
+    if not isinstance(turn, dict):
+        return None
+    message = cast("dict[str, Any]", turn)
+    calls: object = message.get("tool_calls")
+    if message.get("role") != "assistant" or not isinstance(calls, list):
+        return None
+    end = sent + 1
+    while (
+        end < len(entries)
+        and isinstance(entries[end], dict)
+        and cast("dict[str, Any]", entries[end]).get("role") == "tool"
+    ):
+        end += 1
+
+    def rebuild(held: list[Any], told: list[Any]) -> list[Any]:
+        return [{**message, "tool_calls": held}, *told]
+
+    return Spliced(
+        sent,
+        end,
+        list(cast("list[Any]", calls)),
+        list(entries[sent + 1 : end]),
+        rebuild,
+    )
+
+
+def chat_call_ids(entry: object) -> list[str]:
+    message = cast("dict[str, Any]", entry) if isinstance(entry, dict) else {}
+    calls: object = message.get("tool_calls")
+    if message.get("role") != "assistant" or not isinstance(calls, list):
+        return []
+    return [id for call in cast("list[object]", calls) if (id := _id(call, "id"))]
+
+
+def chat_call_of(element: object) -> tuple[str | None, object, object, object]:
+    id = _id(element, "id")
+    if id is None:
+        return None, None, None, None
+    call = cast("dict[str, Any]", element)
+    function: object = call.get("function")
+    entry = cast("dict[str, Any]", function) if isinstance(function, dict) else {}
+    kind = call.get("type", "function")
+    return id, kind, entry.get("name"), _parsed(entry.get("arguments"))
+
+
+def chat_result_of(element: object) -> tuple[str | None, object]:
+    message = cast("dict[str, Any]", element) if isinstance(element, dict) else {}
+    if message.get("role") != "tool":
+        return None, None
+    return _id(message, "tool_call_id"), message
+
+
+def chat_results_in(entry: object) -> list[object]:
+    return [entry] if chat_result_of(entry)[0] is not None else []
+
+
+def chat_pick(rendered: list[Any], id: str) -> tuple[Any, tuple[Any, ...]]:
+    calls = cast("list[Any]", cast("dict[str, Any]", rendered[0])["tool_calls"])
+    call = next(call for call in calls if _id(call, "id") == id)
+    told = [message for message in rendered[1:] if chat_result_of(message)[0] == id]
+    return call, tuple(told)
+
+
+def responses_turn_at(entries: list[Any], sent: int) -> Spliced | None:
+    # the items of the assistant's turn from `sent`, and the outputs after
+    # them
+    end = sent
+    while end < len(entries) and _in_turn(entries[end]):
+        end += 1
+    if end == sent:
+        return None
+    last = end
+    while last < len(entries) and _is_output(entries[last]):
+        last += 1
+
+    def rebuild(held: list[Any], told: list[Any]) -> list[Any]:
+        return [*held, *told]
+
+    return Spliced(
+        sent, last, list(entries[sent:end]), list(entries[end:last]), rebuild
+    )
+
+
+def _in_turn(item: object) -> bool:
+    if not isinstance(item, dict):
+        return False
+    entry = cast("dict[str, Any]", item)
+    return is_assistant_item(entry) or _call_id(entry) is not None
+
+
+def _is_output(item: object) -> bool:
+    return isinstance(item, dict) and str(
+        cast("dict[str, Any]", item).get("type", "")
+    ).endswith("_output")
+
+
+def responses_call_ids(entry: object) -> list[str]:
+    id = _call_id(entry)
+    return [id] if id is not None else []
+
+
+def responses_call_of(element: object) -> tuple[str | None, object, object, object]:
+    id = _call_id(element)
+    if id is None:
+        return None, None, None, None
+    item = cast("dict[str, Any]", element)
+    kind = item.get("type")
+    if kind == "function_call":
+        return id, kind, item.get("name"), _parsed(item.get("arguments"))
+    return id, kind, item.get("name"), item.get("input", item.get("action"))
+
+
+def responses_result_of(element: object) -> tuple[str | None, object]:
+    if not _is_output(element):
+        return None, None
+    return _id(element, "call_id"), element
+
+
+def responses_results_in(entry: object) -> list[object]:
+    return [entry] if responses_result_of(entry)[0] is not None else []
+
+
+def responses_pick(rendered: list[Any], id: str) -> tuple[Any, tuple[Any, ...]]:
+    call = next(item for item in rendered if _call_id(item) == id)
+    told = [item for item in rendered if responses_result_of(item)[0] == id]
+    # and the message that says why, for a computer call
+    told += [
+        item
+        for item in rendered
+        if isinstance(item, dict)
+        and cast("dict[str, Any]", item).get("role") == "user"
+        and _text(cast("dict[str, Any]", item).get("content")).startswith(f"{id}: ")
+    ]
+    return call, tuple(told)
+
+
+def _parsed(arguments: object) -> object:
+    # arguments as JSON says them, so that two writings of the same are equal
+    if isinstance(arguments, str):
+        try:
+            return json.loads(arguments)
+        except ValueError:
+            return arguments
+    return arguments
+
+
+def _text(content: object) -> str:
+    if isinstance(content, list):
+        return "".join(
+            str(cast("dict[str, Any]", part).get("text", ""))
+            for part in cast("list[object]", content)
+            if isinstance(part, dict)
+        )
+    return str(content or "")
+
+
 async def chat_rejected_turn(
     message: ChatMessageAssistant, results: Sequence[ChatMessageTool]
 ) -> list[Any]:
@@ -277,7 +887,7 @@ async def responses_rejected_turn(
         and cast("dict[str, Any]", entry).get("type") == "computer_call_output"
     }
     told = [
-        f"{result.tool_call_id}: {result.text}"
+        f"{result.tool_call_id}: {result.error.message if result.error else result.text}"
         for result in results
         if result.tool_call_id in computer
     ]
@@ -512,10 +1122,17 @@ def _chat_stream(events: list[dict[str, Any]]) -> object:
     if any("error" in event for event in events):
         raise UnreadableError("The reply stream ended in an error from the provider.")
     state = ChatCompletionStreamState()
+    # the SDK gives a call as done once another call starts or the choice
+    # finishes, and a client may run it then, so a later chunk mustn't change it
+    done: list[Any] = []
     try:
         for event in events:
-            state.handle_chunk(
-                cast(Any, construct_type(type_=ChatCompletionChunk, value=event))
+            done.extend(
+                given
+                for given in state.handle_chunk(
+                    cast(Any, construct_type(type_=ChatCompletionChunk, value=event))
+                )
+                if given.type == "tool_calls.function.arguments.done"
             )
         snapshot = state.current_completion_snapshot
     except Exception as ex:
@@ -527,11 +1144,18 @@ def _chat_stream(events: list[dict[str, Any]]) -> object:
         getattr(choice, "finish_reason", None) is None for choice in snapshot.choices
     ):
         raise UnreadableError("The reply stream is not a complete message.")
+    calls: list[Any] = snapshot.choices[0].message.tool_calls or []
+    for given in done:
+        function = calls[given.index].function
+        if (function.name, function.arguments) != (given.name, given.arguments):
+            raise UnreadableError(
+                "The reply stream changes a call after the SDK gave it as done."
+            )
     return cast(object, snapshot)
 
 
 def _responses_stream(events: list[dict[str, Any]]) -> object:
-    for event in events:
+    for position, event in enumerate(events):
         kind = event.get("type")
         if kind in ("response.failed", "error"):
             raise UnreadableError(
@@ -541,5 +1165,11 @@ def _responses_stream(events: list[dict[str, Any]]) -> object:
         if kind in ("response.completed", "response.incomplete"):
             response = event.get("response")
             if isinstance(response, dict):
+                # the SDK keeps the last response a stream gives, so a stream
+                # that goes on could have a client act on another one
+                if position != len(events) - 1:
+                    raise UnreadableError(
+                        "The reply stream goes on after its response ended."
+                    )
                 return _response(cast("dict[str, Any]", response))
     raise UnreadableError("The reply stream is not a complete response.")
