@@ -202,12 +202,14 @@ async def test_a_nonce_marks_the_real_markers_and_headers_but_not_the_agents() -
         f"[END POLICY ({n})]",
         f"[BEGIN TASK ({n})]",
         f"[END TASK ({n})]",
+        f"[BEGIN AGENT STEP - TOOL CALL REQUEST ({n})]",
         f"[BEGIN INPUT ({n})]",
         f"[M1] USER ({n}):",
         f"[M2] ASSISTANT ({n}):",
         f"[END INPUT ({n})]",
-        f"[BEGIN AGENT STEP - TOOL CALL REQUEST ({n})]",
+        f"[BEGIN CALL ({n})]",
         f"[M3] ASSISTANT ({n}):",
+        f"[END CALL ({n})]",
         f"[END AGENT STEP - TOOL CALL REQUEST ({n})]",
     ]
     assert spoof in shown
