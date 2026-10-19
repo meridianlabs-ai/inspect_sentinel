@@ -23,6 +23,7 @@ from inspect_sentinel.sidecar import (
     Replace,
     TimeLimitError,
     UnreadableError,
+    _handler,
     read_reply,
 )
 from tests.sidecar._traffic import (
@@ -338,6 +339,36 @@ async def test_rejection_is_added_to_the_next_request_of_the_run() -> None:
     assert {k: v for k, v in json.loads(again.body).items() if k != "messages"} == {
         k: v for k, v in json.loads(first.body).items() if k != "messages"
     }
+
+
+@pytest.mark.anyio
+async def test_a_rejection_that_cant_be_written_keeps_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = Handler(every_call_rule())
+    parallel = anthropic_recorded("parallel-tool-calls")
+
+    async def unwritable(*_: Any) -> Any:
+        raise UnreadableError("The turn can't be written.")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(_handler, "amendments", unwritable)
+        await handler.request(request("a"))
+        with pytest.raises(UnreadableError):
+            await handler.reply(reply(parallel, id="a", content_type=STREAM))
+
+    # nothing of the turn was kept, so the conversation goes on as before it,
+    # and the turn doesn't count toward the three in a row
+    assert await handler.request(request("b")) == Pass()
+    first = await handler.reply(reply(parallel, id="b", content_type=STREAM))
+    await handler.request(request("c"))
+    second = await handler.reply(reply(parallel, id="c", content_type=STREAM))
+
+    assert [first, second] == [
+        Refuse(
+            400, "A sentinel rejected the call to get_weather: Paris is not allowed."
+        )
+    ] * 2
 
 
 def _ids(body: bytes) -> list[str]:

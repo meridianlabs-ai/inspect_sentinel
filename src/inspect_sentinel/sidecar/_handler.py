@@ -841,11 +841,18 @@ class Handler:
         # the first rejection is the one the client is refused with
         call, _ = rejected[0]
         why = reasons[call.id]
+        count = run.in_a_row.get(held.sample_attempt, 0) + 1
+        ends = count >= _MAX_CONSECUTIVE_REJECTIONS
+        # made before anything is kept, since making it can fail, and a turn
+        # kept without it would leave every later request of the conversation
+        # unreadable
+        written = (
+            None if ends else await amendments(held.format, message, told, (), noted)
+        )
         held.exchange.withheld = Withheld(message, told)
         held.exchange.message = why
-        count = run.in_a_row.get(held.sample_attempt, 0) + 1
         run.in_a_row[held.sample_attempt] = count
-        if count >= _MAX_CONSECUTIVE_REJECTIONS:
+        if written is None:
             return self._end(
                 held,
                 run,
@@ -865,7 +872,7 @@ class Handler:
             point = Rejected(held.sent, held.mark, [])
             conversation.rejected.append(point)
         point.turns.append((message, told, noted))
-        point.written.append(await amendments(held.format, message, told, (), noted))
+        point.written.append(written)
         return Refuse(
             self._reject_status,
             f"A sentinel rejected the call to {call.function}: {why}",
