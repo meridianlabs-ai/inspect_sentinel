@@ -284,8 +284,7 @@ class LiteLLMGuardrail(CustomGuardrail):
 
         LiteLLM sends the caller nothing, the status included, until this yields. A reply that is refused is therefore refused before any of it has gone out.
 
-        Raises:
-            HTTPException: The reply is refused, or the sidecar gave no usable answer and `unreachable_fallback` is `fail_closed`.
+        A reply that is refused, or that the sidecar gave no usable answer for when `unreachable_fallback` is `fail_closed`, is answered with an error event in place of the reply, which LiteLLM sends the caller as an error under the refusal's status.
         """
         chunks = cast("AsyncIterator[Any]", response)
         told = _told(request_data)
@@ -306,15 +305,13 @@ class LiteLLMGuardrail(CustomGuardrail):
                 if answer["action"] == "replace":
                     held = _replaced_stream(held, _replacement(answer), told["format"])
             except SidecarError:
-                self._unanswered()
+                try:
+                    self._unanswered()
+                except HTTPException as refused:
+                    yield _refused_stream(held, refused, told["format"])
+                    return
             except HTTPException as refused:
-                if told["format"] != _RESPONSES:
-                    raise
-                # LiteLLM answers a refused Responses stream with its own
-                # `response.failed` event, holding the refusal as text, so the
-                # guardrail sends one with the sentinel field instead. LiteLLM
-                # then logs the call as one that succeeded
-                yield _response_failed(held, refused)
+                yield _refused_stream(held, refused, told["format"])
                 return
         for chunk in held:
             yield chunk
@@ -759,6 +756,30 @@ def _refusal(answer: dict[str, Any]) -> HTTPException:
         # fields, at `error.provider_specific_fields`
         setattr(refused, "provider_specific_fields", {"sentinel": field})  # noqa: B010
     return refused
+
+
+def _refused_stream(held: list[Any], refused: HTTPException, format: str) -> Any:
+    # A refusal raised here reaches the caller as LiteLLM writes an error in a
+    # stream: a 500 without the sentinel field in some versions, and in others
+    # an error whose body the provider's SDK keeps only as text. Every version
+    # instead answers a stream whose first event is an error with that error
+    # alone, as JSON, under the status the event names. LiteLLM then logs the
+    # call as one that succeeded.
+    if format == _RESPONSES:
+        # a Responses client is told of a failed response by its own event
+        return _response_failed(held, refused)
+    error: dict[str, Any] = {
+        "message": str(refused.detail),
+        "type": _error_code(refused.status_code),
+        "param": None,
+        "code": refused.status_code,
+    }
+    extra = getattr(refused, "provider_specific_fields", None)
+    if isinstance(extra, dict):
+        error["provider_specific_fields"] = extra
+    # written, since LiteLLM finds an error in a stream's first event only in
+    # what is written
+    return f"data: {json.dumps({'error': error})}\n\n"
 
 
 def _response_failed(held: list[Any], refused: HTTPException) -> _Written:

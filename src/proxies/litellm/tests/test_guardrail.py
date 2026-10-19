@@ -20,7 +20,7 @@ from collections.abc import AsyncIterator, Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import jsonschema
@@ -412,25 +412,35 @@ def test_exchange_the_sentinel_allows_goes_on_as_it_is(
         ]
 
 
+def _error_event(chunk: Any) -> dict[str, Any]:
+    """The error in the event a refused Chat Completions or Messages stream is answered with, written as LiteLLM looks for an error in a stream's first event."""
+    assert isinstance(chunk, str)
+    assert chunk.startswith("data: ")
+    return json.loads(chunk.removeprefix("data: "))["error"]
+
+
 def _refused(
     guardrail: Any, on: _On, data: dict[str, Any], streamed: bool
 ) -> tuple[int, Any, Any, list[Any]]:
     """How the guardrail refused an exchange: the status and message the caller is given, the sentinel field, and what else went out.
 
-    A streamed Responses reply is refused with a `response.failed` event, which LiteLLM sends on with status 200. Anything else is refused with an `HTTPException`, whose `provider_specific_fields` LiteLLM writes into the error.
+    A streamed reply is refused with an event in place of the reply: on the Responses route a `response.failed` event, which LiteLLM sends on with status 200, and elsewhere an error event, which LiteLLM sends as an error under the status it names. A reply that isn't streamed is refused with an `HTTPException`, whose `provider_specific_fields` LiteLLM writes into the error.
     """
     let_go: list[Any] = []
-    if on is _RESPONSES and streamed:
+    if streamed:
         _exchange(guardrail, on, data, streamed, let_go)
-        event = _written(let_go.pop())
-        assert event["type"] == "response.failed"
-        assert event["response"]["status"] == "failed"
-        return 200, event["response"]["error"]["message"], event.get("sentinel"), let_go
+        if on is _RESPONSES:
+            event = _written(let_go.pop())
+            assert event["type"] == "response.failed"
+            assert event["response"]["status"] == "failed"
+            message = event["response"]["error"]["message"]
+            return 200, message, event.get("sentinel"), let_go
+        error = _error_event(let_go.pop())
+        extra: dict[str, Any] = error.get("provider_specific_fields") or {}
+        return error["code"], error["message"], extra.get("sentinel"), let_go
     with pytest.raises(HTTPException) as refused:
         _exchange(guardrail, on, data, streamed, let_go)
-    extra: dict[str, Any] = (
-        getattr(refused.value, "provider_specific_fields", None) or {}
-    )
+    extra = getattr(refused.value, "provider_specific_fields", None) or {}
     return (
         refused.value.status_code,
         refused.value.detail,
@@ -789,6 +799,7 @@ def test_a_replaced_chat_stream_sends_the_chunk_with_the_field_as_written(
     assert _written(last) == events[-1]
 
 
+_EVENT_STREAM = "text/event-stream"
 # where OpenAI's SDK sends a streamed request, under the base URL it is given
 _SDK_PATHS = ("/chat/completions", "/responses")
 
@@ -814,11 +825,13 @@ def _as_litellm_writes(on: _On, chunks: list[Any], data: dict[str, Any]) -> byte
     return asyncio.run(write())
 
 
-def _read_by_the_sdk(on: _On, written: bytes) -> list[Any]:
-    """The events OpenAI's SDK reads from a stream LiteLLM wrote."""
+def _read_by_the_sdk(
+    on: _On, written: bytes, status: int = 200, content_type: str = _EVENT_STREAM
+) -> list[Any]:
+    """The events OpenAI's SDK reads from what LiteLLM answered with."""
 
     async def answer(_: HttpRequest) -> HttpResponse:
-        return HttpResponse(written, media_type="text/event-stream")
+        return HttpResponse(written, status_code=status, media_type=content_type)
 
     async def read(url: str) -> list[Any]:
         client = openai.AsyncOpenAI(api_key="sk-caller", base_url=url)
@@ -839,6 +852,83 @@ def _read_by_the_sdk(on: _On, written: bytes) -> list[Any]:
     routes = [Route(path, answer, methods=["POST"]) for path in _SDK_PATHS]
     with _serving(Starlette(routes=routes)) as url:
         return asyncio.run(read(url))
+
+
+def _as_litellm_answers(
+    on: _On, chunks: list[Any], data: dict[str, Any]
+) -> tuple[int, str, bytes]:
+    """The status, content type and body LiteLLM's route answers the caller with, from the chunks a guardrail lets go of a stream, with the LiteLLM version installed."""
+    proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
+    processing: Any = importlib.import_module("litellm.proxy.common_request_processing")
+
+    async def answer() -> tuple[int, str, bytes]:
+        if on is _MESSAGES:
+            written = processing.ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                _chunks(chunks), _USER, data, proxy.proxy_logging_obj
+            )
+        else:
+            written = proxy.async_data_generator(_chunks(chunks), _USER, data)
+        response = await processing.create_response(written, _EVENT_STREAM, {})
+        body = getattr(response, "body", b"")
+        if hasattr(response, "body_iterator"):
+            body = b"".join(
+                [
+                    part if isinstance(part, bytes) else part.encode()
+                    async for part in response.body_iterator
+                ]
+            )
+        return response.status_code, response.headers["content-type"], body
+
+    return asyncio.run(answer())
+
+
+@pytest.mark.parametrize(
+    ("answer", "status"),
+    [
+        pytest.param(_result(_REFUSAL | {"sentinel": _FIELD}), 403, id="refused"),
+        pytest.param(
+            _result({"action": "replace", "body": "not base64!"}),
+            503,
+            id="no usable answer",
+        ),
+    ],
+)
+@pytest.mark.parametrize("on", [_MESSAGES, _CHAT], ids=["messages", "chat"])
+def test_a_refused_stream_is_answered_as_an_error_with_the_field_by_litellm(
+    monkeypatch: pytest.MonkeyPatch, on: _On, answer: Any, status: int
+) -> None:
+    data = _data(on)
+
+    with _serving(_scripted([], _result({"action": "pass"}), answer)) as url:
+        _, let_go = _exchange(_make(monkeypatch, url), on, data, True)
+    answered, content_type, body = _as_litellm_answers(on, let_go, data)
+
+    # an error of its own, as JSON, which every provider SDK reads as one
+    assert (answered, content_type) == (status, "application/json")
+    error = json.loads(body)["error"]
+    if status == 403:
+        assert error["message"] == "Not allowed."
+        assert error["provider_specific_fields"] == {"sentinel": _FIELD}
+    else:
+        assert error["message"] == _UNANSWERED[1]
+
+
+def test_a_refused_chat_stream_gives_the_sdk_the_field_as_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answers = (_result({"action": "pass"}), _result(_REFUSAL | {"sentinel": _FIELD}))
+    data = _data(_CHAT)
+
+    with _serving(_scripted([], *answers)) as url:
+        _, let_go = _exchange(_make(monkeypatch, url), _CHAT, data, True)
+    answered, content_type, body = _as_litellm_answers(_CHAT, let_go, data)
+    with pytest.raises(openai.PermissionDeniedError) as refused:
+        _read_by_the_sdk(_CHAT, body, answered, content_type)
+
+    body: Any = refused.value.body
+    assert isinstance(body, dict)
+    error = cast("dict[str, Any]", body)
+    assert error["provider_specific_fields"] == {"sentinel": _FIELD}
 
 
 def test_a_chat_stream_with_the_field_is_read_by_the_sdk_from_what_litellm_writes(
@@ -958,6 +1048,13 @@ def test_no_usable_answer_refuses_or_lets_through_as_litellm_is_set(
 
     with _serving(_scripted(calls, *answers, status=status)) as url:
         guardrail = _make(monkeypatch, url, unreachable_fallback=fallback)
+        if fallback == "fail_closed" and streamed and phase == "reply":
+            # the stream is answered with the error in place of the reply
+            _, reply = _exchange(guardrail, on, data, streamed)
+            [event] = reply
+            error = _error_event(event)
+            assert (error["code"], error["message"]) == _UNANSWERED
+            return
         if fallback == "fail_closed":
             with pytest.raises(HTTPException) as refused:
                 _exchange(guardrail, on, data, streamed)
@@ -1022,16 +1119,16 @@ def test_reply_too_large_to_hold_is_not_put_to_the_sidecar(
 
     with _serving(_scripted(calls, _result({"action": "pass"}))) as url:
         guardrail = _make(monkeypatch, url, **settings)
-        if fallback == "fail_closed":
-            with pytest.raises(HTTPException) as refused:
-                _exchange(guardrail, _MESSAGES, _data(_MESSAGES), True, let_go)
-            assert (refused.value.status_code, refused.value.detail) == _UNANSWERED
-        else:
-            _exchange(guardrail, _MESSAGES, _data(_MESSAGES), True, let_go)
+        _exchange(guardrail, _MESSAGES, _data(_MESSAGES), True, let_go)
 
     # only the request was put, and the reply went out whole or not at all
     assert len(calls) == 1
-    assert let_go == ([] if fallback == "fail_closed" else chunks)
+    if fallback == "fail_closed":
+        [event] = let_go
+        error = _error_event(event)
+        assert (error["code"], error["message"]) == _UNANSWERED
+    else:
+        assert let_go == chunks
 
 
 def test_request_on_a_route_the_guardrail_does_not_read_goes_on_unasked(
