@@ -93,6 +93,9 @@ class Rejected:
     )
     """For each rejected turn, its calls and their rejections as inspect_ai writes them in the conversation's format, by call id, so that a client that put the turn back itself can be told from one that ran its calls."""
 
+    added: bool = True
+    """Whether the turns are added to the requests that continue from the point. A run no eval names that was ended at the point, but isn't remembered as ended there, may next be sent the same request as a fresh start, so they stop being added. They are kept, so that a client that put a turn back itself is still told from one that ran its calls."""
+
 
 def occurrence(call: str, index: int) -> str:
     """A tool call told apart from others with its id: a client can use one id for calls in different turns. `index` is how many calls with the id come before it in the client's conversation, which only grows, so it stays the same on every request."""

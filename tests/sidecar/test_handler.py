@@ -1045,6 +1045,52 @@ async def test_what_the_model_is_told_of_a_rejection_is_not_judged_as_a_result()
 
 
 @protocol
+def rejects_tokyo_ends_at_oslo_and_at_any_result() -> ProtocolGroup:
+    async def before(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        city = step.call.arguments.get("location")
+        if city == "Tokyo":
+            return Decision.reject("Tokyo", message="Tokyo is not allowed.")
+        if city == "Oslo":
+            return Decision.terminate("Oslo")
+        return Decision.proceed()
+
+    async def after(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
+        return Decision.terminate("a result")
+
+    return ProtocolGroup(before, after)
+
+
+@pytest.mark.anyio
+async def test_a_rejection_put_back_is_known_after_another_conversation_is_ended() -> (
+    None
+):
+    # Two conversations of a run no eval names send the same first request.
+    # One has its turn refused whole; the other is ended at its first turn.
+    handler = Handler(rejects_tokyo_ends_at_oslo_and_at_any_result())
+    await handler.request(request("a"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+    # the first, with its rejected turn put back, as a client may do itself
+    put_back = await handler.request(request("a-again"))
+    assert isinstance(put_back, Replace)
+    await handler.request(request("b"))
+    ended = await handler.reply(reply(message(weather("Oslo", "toolu_9")), id="b"))
+
+    held = await handler.request(replace(request("c"), body=put_back.body))
+    fresh = await handler.request(request("d"))
+
+    assert isinstance(ended, Refuse) and "ended this run" in ended.message
+    # the sidecar's own rejection, not a result to judge
+    assert held == Pass()
+    assert await handler.records("c") == []
+    # the same first request again may be a fresh start, so nothing is added
+    assert fresh == Pass()
+
+
+@protocol
 def rejects_tokyo_and_reports_what_led_to_a_result() -> ProtocolGroup:
     async def before(
         context: Context, step: BeforeToolCall, escalations: Escalations

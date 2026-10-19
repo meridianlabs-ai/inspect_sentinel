@@ -451,7 +451,8 @@ class Handler:
         told = {
             rejected.sent: turns
             for rejected in continued
-            if (turns := [t for t in rejected.turns if _digest(t[0]) not in holds])
+            if rejected.added
+            and (turns := [t for t in rejected.turns if _digest(t[0]) not in holds])
         }
         # the rejections of refused turns the client put back itself
         refused = {
@@ -872,7 +873,7 @@ class Handler:
             (
                 known
                 for known in conversation.rejected
-                if (known.sent, known.mark) == (held.sent, held.mark)
+                if (known.sent, known.mark) == (held.sent, held.mark) and known.added
             ),
             None,
         )
@@ -948,15 +949,12 @@ class Handler:
         # conversation is still only how it opens, which is all another
         # conversation with the same key has too, and nothing tells them apart.
         # Other conversations with the same key go on, and still need their
-        # turns put back, so only the rejected turns where this one ended are
-        # dropped.
+        # turns put back, or told from results. So the rejected turns where
+        # this one ended are only no longer added to a request sent there.
         conversation = run.conversations.get(held.conversation)
-        if conversation is not None:
-            conversation.rejected[:] = [
-                point
-                for point in conversation.rejected
-                if (point.sent, point.mark) != (held.sent, held.mark)
-            ]
+        for point in conversation.rejected if conversation is not None else []:
+            if (point.sent, point.mark) == (held.sent, held.mark):
+                point.added = False
         return refusal
 
     def _out_of_time(self, what: str, id: str) -> TimeLimitError:
