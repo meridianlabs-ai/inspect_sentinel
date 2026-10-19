@@ -930,19 +930,31 @@ class Handler:
 
     def _end(self, held: Held, run: Run, where: str) -> Refuse:
         held.exchange.ended = True
-        for conversation in run.conversations.values():
-            conversation.rejected.clear()
-            conversation.edited.clear()
-        run.in_a_row.clear()
         refusal = Refuse(400, f"A sentinel ended this run {where}.")
+        run.in_a_row.clear()
         if held.named:
             run.refusal = refusal
-        elif held.answered:
+            # nothing of the run goes on, so nothing is put back again
+            for conversation in run.conversations.values():
+                conversation.rejected.clear()
+                conversation.edited.clear()
+            return refusal
+        if held.answered:
             run.ended_at[held.mark] = refusal
         # A run no eval names, ended before any reply in its
         # conversation was passed on, is not remembered as ended. Its
         # conversation is still only how it opens, which is all another
         # conversation with the same key has too, and nothing tells them apart.
+        # Other conversations with the same key go on, and still need their
+        # turns put back, so only the rejected turns where this one ended are
+        # dropped.
+        conversation = run.conversations.get(held.conversation)
+        if conversation is not None:
+            conversation.rejected[:] = [
+                point
+                for point in conversation.rejected
+                if (point.sent, point.mark) != (held.sent, held.mark)
+            ]
         return refusal
 
     def _out_of_time(self, what: str, id: str) -> TimeLimitError:

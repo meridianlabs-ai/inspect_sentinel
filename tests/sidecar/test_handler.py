@@ -686,6 +686,29 @@ async def test_the_calls_taken_out_are_put_back_each_with_its_own_reason() -> No
 
 
 @pytest.mark.anyio
+async def test_calls_taken_out_are_put_back_after_another_conversation_is_ended() -> (
+    None
+):
+    # Two conversations of a run no eval names, which open alike and so share
+    # it. Ending one leaves the other's turns to be put back.
+    handler = Handler(city_rule())
+    await handler.request(request("a"))
+    await handler.reply(reply(_TOKYO_PARIS_LIMA, id="a"))
+    await handler.request(request("other"))
+    ended = await handler.reply(reply(message(weather("Oslo", "toolu_9")), id="other"))
+
+    again = await handler.request(request("b", then=ran("Paris", "Sunny.", "toolu_2")))
+
+    assert isinstance(ended, Refuse) and "ended this run" in ended.message
+    assert isinstance(again, Replace)
+    assert _results(again.body) == {
+        "toolu_1": "Not Tokyo.",
+        "toolu_2": "Sunny.",
+        "toolu_3": "Not Lima.",
+    }
+
+
+@pytest.mark.anyio
 async def test_a_turn_that_cant_be_edited_is_refused_whole(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
