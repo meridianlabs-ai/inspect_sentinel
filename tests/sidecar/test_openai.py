@@ -255,6 +255,30 @@ async def test_a_chat_chunk_the_sdk_never_dispatches_is_not_read(where: str) -> 
     }
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "where",
+    ["after the choice finished", "after the next call began"],
+)
+async def test_a_chat_stream_that_changes_a_call_the_sdk_gave_as_done_is_refused(
+    where: str,
+) -> None:
+    _, body = openai_recorded("chat stream")
+    late = _chat_chunk(0, {"name": "_safe"}) + b"\n\n"
+    if where == "after the choice finished":
+        body = body.replace(_DONE, late + _DONE)
+    else:
+        lines = body.split(b"\n\n")
+        second = next(
+            position for position, line in enumerate(lines) if b'"index":1,"id"' in line
+        )
+        lines.insert(second + 1, late.rstrip(b"\n"))
+        body = b"\n\n".join(lines)
+
+    with pytest.raises(UnreadableError, match="after the SDK gave it as done"):
+        await read_reply("openai", STREAM, body)
+
+
 def _responses_stream_going_on(kind: str) -> bytes:
     # the recorded stream, then again an event of a kind it already has,
     # giving a call other arguments

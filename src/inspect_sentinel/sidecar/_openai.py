@@ -1122,10 +1122,17 @@ def _chat_stream(events: list[dict[str, Any]]) -> object:
     if any("error" in event for event in events):
         raise UnreadableError("The reply stream ended in an error from the provider.")
     state = ChatCompletionStreamState()
+    # the SDK gives a call as done once another call starts or the choice
+    # finishes, and a client may run it then, so a later chunk mustn't change it
+    done: list[Any] = []
     try:
         for event in events:
-            state.handle_chunk(
-                cast(Any, construct_type(type_=ChatCompletionChunk, value=event))
+            done.extend(
+                given
+                for given in state.handle_chunk(
+                    cast(Any, construct_type(type_=ChatCompletionChunk, value=event))
+                )
+                if given.type == "tool_calls.function.arguments.done"
             )
         snapshot = state.current_completion_snapshot
     except Exception as ex:
@@ -1137,6 +1144,13 @@ def _chat_stream(events: list[dict[str, Any]]) -> object:
         getattr(choice, "finish_reason", None) is None for choice in snapshot.choices
     ):
         raise UnreadableError("The reply stream is not a complete message.")
+    calls: list[Any] = snapshot.choices[0].message.tool_calls or []
+    for given in done:
+        function = calls[given.index].function
+        if (function.name, function.arguments) != (given.name, given.arguments):
+            raise UnreadableError(
+                "The reply stream changes a call after the SDK gave it as done."
+            )
     return cast(object, snapshot)
 
 
