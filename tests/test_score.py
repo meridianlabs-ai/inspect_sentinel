@@ -16,11 +16,9 @@ from inspect_ai.tool import ToolCall
 from inspect_ai.util import Store
 
 from inspect_sentinel import (
-    Decision,
     Excerpt,
     Host,
     Observation,
-    Reported,
     Step,
     keep_agent_messages,
     last_turns,
@@ -420,6 +418,12 @@ async def test_the_model_is_offered_only_the_answer_tool_one_call_at_a_time() ->
             "'polcy', which is not a variable",
         ),
         ("Safe?", {"template_variables": {"task": "mine"}}, "'task'"),
+        # a monitor never sees escalations, so no template can show them
+        (
+            "Safe?",
+            {"template": "{{ escalations }}{{ step }}{{ answer_format }}"},
+            "'escalations', which is not a variable",
+        ),
         ("Safe?", {"retry_refusals": -1}, "retry_refusals >= 0"),
         ({}, {}, "at least one dimension"),
         ({"explanation": "Why?", "risk": "Risky?"}, {}, "'explanation'"),
@@ -453,47 +457,12 @@ async def test_a_template_reads_its_own_variables_and_the_eval() -> None:
     assert prompt(host).startswith("bash;python; /work t\n")
 
 
-def escalated() -> Step:
-    return replace(
-        before_tool_call("bash", cmd="rm -rf /etc"),
-        escalations=(
-            Reported(
-                name="rules",
-                path="rules",
-                report=Decision.escalate("rm outside /work"),
-                function="check",
-            ),
-            Reported(
-                name="llm",
-                path="llm",
-                report=Decision.escalate(),
-                function="check",
-            ),
-        ),
-    )
-
-
-# the escalations reach the prompt from an excerpt too
-@pytest.mark.parametrize("windowed", [False, True])
-@pytest.mark.anyio
-async def test_earlier_escalations_are_shown_after_the_task(windowed: bool) -> None:
-    host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
-    step = escalated()
-    await score(host, last_turns(step, 3) if windowed else step, "Safe?")
-    n = nonce(host)
-    assert (
-        f"[END TASK ({n})]\n\n[BEGIN ESCALATIONS ({n})]\n- rules: rm outside /work\n- llm\n[END ESCALATIONS ({n})]\n\n[AGENT STEP - BEGIN TOOL CALL ({n})]"
-        in prompt(host)
-    )
-
-
 @pytest.mark.anyio
 async def test_the_default_template_leaves_out_what_is_not_given() -> None:
     host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
     await score(host, before_tool_call("bash", cmd="ls"), "Safe?")
     assert "[BEGIN POLICY" not in prompt(host)
     assert "[BEGIN TASK" not in prompt(host)
-    assert "[BEGIN ESCALATIONS" not in prompt(host)
     # no gap where they would have been
     assert "\n\n\n" not in prompt(host).split("[AGENT STEP - BEGIN TOOL CALL")[0]
 

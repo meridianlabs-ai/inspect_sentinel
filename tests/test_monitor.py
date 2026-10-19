@@ -20,7 +20,7 @@ from inspect_sentinel._decorators import (
     step_types,
 )
 from inspect_sentinel._protocols import concurrent
-from inspect_sentinel._report import Decision, Observation
+from inspect_sentinel._report import Decision, Escalations, Observation
 from inspect_sentinel._runner import (
     run_monitors,
     run_sentinel,
@@ -59,7 +59,9 @@ def after_monitor() -> Monitor:
 
 @protocol
 def any_stage_protocol() -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         return None
 
     return decide
@@ -67,7 +69,11 @@ def any_stage_protocol() -> Protocol:
 
 @protocol
 def no_curl() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         if "curl" in str(step.call.arguments):
             return Decision.reject("network access is not allowed")
         return None
@@ -165,7 +171,9 @@ def test_monitor_returning_decisions_is_rejected_at_configuration() -> None:
 
 def test_protocol_returning_observations_is_rejected_at_configuration() -> None:
     async def observes_not_decides(
-        context: Context, step: BeforeToolCall
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
     ) -> Observation | None:
         return None
 
@@ -244,6 +252,59 @@ def test_keyword_only_step_is_rejected_at_configuration() -> None:
         wrong()
 
 
+async def _two_parameters(
+    context: Context, step: BeforeToolCall
+) -> Observation | Decision | None:
+    return None
+
+
+async def _three_parameters(
+    context: Context,
+    step: BeforeToolCall,
+    escalations: Escalations,
+) -> Observation | Decision | None:
+    return None
+
+
+async def _keyword_only_escalations(
+    context: Context,
+    step: BeforeToolCall,
+    *,
+    escalations: Escalations,
+) -> Decision | None:
+    return None
+
+
+@pytest.mark.parametrize(
+    ("kind", "function", "message"),
+    [
+        (
+            "protocol",
+            _two_parameters,
+            r"A protocol takes exactly \(context, step, escalations\)",
+        ),
+        ("monitor", _three_parameters, r"A monitor takes exactly \(context, step\);"),
+        (
+            "protocol",
+            _keyword_only_escalations,
+            r"A protocol takes \(context, step, escalations\) as positional",
+        ),
+    ],
+)
+def test_a_protocol_takes_escalations_and_a_monitor_does_not(
+    kind: RegistryType, function: Callable[..., Any], message: str
+) -> None:
+    def factory() -> Any:
+        return function
+
+    # a name is one kind, and other tests register a monitor `factory`
+    factory.__name__ = f"{kind}_factory"
+    decorate = monitor if kind == "monitor" else protocol
+    wrong = decorate(factory)
+    with pytest.raises(TypeError, match=message):
+        wrong()
+
+
 def test_monitor_annotating_step_is_rejected_at_configuration() -> None:
     async def every_stage(context: Context, step: Step) -> Observation | None:
         return None
@@ -307,6 +368,7 @@ def test_protocol_annotating_every_stage_explicitly_is_step() -> None:
         async def decide(
             context: Context,
             step: BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall,
+            escalations: Escalations,
         ) -> Decision | None:
             return None
 
@@ -384,7 +446,9 @@ async def _unannotated(context: Context, step: Any) -> Observation | None:
 _unannotated.__annotations__.pop("step")
 
 
-async def _decide(context: Context, step: Step) -> Decision | None:
+async def _decide(
+    context: Context, step: Step, escalations: Escalations
+) -> Decision | None:
     return None
 
 
@@ -441,10 +505,18 @@ def configured_monitor() -> Monitor:
 
 @protocol()
 def bare_call_protocol() -> ProtocolGroup:
-    async def first(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def first(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return None
 
-    async def second(context: Context, step: AfterToolCall) -> Decision | None:
+    async def second(
+        context: Context,
+        step: AfterToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return None
 
     return ProtocolGroup(first, second)
@@ -493,7 +565,11 @@ def test_a_parameter_cannot_be_named_for_an_entry_key(param: str) -> None:
 def test_variadic_parameters_may_use_an_entry_key() -> None:
     @protocol
     def variadic_keys(*name: object, **params: object) -> Protocol:
-        async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+        async def decide(
+            context: Context,
+            step: BeforeToolCall,
+            escalations: Escalations,
+        ) -> Decision | None:
             return None
 
         return decide
@@ -521,7 +597,11 @@ def watched() -> Monitor:
 
 @protocol
 def calls_directly(child: Monitor) -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         await cast(Callable[..., Any], child)(context, step)
         return None
 
@@ -530,7 +610,11 @@ def calls_directly(child: Monitor) -> Protocol:
 
 @protocol
 def calls_through_runner(child: Monitor) -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         observations = await run_monitors(child, context, step)
         return Decision.reject() if observations.max_suspicion() else None
 
@@ -554,12 +638,14 @@ async def test_a_call_through_the_runner_during_a_run_is_allowed() -> None:
 @pytest.mark.anyio
 async def test_a_direct_call_outside_a_run_is_allowed() -> None:
     decide = cast(Callable[..., Any], calls_directly(watched()))
-    assert await decide(host_context().context, before_step()) is None
+    assert await decide(host_context().context, before_step(), ()) is None
 
 
 def test_a_monitor_and_a_protocol_cannot_share_a_name() -> None:
     def factory() -> Protocol:
-        async def decide(context: Context, step: Step) -> Decision | None:
+        async def decide(
+            context: Context, step: Step, escalations: Escalations
+        ) -> Decision | None:
             return None
 
         return decide

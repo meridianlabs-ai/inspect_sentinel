@@ -9,7 +9,7 @@ from inspect_ai.util import StoreModel
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision
+from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import AfterToolCall, BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol, ProtocolGroup
 from inspect_sentinel.sidecar import (
@@ -517,7 +517,9 @@ async def test_result_is_judged(api: str, result: str, expected: Pass | Refuse) 
 
 @protocol
 def reports_tools() -> Protocol:
-    async def decide(context: Context, step: BeforeGenerate) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
         return Decision.proceed(
             f"{[tool.name for tool in step.tools]}|{step.config.max_tokens}"
         )
@@ -671,12 +673,16 @@ async def test_a_chat_custom_tool_makes_the_request_unreadable() -> None:
 
 @protocol
 def rejects_tokyo_and_ends_at_any_result() -> ProtocolGroup:
-    async def before(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def before(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.arguments.get("location") == "Tokyo":
             return Decision.reject("Tokyo", message="Tokyo is not allowed.")
         return Decision.proceed()
 
-    async def after(context: Context, step: AfterToolCall) -> Decision | None:
+    async def after(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.terminate("a result")
 
     return ProtocolGroup(before, after)
@@ -737,7 +743,9 @@ class _Asked(StoreModel):
 
 @protocol
 def one_request_a_run() -> Protocol:
-    async def decide(context: Context, step: BeforeGenerate) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
         asked = context.store_as(_Asked)
         asked.requests += 1
         if asked.requests > 1:
@@ -1034,7 +1042,9 @@ async def test_audio_from_the_user_is_read() -> None:
 
 @protocol
 def rejects_the_computer() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.reject("clicks", message="Clicking is not allowed.")
 
     return decide
@@ -1255,7 +1265,9 @@ async def test_a_refusal_that_is_not_merged_is_read() -> None:
 
 @protocol
 def ends_at_a_custom_result() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.type == "custom":
             return Decision.terminate("a custom tool")
         return Decision.proceed()
@@ -1318,7 +1330,9 @@ class _Results(StoreModel):
 
 @protocol
 def ends_at_a_second_result() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         results = context.store_as(_Results)
         results.judged += 1
         if results.judged > 1:
@@ -1388,7 +1402,9 @@ async def test_a_result_beside_a_changed_refusal_is_new() -> None:
 
 @protocol
 def ends_at_a_storm_the_model_mentions() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         if "storm" in step.message:
             return Decision.terminate("a storm")
         return Decision.proceed()
@@ -1696,7 +1712,9 @@ async def test_two_calls_that_share_an_id_and_a_result_are_each_judged() -> None
 
 @protocol
 def notes_what_the_model_was_sent() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         sent = step.input
         return Decision.proceed("None" if sent is None else str(len(sent)))
 
@@ -1819,7 +1837,9 @@ async def test_a_conversation_that_lost_calls_with_a_shared_id_is_unreadable() -
 
 @protocol
 def notes_each_result() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.proceed(step.call.id)
 
     return decide
@@ -1866,7 +1886,9 @@ class _Calls(StoreModel):
 
 @protocol
 def ends_at_a_second_result_of_call_1() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         calls = context.store_as(_Calls)
         judged = calls.judged | {step.call.id: calls.judged.get(step.call.id, 0) + 1}
         calls.judged = judged

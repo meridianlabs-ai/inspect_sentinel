@@ -26,7 +26,7 @@ class HumanDecision:
     """The tool calls the decision covered: the step's call at a tool stage, and every call the turn makes at `model_output`. How a prompt says which calls a person approved. Empty for a review of a turn with no tool calls, which has no stable key to annotate by: `step_id` is then the turn's message id, which is not stable across scaffolds that copy or rebuild their messages."""
 
     decided: Reported[Decision]
-    """The `human()` instance that asked (`name`, `path`, `function`) and a detached copy of its decision, which carries nothing of the step it was made at beyond its own fields: `approve` is a `proceed`, with no explanation, and on a `reject` or `terminate` the person's reason is the `explanation` (and, for a `reject`, the `message`). The reason is untrusted text, which can quote the agent, so quote it when rendering it into a prompt.
+    """The `human()` instance that asked (`name`, `path`, `function`) and a detached copy of its decision, which carries nothing of the step it was made at beyond its own fields: `approve` is a `proceed`, and the person's reason is the `explanation` (and, for a `reject`, the `message`). The reason is untrusted text, which can quote the agent, so quote it when rendering it into a prompt.
 
     It is what the person decided, not what happened to the step: beside other protocols in a `concurrent()`, a peer's `reject` outranks the person's `approve`, so a call a person approved may not have run. Mark only calls that ran, which have a result without an error in the history (a call rejected before it ran also gets a tool message, with an `approval` error, so a tool message alone does not prove the call ran).
 
@@ -70,9 +70,6 @@ class BeforeGenerate:
     config: GenerateConfig
     """The generation configuration the model is sent, with the task's and the model's settings merged in. In-process this is the host's own object; monitors must not mutate it."""
 
-    escalations: tuple[Reported[Decision], ...] = ()
-    """Earlier links' escalations, when this step is inside a `sequential` composition."""
-
 
 @dataclass(frozen=True)
 class AfterGenerate:
@@ -112,9 +109,6 @@ class AfterGenerate:
 
     output: ModelOutput
     """What the model returned; the first choice's message is what the agent receives. Some providers return an output with no choices, so check `output.choices` before reading `output.message`. In-process this is the host's own output, which the agent receives; monitors must not mutate it."""
-
-    escalations: tuple[Reported[Decision], ...] = ()
-    """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
 
 @dataclass(frozen=True)
@@ -158,9 +152,6 @@ class BeforeToolCall:
     )
     """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, for annotating the past calls a person already reviewed when rendering the conversation, so a monitor does not flag them again; `human_decision_for()` finds the one covering a call. Not a standing permission: mark the exact call, and never lower suspicion of a new call that resembles an approved one (see `HumanDecision`). A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. A prompt the person cancelled or closed without choosing is recorded as the surface's fail-closed answer, with an explanation that says so; render it, never as the person's judgment. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
-    escalations: tuple[Reported[Decision], ...] = ()
-    """Earlier links' escalations, when this step is inside a `sequential` composition."""
-
     tools: list[ToolInfo] | None = None
     """The tool definitions offered to the model call that produced the call, as the transcript's `ModelEvent` recorded them, after any model hooks (so they can differ from that call's `AfterGenerate.tools` when a hook changed them): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""
 
@@ -200,9 +191,6 @@ class AfterToolCall:
         default=None, kw_only=True
     )
     """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, for annotating the past calls a person already reviewed when rendering the conversation, so a monitor does not flag them again; `human_decision_for()` finds the one covering a call. Not a standing permission: mark the exact call, and never lower suspicion of a new call that resembles an approved one (see `HumanDecision`). A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. A prompt the person cancelled or closed without choosing is recorded as the surface's fail-closed answer, with an explanation that says so; render it, never as the person's judgment. `()` when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
-
-    escalations: tuple[Reported[Decision], ...] = ()
-    """Earlier links' escalations, when this step is inside a `sequential` composition."""
 
     tools: list[ToolInfo] | None = None
     """The tool definitions offered to the model call that produced the call, as the transcript's `ModelEvent` recorded them, after any model hooks (so they can differ from that call's `AfterGenerate.tools` when a hook changed them): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""

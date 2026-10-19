@@ -6,7 +6,7 @@ import pytest
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision
+from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import (
     AfterGenerate,
     AfterToolCall,
@@ -42,7 +42,9 @@ _TOOLS = [
 def at(stage: str, action: str = "terminate") -> Protocol:
     """Decide `action` at every step of one stage."""
 
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         if type(step).__name__ != stage:
             return Decision.proceed()
         return Decision(action=cast(Any, action), explanation=stage)
@@ -96,7 +98,9 @@ async def test_reject_at_a_generate_stage_is_a_failing_protocol(stage: str) -> N
 
 @protocol
 def reports_generates() -> Protocol:
-    async def before(context: Context, step: BeforeGenerate) -> Decision | None:
+    async def before(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
         return Decision.proceed(
             "|".join(
                 [
@@ -116,7 +120,9 @@ def reports_generates() -> Protocol:
 
 @protocol
 def reports_outputs() -> Protocol:
-    async def after(context: Context, step: AfterGenerate) -> Decision | None:
+    async def after(
+        context: Context, step: AfterGenerate, escalations: Escalations
+    ) -> Decision | None:
         return Decision.proceed(
             f"{_roles(step.input)}|{[tool.name for tool in step.tools]}|{step.output.message.text}"
         )
@@ -202,7 +208,9 @@ _LOOKING = {"type": "text", "text": "Looking."}
 
 @protocol
 def reports_histories() -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         call = step.call.id if isinstance(step, BeforeToolCall | AfterToolCall) else "-"
         lists = [step.agent_messages, step.history]
         texts = [None if m is None else [message.text for message in m] for m in lists]
@@ -231,7 +239,9 @@ async def test_no_step_is_given_the_agent_messages_or_the_history() -> None:
 
 @protocol
 def reports_views() -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         if not isinstance(step, BeforeToolCall | AfterToolCall):
             return None
         view = step.view.call

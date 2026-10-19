@@ -11,7 +11,7 @@ import pytest
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision
+from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler
@@ -157,7 +157,9 @@ async def test_body_is_read_in_the_format_the_proxy_names() -> None:
 
 @protocol
 def reports_the_conversation() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.reject("run", message=step.conversation)
 
     return decide
@@ -295,7 +297,9 @@ async def test_call_that_does_not_fit_is_an_error(
 
 @protocol
 def never_finishes() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         await anyio.sleep_forever()
         return None
 
