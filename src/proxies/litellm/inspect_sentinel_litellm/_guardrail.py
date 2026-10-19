@@ -111,7 +111,37 @@ _NOT_SHOWN = frozenset(
 _JSON = "application/json"
 _LINE_END = re.compile(r"\r\n|\r|\n")
 _STREAM = "text/event-stream"
-_EXTRA_BODY = "A request with an `extra_body` field can't be judged, so it is refused."
+# A request's own fields that LiteLLM rewrites the request from after this
+# guardrail has run, so that the provider would be sent what the sidecar
+# never judged. The provider's SDK merges `extra_body` over the request's
+# other fields. LiteLLM's `completion()` inserts the continue messages, loads a
+# stored prompt for the prompt fields, adds `litellm_system_prompt`, writes a
+# custom prompt template from the template fields, and folds the system
+# message into a user message when told the model has none. A client that
+# calls through a provider's SDK sends none of them: the SDK merges its own
+# `extra_body` before sending.
+_REWRITTEN_FROM = frozenset(
+    {
+        "extra_body",
+        "ensure_alternating_roles",
+        "user_continue_message",
+        "assistant_continue_message",
+        "prompt_id",
+        "prompt_variables",
+        "prompt_label",
+        "prompt_version",
+        "prompt_environment",
+        "langfuse_prompt_version",
+        "litellm_system_prompt",
+        "roles",
+        "initial_prompt_value",
+        "final_prompt_value",
+        "bos_token",
+        "eos_token",
+        "custom_prompt_dict",
+        "supports_system_message",
+    }
+)
 # the code a failed Responses stream gives for each status of a refusal, as
 # LiteLLM's own failed event gives them; any other client error is an
 # invalid request, and only a server error is one a client tries again
@@ -204,20 +234,25 @@ class LiteLLMGuardrail(CustomGuardrail):
         """Put a request to the sidecar. LiteLLM sends on `data`, which is changed in place when the sidecar replaces the request.
 
         Raises:
-            HTTPException: The request is refused, by the sidecar or because it sets `extra_body`, or the sidecar gave no usable answer and `unreachable_fallback` is `fail_closed`. LiteLLM answers the caller with it in the error format of the route.
+            HTTPException: The request is refused, by the sidecar or because it sets a field LiteLLM rewrites it from, such as `extra_body`, or the sidecar gave no usable answer and `unreachable_fallback` is `fail_closed`. LiteLLM answers the caller with it in the error format of the route.
         """
         _withhold_inspect_headers(data)
         api = _APIS.get(call_type)
         if api is None:
             return data
-        if data.get("extra_body"):
-            # LiteLLM has the provider's SDK merge `extra_body` over the
-            # request's own fields after this, so what the sidecar judged
-            # would not be what the provider is sent. A provider's SDK merges
-            # its own `extra_body` before sending, so a client calling through
-            # one never sends this field. Refused whatever
-            # `unreachable_fallback` says, since nothing could judge it.
-            raise HTTPException(400, _EXTRA_BODY)
+        rewritten = sorted(
+            # `False` counts, as `supports_system_message: false` is one
+            name
+            for name in _REWRITTEN_FROM
+            if data.get(name) not in (None, "", {}, [])
+        )
+        if rewritten:
+            # Refused whatever `unreachable_fallback` says, since nothing could
+            # judge what the provider would be sent
+            named = ", ".join(f"`{name}`" for name in rewritten)
+            raise HTTPException(
+                400, f"A request that sets {named} can't be judged, so it is refused."
+            )
         try:
             record = _record(data)
             sent = _body(data, record)

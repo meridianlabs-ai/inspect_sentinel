@@ -608,6 +608,59 @@ def test_a_request_that_sets_extra_body_is_refused_unasked(
     assert calls == []
 
 
+# a value LiteLLM would rewrite the request from, for each such field
+_REWRITING: dict[str, Any] = {
+    "extra_body": {"messages": [{"role": "user", "content": "Other."}]},
+    "ensure_alternating_roles": True,
+    "user_continue_message": {"role": "user", "content": "Other."},
+    "assistant_continue_message": {"role": "assistant", "content": "Other."},
+    "prompt_id": "a-stored-prompt",
+    "prompt_variables": {"city": "Tokyo"},
+    "prompt_label": "production",
+    "prompt_version": 2,
+    "prompt_environment": "production",
+    "langfuse_prompt_version": 2,
+    "litellm_system_prompt": "Other.",
+    "roles": {"user": {"pre_message": "Other."}},
+    "initial_prompt_value": "Other.",
+    "final_prompt_value": "Other.",
+    "bos_token": "Other.",
+    "eos_token": "Other.",
+    "custom_prompt_dict": {"a-model": {"roles": {}}},
+    "supports_system_message": False,
+}
+
+
+def test_every_field_litellm_rewrites_a_request_from_is_tested() -> None:
+    from inspect_sentinel_litellm import _guardrail
+
+    assert set(_REWRITING) == _guardrail._REWRITTEN_FROM  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize("fallback", ["fail_closed", "fail_open"])
+@pytest.mark.parametrize("name", sorted(_REWRITING))
+def test_a_request_that_sets_a_field_litellm_rewrites_it_from_is_refused_unasked(
+    monkeypatch: pytest.MonkeyPatch, name: str, fallback: str
+) -> None:
+    calls: list[Any] = []
+    data = _data(_CHAT)
+    data[name] = _REWRITING[name]
+
+    # refused, even where LiteLLM is set to let through what wasn't judged
+    with _serving(_scripted(calls)) as url:
+        with pytest.raises(HTTPException) as refused:
+            _exchange(
+                _make(monkeypatch, url, unreachable_fallback=fallback),
+                _CHAT,
+                data,
+                False,
+            )
+
+    assert refused.value.status_code == 400
+    assert f"`{name}`" in str(refused.value.detail)
+    assert calls == []
+
+
 def test_a_request_with_an_empty_extra_body_is_asked_about(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

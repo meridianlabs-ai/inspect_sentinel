@@ -44,7 +44,7 @@ from inspect_sentinel_litellm import LiteLLMGuardrail as LiteLLMGuardrail
 
 Requests to LiteLLM's `/v1/messages`, `/chat/completions` and `/responses` routes, and their replies, streamed or not. A request to another route goes on unread.
 
-A request on those routes with an `extra_body` field is refused, whatever `unreachable_fallback` says, because LiteLLM merges that field over the request after the sidecar has judged it. A client that calls through a provider's SDK never sends one: the SDK merges its own `extra_body` into the request before sending it.
+A request on those routes is refused, whatever `unreachable_fallback` says, when it sets a field that LiteLLM rewrites the request from after the sidecar has judged it, since the provider would be sent something the sidecar never saw. These are `extra_body`, which the provider's SDK merges over the request; `ensure_alternating_roles` and the continue messages it inserts; the fields that load a stored prompt, such as `prompt_id`; `litellm_system_prompt`; the custom prompt template fields, such as `roles` and `final_prompt_value`; and `supports_system_message`. A client that calls through a provider's SDK sends none of them: the SDK merges its own `extra_body` into the request before sending it. A deployment that relies on LiteLLM's prompt management can't use it through the guardrail.
 
 A streamed reply is held whole until the sidecar has answered, so a reply that is refused is refused before any of it has gone out.
 
