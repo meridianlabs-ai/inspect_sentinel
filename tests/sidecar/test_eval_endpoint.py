@@ -439,17 +439,30 @@ async def test_a_run_its_eval_ended_is_dropped_and_refused_from_then_on() -> Non
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("method", ["request_result", "run_result"])
-async def test_results_can_be_withheld(method: str) -> None:
-    params = {"id": "irid-1"} if method == "request_result" else {"run": "sample_123"}
-
+async def test_results_can_be_withheld() -> None:
     async with _client(Handler(weather_rule()), results=False) as client:
-        withheld = await _call(client, method, params)
+        withheld = await _call(client, "run_result", {"run": "sample_123"})
         registered = await _call(client, "register_task", _REGISTRATION)
 
     assert withheld["error"]["code"] == METHOD_NOT_FOUND
     assert "doesn't send results" in withheld["error"]["message"]
     assert "result" in registered
+
+
+@pytest.mark.anyio
+async def test_a_refused_turn_is_told_without_the_results() -> None:
+    # how an eval whose proxy dropped the `sentinel` field learns of it
+    handler = Handler(weather_rule("reject", "Tokyo"))
+    await handler.request(_asked("x"))
+    await handler.reply(reply(_message("Tokyo")))
+
+    async with _client(handler, results=False) as client:
+        answered = await _call(client, "request_result", {"id": "irid-1"})
+
+    result = answered["result"]
+    assert (result["outcome"], result["message"]) == ("reject", "Tokyo is not allowed.")
+    assert result["withheld"] is not None
+    assert "recorded" not in result
 
 
 @pytest.mark.anyio

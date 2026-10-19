@@ -145,7 +145,7 @@ _METHODS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "end_run": (EndRunParams, EndRunResult),
 }
 
-_RESULTS = frozenset({"request_result", "run_result"})
+_RESULTS = frozenset({"run_result"})
 
 _ERRORS: dict[int, tuple[str, str]] = {
     REGISTRATION_REFUSED: (
@@ -174,7 +174,7 @@ def eval_routes(
         handler: The handler the proxy's requests and replies are put to.
         max_body_bytes: The largest call that is read.
         token: A credential every call to the methods must present as a bearer token, when the endpoint has a port of its own. None where it shares the proxy's port and access control.
-        results: Whether `request_result` and `run_result` are served. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off.
+        results: Whether the results are sent: `run_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited when its proxy didn't pass on the `sentinel` field.
     """
 
     async def info(http: HttpRequest) -> Response:
@@ -204,7 +204,7 @@ def eval_routes(
                     METHOD_NOT_FOUND,
                     f"This sidecar doesn't send results, so there is no method {asked.method!r}.",
                 )
-            result = await _answer(handler, asked.method, asked.params)
+            result = await _answer(handler, asked.method, asked.params, results)
         except RpcError as ex:
             return failed(id, ex)
         return answered(id, result)
@@ -215,7 +215,9 @@ def eval_routes(
     ]
 
 
-async def _answer(handler: Handler, method: str, params: dict[str, Any]) -> BaseModel:
+async def _answer(
+    handler: Handler, method: str, params: dict[str, Any], results: bool = True
+) -> BaseModel:
     if method not in _METHODS:
         raise RpcError(METHOD_NOT_FOUND, f"There is no method {method!r}.")
     try:
@@ -249,7 +251,9 @@ async def _answer(handler: Handler, method: str, params: dict[str, Any]) -> Base
             reason=latest.reason,
             outcome=latest.outcome,
             message=latest.message,
-            recorded=[record_json(record) for record in found.records],
+            recorded=(
+                [record_json(record) for record in found.records] if results else None
+            ),
             withheld=(
                 withheld_turn(latest.withheld) if latest.withheld is not None else None
             ),
