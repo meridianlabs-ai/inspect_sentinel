@@ -32,6 +32,24 @@ from ._wire import UnreadableError
 _EVERY_PROVIDER: dict[str, Any] = {}
 
 
+VIEWED_TOOLS = frozenset(
+    {
+        "agent_cancel",
+        "agent_list",
+        "agent_status",
+        "agent_wait",
+        "bash",
+        "code_execution",
+        "python",
+        "think",
+    }
+)
+"""The names of inspect_ai's own tools whose factory gives them a viewer.
+
+A call is taken for one of inspect_ai's tools by the name the model sees, which the client chooses, so only these names are looked up. Looking up any other would make the sidecar build a tool of the client's choosing, and keep what it found for every name it is sent.
+"""
+
+
 def tool_call_view(call: ToolCall, tool: str | None = None) -> ToolCallView:
     """The view Inspect makes of a call: the tool's own, or the default view.
 
@@ -53,7 +71,7 @@ def tool_call_view(call: ToolCall, tool: str | None = None) -> ToolCallView:
     return default_tool_call_viewer(call)
 
 
-@functools.cache
+@functools.lru_cache(maxsize=256)
 def _viewer(tool: str) -> ToolCallViewer | None:
     # A tool's viewer is attached when its factory is called, so the tool is
     # made once, with no arguments. One that needs some has the default view.

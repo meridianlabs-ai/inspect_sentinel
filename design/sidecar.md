@@ -848,7 +848,7 @@ A step at a tool call has a `view`: how Inspect presents the call to a person, s
 | in the tasks folder, with the task's package installed beside the sentinel | each tool's own view, its own viewer included: the tool the file's `tools` names, otherwise inspect_ai's own tool of that name. A request names neither the tool's package nor the task's, so a tool of the task's own is found only through `tools` |
 | registered by Inspect at task init, or not registered | the viewers of inspect_ai's own tools, such as `bash` and `python`, matched by the tool's bare name, and the default view for every other tool. A viewer is code, so it cannot be sent at registration |
 
-A request names a tool only by the name the model sees. So a custom tool called `bash` is given the viewer of inspect_ai's own `bash`, unless the task's file maps the name to the custom tool. A tool made while the eval runs, such as one reached over MCP, has no registry entry and gets the default view.
+A request names a tool only by the name the model sees. So a custom tool called `bash` is given the viewer of inspect_ai's own `bash`, unless the task's file maps the name to the custom tool. A tool made while the eval runs, such as one reached over MCP, has no registry entry and gets the default view. The name the model sees is chosen by the client, so it is matched only against the inspect_ai tools that have a viewer (`bash`, `python`, `code_execution`, `think` and the `agent_*` tools), and the sidecar never makes a tool by any other name the client sends. A test keeps that list the same as the inspect_ai tools that have a viewer.
 
 ### What comes back to the eval
 

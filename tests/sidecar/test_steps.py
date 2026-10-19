@@ -391,6 +391,46 @@ async def test_a_call_to_another_tool_is_given_the_default_view() -> None:
     assert "run_shell" in view and "ls -la" in view
 
 
+def test_the_tools_looked_up_by_name_are_inspect_ais_with_viewers() -> None:
+    # every tool inspect_ai registers, made as the sidecar makes one, to find
+    # which have a viewer
+    from inspect_ai._util.registry import registry_find
+    from inspect_ai.tool._tool import TOOL_VIEWER
+
+    from inspect_sentinel.sidecar._inspect_ai import VIEWED_TOOLS
+
+    viewed: set[str] = set()
+    for factory in registry_find(
+        lambda info: info.type == "tool" and info.name.startswith("inspect_ai/")
+    ):
+        try:
+            made = cast(Any, factory)()
+            viewer = registry_info(made).metadata.get(TOOL_VIEWER)
+        except Exception:
+            continue
+        if callable(viewer):
+            viewed.add(registry_info(made).name.removeprefix("inspect_ai/"))
+
+    assert viewed == VIEWED_TOOLS
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("name", ["web_browser_go", "made_up_1", "made_up_2"])
+async def test_a_call_to_a_tool_without_a_viewer_doesnt_look_one_up(
+    name: str,
+) -> None:
+    # The name is the client's, so the sidecar builds no tool by it, and keeps
+    # nothing for it.
+    from inspect_sentinel.sidecar._inspect_ai import _viewer
+
+    before = _viewer.cache_info()
+
+    view = await _view(Handler(reports_views()), name)
+
+    assert name in view
+    assert _viewer.cache_info() == before
+
+
 def _task(tools: dict[str, str]) -> dict[str, FileTask]:
     return {
         "philadelphia": FileTask.model_validate(

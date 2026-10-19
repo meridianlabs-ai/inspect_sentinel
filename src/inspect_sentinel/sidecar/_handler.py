@@ -30,7 +30,7 @@ from .._step import (
 from .._types import Sentinels
 from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request
 from ._host import Record, RunHost, SidecarHost, stage
-from ._inspect_ai import tool_call_view
+from ._inspect_ai import VIEWED_TOOLS, tool_call_view
 from ._inspect_client import (
     Exchange,
     Judged,
@@ -374,10 +374,12 @@ class Handler:
     def _view(self, call: ToolCall, run: Run) -> ToolCallView:
         # A request names a tool only by the name the model sees. A task
         # registered beforehand can name the tool that is; otherwise the name
-        # is taken for inspect_ai's own tool of that name, if there is one.
+        # is taken for inspect_ai's own tool of that name, if it has a viewer.
         task = self._tasks.get(run.eval.task) if run.eval is not None else None
         tool = task.tools.get(call.function) if task is not None else None
-        return tool_call_view(call, tool or f"inspect_ai/{call.function}")
+        if tool is None and call.function in VIEWED_TOOLS:
+            tool = f"inspect_ai/{call.function}"
+        return tool_call_view(call, tool)
 
     async def _eval(self, sample: InspectSample) -> EvalContext | None:
         # the sample a request names, from the task's registration; asking
