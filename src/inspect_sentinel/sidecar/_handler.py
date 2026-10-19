@@ -458,6 +458,14 @@ class Handler:
             for turn in conversation.edited
             if turn.sent < len(marks) and marks[turn.sent] == turn.mark
         ]
+        # A request that holds a call of an edited turn, which isn't held where
+        # the turn was made, as when a client rewrote earlier entries of its
+        # conversation, can't be matched with the edit: its results would be
+        # judged as of a call that didn't run.
+        if _edit_lost(run, edited, client):
+            raise UnreadableError(
+                "The request holds a call this sidecar changed or took out, after earlier entries of its conversation changed, so which call ran can't be told."
+            )
         amended = await amend_request(
             request.provider,
             request.body,
@@ -967,6 +975,23 @@ def _digest(message: ChatMessage) -> str:
             [message.role, message.text, calls, result], sort_keys=True, default=str
         ).encode()
     ).hexdigest()
+
+
+def _edit_lost(
+    run: Run, edited: Sequence[Edited], messages: Sequence[ChatMessage]
+) -> bool:
+    # whether the messages hold a call id of an edited turn of the run that
+    # isn't among those the request continues from
+    ids = set(_calls(messages)) | {
+        message.tool_call_id
+        for message in messages
+        if isinstance(message, ChatMessageTool) and message.tool_call_id is not None
+    }
+    return any(
+        turn not in edited and ids.intersection(turn.order)
+        for conversation in run.conversations.values()
+        for turn in conversation.edited
+    )
 
 
 def _calls(messages: Sequence[ChatMessage]) -> dict[str, int]:

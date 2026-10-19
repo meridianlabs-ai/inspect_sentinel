@@ -150,6 +150,34 @@ async def test_a_changed_call_goes_back_as_the_model_proposed_it() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("rewritten", ["the opening", "an earlier result"])
+async def test_a_changed_call_held_after_earlier_entries_changed_is_unreadable(
+    rewritten: str,
+) -> None:
+    handler = Handler(weather_rule("modify", "Tokyo"))
+    # a run an eval names, so that a rewritten opening stays in it; a run no
+    # eval names is told by its opening, and one that opens anew is another
+    sample = "sample-uuid"
+    await handler.request(request("a", sample=sample))
+    await handler.reply(reply(message(weather("Paris", "toolu_0")), id="a"))
+    await handler.request(
+        request("b", then=ran("Paris", "Sunny.", "toolu_0"), sample=sample)
+    )
+    await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="b"))
+    # the client rewrote an entry before the changed call, as a compaction
+    # may, and kept the call as it ran
+    opening = (
+        "Earlier: weather." if rewritten == "the opening" else "What is the weather?"
+    )
+    said = "Sunny." if rewritten == "the opening" else "(summarised)"
+    then = [*ran("Paris", said, "toolu_0"), *ran("Oslo", "Rain.", "toolu_1")]
+
+    # its result can't be told to be the changed call's, so isn't judged
+    with pytest.raises(UnreadableError, match="which call ran"):
+        await handler.request(request("c", opening, then=then, sample=sample))
+
+
+@pytest.mark.anyio
 async def test_a_change_that_cant_be_made_is_not_judged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
