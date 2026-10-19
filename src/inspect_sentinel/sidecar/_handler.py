@@ -304,7 +304,7 @@ class Handler:
         Returns:
             The run's outcome and store, or None if nothing is kept for it.
         """
-        kept = await self._state.existing_run(run)
+        kept = await self._state.existing_run(_run_key(True, run))
         if kept is None:
             return None
         return RunResult(
@@ -321,7 +321,7 @@ class Handler:
         Returns:
             `ended`, or `unknown` for a run the handler never saw. Ending a run again has no effect.
         """
-        return "ended" if await self._state.end_run(run) else "unknown"
+        return "ended" if await self._state.end_run(_run_key(True, run)) else "unknown"
 
     async def _within_limit(
         self, judging: Awaitable[Answer], what: str, id: str
@@ -414,7 +414,8 @@ class Handler:
         # is part of, since a retry opens as the attempt it replaces did, and
         # then by how it opens
         conversation_key = f"{key}/{sample_attempt}/{opening}" if named else key
-        run = await self._state.run(key)
+        run_key = _run_key(named, key)
+        run = await self._state.run(run_key)
         marks = request_marks(request.provider, request.body, request.format)
         refusal = _ended(run, marks)
         if refusal is not None:
@@ -488,7 +489,7 @@ class Handler:
             answer = Replace(amended.body)
 
         held = Held(
-            run=key,
+            run=run_key,
             conversation=conversation_key,
             named=named,
             sample_attempt=sample_attempt,
@@ -948,6 +949,14 @@ class Handler:
         return TimeLimitError(
             f"The sentinel didn't finish judging the {what} {id!r} within {self._time_limit} seconds."
         )
+
+
+def _run_key(named: bool, key: str) -> str:
+    # Runs an eval names and runs it doesn't are kept apart. A run no eval
+    # names is keyed by how its conversation opens, which anyone who knows the
+    # opening can work out, so the eval endpoint, which takes a sample's uuid,
+    # must never reach one.
+    return f"{'sample' if named else 'opening'}:{key}"
 
 
 def _ended(run: Run, marks: Sequence[str]) -> Refuse | None:

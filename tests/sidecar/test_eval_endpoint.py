@@ -15,7 +15,14 @@ from inspect_sentinel._decorators import protocol
 from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol, ProtocolGroup
-from inspect_sentinel.sidecar import Handler, Refuse, Request, UnreadableError, _state
+from inspect_sentinel.sidecar import (
+    Handler,
+    Refuse,
+    Request,
+    UnreadableError,
+    _handler,
+    _state,
+)
 from inspect_sentinel.sidecar._eval_endpoint import (
     INFO_PATH,
     PATH,
@@ -374,6 +381,28 @@ async def test_a_run_a_sentinel_ended_says_so() -> None:
         answered = await _call(client, "run_result", {"run": "sample_123"})
 
     assert answered["result"]["outcome"] == "terminate"
+
+
+@pytest.mark.anyio
+async def test_a_run_no_eval_names_cant_be_reached_by_its_opening() -> None:
+    # Such a run is keyed by a digest of how its conversation opens, which
+    # anyone who knows the opening can work out.
+    handler = Handler(counts_lookups())
+    asked = request("x")
+    await handler.request(asked)
+    await handler.reply(reply(_message("Tokyo")))
+    opening = _handler._opening(
+        await _handler.read_opening(asked.provider, asked.body, asked.format)
+    )
+
+    async with _client(handler) as client:
+        result = await _call(client, "run_result", {"run": opening})
+        ended = await _call(client, "end_run", {"run": opening})
+    later = await handler.request(request("y"))
+
+    assert result["error"]["code"] == UNKNOWN_RUN
+    assert ended["result"]["state"] == "unknown"
+    assert not isinstance(later, Refuse)
 
 
 @pytest.mark.anyio
