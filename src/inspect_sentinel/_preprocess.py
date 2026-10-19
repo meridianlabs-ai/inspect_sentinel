@@ -98,7 +98,10 @@ class StepPreprocessor(Generic[S]):
     """
 
     input_window: Window | None = field(default_factory=AllMessages)
-    """How much of `input` to show: all of it by default; None for none."""
+    """How much of `input` to show: all of it by default; None for none.
+
+    Before a generate, `input` is the request being judged, so a window that leaves none of it (None, `LastTurns(0)`, `LastMessages(0)`, or `NewSinceLastReport` when nothing is new) shows the model only the tools offered. At the other stages the step is judged without its context.
+    """
 
     history_window: Window | None = None
     """How much of `history`, every message the agent has sent its model, to show: none by default."""
