@@ -60,13 +60,35 @@ def main() -> None:
     stages = args.stage or list(STAGES)
     wanted = set(args.step or [])
 
+    class Counting(ReplayHost):
+        def __init__(self, task: Any, model: str | None, dry: bool) -> None:
+            super().__init__(task, model)
+            self._dry = DryRunHost(task) if dry else None
+            self.input_tokens = 0
+            self.output_tokens = 0
+            self.calls = 0
+
+        async def generate(self, input: Any, **kwargs: Any) -> Any:
+            self.calls += 1
+            output = await (
+                self._dry.generate(input, **kwargs)
+                if self._dry
+                else super().generate(input, **kwargs)
+            )
+            if output.usage:
+                self.input_tokens += output.usage.input_tokens
+                self.output_tokens += output.usage.output_tokens
+            return output
+
     async def all_runs() -> None:
         limiter = anyio.CapacityLimiter(args.concurrency)
         out = args.out.open("a")
         done = 0
 
-        async def one(t: Any, host: Any, store: Any, s: Any, run: int) -> None:
+        async def one(t: Any, shared: Any, store: Any, s: Any, run: int) -> None:
             nonlocal done
+            # a host per step, so its usage is this step's
+            host = Counting(t.task, None if args.dry_run else args.model, args.dry_run)
             context = HostContext(
                 host=host, recorder=_NoRecorder(), store=store
             ).context
@@ -103,6 +125,9 @@ def main() -> None:
                             else None,
                             "error": error,
                             "seconds": round(time.monotonic() - started, 1),
+                            "input_tokens": host.input_tokens,
+                            "output_tokens": host.output_tokens,
+                            "calls": host.calls,
                         }
                     )
                     + "\n"
