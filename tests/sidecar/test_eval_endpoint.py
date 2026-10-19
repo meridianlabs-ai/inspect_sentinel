@@ -164,6 +164,29 @@ async def test_a_sidecar_that_takes_no_registrations_refuses_another_task() -> N
 
 
 @pytest.mark.anyio
+async def test_a_registration_past_the_limit_is_refused() -> None:
+    # anything that can reach the endpoint can register, so what is kept is
+    # bounded, and nothing kept is dropped to make room
+    async with _client(Handler(weather_rule(), max_task_registrations=2)) as client:
+        kept = [
+            await _call(client, "register_task", _REGISTRATION | {"eval_id": id})
+            for id in ["eval_1", "eval_2"]
+        ]
+        refused = await _call(
+            client, "register_task", _REGISTRATION | {"eval_id": "eval_3"}
+        )
+        again = await _call(
+            client, "register_task", _REGISTRATION | {"eval_id": "eval_1"}
+        )
+
+    assert all("result" in answered for answered in kept)
+    assert refused["error"]["code"] == REGISTRATION_REFUSED
+    assert "already keeps the 2 tasks" in refused["error"]["message"]
+    # a registration of a task kept already replaces it
+    assert "result" in again
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "params",
     [

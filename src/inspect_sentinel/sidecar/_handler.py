@@ -41,6 +41,7 @@ from ._inspect_client import (
 )
 from ._registration import (
     MAX_TASK_EXPIRY,
+    MAX_TASK_REGISTRATIONS,
     TASK_EXPIRY,
     FileTask,
     RegistrationError,
@@ -150,6 +151,7 @@ class Handler:
         tasks: Mapping[str, FileTask] | None = None,
         runtime_task_registration: bool = True,
         task_expiry: float = MAX_TASK_EXPIRY,
+        max_task_registrations: int = MAX_TASK_REGISTRATIONS,
     ) -> None:
         """Create a handler.
 
@@ -163,6 +165,7 @@ class Handler:
             tasks: Tasks registered beforehand, by name, as the tasks folder's files hold them. Nothing an eval registers replaces one, and a request for a sample one doesn't hold is refused.
             runtime_task_registration: Whether an eval may register its tasks itself, at task init.
             task_expiry: The longest a task an eval registered is kept once no request has named it, in seconds, whatever the registration asks.
+            max_task_registrations: How many tasks registered by evals are kept at once. A registration past it is refused.
         """
         self._protocol = resolve_sentinel(sentinel)
         # a stage nothing watches is never built, as in Inspect's own process
@@ -175,6 +178,7 @@ class Handler:
         self._tasks = dict(tasks or {})
         self._runtime_task_registration = runtime_task_registration
         self._task_expiry = task_expiry
+        self._max_task_registrations = max_task_registrations
         # the tool results being judged now, by run, conversation and digest,
         # so that a request holding one waits for the request judging it
         self._judging: dict[tuple[str, str, str], anyio.Event] = {}
@@ -359,7 +363,7 @@ class Handler:
             How long it is kept once no request has named the task: `expiry`, or less if that is longer than the handler keeps any. None for a task registered beforehand, which is never dropped.
 
         Raises:
-            RegistrationError: If the handler takes no registrations from evals and the task was not registered beforehand.
+            RegistrationError: If the handler takes no registrations from evals and the task was not registered beforehand, or already keeps as many as it takes.
         """
         if facts.task in self._tasks:
             return None
@@ -368,7 +372,12 @@ class Handler:
                 "This sidecar takes no tasks registered by an eval."
             )
         granted = min(expiry if expiry is not None else TASK_EXPIRY, self._task_expiry)
-        await self._state.register(eval_id, facts.task, facts, granted)
+        if not await self._state.register(
+            eval_id, facts.task, facts, granted, self._max_task_registrations
+        ):
+            raise RegistrationError(
+                f"This sidecar already keeps the {self._max_task_registrations} tasks registered by evals that it takes. One is taken again once a kept task expires."
+            )
         return granted
 
     def _view(self, call: ToolCall, run: Run) -> ToolCallView:

@@ -229,8 +229,8 @@ class State(Protocol):
         ...
 
     async def register(
-        self, eval_id: str, task: str, facts: TaskFacts, expiry: float
-    ) -> None:
+        self, eval_id: str, task: str, facts: TaskFacts, expiry: float, limit: int
+    ) -> bool:
         """Keep a task an eval registered, in place of any it registered before.
 
         Args:
@@ -238,6 +238,10 @@ class State(Protocol):
             task: The task's name.
             facts: The task and its samples.
             expiry: How long to keep it once no request has named it, in seconds.
+            limit: How many registrations are kept at once.
+
+        Returns:
+            Whether it is kept: False for a new registration when `limit` are kept already.
         """
         ...
 
@@ -324,10 +328,13 @@ class MemoryState:
         return recorder.records if recorder is not None else None
 
     async def register(
-        self, eval_id: str, task: str, facts: TaskFacts, expiry: float
-    ) -> None:
+        self, eval_id: str, task: str, facts: TaskFacts, expiry: float, limit: int
+    ) -> bool:
         self._expire_tasks()
+        if (eval_id, task) not in self._tasks and len(self._tasks) >= limit:
+            return False
         self._tasks[(eval_id, task)] = (time.monotonic(), expiry, facts)
+        return True
 
     async def registration(self, eval_id: str, task: str) -> TaskFacts | None:
         self._expire_tasks()

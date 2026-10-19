@@ -19,7 +19,7 @@ from ._handler import Handler
 from ._host import SidecarHost
 from ._http import HEALTH_PATH, MAX_BODY_BYTES, health_route
 from ._proxy_endpoint import proxy_app
-from ._registration import MAX_TASK_EXPIRY, read_tasks_folder
+from ._registration import MAX_TASK_EXPIRY, MAX_TASK_REGISTRATIONS, read_tasks_folder
 from ._state import RUN_EXPIRY, MemoryState
 
 
@@ -96,6 +96,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="The longest a task an eval registered is kept once no request has named it, whatever the eval asks. 30 days by default.",
     )
     parser.add_argument(
+        "--max-task-registrations",
+        type=int,
+        default=MAX_TASK_REGISTRATIONS,
+        metavar="COUNT",
+        help=f"How many tasks registered by evals are kept at once. Anything that can reach the endpoint for evals can register a task, so a registration past this is refused, rather than one still in use dropped. {MAX_TASK_REGISTRATIONS} by default.",
+    )
+    parser.add_argument(
         "--max-body-bytes",
         type=int,
         default=MAX_BODY_BYTES,
@@ -128,6 +135,7 @@ class ServerSettings(BaseModel):
     eval_results: bool | None = None
     runtime_task_registration: bool | None = None
     task_expiry: float | None = None
+    max_task_registrations: int | None = None
     max_body_bytes: int | None = None
     run_expiry: float | None = None
 
@@ -155,6 +163,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "reject_status",
             "time_limit",
             "task_expiry",
+            "max_task_registrations",
             "max_body_bytes",
             "run_expiry",
         )
@@ -268,6 +277,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         else None,
         runtime_task_registration=not arguments.no_runtime_task_registration,
         task_expiry=arguments.task_expiry,
+        max_task_registrations=arguments.max_task_registrations,
     )
 
 

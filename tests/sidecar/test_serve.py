@@ -112,6 +112,7 @@ def test_defaults_are_one_port_and_no_limits() -> None:
     assert arguments.tasks_folder is None
     assert arguments.no_runtime_task_registration is False
     assert arguments.task_expiry == 30 * 24 * 60 * 60
+    assert arguments.max_task_registrations == 1000
 
 
 @pytest.mark.anyio
@@ -225,6 +226,7 @@ server:
   eval_results: false
   runtime_task_registration: false
   task_expiry: 60
+  max_task_registrations: 5
 tasks_folder: tasks
 """
 
@@ -242,6 +244,7 @@ def test_the_server_stanza_sets_what_the_options_would(tmp_path: Path) -> None:
         True,
     )
     assert arguments.task_expiry == 60
+    assert arguments.max_task_registrations == 5
     # the tasks folder is found beside the configuration file
     assert arguments.tasks_folder == str(tmp_path.resolve() / "tasks")
     # the sentinel is built from the file's sentinel, which the core reads
