@@ -46,7 +46,7 @@ inspect_sentinel                                              inspect_ai
 13 human review: inspect_sentinel and inspect_ai, after 12
 ```
 
-PRs 1 to 3 come first, one after another, and land as one pull request with a commit for each, because the endpoint is the first point at which anything runs. After 3, the sidecar's support for Inspect clients (5) and the guardrail (4) land together as one pull request, with a commit for each and one more for the guardrail passing the `sentinel` field on: the guardrail's tests run a real sidecar, and the field can only be tested through LiteLLM once the sidecar writes it. PR 8 needs 5 and 6, and needs 7 for per-call rejection and `modify`. PR 9 needs nothing and can start at any time. PR 10 waits on METR accepting Middleman's passthrough hook. PR 11 builds the Envoy shim independently of Middleman. PR 12 adds incremental streaming to the shared handler, Envoy and LiteLLM, with Inspect client support from PR 8. Extending Middleman to hand over chunks also needs PR 10 and METR accepting that change; it does not block streaming through the other proxies. PR 13 follows incremental streaming and adds human review through the sidecar's host, Inspect's approval UI and external review consumers.
+PRs 1 to 3 come first, one after another, and land as one pull request with a commit for each, because the endpoint is the first point at which anything runs. After 3, the sidecar's support for Inspect clients (5) and the guardrail (4) land together as one pull request, with a commit for each and one more for the guardrail passing the `sentinel` field on: the guardrail's tests run a real sidecar, and the field can only be tested through LiteLLM once the sidecar writes it. PR 8 needs 5, 6 and 7. From 7 it needs per-call rejection and `modify`, and also that a rejection Inspect puts back into its conversation is not judged as a tool result: before 7, the sidecar would judge each such rejection as a call that ran, and could end the run for a call that never ran. PR 9 needs nothing and can start at any time. PR 10 waits on METR accepting Middleman's passthrough hook. PR 11 builds the Envoy shim independently of Middleman. PR 12 adds incremental streaming to the shared handler, Envoy and LiteLLM, with Inspect client support from PR 8. Extending Middleman to hand over chunks also needs PR 10 and METR accepting that change; it does not block streaming through the other proxies. PR 13 follows incremental streaming and adds human review through the sidecar's host, Inspect's approval UI and external review consumers.
 
 ## PR 1: reading provider traffic
 
@@ -64,7 +64,7 @@ Repository: `inspect_sentinel`. Depends on: PR 1.
 - Runs, keyed by a name the proxy passes on or by how a conversation opens, and conversations within a run (section 7).
 - The four steps, found in the traffic: `AfterToolCall` and `BeforeGenerate` on a request, `AfterGenerate` and `BeforeToolCall` on a reply, each tool result judged once (section 3).
 - Carrying out decisions on the request or reply held: `proceed`, refusing a whole turn, a `terminate` that keeps the run ended, rejected turns put back on later requests, and three rejections in a row ending the run (section 4).
-- No `history` at any step, as the core defines it behind a proxy (section 8).
+- No `agent_messages` at any step, as the core defines it behind a proxy (section 8).
 - The state behind one interface, with an in-memory implementation (section 10).
 - Tests: the handler driven directly, with no proxy and no HTTP.
 
@@ -125,7 +125,7 @@ Repository: `inspect_sentinel`. Depends on: PRs 2 and 5.
 
 ## PR 8: `RemoteSentinel`
 
-Repository: `inspect_ai`. Depends on: PRs 5 and 6, and PR 7 for per-call rejection and `modify`.
+Repository: `inspect_ai`. Depends on: PRs 5, 6 and 7 (above).
 
 - The probe, `register_task` and the `required` or `optional` setting at task init (section 9). An answer with `fixed` true, for a task in the tasks folder, is a success.
 - `x-inspect-context` and `x-irid` on each model request, only after the probe found a sentinel.
@@ -207,7 +207,7 @@ These need design first. Each names the repositories it would touch.
 
 - How Inspect says that a run is new or resumed. `inspect_sentinel` and `inspect_ai`.
 - Model calls that Inspect answers from its cache, which never reach the proxy. `inspect_ai`, and possibly `inspect_sentinel`.
-- Filling `step.sent` from each conversation the sidecar keeps, with the turns before a compaction, once the core has `step.sent`. `inspect_sentinel`.
+- Filling `step.history` from each conversation the sidecar keeps, with the turns before a compaction, once the core has the as-sent `step.history` (R10, sentinel #98). `inspect_sentinel`.
 - Tallies kept at the task level. `inspect_sentinel`.
 - A credential tied to the evals it may name. `inspect_sentinel`.
 - A state implementation that processes share and that outlasts a restart. `inspect_sentinel`.

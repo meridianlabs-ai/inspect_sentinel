@@ -90,8 +90,10 @@ class HostNative(typing.Protocol):
         tool_choice: ToolChoice | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput: ...
-    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
-    """Ask a person about the step, rendered by its type; a proxy might use a review queue.
+    async def ask_human(
+        self, step: Step, escalations: Escalations, choices: Sequence[str]
+    ) -> HumanAnswer: ...
+    """Ask a person about the step, rendered by its type with the escalations that led to it; a proxy might use a review queue.
     A person who ends the prompt without an offered choice yields `reject` if offered, otherwise `terminate`."""
     async def fetch(
         self,
@@ -211,7 +213,7 @@ It could be — `fetch("model", ...)` — but keeping it distinct is better. Mod
 
 The split is one of types, `@monitor` and `@protocol`, but both are plain functions of `(context, step)`, and that matters here in one specific way. The portability verdict is per function, and each configured instance is checked on its own by its factory (decided 2026-10-05): a protocol is not disqualified by a leaf monitor calling `get_model()`, but a configuration that includes a non-portable instance cannot be deployed, so a composition is deployable only when every member is. A protocol reaching for task-scoped state disqualifies itself while leaving its leaves deployable. The same static check covers both, which would not have been true had protocols been a separate kind of object with their own affordances.
 
-The two compositions cross intact. `concurrent()` and `sequential()` are ordinary code over the runner, and a `sequential`'s hand-off travels as data — `step.escalations` is a field on the payload, not a reference to a `ToolCallView` — so a `sequential` deserializes and runs in a proxy exactly as in-process. What changes is the last link: a `human()` in a proxy is an audit queue rather than a blocking prompt, which is the `audit`-travels-cleanly point below applied to a `sequential`, and it means a proxy `sequential` ending in a person degrades to "record, request review, and apply its default" rather than waiting.
+The two compositions cross intact. `concurrent()` and `sequential()` are ordinary code over the runner, and a `sequential`'s hand-off travels as data — the escalations it hands the next link are `Reported[Decision]` values passed as a protocol's third argument, not a reference to a `ToolCallView` — so a `sequential` deserializes and runs in a proxy exactly as in-process. What changes is the last link: a `human()` in a proxy is an audit queue rather than a blocking prompt, which is the `audit`-travels-cleanly point below applied to a `sequential`, and it means a proxy `sequential` ending in a person degrades to "record, request review, and apply its default" rather than waiting.
 
 Three notes:
 
@@ -227,7 +229,7 @@ A proxy has no ContextVar, no sample identity and no `Store`. Its `HostNative.ev
 
 **A keyed store in the proxy layer.** A session header plus a local store, carrying what the conversation does not: the monitor's own accumulated judgment.
 
-The request is `step.input` exactly, which is the one place a proxy beats an eval: nothing sits between the scaffold and the wire. What the request stops carrying once the agent compacts is the pre-compaction history. A proxy never sees the scaffold's list, so `step.history` under a proxy is `None`. The keyed store can accumulate what each request added for that session, with the session key doubling as the step's `conversation` id; that is an as-sent view (cf. AISI R10), not `history`. A monitor that needs the full trajectory needs that accumulated view and should declare it, so that a storeless deployment refuses it at configuration time rather than running it on a truncated view.
+The request is `step.input` exactly, which is the one place a proxy beats an eval: nothing sits between the scaffold and the wire. What the request stops carrying once the agent compacts is the pre-compaction history. A proxy never sees the scaffold's list, so `step.agent_messages` under a proxy is `None`. The keyed store can accumulate what each request added for that session, with the session key doubling as the step's `conversation` id; that is an as-sent view (cf. AISI R10, `step.history` in an eval), not `agent_messages`. Until a proxy host builds it, `step.history` is `None` there. A monitor that needs the full trajectory needs that accumulated view and should declare it, so that a storeless deployment refuses it at configuration time rather than running it on a truncated view.
 
 ### The store is not merely a convenience
 

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 from .._context import Context
 from .._decorators import forwards, protocol
-from .._report import Decision, Reported
+from .._report import Decision, Escalations, Reported
 from .._results import warn_failed
 from .._runner import run_children
 from .._step import Step
@@ -18,7 +16,7 @@ def sequential(
 ) -> Protocol:
     """Run children one at a time, in order; the first that decides anything but `escalate` decides, and later children do not run.
 
-    Each child is run through the runner and recorded under its own name, and a child that does not watch the current stage is not invoked. An `escalate` hands the step to the next child with the escalation appended to `step.escalations`, so a person at the end sees who asked and why. The list starts empty for each run of the chain: escalations do not cross layers, so a nested `sequential` does not see the escalations of the chain around it. The functions of one `ProtocolGroup` run in one call and all see the step before any of their own escalations.
+    Each child is run through the runner and recorded under its own name, and a child that does not watch the current stage is not invoked. An `escalate` hands the step to the next child with the escalation appended to the `escalations` that protocol is handed, so a person at the end sees who asked and why; a monitor is never handed them. The list starts empty for each run of the chain: escalations do not cross layers, so a nested `sequential` does not see the escalations of the chain around it, and the chain ignores any it is handed itself. The functions of one `ProtocolGroup` run in one call and are all handed the escalations from before any of their own.
 
     A monitor is recorded and falls through, since an observation is not a decision; one that raises is recorded as failed, logged as a warning, and falls through the same way. When every child that decided escalated, the chain returns the last escalate, passing it up as `concurrent` does; when only monitors reported, it returns `proceed`; when no child took part, `None`. A child that calls `decide_final()` ends the step as usual.
 
@@ -30,13 +28,15 @@ def sequential(
     if not named:
         raise ValueError("sequential needs at least one child.")
 
-    async def run(context: Context, step: Step) -> Decision | None:
-        escalations: list[Reported[Decision]] = []
+    async def run(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
+        # the chain's own, not the ones it was handed: escalations do not cross layers
+        handed: list[Reported[Decision]] = []
         participated = False
         for name, child in named:
-            current = replace(step, escalations=tuple(escalations))
             observations, decisions = await run_children(
-                {name: child}, context, current
+                {name: child}, context, step, escalations=handed
             )
             warn_failed(observations.failed)
             if observations.failed or observations.succeeded:
@@ -48,9 +48,9 @@ def sequential(
             if strongest.report.action != "escalate":
                 # a group link decides by its strongest function, as concurrent does
                 return strongest.report
-            escalations.extend(d for d in decisions if d.report.action == "escalate")
-        if escalations:
-            return escalations[-1].report
+            handed.extend(d for d in decisions if d.report.action == "escalate")
+        if handed:
+            return handed[-1].report
         return Decision.proceed() if participated else None
 
     return forwards(run)

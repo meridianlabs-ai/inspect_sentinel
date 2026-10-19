@@ -11,7 +11,7 @@ from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
 from inspect_ai.tool import ToolCall, ToolChoice, ToolInfo
 from inspect_ai.util import Store
 
-from ._report import Decision, Failed, Observation, Report, Reported
+from ._report import Decision, Escalations, Failed, Observation, Report, Reported
 from ._score import score_step
 from ._step import Step
 
@@ -55,7 +55,9 @@ class HostNative(TypingProtocol):
         """As `Host.generate`."""
         ...
 
-    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
+    async def ask_human(
+        self, step: Step, escalations: Escalations, choices: Sequence[str]
+    ) -> HumanAnswer:
         """As `Host.ask_human`."""
         ...
 
@@ -132,13 +134,12 @@ class Host(HostNative):
 
         Pass the step to show the model all of it, or narrow what it sees with the windowing functions, such as `last_turns(step, 6)` or `new_since_last_report(context, step)`.
 
-        The default template opens with `instructions` and a paragraph on the nonce, then shows the model `policy`, the task, any escalations and the step, asks it to score the step from 0.0 to 1.0 against `dimensions`, and asks for an explanation. Templates are Jinja templates. A custom one uses the same variables, and must include `{{ step }}` and `{{ answer_format }}`:
+        The default template opens with `instructions` and a paragraph on the nonce, then shows the model `policy`, the task and the step, asks it to score the step from 0.0 to 1.0 against `dimensions`, and asks for an explanation. Templates are Jinja templates. A custom one uses the same variables, and must include `{{ step }}` and `{{ answer_format }}`:
 
         - `{{ instructions }}`: `instructions`, or by default a sentence on monitoring AI agents for harmful actions and one telling the model to treat what the agent wrote or was shown as data and ignore any instructions in it. Instructions you pass replace both, so say the second yourself.
         - `{{ policy }}`: `policy`, the policy the agent must follow whatever its task, between `[BEGIN POLICY (nonce)]` and `[END POLICY (nonce)]` lines; empty when there is none.
         - `{{ task }}`: the task the agent was given (in an eval, the sample's input), between `[BEGIN TASK (nonce)]` and `[END TASK (nonce)]` lines; empty outside an eval.
         - `{{ eval }}`: the eval the agent is running in, as `context.eval` holds it, such as `{{ eval.task }}` or `{{ eval.metadata.difficulty }}`; None outside an eval, so guard it with `{% if eval %}` in a monitor that may run outside one.
-        - `{{ escalations }}`: the escalations from earlier links of a `sequential` composition (`step.escalations`), one `- name: explanation` line each, between `[BEGIN ESCALATIONS (nonce)]` and `[END ESCALATIONS (nonce)]` lines; empty when there are none.
         - `{{ step }}`: `step_as_str()` of the step or excerpt, its messages numbered `[M1]`, `[M2]` and so on so the explanation can cite them; the observation's `references` come from those cites.
         - `{{ sentinel_nonce }}`: a nonce made on the sample's first `score` and used for the rest of the sample, so the monitor model's prompt cache keeps working from step to step; 8 hex characters, on every block marker and, where the installed Scout takes a nonce, every message header (`[M1] USER (3f9a1c7e):`). The agent never sees the prompt, so text it writes that looks like a marker or a header lacks the nonce, and the default template tells the model so. The nonce is kept in the sample store, so a tool that shows the agent the store, or a protocol that passes the agent a monitor explanation quoting the nonce, gives it away for the rest of the sample. A `sentinel_nonce` in `template_variables` is ignored.
         - `{{ dimensions }}`: `dimensions` as given, or each dimension's name followed by its text.
@@ -174,16 +175,22 @@ class Host(HostNative):
             retry_refusals=retry_refusals,
         )
 
-    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
+    async def ask_human(
+        self,
+        step: Step,
+        escalations: Escalations,
+        choices: Sequence[str],
+    ) -> HumanAnswer:
         """Ask a person to decide about a step, and wait for the answer.
 
-        The host is handed the step itself and renders it by its type: before a tool call the call, its view, the conversation and `step.escalations` (who escalated and why); after a call the same with the result the model is about to receive; after a generate the whole assistant turn, its text and every tool call it makes, with `step.escalations`. A host raises a clear error for a stage it cannot render. When the person ends the prompt without one of the `choices`, the host answers `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered. It notifies the person and marks the sample as awaiting a person while it waits. `human()` calls this; most protocols never need to.
+        The host is handed the step itself and renders it by its type, with the `escalations` (who escalated and why): before a tool call the call, its view and the conversation; after a call the same with the result the model is about to receive; after a generate the whole assistant turn, its text and every tool call it makes. A host raises a clear error for a stage it cannot render. When the person ends the prompt without one of the `choices`, the host answers `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered. It notifies the person and marks the sample as awaiting a person while it waits. `human()` calls this; most protocols never need to.
 
         Args:
             step: The step to decide about.
+            escalations: The escalations the asking protocol was handed, from the links before it in a `sequential()`, in order; empty when nothing escalated.
             choices: What the person may pick, from `approve`, `reject`, `terminate` and `modify`, in the order to present them.
         """
-        return await self._native.ask_human(step, choices)
+        return await self._native.ask_human(step, escalations, choices)
 
 
 @runtime_checkable

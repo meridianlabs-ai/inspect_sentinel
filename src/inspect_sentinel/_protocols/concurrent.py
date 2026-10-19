@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .._context import Context
 from .._decorators import forwards, protocol
-from .._report import Decision, Reported
+from .._report import Decision, Escalations, Reported
 from .._results import warn_failed
 from .._runner import run_children
 from .._step import Step
@@ -16,7 +16,7 @@ def concurrent(
 ) -> Protocol:
     """Run every child at once; the strictest decision wins.
 
-    What a list containing a protocol resolves to. Monitors are recorded in the transcript, a monitor that raises recorded as failed and logged as a warning while the others go on; protocols vote by `terminate > reject > modify > escalate > proceed`, the first in configuration order winning a tie, so a peer's `proceed` does not override an `escalate` and the layer escalates when that is the strongest vote. A `modify` when another protocol also decided anything but `escalate` becomes a `reject` naming the modifier, since the others decided about the call as it stood; votes count by instance, so another function of the modifier's own instance contests it only by also modifying; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided and not all of them proceeded, the layer's explanation lists each one's decision after the winner's own, labelling a function of a `ProtocolGroup` or `MonitorGroup` `name.function`. A child that calls `decide_final()` ends the step and no vote is taken.
+    What a list containing a protocol resolves to. Monitors are recorded in the transcript, a monitor that raises recorded as failed and logged as a warning while the others go on; protocols vote by `terminate > reject > modify > escalate > proceed`, the first in configuration order winning a tie, so a peer's `proceed` does not override an `escalate` and the layer escalates when that is the strongest vote. A `modify` when another protocol also decided anything but `escalate` becomes a `reject` naming the modifier, since the others decided about the call as it stood; votes count by instance, so another function of the modifier's own instance contests it only by also modifying; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided and not all of them proceeded, the layer's explanation lists each one's decision after the winner's own, labelling a function of a `ProtocolGroup` or `MonitorGroup` `name.function`. A child that calls `decide_final()` ends the step and no vote is taken. Its protocol children are handed no escalations, even inside a `sequential()`: escalations do not cross layers.
 
     Args:
         children: A monitor, protocol or group, or several, to run together.
@@ -34,7 +34,9 @@ def concurrent(
             return f"{reported.name}.{reported.function}"
         return reported.name
 
-    async def run(context: Context, step: Step) -> Decision | None:
+    async def run(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         reports = await run_children(snapshot, context, step)
         warn_failed(reports.observations.failed)
         voters = reports.decisions

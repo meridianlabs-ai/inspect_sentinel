@@ -15,8 +15,13 @@ from inspect_sentinel._integration import (
     sentinel_from_config,
 )
 from inspect_sentinel._protocols import concurrent
-from inspect_sentinel._report import Action, Decision, Observation
-from inspect_sentinel._runner import run_sentinel
+from inspect_sentinel._report import (
+    Action,
+    Decision,
+    Escalations,
+    Observation,
+)
+from inspect_sentinel._runner import run_protocols, run_sentinel
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup, Sentinels
 from tests._fakes import ListRecorder, after_step, before_step, host_context
@@ -38,11 +43,13 @@ def _seen(store: Store) -> dict[str, list[tuple[str, ...]]]:
 
 @protocol
 def seq_link(action: Action = "proceed", explanation: str | None = None) -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         seen = context.store_as(Seen)
         seen.escalations = [
             *seen.escalations,
-            tuple(e.name for e in step.escalations),
+            tuple(e.name for e in escalations),
         ]
         return Decision(action=action, explanation=explanation)
 
@@ -51,7 +58,9 @@ def seq_link(action: Action = "proceed", explanation: str | None = None) -> Prot
 
 @protocol
 def seq_abstains() -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         return None
 
     return decide
@@ -59,7 +68,11 @@ def seq_abstains() -> Protocol:
 
 @protocol
 def seq_after_only() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: AfterToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return Decision.terminate("after")
 
     return decide
@@ -67,12 +80,20 @@ def seq_after_only() -> Protocol:
 
 @protocol
 def seq_pair() -> ProtocolGroup:
-    async def first(context: Context, step: BeforeToolCall) -> Decision | None:
-        context.store_as(PairSaw).first = len(step.escalations)
+    async def first(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
+        context.store_as(PairSaw).first = len(escalations)
         return Decision.escalate("first")
 
-    async def second(context: Context, step: BeforeToolCall) -> Decision | None:
-        context.store_as(PairSaw).second = len(step.escalations)
+    async def second(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
+        context.store_as(PairSaw).second = len(escalations)
         return Decision.escalate("second")
 
     return ProtocolGroup(first, second)
@@ -80,10 +101,18 @@ def seq_pair() -> ProtocolGroup:
 
 @protocol
 def seq_mixed(first_action: Action, second_action: Action) -> ProtocolGroup:
-    async def first(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def first(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return Decision(action=first_action, explanation="first")
 
-    async def second(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def second(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return Decision(action=second_action, explanation="second")
 
     return ProtocolGroup(first, second)
@@ -91,8 +120,24 @@ def seq_mixed(first_action: Action, second_action: Action) -> ProtocolGroup:
 
 @protocol
 def seq_final() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         decide_final(Decision.reject("final"))
+
+    return decide
+
+
+@protocol
+def seq_forward(child: Protocol) -> Protocol:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
+        decisions = await run_protocols(child, context, step, escalations=escalations)
+        strongest = decisions.strongest()
+        return None if strongest is None else strongest.report
 
     return decide
 
@@ -187,6 +232,59 @@ async def test_a_chain_does_not_inherit_the_incoming_escalations() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_concurrent_link_hands_its_children_no_escalations() -> None:
+    _, _, store = await _root(
+        sequential(
+            {
+                "first": seq_link("escalate"),
+                "both": concurrent({"x": seq_link()}),
+            }
+        )
+    )
+    assert _seen(store) == {"first": [()], "both/x": [()]}
+
+
+@pytest.mark.anyio
+async def test_a_protocol_can_hand_its_escalations_on() -> None:
+    _, _, store = await _root(
+        sequential(
+            {
+                "first": seq_link("escalate"),
+                "outer": seq_forward(seq_link()),
+            }
+        )
+    )
+    assert _seen(store) == {"first": [()], "outer/seq_link": [("first",)]}
+
+
+@pytest.mark.anyio
+async def test_a_monitor_after_an_escalation_is_handed_the_hosts_step() -> None:
+    seen: list[Step] = []
+
+    @monitor
+    def seq_step_watch() -> Monitor:
+        async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+            seen.append(step)
+            return None
+
+        return check
+
+    step = before_step()
+    await _root(
+        sequential(
+            {
+                "first": seq_link("escalate"),
+                "watch": seq_step_watch(),
+                "last": seq_link(),
+            }
+        ),
+        step,
+    )
+    [watched] = seen
+    assert watched is step
+
+
+@pytest.mark.anyio
 async def test_monitors_are_recorded_and_fall_through() -> None:
     decision, recorder, _ = await _root(
         sequential({"watch": seq_watch(), "rule": seq_link("reject")})
@@ -236,7 +334,7 @@ async def test_what_a_chain_returns_when_no_link_decides(
 
 
 @pytest.mark.anyio
-async def test_a_group_link_runs_in_one_call_and_sees_the_step_before_its_escalations() -> (
+async def test_a_group_link_runs_in_one_call_and_is_handed_the_escalations_before_its_own() -> (
     None
 ):
     decision, recorder, store = await _root(
