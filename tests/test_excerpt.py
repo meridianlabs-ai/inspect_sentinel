@@ -34,7 +34,7 @@ from inspect_sentinel import (
     drop_input,
     drop_reasoning,
     drop_tool_usage,
-    keep_history,
+    keep_agent_messages,
     keep_system,
     last_messages,
     last_turns,
@@ -42,6 +42,7 @@ from inspect_sentinel import (
     step_as_str,
 )
 from inspect_sentinel._decorators import monitor, protocol
+from inspect_sentinel._excerpt import scout_nonce
 from inspect_sentinel._report import Decision, Escalations, Observation
 from inspect_sentinel._runner import run_monitors, run_protocols, run_sentinel
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
@@ -96,7 +97,9 @@ def texts(messages: list[ChatMessage] | None) -> list[str] | None:
 def tool_step(
     input: list[ChatMessage] | None, history: list[ChatMessage] | None
 ) -> BeforeToolCall:
-    return replace(before_tool_call("bash", cmd="ls"), input=input, history=history)
+    return replace(
+        before_tool_call("bash", cmd="ls"), input=input, agent_messages=history
+    )
 
 
 def windowed() -> BeforeToolCall:
@@ -109,7 +112,7 @@ def parallel_after_b() -> Step:
         after_tool_call("bash", "result b", cmd="b"),
         call=call("b"),
         message="both",
-        history=[
+        agent_messages=[
             user("task"),
             asks("both", call("a"), call("b")),
             result("a", "result a"),
@@ -138,7 +141,7 @@ def test_a_tool_steps_history_ends_before_the_message_holding_its_call(
     step: Step, history: list[str]
 ) -> None:
     # an excerpt from any window shows the cut
-    assert texts(keep_history(step).history) == history
+    assert texts(keep_agent_messages(step).agent_messages) == history
 
 
 REPLIED = ["sys", "task", "reply 1"]
@@ -165,8 +168,10 @@ def test_before_a_generate_conversations_end_at_the_last_reply(
     kept_input: list[str],
     kept_history: list[str],
 ) -> None:
-    cut = keep_history(replace(before_generate_step(), input=input, history=history))
-    assert (texts(cut.input), texts(cut.history)) == (kept_input, kept_history)
+    cut = keep_agent_messages(
+        replace(before_generate_step(), input=input, agent_messages=history)
+    )
+    assert (texts(cut.input), texts(cut.agent_messages)) == (kept_input, kept_history)
 
 
 @pytest.mark.parametrize(
@@ -191,16 +196,16 @@ def test_windows_cut_input_and_history_alike(
     kept: list[str],
 ) -> None:
     cut = window(windowed(), n)
-    assert (texts(cut.input), texts(cut.history)) == (kept, kept)
+    assert (texts(cut.input), texts(cut.agent_messages)) == (kept, kept)
     assert cut.step == windowed()
     # a window narrows an excerpt as well as a step
-    assert window(drop_input(windowed()), n).history == cut.history
+    assert window(drop_input(windowed()), n).agent_messages == cut.agent_messages
 
 
 def test_last_messages_keeps_a_result_it_did_not_part_from_its_call() -> None:
     # as new_since_last_report leaves it when the call was already shown
     started = Excerpt(windowed(), None, CONVERSATION[3:])
-    assert texts(last_messages(started, 9).history) == ["result a", "reply 2"]
+    assert texts(last_messages(started, 9).agent_messages) == ["result a", "reply 2"]
 
 
 @pytest.mark.parametrize("window", [last_turns, last_messages])
@@ -246,7 +251,9 @@ Shown = tuple[list[str] | None, list[str] | None]
 
 
 def report(cut: Excerpt[Step]) -> Observation:
-    return Observation.score(0.0, json.dumps([texts(cut.input), texts(cut.history)]))
+    return Observation.score(
+        0.0, json.dumps([texts(cut.input), texts(cut.agent_messages)])
+    )
 
 
 @monitor
@@ -339,7 +346,7 @@ async def test_new_since_last_report_records_per_function() -> None:
         after_generate_step(),
         conversation="c",
         input=CONVERSATION[:2],
-        history=CONVERSATION[:2],
+        agent_messages=CONVERSATION[:2],
     )
     called = replace(tool_step(None, CONVERSATION), conversation="c")
     assert await shown(Store(), [generated, called]) == [
@@ -400,7 +407,9 @@ async def test_new_since_last_report_is_recorded_for_a_final_decision(
             context: Context, step: BeforeToolCall, escalations: Escalations
         ) -> Decision | None:
             cut = new_since_last_report(context, step)
-            final = Decision.proceed(json.dumps([texts(cut.input), texts(cut.history)]))
+            final = Decision.proceed(
+                json.dumps([texts(cut.input), texts(cut.agent_messages)])
+            )
             if in_task:
                 async with anyio.create_task_group() as group:
                     group.start_soon(_decide_final, final)
@@ -448,7 +457,7 @@ async def test_new_since_last_report_is_not_recorded_when_a_childs_final_passes_
             context: Context, step: BeforeToolCall, escalations: Escalations
         ) -> Decision | None:
             cut = new_since_last_report(context, step)
-            seen.append(texts(cut.history) or [])
+            seen.append(texts(cut.agent_messages) or [])
             await run_protocols(ends_the_step(), context, step)
             return Decision.proceed()
 
@@ -469,7 +478,7 @@ async def test_step_as_str_leaves_out_empty_parts_whatever_the_renderer() -> Non
         return json.dumps([m.text for m in messages])
 
     prefilled = [user("task"), asks("prefill")]
-    step = replace(before_generate_step(), input=prefilled, history=prefilled)
+    step = replace(before_generate_step(), input=prefilled, agent_messages=prefilled)
     rendered = await step_as_str(step, messages_as_str=as_json)
     assert "[BEGIN HISTORY]" not in rendered
     assert "[AGENT STEP - BEGIN MODEL REQUEST]" not in rendered
@@ -485,7 +494,7 @@ def test_new_since_last_report_outside_the_runner_raises() -> None:
     [
         (windowed(), [], "TOOL CALL", ["cmd: ls"]),
         # the same conversation as the input, so not shown even when kept
-        (keep_history(windowed()), ["HISTORY"], "TOOL CALL", ["cmd: ls"]),
+        (keep_agent_messages(windowed()), ["HISTORY"], "TOOL CALL", ["cmd: ls"]),
         (
             after_tool_call("bash", "out.txt", cmd="ls"),
             ["HISTORY"],
@@ -493,7 +502,7 @@ def test_new_since_last_report_outside_the_runner_raises() -> None:
             ["cmd: ls", "out.txt"],
         ),
         (
-            replace(before_generate_step(), input=GO, history=GO),
+            replace(before_generate_step(), input=GO, agent_messages=GO),
             ["HISTORY", "INPUT"],
             "MODEL REQUEST",
             ["go"],
@@ -523,7 +532,7 @@ async def test_step_as_str_renders_each_kept_part_in_a_block(
 async def test_a_request_ending_in_a_prefill_has_no_step_block() -> None:
     prefilled = [user("task"), asks("prefill")]
     rendered = await step_as_str(
-        replace(before_generate_step(), input=prefilled, history=prefilled)
+        replace(before_generate_step(), input=prefilled, agent_messages=prefilled)
     )
     assert "[AGENT STEP - BEGIN MODEL REQUEST]" not in rendered
     assert "prefill" in rendered.split("[BEGIN INPUT]")[1]
@@ -559,7 +568,7 @@ def thoughtful() -> Step:
     return replace(
         after_generate_step(),
         input=conversation,
-        history=conversation,
+        agent_messages=conversation,
         output=ModelOutput(
             model="m",
             choices=[ChatCompletionChoice(message=thinks("reply", "reply"))],
@@ -615,7 +624,7 @@ def many_messages(step: Step | Excerpt[Step]) -> Excerpt[Step]:
 
 EXCERPTING: list[Callable[[Step | Excerpt[Step]], Excerpt[Step]]] = [
     keep_system,
-    keep_history,
+    keep_agent_messages,
     drop_reasoning,
     drop_tool_usage,
     two_turns,
@@ -641,7 +650,9 @@ async def test_a_chain_gives_the_same_excerpt_in_any_order(
     assert rendered == await step_as_str(
         drop_input(
             two_turns(
-                drop_tool_usage(drop_reasoning(keep_history(keep_system(thoughtful()))))
+                drop_tool_usage(
+                    drop_reasoning(keep_agent_messages(keep_system(thoughtful())))
+                )
             )
         )
     )
@@ -656,7 +667,7 @@ async def test_a_chain_gives_the_same_excerpt_in_any_order(
     "excerpting",
     [
         drop_input,
-        keep_history,
+        keep_agent_messages,
         two_turns,
         many_messages,
         drop_reasoning,
@@ -674,7 +685,7 @@ def test_every_function_keeps_what_earlier_ones_excluded_or_kept(
 
 
 def test_keep_system_twice_is_keep_system_once() -> None:
-    assert keep_system(keep_system(thoughtful())).exclude == {"history"}
+    assert keep_system(keep_system(thoughtful())).exclude == {"agent_messages"}
 
 
 @monitor
@@ -700,7 +711,7 @@ async def test_keep_system_holds_before_or_after_new_since_last_report(
             {"judge": keeps_system(first=first)}, context, thoughtful()
         )
     [seen] = [o.report.explanation for o in observations.succeeded]
-    assert json.loads(seen or "") == ["history"]
+    assert json.loads(seen or "") == ["agent_messages"]
 
 
 def merged() -> ChatMessage:
@@ -711,11 +722,11 @@ def merged() -> ChatMessage:
 
 
 def history_only(step: Step | Excerpt[Step]) -> Excerpt[Step]:
-    return keep_history(drop_input(step))
+    return keep_agent_messages(drop_input(step))
 
 
 def with_system(step: Step | Excerpt[Step]) -> Excerpt[Step]:
-    return keep_system(keep_history(step))
+    return keep_system(keep_agent_messages(step))
 
 
 @pytest.mark.parametrize(
@@ -726,11 +737,11 @@ def with_system(step: Step | Excerpt[Step]) -> Excerpt[Step]:
         # in place of an unknown input, kept or not
         (None, None, CONVERSATION, True),
         # kept: the same conversation is shown once
-        (keep_history, CONVERSATION, CONVERSATION, False),
+        (keep_agent_messages, CONVERSATION, CONVERSATION, False),
         # kept: turns before a compaction are only in history, so all of it shows
-        (keep_history, [user("summary")], CONVERSATION, True),
-        (keep_history, [merged()], [user("task"), user("more")], False),
-        (keep_history, CONVERSATION, [unnamed("no id")], True),
+        (keep_agent_messages, [user("summary")], CONVERSATION, True),
+        (keep_agent_messages, [merged()], [user("task"), user("more")], False),
+        (keep_agent_messages, CONVERSATION, [unnamed("no id")], True),
         (history_only, CONVERSATION, CONVERSATION, True),
         # a dropped input is not an unknown one
         (drop_input, CONVERSATION, CONVERSATION, False),
@@ -738,7 +749,7 @@ def with_system(step: Step | Excerpt[Step]) -> Excerpt[Step]:
         (drop_input, None, CONVERSATION, False),
         (history_only, None, CONVERSATION, True),
         # only hidden messages are extra
-        (keep_history, CONVERSATION[1:], CONVERSATION, False),
+        (keep_agent_messages, CONVERSATION[1:], CONVERSATION, False),
         (with_system, CONVERSATION[1:], CONVERSATION, True),
     ],
 )
@@ -771,7 +782,7 @@ async def test_blocks_come_input_then_history_then_the_step_numbered_in_that_ord
     step = replace(
         tool_step([user("summary")], CONVERSATION), call=call("b"), message="calls b"
     )
-    rendered = await step_as_str(keep_history(step), messages_as_str=numbered)
+    rendered = await step_as_str(keep_agent_messages(step), messages_as_str=numbered)
     starts = [
         rendered.index(marker)
         for marker in (
@@ -785,7 +796,7 @@ async def test_blocks_come_input_then_history_then_the_step_numbered_in_that_ord
 
 
 def windows(step: Step) -> Excerpt[Step]:
-    return last_messages(last_turns(keep_history(step), 1), 1)
+    return last_messages(last_turns(keep_agent_messages(step), 1), 1)
 
 
 UNKNOWN_HISTORY = (
@@ -798,13 +809,21 @@ UNKNOWN_HISTORY = (
     "step, excerpting, says_unknown",
     [
         (tool_step(CONVERSATION, None), None, False),
-        (tool_step(CONVERSATION, None), keep_history, True),
+        (tool_step(CONVERSATION, None), keep_agent_messages, True),
         # in place of an unknown input
         (tool_step(None, None), None, True),
         # windows keep it unknown rather than empty
         (tool_step(CONVERSATION, None), windows, True),
-        (replace(before_generate_step(), history=None), keep_history, True),
-        (replace(after_generate_step(), history=None), keep_history, True),
+        (
+            replace(before_generate_step(), agent_messages=None),
+            keep_agent_messages,
+            True,
+        ),
+        (
+            replace(after_generate_step(), agent_messages=None),
+            keep_agent_messages,
+            True,
+        ),
     ],
 )
 @pytest.mark.anyio
@@ -816,6 +835,28 @@ async def test_a_history_the_host_could_not_provide_is_named_where_it_would_show
     rendered = await step_as_str(excerpting(step) if excerpting else step)
     assert (UNKNOWN_HISTORY in rendered) == says_unknown
     assert "[AGENT STEP - BEGIN" in rendered
+
+
+@pytest.mark.parametrize("nonce", [None, "3f9a1c7e"])
+@pytest.mark.anyio
+async def test_a_nonce_marks_every_block_and_the_default_renderers_headers(
+    nonce: str | None,
+) -> None:
+    rendered = await step_as_str(
+        keep_agent_messages(tool_step(GO, CONVERSATION)), nonce=nonce
+    )
+    mark = "" if nonce is None else f" ({nonce})"
+    assert [line for line in rendered.splitlines() if line.startswith("[")] == [
+        f"[BEGIN INPUT{mark}]",
+        f"[END INPUT{mark}]",
+        f"[BEGIN HISTORY{mark}]",
+        f"[END HISTORY{mark}]",
+        f"[AGENT STEP - BEGIN TOOL CALL{mark}]",
+        f"[AGENT STEP - END TOOL CALL{mark}]",
+    ]
+    # Scout 0.5.5 and earlier write no nonce on message headers
+    header = mark if scout_nonce("3f9a1c7e") else ""
+    assert f"USER{header}:\ngo" in rendered
 
 
 @pytest.mark.anyio
@@ -831,7 +872,7 @@ async def test_step_as_str_says_when_the_model_input_is_unknown() -> None:
 async def test_numbered_citations_resolve_to_the_agents_messages() -> None:
     numbered, extract_refs = message_numbering()
     rendered = await step_as_str(
-        keep_history(parallel_after_b()), messages_as_str=numbered
+        keep_agent_messages(parallel_after_b()), messages_as_str=numbered
     )
     step_block = rendered.split("[AGENT STEP - BEGIN TOOL CALL AND RESULT]")[1]
     assert "cmd: b" in step_block and "cmd: a" not in step_block

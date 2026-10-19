@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -41,10 +40,6 @@ from ._unhandled import (
     unhandled,
 )
 from ._validate import check_child, named_children, validate_shape
-
-if sys.version_info < (3, 11):
-    from exceptiongroup import BaseExceptionGroup
-
 
 R = TypeVar("R", bound=Report)
 

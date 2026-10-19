@@ -13,6 +13,8 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 ### BeforeToolCall
 ### AfterToolCall
 ### Truncation
+### HumanDecision
+### human_decision_for
 ### Step
 
 ## Report types
@@ -86,7 +88,7 @@ What a monitor shows a model about a step: the windows take a step or an excerpt
 ### drop_input
 ### drop_reasoning
 ### drop_tool_usage
-### keep_history
+### keep_agent_messages
 ### keep_system
 ### last_turns
 ### last_messages
