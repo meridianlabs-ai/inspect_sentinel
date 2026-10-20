@@ -1,6 +1,7 @@
 import json
 from typing import Any
 
+import anyio
 import pytest
 from inspect_ai import Task, eval
 from inspect_ai.agent import react
@@ -19,8 +20,8 @@ from inspect_ai.tool import Tool, ToolCall, ToolChoice, ToolInfo, tool
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import forwards, monitor, protocol
-from inspect_sentinel._replay import main
-from inspect_sentinel._report import Decision, Escalations, Observation
+from inspect_sentinel._replay import main, replay_eval
+from inspect_sentinel._report import Decision, Escalations, Observation, Reported
 from inspect_sentinel._runner import run_monitors
 from inspect_sentinel._step import (
     AfterGenerate,
@@ -57,7 +58,7 @@ def forbidden() -> Tool:
 @monitor
 def counts() -> MonitorGroup:
     async def before_generate(context: Context, step: BeforeGenerate) -> Observation:
-        return Observation(suspicion=len(step.input) / 100)
+        return Observation(suspicion=len(step.input[-1].text) / 1000)
 
     async def after_generate(context: Context, step: AfterGenerate) -> Observation:
         return Observation(suspicion=len(step.output.message.tool_calls or []) / 10)
@@ -116,7 +117,7 @@ def agent_turn(
 @pytest.fixture(scope="module")
 def log(tmp_path_factory: pytest.TempPathFactory) -> str:
     task = Task(
-        dataset=[Sample(id="a", input="first"), Sample(id="b", input="second")],
+        dataset=[Sample(id="a", input="first " * 100), Sample(id="b", input="second")],
         solver=react(tools=[lookup(), forbidden()]),
         sentinel=no_forbidden(counts()),
         epochs=2,
@@ -133,6 +134,7 @@ def log(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 
 def recorded(log: str, samples: set[tuple[str, int]]) -> list[tuple[Any, ...]]:
+    # an observation's suspicion, or a decision's action, per record
     return [
         (
             str(sample.id),
@@ -192,3 +194,25 @@ def test_replay_reports_what_the_live_run_recorded(
 def test_a_sample_the_log_lacks_is_an_error(log: str) -> None:
     with pytest.raises(SystemExit):
         main([log, "--sample", "c"])
+
+
+@pytest.mark.anyio
+async def test_replay_eval_yields_the_steps_of_a_sample(log: str) -> None:
+    replayed = [
+        (
+            str(step.sample_id),
+            step.epoch,
+            step.stage,
+            step.step_id,
+            record.path,
+            "decision" if isinstance(report, Decision) else "observation",
+            report.suspicion if isinstance(report, Observation) else None,
+            report.action if isinstance(report, Decision) else None,
+        )
+        async for step in replay_eval(log, samples=[("a", 1)])
+        for record in step.records
+        if isinstance(record.detail, Reported)
+        for report in [record.detail.report]
+    ]
+    # read_eval_log refuses to run under trio
+    assert replayed == await anyio.to_thread.run_sync(recorded, log, {("a", 1)})

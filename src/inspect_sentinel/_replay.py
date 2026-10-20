@@ -16,9 +16,10 @@ from inspect_ai.event import ApprovalEvent, ModelEvent, SpanBeginEvent, ToolEven
 from inspect_ai.log import (
     EvalLog,
     EvalSample,
-    read_eval_log,
-    read_eval_log_sample,
+    read_eval_log_async,
+    read_eval_log_sample_async,
     read_eval_log_sample_summaries,
+    read_eval_log_sample_summaries_async,
 )
 from inspect_ai.model import (
     ChatMessage,
@@ -93,9 +94,9 @@ async def replay_eval(
 
     Temporary, until the replay `design/sentinel-development.md` describes replaces it.
 
-    Steps are rebuilt from the sample's events, as inspect_ai builds them live. Each agent turn gives a `BeforeGenerate` from its first `ModelEvent`, so attempts a provider error made inspect_ai retry are one step, and an `AfterGenerate` from the attempt that returned output. Each `ToolEvent` gives a `BeforeToolCall` of the call as the sentinel would have seen it, after an approver's modification, unless the call never reached the sentinel (it did not parse, named no tool the model was offered, or an approver rejected it), and an `AfterToolCall` if the call ran to a result. Only model and tool calls made while the solvers ran count, and none inside a sentinel's own span or a tool's. Only the stages the sentinel watches are run, in the order the log recorded them, with one store per sample.
+    Steps are rebuilt from the sample's events, as inspect_ai builds them live. Each agent turn gives a `BeforeGenerate` from its first `ModelEvent`, so attempts a provider error made inspect_ai retry are one step, and an `AfterGenerate` from the attempt that returned output. Each `ToolEvent` gives a `BeforeToolCall` of the call as the sentinel would have seen it, after an approver's modification, unless the call never reached the sentinel (it did not parse, named no tool the model was offered, or an approver rejected it), and an `AfterToolCall` if the call ran to a result. Only model and tool calls made while the solvers ran count, and none inside a sentinel's own span or a tool's. Only the stages the sentinel watches are run, in the order of the events they come from, with one store per sample.
 
-    What the log does not hold is missing or approximate. `agent_messages`, `history` and `human_decisions` are None. `AfterToolCall.output` is the result as the model saw it, after truncation, not what the tool returned. A model call that inspect_ai keeps out of the sentinel without a span, such as a compaction summary or a model-based approver, is taken for an agent turn. `context.eval.metadata` holds the eval's metadata as well as the task's, since the log records them merged.
+    What the log does not hold is missing or approximate. `agent_messages`, `history` and `human_decisions` are None. `AfterToolCall.output` is the result as the model saw it, after truncation, not what the tool returned. A model call that inspect_ai keeps out of the sentinel without a span, such as a compaction summary or a model-based approver, is taken for an agent turn. `context.eval.metadata` holds the eval's metadata as well as the task's, since the log records them merged. A `BeforeGenerate` that made no model call, because the sentinel ended the sample there or a limit stopped the call, has no `ModelEvent` and is not replayed. A tool call's two steps come out together where its `ToolEvent` is, so its `AfterToolCall` comes before any steps of a sub-agent the call ran, and parallel calls' steps do not interleave. A parallel call cancelled because a sibling raised is taken to have reached the sentinel.
 
     A decision changes nothing: the replay goes on with what the agent did. Monitors' model calls are made for real, with the model of their role (from `model_roles`, then the eval's model roles), or else the eval's own model. A protocol that asks a person raises, since nobody can be asked.
 
@@ -108,7 +109,7 @@ async def replay_eval(
     Raises:
         ValueError: If `sentinel` is None and the eval ran without one.
     """
-    header = read_eval_log(log, header_only=True)
+    header = await read_eval_log_async(log, header_only=True)
     if sentinel is None:
         if header.eval.config.sentinel is None:
             raise ValueError(f"{log} ran without a sentinel; pass one to replay.")
@@ -117,23 +118,33 @@ async def replay_eval(
     watched = watched_stages(root)
     roles = {
         **{
-            role: config.model
+            role: config if isinstance(config, ModelConfig) else config[0]
             for role, config in (header.eval.model_roles or {}).items()
-            if isinstance(config, ModelConfig)
         },
-        **(model_roles or {}),
+        **{
+            role: ModelConfig(model=model)
+            for role, model in (model_roles or {}).items()
+        },
     }
+    own = ModelConfig(
+        model=header.eval.model,
+        config=header.eval.model_generate_config,
+        base_url=header.eval.model_base_url,
+        args=header.eval.model_args,
+    )
     selected = (
         samples
         if samples is not None
         else [
             (summary.id, summary.epoch)
-            for summary in read_eval_log_sample_summaries(log)
+            for summary in await read_eval_log_sample_summaries_async(log)
         ]
     )
     for sample_id, epoch in selected:
-        sample = read_eval_log_sample(log, sample_id, epoch)
-        host = _ReplayHost(roles, header.eval.model, _eval_context(header, sample))
+        sample = await read_eval_log_sample_async(
+            log, sample_id, epoch, resolve_attachments=True
+        )
+        host = _ReplayHost(roles, own, _eval_context(header, sample))
         store = Store()
         for step_id, step in _steps(sample):
             if type(step) not in watched:
@@ -153,9 +164,11 @@ async def replay_eval(
 
 
 class _ReplayHost:
-    def __init__(self, roles: Mapping[str, str], model: str, eval: EvalContext) -> None:
+    def __init__(
+        self, roles: Mapping[str, ModelConfig], own: ModelConfig, eval: EvalContext
+    ) -> None:
         self._roles = roles
-        self._model = model
+        self._own = own
         self._eval = eval
 
     @property
@@ -174,12 +187,18 @@ class _ReplayHost:
     ) -> ModelOutput:
         # as inspect_ai's host: a model alone is that model; otherwise the
         # role's model, then the model given, then the eval's own
-        name = (
-            model
+        found = (
+            ModelConfig(model=model)
             if model is not None and role is None
-            else self._roles.get(role or "monitor", model or self._model)
+            else self._roles.get(
+                role or "monitor",
+                ModelConfig(model=model) if model is not None else self._own,
+            )
         )
-        return await get_model(name).generate(
+        resolved = get_model(
+            found.model, config=found.config, base_url=found.base_url, **found.args
+        )
+        return await resolved.generate(
             input,
             tools=tools or [],
             tool_choice=tool_choice,
@@ -301,9 +320,15 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
                     producer.event.tools,
                 )
             )
+            # a call halted before it ran is cancelled without failing
             reached = (
                 proposed.parse_error is None
                 and event.id not in refused
+                and not (
+                    event.error is not None
+                    and event.error.type == "cancelled"
+                    and not event.failed
+                )
                 and (tools is None or any(t.name == proposed.function for t in tools))
             )
             if not reached:
@@ -320,12 +345,14 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
                     tools=tools,
                 ),
             )
-            # a call the sentinel rejected, or that was cancelled or raised,
-            # has no result
-            if event.failed or (
+            # a call the sentinel rejected, or that was cancelled, has no
+            # result, and neither has one that raised, which failed the call
+            # and errored the sample; a call the sentinel ended the sample at
+            # failed too, but it had a result
+            if (
                 event.error is not None
                 and event.error.type in ("approval", "parsing", "cancelled")
-            ):
+            ) or (event.failed and sample.error is not None):
                 continue
             yield (
                 event.id,
@@ -370,7 +397,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     """
     parser = argparse.ArgumentParser(
         prog="python -m inspect_sentinel._replay",
-        description="Run a sentinel over the samples of an eval log, as if it had watched them live. Temporary.",
+        description="Run a sentinel over the samples of an eval log, as if it had watched them live. Temporary. The sentinel's monitors and protocols must be registered by an installed package; for ones a task file defines, import it and call replay_eval() instead.",
     )
     parser.add_argument("log", help="The eval log file.")
     parser.add_argument(
