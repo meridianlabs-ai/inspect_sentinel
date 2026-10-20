@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 from collections import Counter
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
@@ -15,6 +16,7 @@ import anyio
 from inspect_ai.event import (
     ApprovalEvent,
     ModelEvent,
+    SampleLimitEvent,
     SentinelEvent,
     SpanBeginEvent,
     ToolEvent,
@@ -266,7 +268,16 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
     # each conversation's last turn whose attempt failed, by its last input
     failed: dict[str, str] = {}
     inputs = Counter[str]()
-    for event in sample.events:
+    # a token, turn or cost limit trips once a model call returns, before
+    # the sentinel sees its output
+    limited = {
+        index
+        for index, (event, after) in enumerate(itertools.pairwise(sample.events))
+        if isinstance(event, ModelEvent)
+        and isinstance(after, SampleLimitEvent)
+        and after.type in ("token", "turn", "cost")
+    }
+    for index, event in enumerate(sample.events):
         if not isinstance(event, ModelEvent | ToolEvent):
             continue
         spanned = ancestry(event.span_id)
@@ -303,7 +314,7 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
                         config=event.config,
                     ),
                 )
-            if message is not None and event.error is None:
+            if message is not None and event.error is None and index not in limited:
                 yield (
                     message.id or "",
                     AfterGenerate(

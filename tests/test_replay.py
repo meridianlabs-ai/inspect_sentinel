@@ -264,6 +264,27 @@ def test_a_call_the_sample_ended_at_has_a_tool_result_only_if_it_ran(
     assert replayed[-1][2:4] == last
 
 
+def test_a_turn_a_limit_ended_has_no_model_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    [result] = eval(
+        Task(
+            dataset=[Sample(id="a", input="go")],
+            solver=react(tools=[lookup(), forbidden()]),
+            sentinel=no_forbidden(counts(), "reject"),
+            turn_limit=1,
+        ),
+        model=get_model("mockllm/model", custom_outputs=agent_turn),
+        log_dir=str(tmp_path),
+        display="none",
+    )
+    assert result.location
+    main([result.location])
+    replayed = replayed_lines(capsys)
+    assert replayed == recorded(result.location, {("a", 1)})
+    assert replayed[-1][2] == "model_input"
+
+
 def test_a_call_a_time_limit_cut_off_has_no_tool_result(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
