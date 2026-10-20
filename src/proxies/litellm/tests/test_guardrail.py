@@ -305,6 +305,8 @@ def weather_rule():
     ) -> Decision | None:
         location = step.call.arguments.get("location")
         if {city!r} in (None, location):
+            if {action!r} == "terminate":
+                return Decision.terminate("a lookup")
             return Decision.reject("a lookup", message=f"{{location}} is not allowed.")
         return Decision.proceed()
 
@@ -326,10 +328,16 @@ def _sidecar_python() -> Path:
 
 
 @contextmanager
-def _sidecar(city: str | None, tmp_path: Path) -> Generator[str]:
-    """The address of a real sidecar, whose sentinel rejects a weather lookup of `city`, or every lookup for None."""
+def _sidecar(
+    city: str | None,
+    tmp_path: Path,
+    *,
+    release: str = "whole",
+    action: str = "reject",
+) -> Generator[str]:
+    """The address of a real sidecar, whose sentinel rejects a weather lookup of `city`, or every lookup for None, or ends the run there, releasing replies as `release` says."""
     rule = tmp_path / "weather_rule.py"
-    rule.write_text(_RULE.format(city=city))
+    rule.write_text(_RULE.format(city=city, action=action))
     with socket.socket() as free:
         free.bind(("127.0.0.1", 0))
         port = free.getsockname()[1]
@@ -346,6 +354,8 @@ def _sidecar(city: str | None, tmp_path: Path) -> Generator[str]:
             "weather_rule",
             "--port",
             str(port),
+            "--release",
+            release,
         ],
         cwd=tmp_path,
         stdout=subprocess.DEVNULL,
@@ -374,15 +384,91 @@ def _result(result: Any) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": 1, "result": result}
 
 
-def _scripted(calls: list[Any], *answers: Any, status: int = 200) -> Starlette:
-    """A stand-in for the sidecar that keeps the calls made to it and gives these answers in turn."""
+_STREAM_METHODS = frozenset(
+    {"begin_reply", "reply_chunk", "end_reply", "abort_reply", "next_release"}
+)
+
+
+def _scripted(
+    calls: list[Any],
+    *answers: Any,
+    status: int = 200,
+    streamed: list[Any] | None = None,
+) -> Starlette:
+    """A stand-in for the sidecar that keeps the calls made to it and gives these answers in turn.
+
+    A reply handed over as a reply stream is kept in `calls` as the `judge_reply` that would have held it whole, and answered from the next answer as the stream's outputs: the reply as handed over, then its end, for `pass`; the replacement, then its end, for `replace`; and a refusal, or the error, as it is. The calls of each stream are kept in `streamed`.
+    """
     left = list(answers)
+    streams: dict[str, dict[str, Any]] = {}
 
     async def call(http: HttpRequest) -> JSONResponse:
-        calls.append(await http.json())
-        return JSONResponse(left.pop(0), status_code=status)
+        asked = await http.json()
+        method, params = asked["method"], asked.get("params", {})
+        if method not in _STREAM_METHODS:
+            calls.append(asked)
+            return JSONResponse(left.pop(0), status_code=status)
+        if streamed is not None:
+            streamed.append(asked)
+        if status != 200:
+            return JSONResponse({}, status_code=status)
+        taken = _result({"taken": True})
+        if method == "begin_reply":
+            streams[params["id"]] = {"begun": params, "data": b"", "ended": False}
+            return JSONResponse(taken)
+        stream = streams[params["id"]]
+        if method == "reply_chunk":
+            stream["data"] += base64.b64decode(params["data"])
+            return JSONResponse(taken)
+        if method == "end_reply":
+            stream["ended"] = True
+            return JSONResponse(taken)
+        if method == "abort_reply":
+            return JSONResponse(taken)
+        if not stream["ended"]:
+            await asyncio.sleep(0.01)
+            return JSONResponse(_result({"position": params["after"], "outputs": []}))
+        if "answer" not in stream:
+            body = base64.b64encode(stream["data"]).decode()
+            calls.append(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "judge_reply",
+                    "params": stream["begun"] | {"body": body},
+                }
+            )
+            stream["answer"] = _as_outputs(left.pop(0), body)
+        answer = stream["answer"]
+        if "error" in answer:
+            return JSONResponse(answer)
+        outputs = answer["outputs"]
+        return JSONResponse(
+            _result({"position": len(outputs), "outputs": outputs[params["after"] :]})
+        )
 
     return Starlette(routes=[Route(PATH, call, methods=["POST"])])
+
+
+def _as_outputs(answer: dict[str, Any], body: str) -> dict[str, Any]:
+    # a scripted answer to `judge_reply`, as a reply stream's outputs
+    if "error" in answer:
+        return answer
+    result = answer["result"]
+    action = result.get("action")
+    if action == "pass":
+        return {"outputs": [{"kind": "release", "data": body}, {"kind": "finished"}]}
+    if action == "replace":
+        return {
+            "outputs": [
+                {"kind": "release", "data": result["body"]},
+                {"kind": "finished"},
+            ]
+        }
+    if action == "refuse":
+        refusal = {key: value for key, value in result.items() if key != "action"}
+        return {"outputs": [{"kind": "refuse", **refusal}]}
+    return {"outputs": [result]}
 
 
 def _fits(part: dict[str, Any], value: Any) -> None:
@@ -410,7 +496,9 @@ def test_exchange_the_sentinel_allows_goes_on_as_it_is(
         # LiteLLM sends on the reply it has
         assert reply is None
     elif on is _MESSAGES:
-        assert reply == on.stream()
+        # the bytes as the provider sent them, in the parts the sidecar
+        # released them in
+        assert b"".join(reply) == b"".join(on.stream())
     else:
         assert [_written(chunk) for chunk in reply] == [
             _written(chunk) for chunk in on.stream()
@@ -493,14 +581,19 @@ def _call_ids(on: _On, reply: Any, streamed: bool) -> list[str]:
         for streamed in (False, True)
     ],
 )
+@pytest.mark.parametrize("release", ["whole", "early"])
 def test_a_reply_with_a_rejected_call_goes_on_without_it(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, on: _On, streamed: bool
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    on: _On,
+    streamed: bool,
+    release: str,
 ) -> None:
     proposed = _call_ids(on, on.stream() if streamed else on.whole(), streamed)
     # the recorded Responses stream is the one reply that names the country too
     city = "Tokyo, Japan" if on is _RESPONSES and streamed else "Tokyo"
 
-    with _sidecar(city, tmp_path) as url:
+    with _sidecar(city, tmp_path, release=release) as url:
         _, reply = _exchange(_make(monkeypatch, url), on, _data(on), streamed)
 
     # the second call, Tokyo, is taken out, and the others go on
@@ -512,7 +605,7 @@ def _refused(
 ) -> tuple[int, Any, Any, list[Any]]:
     """How the guardrail refused an exchange: the status and message the caller is given, the sentinel field, and what else went out.
 
-    A streamed reply is refused with an event in place of the reply: on the Responses route a `response.failed` event, which LiteLLM sends on with status 200, and elsewhere an error event, which LiteLLM sends as an error under the status it names. A reply that isn't streamed is refused with an `HTTPException`, whose `provider_specific_fields` LiteLLM writes into the error.
+    A streamed reply is refused with an event in place of the reply: on the Responses route a `response.failed` event with an error at its top, which holds the field and which LiteLLM sends on with status 200, and elsewhere an error event, which LiteLLM sends as an error under the status it names. A reply that isn't streamed is refused with an `HTTPException`, whose `provider_specific_fields` LiteLLM writes into the error.
     """
     let_go: list[Any] = []
     if streamed:
@@ -522,7 +615,11 @@ def _refused(
             assert event["type"] == "response.failed"
             assert event["response"]["status"] == "failed"
             message = event["response"]["error"]["message"]
-            return 200, message, event.get("sentinel"), let_go
+            # the error the OpenAI SDK raises on and keeps, which holds the field
+            error = event["error"]
+            assert error["message"] == message
+            extra = error.get("provider_specific_fields") or {}
+            return 200, message, extra.get("sentinel"), let_go
         error = _error_event(let_go.pop())
         extra: dict[str, Any] = error.get("provider_specific_fields") or {}
         return error["code"], error["message"], extra.get("sentinel"), let_go
@@ -572,11 +669,22 @@ def test_calls_the_guardrail_makes_fit_the_schema_file(
         "x-api-key": "a provider's key",
     }
     passed = _result({"action": "pass"})
+    stream_calls: list[Any] = []
 
-    with _serving(_scripted(calls, passed, passed)) as url:
+    with _serving(_scripted(calls, passed, passed, streamed=stream_calls)) as url:
         guardrail = _make(monkeypatch, url, sidecar_headers=["x-hawk-*"])
         _exchange(guardrail, on, _data(on, headers), streamed)
 
+    # a streamed reply is handed over as a reply stream, whose every call fits
+    # its method
+    assert bool(stream_calls) == streamed
+    for each in stream_calls:
+        _fits(_METHODS[each["method"]]["params"], each["params"])
+    assert {each["method"] for each in stream_calls} >= (
+        {"begin_reply", "reply_chunk", "end_reply", "next_release"}
+        if streamed
+        else set()
+    )
     asked, held = calls
     assert (asked["jsonrpc"], asked["method"]) == ("2.0", "judge_request")
     assert (held["jsonrpc"], held["method"]) == ("2.0", "judge_reply")
@@ -1017,7 +1125,15 @@ def test_a_responses_stream_is_failed_as_the_response_it_began() -> None:
         "code": "permission_error",
         "message": "Not allowed.",
     }
-    assert event["sentinel"] == _FIELD
+    # the error the OpenAI SDK raises on, the same one, with the field in it
+    assert event["error"] == {
+        "code": "permission_error",
+        "message": "Not allowed.",
+        "type": "permission_error",
+        "param": None,
+        "provider_specific_fields": {"sentinel": _FIELD},
+    }
+    assert "sentinel" not in event
 
 
 def test_a_replaced_chat_stream_sends_the_chunk_with_the_field_as_written(
@@ -1298,15 +1414,16 @@ def test_a_refused_responses_stream_is_read_by_the_sdk_from_what_litellm_writes(
 
     with _serving(_scripted([], *answers)) as url:
         _, let_go = _exchange(_make(monkeypatch, url), _RESPONSES, data, True)
-    events = _read_by_the_sdk(_RESPONSES, _as_litellm_writes(_RESPONSES, let_go, data))
 
-    *_, last = events
-    assert last.type == "response.failed"
+    # the SDK raises on the failed response, rather than handing it over as
+    # one more event a client could take for the reply's end
+    with pytest.raises(openai.APIError) as raised:
+        _read_by_the_sdk(_RESPONSES, _as_litellm_writes(_RESPONSES, let_go, data))
+
+    error: Any = raised.value.body
     # only a server error is one a client tries again
-    assert last.response.error.code == code
-    assert last.response.error.message == "Not allowed."
-    extra: dict[str, Any] = last.model_extra or {}
-    assert extra.get("sentinel") == _FIELD
+    assert (raised.value.code, error["message"]) == (code, "Not allowed.")
+    assert error["provider_specific_fields"]["sentinel"] == _FIELD
 
 
 _NOT_BASE64 = {"action": "replace", "body": "not base64!"}
@@ -1989,3 +2106,60 @@ def test_a_replaced_stream_may_hold_any_line_separator_json_allows(
 
     assert _written(reply[0])["choices"][0]["delta"]["content"] == "Rain and wind"
     assert len(reply) == len(events)
+
+
+def test_text_reaches_the_caller_before_the_reply_has_ended_when_released_early(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    events = anthropic_recorded("parallel-tool-calls").split(b"\n\n")
+    first_call = next(i for i, event in enumerate(events) if b'"tool_use"' in event)
+    text = [event + b"\n\n" for event in events[:first_call]]
+    rest = [event + b"\n\n" for event in events[first_call:] if event]
+    seen_text = asyncio.Event()
+
+    async def provider() -> AsyncIterator[Any]:
+        for chunk in text:
+            yield chunk
+        # the calls come only once the caller has the text, which a reply
+        # held whole would never let it have
+        await asyncio.wait_for(seen_text.wait(), 10)
+        for chunk in rest:
+            yield chunk
+
+    async def run(url: str) -> bytes:
+        guardrail = _make(monkeypatch, url)
+        data = _data(_MESSAGES)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, "anthropic_messages")
+            out = b""
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                _USER, provider(), data
+            ):
+                out += chunk
+                if b"text_delta" in out:
+                    seen_text.set()
+            return out
+        finally:
+            await guardrail.aclose()
+
+    with _sidecar("Cairo", tmp_path, release="early") as url:
+        out = asyncio.run(run(url))
+
+    # every call let through, so the caller has what the provider sent
+    assert out == b"".join(text + rest)
+
+
+def test_a_turn_ended_after_a_call_went_out_raises_in_the_sdk(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # the recorded Chat reply is calls alone: Paris goes out before Tokyo ends
+    # the run
+    data = _data(_CHAT)
+
+    with _sidecar("Tokyo", tmp_path, release="early", action="terminate") as url:
+        _, let_go = _exchange(_make(monkeypatch, url), _CHAT, data, True)
+
+    with pytest.raises(openai.APIError) as raised:
+        _read_by_the_sdk(_CHAT, _as_litellm_writes(_CHAT, let_go, data))
+
+    assert "ended this run" in str(raised.value)

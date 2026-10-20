@@ -48,11 +48,11 @@ A request on those routes is refused, whatever `unreachable_fallback` says, when
 
 A request with an MCP tool that LiteLLM's own MCP gateway would run is refused too, whatever `unreachable_fallback` says. LiteLLM runs the model's calls to such a tool itself, and sends the provider follow-up requests that no guardrail is shown. The guardrail asks LiteLLM's own test, so it refuses what the installed LiteLLM would hand to its gateway: a `server_url` of `litellm_proxy`, or one ending in `/mcp/<name>`. An MCP tool that the provider calls itself goes to the sidecar as usual.
 
-A streamed reply is held whole until the sidecar has answered, so a reply that is refused is refused before any of it has gone out.
+A streamed reply is handed to the sidecar as LiteLLM yields it, and the caller is sent what the sidecar releases. By default the sidecar holds the whole reply until it is judged, so a reply that is refused is refused before any of it has gone out. A sidecar started with `--release early` releases text as it arrives and each call once judged; a reply refused after some of it has gone out ends with an error event that the provider's SDK raises on. `unreachable_fallback` decides what happens when the sidecar gives no usable answer only while nothing has gone out; after that, the reply ends with an error event.
 
 ## What it sends
 
-Each request and each held reply is one JSON-RPC 2.0 call to the sidecar, `judge_request` or `judge_reply`. A call carries the route's format, the model's name in LiteLLM, the user's id, the request's or the reply's body, and some of the request's headers:
+Each request and each reply that isn't streamed is one JSON-RPC 2.0 call to the sidecar, `judge_request` or `judge_reply`. A streamed reply is a reply stream: `begin_reply`, a `reply_chunk` call for what has arrived each time the last one is answered, and `end_reply`, while a `next_release` call waits beside them for what to send the caller. A call carries the route's format, the model's name in LiteLLM, the user's id, the request's or the reply's body, and some of the request's headers:
 
 - An Inspect eval's own two, `x-inspect-context` and `x-irid`, which say which sample a request is for. The guardrail passes them on without reading them, and removes them from what LiteLLM sends the provider.
 - Any listed in `sidecar_headers`.
@@ -68,7 +68,7 @@ The calls and their results are described by [`proxy_endpoint.schema.json`](http
 When a request comes from an Inspect eval, the sidecar answers with a `sentinel` field that says what was decided, and the guardrail passes it on so that it reaches the eval on every route, streamed or not:
 
 - On a reply that goes on, the field sits beside the reply's own fields, or in the last event of a stream that the provider's SDK reads. LiteLLM drops a field it doesn't know from a Chat Completions chunk of its own class, so the guardrail sends that last chunk as an object that keeps every field.
-- On a refusal, LiteLLM puts the field in its error, at `error.provider_specific_fields.sentinel`, beside the sentinel's message. A refused stream on `/v1/messages` or `/chat/completions` is answered with an error event in place of the reply, which LiteLLM sends the caller as that same error, as JSON under the refusal's status. A refused Responses stream is answered with a `response.failed` event that holds the field, which the guardrail sends in place of LiteLLM's own. Its error code follows the refusal's status as LiteLLM's own would, so a client tries again only after a server error.
+- On a refusal, LiteLLM puts the field in its error, at `error.provider_specific_fields.sentinel`, beside the sentinel's message. A refused stream on `/v1/messages` or `/chat/completions` is answered with an error event in place of the reply, which LiteLLM sends the caller as that same error, as JSON under the refusal's status. A refused Responses stream is answered with a `response.failed` event, which the guardrail sends in place of LiteLLM's own. The event has an error at its top as well as the response's own, holding the same message and code, with the field at `error.provider_specific_fields.sentinel`: the OpenAI SDK raises an `APIError` on that error and keeps only it, where without it a client of the SDK would read the event as one more of the reply's. Its error code follows the refusal's status as LiteLLM's own would, so a client tries again only after a server error.
 
 Any other client is sent the reply, or the refusal, with no field.
 
@@ -82,6 +82,6 @@ LiteLLM checks the caller's key on these routes as it does on its model routes, 
 
 The guardrail is tested with LiteLLM 1.83 and 1.105.
 
-LiteLLM writes the error a caller is sent when the guardrail refuses. With LiteLLM 1.83 and 1.105, a refusal has the sentinel's message and its status, as JSON, streamed or not. The one exception is a streamed `/responses` reply, which is answered with status 200 and a `response.failed` event that holds the message.
+LiteLLM writes the error a caller is sent when the guardrail refuses. With LiteLLM 1.83 and 1.105, a refusal has the sentinel's message and its status, as JSON, streamed or not. The one exception is a streamed `/responses` reply, which is answered with status 200 and a `response.failed` event that holds the message, and which the OpenAI SDK raises on.
 
 With LiteLLM 1.83, more of the replies that LiteLLM converts from another provider's format can't be read. On its `/v1/messages` route, a refused reply that isn't streamed is answered with an error that holds no `sentinel` field, and whose message starts with the status. An Inspect eval then asks the sidecar what was decided.

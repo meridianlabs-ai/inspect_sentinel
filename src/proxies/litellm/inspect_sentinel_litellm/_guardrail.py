@@ -1,6 +1,6 @@
 """A guardrail for the LiteLLM proxy that calls a remote Inspect Sentinel endpoint over HTTPS.
 
-LiteLLM's `guardrails` setting names the class as `inspect_sentinel_litellm.LiteLLMGuardrail`. LiteLLM creates one at startup, then calls it with each model request before the request goes to a provider, and with the provider's reply before any of the reply goes to the caller. Each is put to the sidecar as a JSON-RPC 2.0 call, `judge_request` or `judge_reply`, whose result is carried out: pass, replace or refuse. Inspect Sentinel does not run in LiteLLM: only this guardrail does, and the sentinels run in the sidecar it calls.
+LiteLLM's `guardrails` setting names the class as `inspect_sentinel_litellm.LiteLLMGuardrail`. LiteLLM creates one at startup, then calls it with each model request before the request goes to a provider, and with the provider's reply before any of the reply goes to the caller. Each is put to the sidecar as a JSON-RPC 2.0 call, `judge_request` or `judge_reply`, whose result is carried out: pass, replace or refuse. A streamed reply is handed over as it arrives, as a reply stream, and the caller is sent what the sidecar releases of it. Inspect Sentinel does not run in LiteLLM: only this guardrail does, and the sentinels run in the sidecar it calls.
 
 The class runs inside LiteLLM's process, so this package stands alone: it imports nothing from `inspect_sentinel`, and needs only LiteLLM and what LiteLLM's proxy has. The calls it makes and the results it reads are described by `proxy_endpoint.schema.json` in `inspect_sentinel`'s sidecar.
 
@@ -84,6 +84,9 @@ _KEPT = "inspect_sentinel"
 _MAX_REPLY_BYTES = 32 * 1024 * 1024
 # where the sidecar serves the methods this calls, and the version of them
 _PATH = "/proxy/v1"
+# a call to `next_release` waits up to 20 seconds for output, and is given as
+# long again to answer
+_POLL_TIMEOUT = aiohttp.ClientTimeout(total=40)
 # what an eval reaches through LiteLLM: everything under it is the sidecar's
 # endpoint for evals, and the paths an eval calls first
 _EVAL_PREFIX = "/sentinel"
@@ -351,46 +354,24 @@ class LiteLLMGuardrail(CustomGuardrail):
         response: Any,
         request_data: dict[str, Any],
     ) -> AsyncGenerator[Any, None]:
-        """Hold a streamed reply whole, put it to the sidecar, and then send on what the sidecar allows.
+        """Hand a streamed reply to the sidecar as it arrives, and send on what the sidecar releases.
 
-        LiteLLM sends the caller nothing, the status included, until this yields. A reply that is refused is therefore refused before any of it has gone out.
+        The reply goes to the sidecar's reply stream as LiteLLM yields it, and what the sidecar releases is yielded as it is released: the whole reply once judged, or, where the sidecar releases replies early, text as it arrives and each call once judged. LiteLLM sends the caller nothing, the status included, until this yields.
 
-        A reply that is refused, or that the sidecar gave no usable answer for when `unreachable_fallback` is `fail_closed`, is answered with an error event in place of the reply, which LiteLLM sends the caller as an error under the refusal's status.
+        A reply refused while nothing has gone out is answered with an error event in place of the reply, which LiteLLM sends the caller as an error under the refusal's status. Once something has gone out, a refusal is an error event in the stream, which the provider's SDK raises on. Where the sidecar gives no usable answer, `unreachable_fallback` decides while nothing has gone out; after that, the reply ends with an error event, since what went out can't be matched to what LiteLLM yielded.
         """
         chunks = cast("AsyncIterator[Any]", response)
         told = _told(request_data)
-        held: list[Any] = []
-        ended = False
-        if told is not None:
-            try:
-                written: list[bytes] = []
-                size = 0
-                async for chunk in chunks:
-                    held.append(chunk)
-                    written.append(_event(chunk))
-                    size += len(written[-1])
-                    if size > self._max_reply_bytes:
-                        raise _failed("a reply larger than max_reply_bytes")
-                ended = True
-                answer = await self._ask_about_reply(told, _STREAM, b"".join(written))
-                if answer["action"] == "replace":
-                    held = _replaced_stream(held, _replacement(answer), told["format"])
-            except SidecarError:
-                try:
-                    self._unanswered()
-                except HTTPException as refused:
-                    yield _refused_stream(held, refused, told["format"])
-                    return
-            except HTTPException as refused:
-                yield _refused_stream(held, refused, told["format"])
-                return
-        for chunk in held:
-            yield chunk
-        # what was never held: a reply the sidecar was not asked about, or the
-        # rest of one that grew too large to hold
-        if not ended:
+        if told is None:
             async for chunk in chunks:
                 yield chunk
+            return
+        relay = _Relay(self, told, chunks)
+        try:
+            async for chunk in relay.released():
+                yield chunk
+        finally:
+            await relay.close()
 
     async def aclose(self) -> None:
         """Close the connection to the sidecar."""
@@ -502,13 +483,34 @@ class LiteLLMGuardrail(CustomGuardrail):
 
     async def _ask(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         # the result returned is to pass or to replace; a refusal is raised
+        answer = await self._call(method, params)
+        if answer.get("action") == "refuse":
+            raise _refusal(answer)
+        if answer.get("action") not in ("pass", "replace"):
+            raise _failed("an answer with no action this class knows")
+        return answer
+
+    async def _call(
+        self,
+        method: str,
+        params: dict[str, Any],
+        timeout: aiohttp.ClientTimeout | None = None,
+    ) -> dict[str, Any]:
+        # the result of a call; a call the sidecar didn't answer with one is
+        # raised as `SidecarError`
         if self._session is None:
-            self._session = aiohttp.ClientSession()
-        # one call to a request, so the call's own id tells nothing apart
+            # a reply stream keeps a call to `next_release` waiting beside its
+            # chunks, so the session's connections are not limited to
+            # aiohttp's default of 100, which would leave chunks queued behind
+            # waiting calls
+            self._session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(limit=0)
+            )
+        # each call stands alone, so the call's own id tells nothing apart
         call = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
         try:
             async with self._session.post(
-                self._url, json=call, timeout=self._timeout
+                self._url, json=call, timeout=timeout or self._timeout
             ) as response:
                 if response.status != 200:
                     raise _failed(f"status {response.status}")
@@ -537,12 +539,180 @@ class LiteLLMGuardrail(CustomGuardrail):
         answer = answered.get("result")
         if not isinstance(answer, dict):
             raise _failed("an answer with no result")
-        answer = cast("dict[str, Any]", answer)
-        if answer.get("action") == "refuse":
-            raise _refusal(answer)
-        if answer.get("action") not in ("pass", "replace"):
-            raise _failed("an answer with no action this class knows")
-        return answer
+        return cast("dict[str, Any]", answer)
+
+
+class _Relay:
+    """One streamed reply, handed to the sidecar's reply stream as LiteLLM yields it, and what the sidecar releases of it."""
+
+    def __init__(
+        self,
+        guardrail: LiteLLMGuardrail,
+        told: dict[str, Any],
+        chunks: AsyncIterator[Any],
+    ) -> None:
+        self._guardrail = guardrail
+        self._told = told
+        self._chunks = chunks
+        self._format: str = told["format"]
+        # every chunk LiteLLM yielded, kept for the classes released events are
+        # made in, and for a reply let through unjudged
+        self.held: list[Any] = []
+        self._pending = bytearray()
+        self._size = 0
+        self._read_all = False
+        self._raised: BaseException | None = None
+        self._arrived = asyncio.Event()
+        self._tasks: list[asyncio.Task[None]] = []
+        self._begun = False
+        self._ended = False
+
+    async def released(self) -> AsyncIterator[Any]:
+        """The chunks to yield to LiteLLM, as the sidecar releases them."""
+        guardrail, told = self._guardrail, self._told
+        sent = False
+        try:
+            await guardrail._call(  # pyright: ignore[reportPrivateUsage]
+                "begin_reply", told | {"status": 200, "content_type": _STREAM}
+            )
+            self._begun = True
+            self._tasks = [
+                asyncio.ensure_future(self._read()),
+                asyncio.ensure_future(self._upload()),
+            ]
+            position = 0
+            while True:
+                answer = await guardrail._call(  # pyright: ignore[reportPrivateUsage]
+                    "next_release",
+                    {"id": told["id"], "after": position},
+                    _POLL_TIMEOUT,
+                )
+                if self._raised is not None:
+                    raise self._raised
+                outputs = cast("list[dict[str, Any]]", answer.get("outputs") or [])
+                position_given = answer.get("position")
+                if not isinstance(position_given, int):
+                    raise _failed("a release with no position")
+                position = position_given
+                for output in outputs:
+                    kind = output.get("kind")
+                    if kind == "release":
+                        for chunk in _released(
+                            _decoded(output), self._format, self.held
+                        ):
+                            sent = True
+                            yield chunk
+                    elif kind == "error_event":
+                        for chunk in _released(
+                            _decoded(output), self._format, self.held
+                        ):
+                            yield chunk
+                        self._ended = True
+                        return
+                    elif kind == "refuse":
+                        self._ended = True
+                        raise _refusal(output)
+                    elif kind == "finished":
+                        self._ended = True
+                        return
+                    else:
+                        raise _failed("a release of a kind this class doesn't know")
+        except HTTPException as refused:
+            self._ended = True
+            yield _refused_stream(self.held, refused, self._format)
+        except SidecarError:
+            self._ended = True
+            if sent:
+                # what went out can't be matched to what LiteLLM yielded, so
+                # the reply can't go on unjudged from where it is
+                yield _refused_mid_stream(
+                    self.held,
+                    HTTPException(503, "The sentinel sidecar gave no usable answer."),
+                    self._format,
+                )
+                return
+            try:
+                guardrail._unanswered()  # pyright: ignore[reportPrivateUsage]
+            except HTTPException as refused:
+                yield _refused_stream(self.held, refused, self._format)
+                return
+            # let through unjudged, as LiteLLM yields it
+            async for chunk in self._unjudged():
+                yield chunk
+
+    async def close(self) -> None:
+        """Stop reading and handing over, and tell the sidecar if the reply didn't end."""
+        for task in self._tasks:
+            task.cancel()
+        if self._tasks:
+            await asyncio.wait(self._tasks)
+        if self._begun and not self._ended:
+            try:
+                await self._guardrail._call(  # pyright: ignore[reportPrivateUsage]
+                    "abort_reply", {"id": self._told["id"]}
+                )
+            except SidecarError:
+                pass
+
+    async def _read(self) -> None:
+        # LiteLLM's chunks, kept, and written as the caller would be sent them
+        try:
+            async for chunk in self._chunks:
+                self.held.append(chunk)
+                written = _event(chunk)
+                self._size += len(written)
+                if self._size > self._guardrail._max_reply_bytes:  # pyright: ignore[reportPrivateUsage]
+                    raise _failed("a reply larger than max_reply_bytes")
+                self._pending += written
+                self._arrived.set()
+        except BaseException as ex:
+            self._raised = ex
+            raise
+        finally:
+            self._read_all = True
+            self._arrived.set()
+
+    async def _upload(self) -> None:
+        # what has arrived while the last chunk was being sent goes as one
+        seq = 0
+        while True:
+            await self._arrived.wait()
+            self._arrived.clear()
+            if self._pending:
+                data, self._pending = bytes(self._pending), bytearray()
+                await self._guardrail._call(  # pyright: ignore[reportPrivateUsage]
+                    "reply_chunk",
+                    {
+                        "id": self._told["id"],
+                        "seq": seq,
+                        "data": base64.b64encode(data).decode("ascii"),
+                    },
+                )
+                seq += 1
+                self._arrived.set()
+                continue
+            if self._read_all:
+                if self._raised is None:
+                    await self._guardrail._call(  # pyright: ignore[reportPrivateUsage]
+                        "end_reply", {"id": self._told["id"]}
+                    )
+                return
+
+    async def _unjudged(self) -> AsyncIterator[Any]:
+        # every chunk LiteLLM yields, as the reader keeps them
+        given = 0
+        while True:
+            while given < len(self.held):
+                yield self.held[given]
+                given += 1
+            if self._read_all:
+                if self._raised is not None and not isinstance(
+                    self._raised, SidecarError
+                ):
+                    raise self._raised
+                return
+            self._arrived.clear()
+            await self._arrived.wait()
 
 
 def _listed(headers: str | Iterable[str] | None) -> tuple[str, ...]:
@@ -765,7 +935,18 @@ def _replaced_whole(response: Any, body: bytes) -> Any:
         raise _failed("a replaced reply LiteLLM can't take") from None
 
 
-def _replaced_stream(held: list[Any], body: bytes, format: str) -> list[Any]:
+def _decoded(output: dict[str, Any]) -> bytes:
+    data = output.get("data")
+    try:
+        if not isinstance(data, str):
+            raise ValueError
+        return base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError):
+        raise _failed("a release that is not base64") from None
+
+
+def _released(data: bytes, format: str, held: list[Any]) -> list[Any]:
+    # what the sidecar released, as chunks LiteLLM writes as they were sent
     classes = {
         getattr(chunk, "type", None): type(chunk)
         for chunk in held
@@ -773,24 +954,41 @@ def _replaced_stream(held: list[Any], body: bytes, format: str) -> list[Any]:
     }
     if not classes:
         # the Messages route streams bytes
-        return [body]
-    # elsewhere LiteLLM streams its own classes, one to an event, and each
-    # replaced event is made in the class the reply had for that kind of event
+        return [data]
     try:
-        replaced = [
-            # LiteLLM writes a Chat Completions chunk of its own class without
-            # a field the class doesn't have, so the chunk that carries the
-            # sentinel field is one that keeps every field
+        events = _events(data)
+        released = [
+            # LiteLLM writes a chunk of its own class without a field the
+            # class doesn't have, so a chunk with the sentinel field, and an
+            # error the sidecar wrote, are ones that keep every field
             _Written(**event)
-            if format == _CHAT and "sentinel" in event
+            if "error" in event
+            or (format == _CHAT and "sentinel" in event)
+            or event.get("type") not in classes
             else classes[event.get("type")](**event)
-            for event in _events(body)
+            for event in events
         ]
     except Exception:
-        raise _failed("a replaced reply stream LiteLLM can't take") from None
-    if not replaced:
-        raise _failed("a replaced reply stream that holds no event")
-    return replaced
+        raise _failed("a release LiteLLM can't take") from None
+    if data.strip() and not released and b"[DONE]" not in data:
+        # the sidecar releases whole events, so bytes that hold none are not
+        # a release
+        raise _failed("a release that holds no event")
+    return released
+
+
+def _refused_mid_stream(held: list[Any], refused: HTTPException, format: str) -> Any:
+    # A refusal once some of the stream has gone out: an error event the
+    # provider's SDK raises on, in the provider's own form.
+    if format == _RESPONSES:
+        return _response_failed(held, refused)
+    if format == _CHAT:
+        return _refused_stream(held, refused, format)
+    error = {
+        "type": "error",
+        "error": {"type": "api_error", "message": str(refused.detail)},
+    }
+    return f"event: error\ndata: {json.dumps(error)}\n\n".encode()
 
 
 def _events(body: bytes) -> list[dict[str, Any]]:
@@ -875,14 +1073,25 @@ def _response_failed(held: list[Any], refused: HTTPException) -> _Written:
         },
     }
     sequence = max((event.get("sequence_number", 0) for event in events), default=0)
+    # The OpenAI SDK raises on an event with an error at its top, keeping
+    # only that error, so the sentinel field goes in it; a client that reads
+    # the events sees the response fail with the same error.
+    error: dict[str, Any] = {
+        **response["error"],
+        "type": response["error"]["code"],
+        "param": None,
+    }
+    extra = getattr(refused, "provider_specific_fields", None)
+    if isinstance(extra, dict) and "sentinel" in extra:
+        error["provider_specific_fields"] = {
+            "sentinel": cast("dict[str, Any]", extra)["sentinel"]
+        }
     event: dict[str, Any] = {
         "type": "response.failed",
         "sequence_number": sequence + 1,
         "response": response,
+        "error": error,
     }
-    extra = getattr(refused, "provider_specific_fields", None)
-    if isinstance(extra, dict) and "sentinel" in extra:
-        event["sentinel"] = cast("dict[str, Any]", extra)["sentinel"]
     return _Written(**event)
 
 
