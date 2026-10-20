@@ -299,6 +299,7 @@ class Handler:
                 input=sent.input if sent is not None else None,
                 agent_messages=None,
                 tools=sent.tools if sent is not None else None,
+                tool_choice=sent.tool_choice if sent is not None else None,
             )
             judging = self._judging[key] = anyio.Event()
             try:
@@ -371,6 +372,7 @@ class Handler:
                 input=held.input,
                 agent_messages=None,
                 tools=held.offered.tools,
+                tool_choice=held.offered.tool_choice,
             )
             decision = await self._judge(held, run, step)
             if decision is None or decision.action == "proceed":
@@ -403,7 +405,12 @@ class Handler:
                 index = seen.get(call.id, 0)
                 seen[call.id] = index + 1
                 assert message.id is not None
-                made = Made(held.input, held.offered.tools, message.id)
+                made = Made(
+                    held.input,
+                    held.offered.tools,
+                    held.offered.tool_choice,
+                    message.id,
+                )
                 conversation.made[occurrence(call.id, index)] = made
                 # its place, not one more each time: a retry or another
                 # reply to the same request hands out a call in the same

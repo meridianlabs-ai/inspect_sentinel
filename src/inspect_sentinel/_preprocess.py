@@ -24,6 +24,7 @@ from inspect_ai.model import (
     ContentToolUse,
 )
 from inspect_ai.scorer import Reference
+from inspect_ai.tool import ToolChoice, ToolInfo
 from inspect_ai.util import StoreModel
 from pydantic import Field
 from typing_extensions import TypeVar
@@ -100,7 +101,7 @@ class StepPreprocessor(Generic[S]):
     input_window: Window | None = field(default_factory=AllMessages)
     """How much of `input` to show: all of it by default; None for none.
 
-    Before a generate, `input` is the request being judged, so a window that leaves none of it (None, `LastTurns(0)`, `LastMessages(0)`, or `NewSinceLastReport` when nothing is new) shows the model only the tools offered. At the other stages the step is judged without its context.
+    Before a generate, `input` is the request being judged, so a window that leaves none of it (None, `LastTurns(0)`, `LastMessages(0)`, or `NewSinceLastReport` when nothing is new) shows the model only the tools offered. At a tool stage the call is judged against only the tools of the request that produced it.
     """
 
     history_window: Window | None = None
@@ -180,7 +181,7 @@ async def step_as_str(
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
-    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At a tool stage: `INPUT`, `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the agent loop's own list), `CALL` (the assistant's text and the call) and, after the call, `RESULT`. At a generate: `HISTORY`, `AGENT MESSAGES`, then the request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`, and after the generate, `REPLY`. A list the host could not provide (None) is named in its block. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header where the installed Scout takes a nonce. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
+    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At every stage: `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the agent loop's own list), then the model request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`; at a tool stage, the request that produced the call. Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant's text and the call) and, after the call, `RESULT`. A list the host could not provide (None) is named in its block; at a tool stage whose input is not known, the tools and tool choice are left out. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header where the installed Scout takes a nonce. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
 
     Args:
         step: The step to render, usually from `preprocess_step()`.
@@ -210,13 +211,7 @@ async def step_as_str(
         )
 
     # rendered in this order, so messages are numbered in it too
-    unknown_input = "The model input for this call is not available."
-    parts: list[str] = []
-    generate = isinstance(step, BeforeGenerate | AfterGenerate)
-    # a generate's input is shown with the rest of its request, below
-    if not generate:
-        parts.append(blocks(("INPUT", await text(step.input, unknown_input))))
-    parts.append(
+    parts = [
         blocks(
             (
                 "HISTORY",
@@ -231,22 +226,26 @@ async def step_as_str(
                     "The agent's own message list is not available.",
                 ),
             ),
-        )
-    )
-    if isinstance(step, BeforeGenerate | AfterGenerate):
+        ),
         # the tools follow the input, so the input stays a prefix the monitor
         # model's prompt cache can reuse
-        parts.append(
-            blocks(
-                ("INPUT", await text(step.input, unknown_input)),
-                ("TOOLS", _tools(step)),
-            )
-        )
+        blocks(
+            (
+                "INPUT",
+                await text(
+                    step.input, "The model input for this call is not available."
+                ),
+            ),
+            ("TOOLS", _tools(step.tools)),
+        ),
         # one line, so it needs no end marker
-        parts.append(f"[TOOL CHOICE{mark}] {_tool_choice(step)}")
-        if isinstance(step, AfterGenerate):
-            parts.append(blocks(("REPLY", await text(_reply(step), ""))))
-    else:
+        ""
+        if step.tool_choice is None
+        else f"[TOOL CHOICE{mark}] {_tool_choice(step.tool_choice)}",
+    ]
+    if isinstance(step, AfterGenerate):
+        parts.append(blocks(("REPLY", await text(_reply(step), ""))))
+    elif isinstance(step, BeforeToolCall | AfterToolCall):
         parts.append(blocks(("CALL", await text([_call(step)], ""))))
         if isinstance(step, AfterToolCall):
             parts.append(blocks(("RESULT", await text([step.result], ""))))
@@ -361,12 +360,16 @@ def _step_block(step: Step) -> str:
     return "MODEL REPLY"
 
 
-def _tools(step: BeforeGenerate | AfterGenerate) -> str:
-    return json.dumps([t.model_dump(exclude_none=True) for t in step.tools], indent=2)
+def _tools(tools: list[ToolInfo] | None) -> str:
+    # none offered, or not known, leaves the block out
+    return (
+        json.dumps([t.model_dump(exclude_none=True) for t in tools], indent=2)
+        if tools
+        else ""
+    )
 
 
-def _tool_choice(step: BeforeGenerate | AfterGenerate) -> str:
-    choice = step.tool_choice
+def _tool_choice(choice: ToolChoice) -> str:
     return json.dumps(choice if isinstance(choice, str) else {"name": choice.name})
 
 

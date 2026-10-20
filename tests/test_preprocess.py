@@ -113,6 +113,8 @@ def all_lists(messages: list[ChatMessage] | None) -> BeforeToolCall:
     return replace(tool_step(messages, messages), history=messages)
 
 
+BASH = ToolInfo(name="bash", description="Run a command.")
+
 Shown = tuple[list[str] | None, list[str] | None]
 
 
@@ -516,7 +518,7 @@ async def test_a_reply_holds_its_request_then_the_reply() -> None:
     request = replace(
         before_generate_step(),
         input=CONVERSATION[1:],
-        tools=[ToolInfo(name="bash", description="Run a command.")],
+        tools=[BASH],
     )
     reply = replace(after_generate_step(), input=request.input, tools=request.tools)
     asked, answered = await render(request), await render(reply)
@@ -530,37 +532,64 @@ async def test_a_reply_holds_its_request_then_the_reply() -> None:
     )
 
 
-@pytest.mark.anyio
-async def test_a_request_holds_its_input_then_its_tools() -> None:
-    tool = ToolInfo(name="bash", description="Run a command.")
-    step = replace(
+REQUEST = [user("go")]
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
         before_generate_step(),
-        input=CONVERSATION[1:],
-        tools=[tool],
-        tool_choice=ToolFunction(name="bash"),
+        after_generate_step(),
+        before_tool_call("bash", cmd="ls"),
+        after_tool_call("bash", "out", cmd="ls"),
+    ],
+)
+@pytest.mark.anyio
+async def test_every_stage_shows_the_request_as_its_input_then_its_tools(
+    step: Step,
+) -> None:
+    rendered = await render(
+        replace(
+            step, input=REQUEST, tools=[BASH], tool_choice=ToolFunction(name="bash")
+        )
     )
-    rendered = await render(step)
-    _, request = rendered.split("[BEGIN AGENT STEP - MODEL REQUEST]\n")
     headers = [
         line
-        for line in request.splitlines()
+        for line in rendered.splitlines()
         if re.match(r"\[(BEGIN|END|M|TOOL CHOICE)", line)
     ]
-    assert headers == [
+    request = [
         "[BEGIN INPUT]",
         "[M1] USER:",
-        "[M2] ASSISTANT:",
-        "[M3] TOOL:",
-        "[M4] ASSISTANT:",
         "[END INPUT]",
         "[BEGIN TOOLS]",
         "[END TOOLS]",
         '[TOOL CHOICE] {"name": "bash"}',
-        "[END AGENT STEP - MODEL REQUEST]",
     ]
+    assert headers[1 : 1 + len(request)] == request
     assert json.loads(
-        request.split("[BEGIN TOOLS]\n")[1].split("\n[END TOOLS]")[0]
-    ) == [tool.model_dump(exclude_none=True)]
+        rendered.split("[BEGIN TOOLS]\n")[1].split("\n[END TOOLS]")[0]
+    ) == [BASH.model_dump(exclude_none=True)]
+
+
+@pytest.mark.parametrize(
+    "step, left_out",
+    [
+        # no tools offered
+        (replace(before_generate_step(), input=REQUEST), ["[BEGIN TOOLS]"]),
+        # a tool stage whose request is not known
+        (
+            replace(before_tool_call("bash", cmd="ls"), input=None),
+            ["[BEGIN TOOLS]", "[TOOL CHOICE]"],
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_tools_not_offered_or_not_known_are_left_out(
+    step: Step, left_out: list[str]
+) -> None:
+    rendered = await render(step)
+    assert not any(text in rendered for text in left_out)
 
 
 def thinks(text: str, id: str) -> ChatMessageAssistant:
@@ -670,7 +699,12 @@ async def test_a_nonce_marks_every_block_and_every_message_header(
     nonce: str | None,
 ) -> None:
     rendered = await render(
-        replace(tool_step([user("go")], CONVERSATION), history=CONVERSATION),
+        replace(
+            tool_step([user("go")], CONVERSATION),
+            history=CONVERSATION,
+            tools=[BASH],
+            tool_choice="auto",
+        ),
         StepPreprocessor(
             history_window=AllMessages(), agent_messages_window=AllMessages()
         ),
@@ -679,11 +713,13 @@ async def test_a_nonce_marks_every_block_and_every_message_header(
     mark = "" if nonce is None else f" ({nonce})"
     assert [line for line in rendered.splitlines() if line.startswith("[B")] == [
         f"[BEGIN AGENT STEP - TOOL CALL REQUEST{mark}]",
-        f"[BEGIN INPUT{mark}]",
         f"[BEGIN HISTORY{mark}]",
         f"[BEGIN AGENT MESSAGES{mark}]",
+        f"[BEGIN INPUT{mark}]",
+        f"[BEGIN TOOLS{mark}]",
         f"[BEGIN CALL{mark}]",
     ]
+    assert f'[TOOL CHOICE{mark}] "auto"' in rendered.splitlines()
     assert rendered.endswith(f"[END AGENT STEP - TOOL CALL REQUEST{mark}]")
     # Scout 0.5.5 and earlier write no nonce on message headers
     header = mark if scout_nonce("3f9a1c7e") else ""
@@ -698,17 +734,17 @@ async def test_messages_are_numbered_in_block_order_and_cites_resolve() -> None:
         rendered.index(marker)
         for marker in (
             "[BEGIN AGENT STEP - TOOL CALL REQUEST]",
-            "[BEGIN INPUT]",
             "[BEGIN HISTORY]",
             "[BEGIN AGENT MESSAGES]",
+            "[BEGIN INPUT]",
             "[BEGIN CALL]",
         )
     ]
     assert starts == sorted(starts)
     assert [r.id for r in extract_refs("see [M1], [M2], [M3] and [M4]")] == [
-        "summary",
         "sent",
         "task",
+        "summary",
         "msg_1",
     ]
 
