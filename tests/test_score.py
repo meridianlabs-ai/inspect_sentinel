@@ -865,3 +865,41 @@ async def test_explain_text_takes_an_earlier_attempts_text_when_the_last_has_non
         host, before_tool_call("bash", cmd="rm -rf /etc"), "Safe?", explain="text"
     )
     assert observation.explanation == "Deletes /etc [M1]."
+
+
+@pytest.mark.anyio
+async def test_scope_turn_asks_again_for_a_call_already_answered() -> None:
+    _, steps = turn_of_three()
+    host = FakeHost(
+        eval=EVAL,
+        outputs=[
+            answer(explanation="a", call_1=0.1, call_2=0.2, call_3=0.3),
+            answer(explanation="b", call_1=0.4, call_2=0.5, call_3=0.6),
+        ],
+    )
+    with in_step(host=host) as context:
+        first = await context.host.score(steps[0], "Safe?")
+        again = await context.host.score(steps[0], "Safe?")
+        second = await context.host.score(steps[1], "Safe?")
+    assert (first.suspicion, again.suspicion, second.suspicion) == (0.1, 0.4, 0.5)
+    assert len(host.inputs) == 2
+
+
+@pytest.mark.anyio
+async def test_scope_turn_keeps_interleaved_conversations_apart() -> None:
+    _, steps = turn_of_three()
+    other = [replace(s, conversation="other") for s in steps]
+    host = FakeHost(
+        eval=EVAL,
+        outputs=[
+            answer(explanation="a", call_1=0.1, call_2=0.2, call_3=0.3),
+            answer(explanation="b", call_1=0.4, call_2=0.5, call_3=0.6),
+        ],
+    )
+    with in_step(host=host) as context:
+        scores = [
+            (await context.host.score(s, "Safe?")).suspicion
+            for s in (steps[0], other[0], steps[1], other[1])
+        ]
+    assert scores == [0.1, 0.4, 0.2, 0.5]
+    assert len(host.inputs) == 2

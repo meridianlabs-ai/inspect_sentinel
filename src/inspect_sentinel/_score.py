@@ -251,9 +251,9 @@ async def score_step(
             ).encode()
         ).hexdigest()
         if id(store) not in _TURNS:
-            _TURNS[id(store)] = _Turns()
+            _TURNS[id(store)] = {}
             finalize(store, _TURNS.pop, id(store), None)
-        turns = _TURNS[id(store)]
+        turns = _TURNS[id(store)].setdefault(step.conversation, _Turns())
         if turns.message != step.message_id:
             # keep only the latest message's judgments
             turns.message = step.message_id
@@ -261,6 +261,10 @@ async def score_step(
         while key not in turns.judged and key in turns.flights:
             await turns.flights[key].wait()
         judged = turns.judged.get(key)
+        # a second ask for a call already answered (an ensemble sampling the
+        # same step again) gets a new judgment, as under scope="call"
+        if judged is not None and step.call.id in judged["served"]:
+            judged = None
         if judged is None:
             event = turns.flights[key] = anyio.Event()
             try:
@@ -272,11 +276,13 @@ async def score_step(
                     config=config,
                     retry_refusals=retry_refusals,
                 )
+                judged["served"] = set[str]()
                 if turns.message == step.message_id:
                     turns.judged[key] = judged
             finally:
                 del turns.flights[key]
                 event.set()
+        judged["served"].add(step.call.id)
         return _observation(judged, step.call.id, dimensions)
     prompt = await _prompt(
         host,
@@ -325,7 +331,7 @@ class _Prompt:
 
 @dataclass
 class _Turns:
-    # the judgments of one sample's latest multi-call message under
+    # the judgments of one conversation's latest multi-call message under
     # scope="turn", by prompt key, and those being made, so a concurrent call
     # of the message waits for one rather than asking the model again
     message: str = ""
@@ -333,9 +339,10 @@ class _Turns:
     flights: dict[str, anyio.Event] = field(default_factory=lambda: {})
 
 
-# by sample store, which is not hashable, so by its id, dropped with the store;
-# held in the process, not the store, so the log and the agent never see it
-_TURNS: dict[int, _Turns] = {}
+# by sample store, which is not hashable, so by its id, dropped with the store,
+# then by conversation, so interleaved agents keep their own; held in the
+# process, not the store, so the log and the agent never see it
+_TURNS: dict[int, dict[str, _Turns]] = {}
 
 
 def _label(i: int, name: str, names: list[str]) -> str:
