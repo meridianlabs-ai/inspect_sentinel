@@ -1,5 +1,6 @@
 import json
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 import anyio
 import pytest
@@ -73,14 +74,20 @@ def counts() -> MonitorGroup:
 
 
 @protocol
-def no_forbidden(monitors: Monitor | MonitorGroup) -> Protocol:
+def no_forbidden(
+    monitors: Monitor | MonitorGroup, action: Literal["reject", "terminate"]
+) -> Protocol:
     async def decide(
         context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         await run_monitors(monitors, context, step)
         if isinstance(step, BeforeToolCall):
             if step.call.function == "forbidden":
-                return Decision.reject("forbidden", message="Not allowed.")
+                return (
+                    Decision.reject("forbidden", message="Not allowed.")
+                    if action == "reject"
+                    else Decision.terminate("forbidden")
+                )
             return Decision.proceed()
         return None
 
@@ -114,23 +121,44 @@ def agent_turn(
     )
 
 
-@pytest.fixture(scope="module")
-def log(tmp_path_factory: pytest.TempPathFactory) -> str:
+def run_eval(action: Literal["reject", "terminate"], log_dir: Path) -> str:
     task = Task(
         dataset=[Sample(id="a", input="first " * 100), Sample(id="b", input="second")],
         solver=react(tools=[lookup(), forbidden()]),
-        sentinel=no_forbidden(counts()),
+        sentinel=no_forbidden(counts(), action),
         epochs=2,
     )
     [result] = eval(
         task,
         model=get_model("mockllm/model", custom_outputs=agent_turn),
-        log_dir=str(tmp_path_factory.mktemp("logs")),
+        log_dir=str(log_dir),
         display="none",
     )
     assert result.status == "success"
     assert result.location
     return result.location
+
+
+@pytest.fixture(scope="module")
+def log(tmp_path_factory: pytest.TempPathFactory) -> str:
+    return run_eval("reject", tmp_path_factory.mktemp("logs"))
+
+
+def replayed_lines(capsys: pytest.CaptureFixture[str]) -> list[tuple[Any, ...]]:
+    return [
+        (
+            str(line["sample_id"]),
+            line["epoch"],
+            line["stage"],
+            line["step_id"],
+            record["path"],
+            "decision" if "action" in record["report"] else "observation",
+            record["report"].get("suspicion"),
+            record["report"].get("action"),
+        )
+        for line in map(json.loads, capsys.readouterr().out.splitlines())
+        for record in line["records"]
+    ]
 
 
 def recorded(log: str, samples: set[tuple[str, int]]) -> list[tuple[Any, ...]]:
@@ -168,20 +196,7 @@ def test_replay_reports_what_the_live_run_recorded(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     main([log, *(arg for sample in given for arg in ("--sample", sample))])
-    replayed = [
-        (
-            str(line["sample_id"]),
-            line["epoch"],
-            line["stage"],
-            line["step_id"],
-            record["path"],
-            "decision" if "action" in record["report"] else "observation",
-            record["report"].get("suspicion"),
-            record["report"].get("action"),
-        )
-        for line in map(json.loads, capsys.readouterr().out.splitlines())
-        for record in line["records"]
-    ]
+    replayed = replayed_lines(capsys)
     assert replayed == recorded(log, selected)
     assert {stage for _, _, stage, *_ in replayed} == {
         "model_input",
@@ -189,6 +204,16 @@ def test_replay_reports_what_the_live_run_recorded(
         "tool_call",
         "tool_result",
     }
+
+
+def test_a_call_ended_at_its_tool_call_has_no_tool_result(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log = run_eval("terminate", tmp_path)
+    main([log, "--sample", "a:1"])
+    replayed = replayed_lines(capsys)
+    assert replayed == recorded(log, {("a", 1)})
+    assert replayed[-1][2:4] == ("tool_call", "call-2")
 
 
 def test_a_sample_the_log_lacks_is_an_error(log: str) -> None:

@@ -12,7 +12,13 @@ from dataclasses import dataclass
 from typing import NamedTuple, cast
 
 import anyio
-from inspect_ai.event import ApprovalEvent, ModelEvent, SpanBeginEvent, ToolEvent
+from inspect_ai.event import (
+    ApprovalEvent,
+    ModelEvent,
+    SentinelEvent,
+    SpanBeginEvent,
+    ToolEvent,
+)
 from inspect_ai.log import (
     EvalLog,
     EvalSample,
@@ -249,6 +255,16 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
     approvals = [e for e in sample.events if isinstance(e, ApprovalEvent)]
     refused = {e.call.id for e in approvals if e.decision in ("reject", "terminate")}
     modified = {e.call.id: e.modified for e in approvals if e.modified is not None}
+    # the calls the sentinel ended the sample at before they ran
+    terminated = {
+        e.step_id
+        for e in sample.events
+        if isinstance(e, SentinelEvent)
+        and e.path == ""
+        and e.stage == "tool_call"
+        and e.action == "terminate"
+        and e.status == "reported"
+    }
     # the model call and assistant message that proposed each tool call
     producers: dict[str, _Producer] = {}
     # each conversation's last turn whose attempt failed, by its last input
@@ -345,14 +361,18 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
                     tools=tools,
                 ),
             )
-            # a call the sentinel rejected, or that was cancelled, has no
-            # result, and neither has one that raised, which failed the call
-            # and errored the sample; a call the sentinel ended the sample at
-            # failed too, but it had a result
+            # a call the sentinel rejected or ended the sample at, or that was
+            # cancelled, has no result, and neither has one that raised, which
+            # failed the call and errored the sample; a call the sentinel ended
+            # the sample at once it ran failed too, but it had a result
             if (
-                event.error is not None
-                and event.error.type in ("approval", "parsing", "cancelled")
-            ) or (event.failed and sample.error is not None):
+                (
+                    event.error is not None
+                    and event.error.type in ("approval", "parsing", "cancelled")
+                )
+                or event.id in terminated
+                or (event.failed and sample.error is not None)
+            ):
                 continue
             yield (
                 event.id,
