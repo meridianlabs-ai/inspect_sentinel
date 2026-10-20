@@ -1,8 +1,6 @@
-# Temporary, for the maintainer's own use: runs a sentinel over the samples of
-# an eval log. It does not attempt the replay design/sentinel-development.md
-# describes (as_scanner(), steps_from_messages(), replay_monitor(), workstream
-# 10) and meets none of its requirements. Not exported; delete it when that
-# replay lands.
+# Temporary, for the maintainer's own use, until as_scanner()
+# (design/sentinel-development.md) lands; it does not attempt that design. To
+# remove it, delete this file and tests/test_replay.py.
 
 from __future__ import annotations
 
@@ -75,22 +73,11 @@ class ReplayedStep:
     """What the sentinel decided at one step of a replayed sample."""
 
     sample_id: str | int
-    """The sample's id."""
-
     epoch: int
-    """The sample's epoch."""
-
     stage: Stage
-    """The stage of the step."""
-
     step_id: str
-    """The step's id, as the live run gives `SentinelEvent.step_id`."""
-
     decision: Decision | None
-    """The root's decision, or None if it abstained."""
-
     records: list[Record]
-    """Everything the runner recorded at the step, in order."""
 
 
 async def replay_eval(
@@ -100,25 +87,7 @@ async def replay_eval(
     samples: Sequence[tuple[str | int, int]] | None = None,
     model_roles: Mapping[str, str] | None = None,
 ) -> AsyncIterator[ReplayedStep]:
-    """Run a sentinel over the steps of samples in an eval log, as if it had watched them live, yielding each step as it is judged.
-
-    Temporary, for the maintainer's own use. It does not attempt the replay `design/sentinel-development.md` describes (`as_scanner()` and the functions under it) and meets none of its requirements; it goes when that replay lands.
-
-    Steps are rebuilt from the sample's events, as inspect_ai builds them live. Each agent turn gives a `BeforeGenerate` from its first `ModelEvent`, so attempts a provider error made inspect_ai retry are one step, and an `AfterGenerate` from the attempt that returned output. Each `ToolEvent` gives a `BeforeToolCall` of the call as the sentinel would have seen it, after an approver's modification, unless the call never reached the sentinel (it did not parse, named no tool the model was offered, or an approver rejected it), and an `AfterToolCall` if the call ran to a result. Only model and tool calls made while the solvers ran count, none inside a sentinel's own span, and no model call inside a tool's. Only the stages the sentinel watches are run, in the order of the events they come from, with one store per sample.
-
-    What the log does not hold is missing or approximate. `agent_messages`, `history` and `human_decisions` are None. `AfterToolCall.output` is the result as the model saw it, after truncation, not what the tool returned. A model call that inspect_ai keeps out of the sentinel without a span, such as a compaction summary or a model-based approver, is taken for an agent turn. `context.eval.metadata` holds the eval's metadata as well as the task's, since the log records them merged. A `BeforeGenerate` that made no model call, because the sentinel ended the sample there or a limit stopped the call, has no `ModelEvent` and is not replayed. A tool call's two steps come out together where its `ToolEvent` is, so its `AfterToolCall` comes before any steps of a sub-agent the call ran, and parallel calls' steps do not interleave. A parallel call cancelled because a sibling raised is taken to have reached the sentinel.
-
-    A decision changes nothing: the replay goes on with what the agent did. Monitors' model calls are made for real, with the model of their role (from `model_roles`, then the eval's model roles), or else the eval's own model. A protocol that asks a person raises, since nobody can be asked.
-
-    Args:
-        log: The eval log file.
-        sentinel: The sentinel to run. Defaults to the one the eval ran with.
-        samples: The `(id, epoch)` of each sample to replay. Defaults to every sample.
-        model_roles: The model each role generates with, e.g. `{"monitor": "anthropic/claude-haiku-4-5"}`, over the eval's own model roles.
-
-    Raises:
-        ValueError: If `sentinel` is None and the eval ran without one.
-    """
+    """Run a sentinel over samples of an eval log as if it had watched them live; decisions change nothing."""
     header = await read_eval_log_async(log, header_only=True)
     if sentinel is None:
         if header.eval.config.sentinel is None:
@@ -419,33 +388,13 @@ def _view(call: ToolCall, event: ToolEvent) -> ToolCallView:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Replay a sentinel over samples of an eval log, writing one JSON line per step as it is judged.
-
-    Args:
-        argv: The arguments, without the program's name. The process's own if not given.
-    """
-    parser = argparse.ArgumentParser(
-        prog="python -m inspect_sentinel._replay",
-        description="Run a sentinel over the samples of an eval log, as if it had watched them live. Temporary, for the maintainer's own use; it is not the replay design/sentinel-development.md describes (as_scanner()). The sentinel's monitors and protocols must be registered by an installed package; for ones a task file defines, import it and call replay_eval() instead.",
-    )
-    parser.add_argument("log", help="The eval log file.")
+    """Replay a sentinel over samples of an eval log, writing one JSON line per step."""
+    parser = argparse.ArgumentParser(prog="python -m inspect_sentinel._replay")
+    parser.add_argument("log")
+    parser.add_argument("--sentinel")
+    parser.add_argument("--sample", action="append", default=[], metavar="ID[:EPOCH]")
     parser.add_argument(
-        "--sentinel",
-        help="A YAML or JSON configuration file, or the registered name of a monitor or protocol. Defaults to the sentinel the eval ran with.",
-    )
-    parser.add_argument(
-        "--sample",
-        action="append",
-        default=[],
-        metavar="ID[:EPOCH]",
-        help="A sample to replay: its id for every epoch of it, or its id and an epoch. May be repeated. Defaults to every sample.",
-    )
-    parser.add_argument(
-        "--model-role",
-        action="append",
-        default=[],
-        metavar="ROLE=MODEL",
-        help="The model a role generates with, e.g. monitor=anthropic/claude-haiku-4-5, over the eval's own model roles. May be repeated.",
+        "--model-role", action="append", default=[], metavar="ROLE=MODEL"
     )
     arguments = parser.parse_args(argv)
     roles: dict[str, str] = {}
