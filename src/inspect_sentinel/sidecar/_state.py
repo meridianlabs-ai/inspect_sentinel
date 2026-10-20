@@ -135,6 +135,12 @@ class Conversation:
     made: dict[str, Made] = field(default_factory=dict[str, Made])
     """For the latest tool calls the client was handed, by `occurrence()`, what the model was sent for the generate that made each. The oldest are dropped past `MADE_KEPT`, as each holds what the model was sent, which grows with the conversation."""
 
+    sent: list[ChatMessage] = field(default_factory=list[ChatMessage])
+    """Every message the conversation's requests sent the model, in the order first sent, each once: a step's `history`. Messages a compaction dropped from later requests are kept."""
+
+    recent: list[list[str]] = field(default_factory=list[list[str]])
+    """For each of the conversation's latest requests, latest last, a digest of what the model was sent of each of its messages, which a later request is matched against."""
+
 
 @dataclass
 class Run:
