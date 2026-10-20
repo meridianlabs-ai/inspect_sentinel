@@ -133,13 +133,20 @@ def agent_turn(
 
 
 @protocol
-def end_at_lookup_result(monitors: Monitor | MonitorGroup) -> Protocol:
+def end_at_lookup_result(
+    monitors: Monitor | MonitorGroup, action: Literal["terminate", "escalate"]
+) -> Protocol:
     async def decide(
         context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         await run_monitors(monitors, context, step)
         if isinstance(step, AfterToolCall) and step.call.function == "lookup":
-            return Decision.terminate("looked up")
+            # an escalation nobody handles ends the sample too
+            return (
+                Decision.terminate("looked up")
+                if action == "terminate"
+                else Decision.escalate("looked up")
+            )
         return None
 
     return forwards(decide)
@@ -234,7 +241,14 @@ def test_replay_reports_what_the_live_run_recorded(
     ("sentinel", "last"),
     [
         (lambda: no_forbidden(counts(), "terminate"), ("tool_call", "call-2")),
-        (lambda: end_at_lookup_result(counts()), ("tool_result", "call-1")),
+        (
+            lambda: end_at_lookup_result(counts(), "terminate"),
+            ("tool_result", "call-1"),
+        ),
+        (
+            lambda: end_at_lookup_result(counts(), "escalate"),
+            ("tool_result", "call-1"),
+        ),
     ],
 )
 def test_a_call_the_sample_ended_at_has_a_tool_result_only_if_it_ran(

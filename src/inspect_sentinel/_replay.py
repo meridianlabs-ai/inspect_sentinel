@@ -255,15 +255,11 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
     approvals = [e for e in sample.events if isinstance(e, ApprovalEvent)]
     refused = {e.call.id for e in approvals if e.decision in ("reject", "terminate")}
     modified = {e.call.id: e.modified for e in approvals if e.modified is not None}
-    # the calls the sentinel ended the sample at once they ran
-    ended = {
+    # the calls the live sentinel judged at their result
+    judged = {
         e.step_id
         for e in sample.events
-        if isinstance(e, SentinelEvent)
-        and e.path == ""
-        and e.stage == "tool_result"
-        and e.action == "terminate"
-        and e.status == "reported"
+        if isinstance(e, SentinelEvent) and e.stage == "tool_result"
     }
     # the model call and assistant message that proposed each tool call
     producers: dict[str, _Producer] = {}
@@ -363,15 +359,15 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
             )
             # a call the sentinel rejected, that was cancelled, or that a time
             # limit cut off reached no result; nor did a failed call, which
-            # raised or ended the sample, unless the sentinel ended it at the
-            # call's result
+            # raised or ended the sample, unless the live sentinel judged its
+            # result
             if (
                 (
                     event.error is not None
                     and event.error.type in ("approval", "parsing", "cancelled")
                 )
                 or event.pending
-                or (event.failed and event.id not in ended)
+                or (event.failed and event.id not in judged)
             ):
                 continue
             yield (
