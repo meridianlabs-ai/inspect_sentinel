@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import codecs
+import copy
+import json
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypeAlias, cast
 
-from ._wire import LINE_END_KEPT, StreamEvent, UnreadableError, stream_event
+from ._wire import (
+    LINE_END_KEPT,
+    Format,
+    StreamEvent,
+    UnreadableError,
+    stream_event,
+    write_events,
+)
 
 
 class EventReader:
@@ -97,6 +107,11 @@ class Placement:
 class Turn(Protocol):
     """Places each event of one provider format's reply stream in its turn, in order."""
 
+    @property
+    def open(self) -> frozenset[object]:
+        """The calls that have started and are not complete yet, by their place in the turn."""
+        ...
+
     def place(self, event: StreamEvent) -> Placement:
         """Where an event belongs. An event of blank lines alone is `filler`.
 
@@ -118,6 +133,14 @@ class AnthropicTurn:
     def __init__(self) -> None:
         self._roles: dict[int, Role] = {}
         self._stopped: set[int] = set()
+
+    @property
+    def open(self) -> frozenset[object]:
+        return frozenset(
+            index
+            for index, role in self._roles.items()
+            if role == "call" and index not in self._stopped
+        )
 
     def place(self, event: StreamEvent) -> Placement:
         if _blank(event):
@@ -175,6 +198,10 @@ class ChatTurn:
     def __init__(self) -> None:
         self._open: list[int] = []
         self._complete: set[int] = set()
+
+    @property
+    def open(self) -> frozenset[object]:
+        return frozenset(self._open)
 
     def place(self, event: StreamEvent) -> Placement:
         if _blank(event):
@@ -250,6 +277,14 @@ class ResponsesTurn:
         self._roles: dict[int, Role] = {}
         self._done: set[int] = set()
 
+    @property
+    def open(self) -> frozenset[object]:
+        return frozenset(
+            index
+            for index, role in self._roles.items()
+            if role == "call" and index not in self._done
+        )
+
     def place(self, event: StreamEvent) -> Placement:
         if _blank(event):
             return Placement("filler")
@@ -302,3 +337,126 @@ def _responses_role(item: object) -> Role:
     if isinstance(entry.get("call_id"), str) and not kind.endswith("_output"):
         return "call"
     return "hold"
+
+
+def closed_prefix(
+    format: Format, events: Sequence[StreamEvent], open_calls: Collection[object]
+) -> bytes:
+    """A reply stream's events so far, as the provider sent them, closed as if the reply ended there, for the calls complete in it to be read as they would be at the end of the turn.
+
+    Args:
+        format: Which API the stream is written in.
+        events: The stream's events so far.
+        open_calls: The calls that are not complete yet, by their place in the turn, which are left out.
+    """
+    if format == "anthropic-messages":
+        # blocks come one after another, so none is open once a call stops
+        closing = [
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                "usage": {"output_tokens": 0},
+            },
+            {"type": "message_stop"},
+        ]
+        return write_events([*events, *(_made(data) for data in closing)])
+    if format == "openai-chat":
+        return write_events(_chat_closed(events, open_calls))
+    return write_events([*events, _made(_responses_completed(events))])
+
+
+def _made(data: dict[str, Any]) -> StreamEvent:
+    end = "\n"
+    kind = data.get("type")
+    lines = [(f"event: {kind}", end)] if isinstance(kind, str) else []
+    return StreamEvent([*lines, (f"data: {json.dumps(data)}", end), ("", end)], data)
+
+
+def _chat_closed(
+    events: Sequence[StreamEvent], open_calls: Collection[object]
+) -> list[StreamEvent]:
+    closed: list[StreamEvent] = []
+    first: dict[str, Any] | None = None
+    finished = False
+    for event in events:
+        data = event.data
+        if data is None or not isinstance(data.get("choices"), list):
+            closed.append(event)
+            continue
+        first = first or data
+        choices = cast("list[dict[str, Any]]", data["choices"])
+        finished = finished or any(
+            choice.get("finish_reason") is not None for choice in choices
+        )
+        fragments = [
+            fragment
+            for choice in choices
+            for fragment in cast(
+                "list[dict[str, Any]]",
+                cast("dict[str, Any]", choice.get("delta") or {}).get("tool_calls")
+                or [],
+            )
+        ]
+        if not any(fragment.get("index") in open_calls for fragment in fragments):
+            closed.append(event)
+            continue
+        # without the fragments of calls still arriving
+        data = copy.deepcopy(data)
+        for choice in cast("list[dict[str, Any]]", data["choices"]):
+            delta = cast("dict[str, Any]", choice.get("delta") or {})
+            kept = [
+                fragment
+                for fragment in cast(
+                    "list[dict[str, Any]]", delta.get("tool_calls") or []
+                )
+                if fragment.get("index") not in open_calls
+            ]
+            if kept:
+                delta["tool_calls"] = kept
+            else:
+                delta.pop("tool_calls", None)
+        closed.append(_made(data))
+    if not finished:
+        head = first or {}
+        closed.append(
+            _made(
+                {
+                    "id": head.get("id"),
+                    "object": "chat.completion.chunk",
+                    "created": head.get("created", 0),
+                    "model": head.get("model", ""),
+                    "choices": [
+                        {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
+                    ],
+                }
+            )
+        )
+    return closed
+
+
+def _responses_completed(events: Sequence[StreamEvent]) -> dict[str, Any]:
+    # the response the stream began with, holding the items done so far
+    response: dict[str, Any] = {}
+    done: dict[int, object] = {}
+    sequence = 0
+    for event in events:
+        data = event.data or {}
+        number = data.get("sequence_number")
+        if isinstance(number, int):
+            sequence = max(sequence, number)
+        if data.get("type") in ("response.created", "response.in_progress"):
+            begun = data.get("response")
+            if isinstance(begun, dict):
+                response = cast("dict[str, Any]", begun)
+        index = data.get("output_index")
+        if data.get("type") == "response.output_item.done" and isinstance(index, int):
+            done[index] = data.get("item")
+    return {
+        "type": "response.completed",
+        "sequence_number": sequence + 1,
+        "response": {
+            **response,
+            "status": "completed",
+            "output": [done[index] for index in sorted(done)],
+        },
+    }

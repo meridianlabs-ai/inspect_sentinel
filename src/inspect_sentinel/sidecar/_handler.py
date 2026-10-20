@@ -4,8 +4,8 @@ import hashlib
 import json
 import logging
 from collections.abc import Awaitable, Mapping, Sequence
-from dataclasses import dataclass, replace
-from typing import Any, Literal
+from dataclasses import dataclass, field, replace
+from typing import Any, Literal, TypeVar
 
 import anyio
 from inspect_ai.model import (
@@ -80,10 +80,12 @@ from ._wire import (
     amend_request,
     amendments,
     call_texts,
+    check_edited_reply,
     edit_reply,
     held_rejections,
     offered,
     read_opening,
+    read_reply,
     read_reply_noted,
     read_request,
     request_format,
@@ -91,6 +93,8 @@ from ._wire import (
 )
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 # rejected turns in a row before the run is ended, as inspect_ai's bridge has
 # it: a model that keeps proposing rejected calls would otherwise never stop
@@ -134,12 +138,40 @@ def _not_judged(ex: Exception) -> NotJudged:
     return "error"
 
 
+def _settle(held: Held, status: int, answer: Answer) -> None:
+    # where the request's attempt stands, once its reply has been answered
+    attempt = held.attempt
+    if attempt is None:
+        return
+    if not succeeded(status):
+        attempt.not_judged("provider_error")
+    elif not isinstance(answer, Refuse):
+        attempt.decide("proceed")
+        attempt.proposed = held.exchange.proposed
+    elif held.exchange.ended:
+        attempt.decide("terminate")
+        attempt.withheld = held.exchange.withheld
+    else:
+        attempt.decide("reject", held.exchange.message)
+        attempt.withheld = held.exchange.withheld
+
+
 class ModifyError(Exception):
     """The sentinel decided to change a tool call that the sidecar can't change in the reply, such as one that is not a function call, so the reply was not judged."""
 
 
 class TimeLimitError(TimeoutError):
     """The sentinel didn't finish judging a request or a reply within the handler's time limit, and was cancelled."""
+
+
+@dataclass
+class _Decided:
+    """What was decided about a turn's calls, short of ending the run."""
+
+    rejected: list[tuple[ToolCall, Decision]] = field(
+        default_factory=list[tuple[ToolCall, Decision]]
+    )
+    modified: dict[str, ToolCall] = field(default_factory=dict[str, ToolCall])
 
 
 class Handler:
@@ -286,19 +318,8 @@ class Handler:
             if attempt is not None:
                 attempt.not_judged(_not_judged(ex))
             raise
-        if attempt is None or held is None:
-            return answer
-        if not succeeded(reply.status):
-            attempt.not_judged("provider_error")
-        elif not isinstance(answer, Refuse):
-            attempt.decide("proceed")
-            attempt.proposed = held.exchange.proposed
-        elif held.exchange.ended:
-            attempt.decide("terminate")
-            attempt.withheld = held.exchange.withheld
-        else:
-            attempt.decide("reject", held.exchange.message)
-            attempt.withheld = held.exchange.withheld
+        if held is not None:
+            _settle(held, reply.status, answer)
         return answer
 
     def reply_stream(
@@ -313,6 +334,24 @@ class Handler:
             max_held_bytes: The most of the reply the stream holds back to judge. A reply larger than it is refused with a 502, and not judged.
         """
         return ReplyStream(self, start, max_held_bytes=max_held_bytes)
+
+    async def early_turn(self, start: ReplyStart) -> EarlyTurn:
+        """Judge a streamed reply as it arrives, each call once it is complete, for a reply released early.
+
+        Args:
+            start: The reply's status and headers, before any of its body.
+
+        Raises:
+            UnreadableError: If the reply answers a request this handler was never shown, or no longer keeps.
+        """
+        held = await self._state.release(start.id)
+        if held is None:
+            raise UnreadableError(
+                f"The reply {start.id!r} answers a request this sidecar was never shown, or no longer keeps."
+            )
+        if held.attempt is not None:
+            held.attempt.state = "judging"
+        return EarlyTurn(self, start, held)
 
     async def reply_not_judged(self, id: str, reason: NotJudged) -> None:
         """Let go of a request whose reply the proxy refused without handing it over, as one larger than it holds.
@@ -379,9 +418,7 @@ class Handler:
         """
         return "ended" if await self._state.end_run(_run_key(True, run)) else "unknown"
 
-    async def _within_limit(
-        self, judging: Awaitable[Answer], what: str, id: str
-    ) -> Answer:
+    async def _within_limit(self, judging: Awaitable[T], what: str, id: str) -> T:
         with anyio.move_on_after(self._time_limit):
             return await judging
         raise self._out_of_time(what, id)
@@ -784,33 +821,74 @@ class Handler:
         message = output.message
         # the reply is still read, and kept as passed, when no call is judged
         calls = (message.tool_calls or []) if BeforeToolCall in self._watched else []
-        rejected: list[tuple[ToolCall, Decision]] = []
-        modified: dict[str, ToolCall] = {}
+        decided = _Decided()
         for call in calls:
-            assert message.id is not None
-            step = BeforeToolCall(
-                conversation=held.conversation,
-                message=message.text,
-                message_id=message.id,
-                call=call,
-                view=self._view(call, run),
-                input=held.input,
-                agent_messages=None,
-                history=list(conversation.sent),
-                tools=held.offered.tools,
-                tool_choice=held.offered.tool_choice,
+            ended = await self._judge_call(
+                held, run, conversation, message, call, decided, turn_complete=True
             )
-            decision = await self._judge(held, run, step)
-            if decision is None or decision.action == "proceed":
-                continue
-            if decision.action == "terminate":
-                return self._end(held, run, f"at the call to {call.function}")
-            # the client is never handed the call as the model proposed it
-            held.exchange.judged[-1].original = call
-            if decision.action == "modify" and decision.modified is not None:
-                modified[call.id] = decision.modified
-            else:
-                rejected.append((call, decision))
+            if ended is not None:
+                return ended
+        return await self._conclude(
+            reply, held, run, conversation, output, start, noted, decided
+        )
+
+    async def _judge_call(
+        self,
+        held: Held,
+        run: Run,
+        conversation: Conversation,
+        message: ChatMessageAssistant,
+        call: ToolCall,
+        decided: _Decided,
+        *,
+        turn_complete: bool,
+    ) -> Refuse | None:
+        # a call put to the sentinel, which ends the run or is noted in `decided`
+        assert message.id is not None
+        step = BeforeToolCall(
+            conversation=held.conversation,
+            message=message.text,
+            message_id=message.id,
+            call=call,
+            view=self._view(call, run),
+            input=held.input,
+            agent_messages=None,
+            history=list(conversation.sent),
+            tools=held.offered.tools,
+            tool_choice=held.offered.tool_choice,
+            turn_complete=turn_complete,
+        )
+        decision = await self._judge(held, run, step)
+        if decision is None or decision.action == "proceed":
+            return None
+        if decision.action == "terminate":
+            return self._end(held, run, f"at the call to {call.function}")
+        # the client is never handed the call as the model proposed it
+        held.exchange.judged[-1].original = call
+        if decision.action == "modify" and decision.modified is not None:
+            decided.modified[call.id] = decision.modified
+        else:
+            decided.rejected.append((call, decision))
+        return None
+
+    async def _conclude(
+        self,
+        reply: Reply,
+        held: Held,
+        run: Run,
+        conversation: Conversation,
+        output: ModelOutput,
+        start: JsonValue | None,
+        noted: JsonValue | None,
+        decided: _Decided,
+        *,
+        edited: bytes | None = None,
+    ) -> Answer:
+        # what the turn comes to, once each of its calls is decided. `edited`
+        # is the reply as it already went out with the decisions made, for
+        # one released as it arrived, which is checked rather than made.
+        message = output.message
+        rejected, modified = decided.rejected, decided.modified
         refusal = self._ended_meanwhile(held, run)
         if refusal is not None:
             return refusal
@@ -821,7 +899,16 @@ class Handler:
             return await self._reject(held, run, conversation, message, noted, rejected)
         try:
             return await self._edit(
-                reply, held, run, conversation, output, start, noted, rejected, modified
+                reply,
+                held,
+                run,
+                conversation,
+                output,
+                start,
+                noted,
+                rejected,
+                modified,
+                edited=edited,
             )
         except UnreadableError as ex:
             if not rejected:
@@ -875,6 +962,8 @@ class Handler:
         noted: JsonValue | None,
         rejected: Sequence[tuple[ToolCall, Decision]],
         modified: Mapping[str, ToolCall],
+        *,
+        edited: bytes | None = None,
     ) -> Replace:
         # The rejected calls are taken out and the changed calls go out
         # changed, and the rest of the turn goes on, as in Inspect's own
@@ -886,15 +975,28 @@ class Handler:
             call.id: decision.message or _REJECTED for call, decision in rejected
         }
         written = await amendments(held.format, message, reasons, modified, noted)
-        body = await edit_reply(
-            reply.provider,
-            reply.content_type,
-            reply.body,
-            reply.format,
-            Edits(frozenset(reasons), modified),
-            output,
-            start=start,
-        )
+        edits = Edits(frozenset(reasons), modified)
+        if edited is None:
+            body = await edit_reply(
+                reply.provider,
+                reply.content_type,
+                reply.body,
+                reply.format,
+                edits,
+                output,
+                start=start,
+            )
+        else:
+            await check_edited_reply(
+                reply.provider,
+                reply.content_type,
+                edited,
+                reply.format,
+                edits,
+                output,
+                start=start,
+            )
+            body = edited
         calls = message.tool_calls or []
         conversation.edited.append(
             Edited(
@@ -1052,6 +1154,233 @@ class Handler:
         return TimeLimitError(
             f"The sentinel didn't finish judging the {what} {id!r} within {self._time_limit} seconds."
         )
+
+
+class EarlyTurn:
+    """A streamed reply judged as it arrives: each call once it is complete, then the turn once it has ended. Made by `Handler.early_turn`.
+
+    Each call judged before the turn has ended is put to the sentinel with `turn_complete` false, and with the assistant text written before it. The whole reply is read again at its end, as `Handler.reply` reads it, and its calls must be the ones judged as it arrived. What is decided is kept as `Handler.reply` keeps it.
+    """
+
+    def __init__(self, handler: Handler, start: ReplyStart, held: Held) -> None:
+        self._handler = handler
+        self._start = start
+        self._held = held
+        self._decided = _Decided()
+        self._judged: dict[str, ToolCall] = {}
+        self._message_id: str | None = None
+        self._ended: Refuse | None = None
+        # the turn's answer, once it has one
+        self._answer: Answer | None = None
+
+    @property
+    def edits(self) -> Edits:
+        """The calls decided so far that are taken out, and those changed."""
+        return Edits(
+            frozenset(call.id for call, _ in self._decided.rejected),
+            dict(self._decided.modified),
+        )
+
+    @property
+    def field(self) -> Mapping[str, Any] | None:
+        """For an Inspect client, the `sentinel` field for a turn that goes on, which goes in the stream's last event."""
+        held = self._held
+        if held.proxy.inspect is None:
+            return None
+        return self._handler._field(held.exchange, "proceed")  # pyright: ignore[reportPrivateUsage]
+
+    async def judge(self, prefix: bytes) -> Refuse | None:
+        """Judge the calls that have become complete, in order: each call in `prefix` not judged yet.
+
+        Args:
+            prefix: The reply so far, as the provider sent it, closed as if it ended there, without the calls that are not complete yet.
+
+        Returns:
+            The refusal, with the `sentinel` field for an Inspect client, if the run was ended. The turn's answer is then that refusal.
+
+        Raises:
+            UnreadableError: If the reply so far can't be read.
+            TimeLimitError: If the handler has a time limit and the sentinel didn't finish within it.
+        """
+        if isinstance(self._answer, Refuse):
+            return self._answer
+        refusal = await self._guarded(self._judge(prefix))
+        if refusal is None:
+            return None
+        answered = self._answered(refusal)
+        assert isinstance(answered, Refuse)
+        return answered
+
+    async def finish(self, body: bytes, released: bytes) -> Answer:
+        """Judge the turn once the reply has ended.
+
+        Args:
+            body: The whole reply, as the provider sent it.
+            released: The whole reply, as the client was sent it, with the calls taken out and changed.
+
+        Returns:
+            What `Handler.reply` would answer, without the `sentinel` field on a turn that goes on, which for an Inspect client is `field`: `Pass`, `Replace` with `released` when calls were taken out or changed, or the refusal, with the field.
+
+        Raises:
+            UnreadableError: If the reply can't be read, its calls are not those judged as it arrived, or what the client was sent doesn't read as the reply with the decisions made.
+            ModifyError: If the sentinel changed a call the sidecar can't change, and rejected none of the turn's calls.
+            TimeLimitError: If the handler has a time limit and the sentinel didn't finish within it.
+        """
+        if self._answer is not None:
+            return self._answer
+        return self._answered(await self._guarded(self._finish(body, released)))
+
+    def cut_off(self) -> None:
+        """Record a turn whose stream ended before the turn was answered, as when its client disconnected."""
+        attempt = self._held.attempt
+        # a turn that failed to be judged keeps its reason
+        if self._answer is None and attempt is not None and attempt.state == "judging":
+            attempt.not_judged("cut_off")
+
+    def _answered(self, answer: Answer) -> Answer:
+        held = self._held
+        if isinstance(answer, Refuse) and held.proxy.inspect is not None:
+            outcome = "terminate" if held.exchange.ended else "reject"
+            answer = self._handler._with_field(  # pyright: ignore[reportPrivateUsage]
+                answer, held.proxy, held.exchange, outcome
+            )
+        self._answer = answer
+        _settle(held, self._start.status, answer)
+        return answer
+
+    async def _guarded(self, judging: Awaitable[T]) -> T:
+        try:
+            return await self._handler._within_limit(  # pyright: ignore[reportPrivateUsage]
+                judging, "reply", self._start.id
+            )
+        except Exception as ex:
+            if self._held.attempt is not None:
+                self._held.attempt.not_judged(_not_judged(ex))
+            raise
+
+    async def _judge(self, prefix: bytes) -> Refuse | None:
+        handler, held, start = self._handler, self._held, self._start
+        if self._ended is not None:
+            return self._ended
+        output = await read_reply(
+            start.provider, start.content_type, prefix, start.format
+        )
+        run, conversation = await self._run()
+        refusal = _ended(run, held.marks)
+        if refusal is not None:
+            # a sentinel ended the run while the model was answering
+            held.exchange.ended = True
+            self._ended = refusal
+            return refusal
+        if not output.choices:
+            raise UnreadableError("The reply so far doesn't read as a message.")
+        message = self._same_id(output.message)
+        for call in message.tool_calls or []:
+            if call.id in self._judged:
+                continue
+            self._judged[call.id] = call
+            if BeforeToolCall not in handler._watched:  # pyright: ignore[reportPrivateUsage]
+                continue
+            ended = await handler._judge_call(  # pyright: ignore[reportPrivateUsage]
+                held,
+                run,
+                conversation,
+                message,
+                call,
+                self._decided,
+                turn_complete=False,
+            )
+            if ended is not None:
+                self._ended = ended
+                return ended
+        return None
+
+    async def _finish(self, body: bytes, released: bytes) -> Answer:
+        handler, held, start = self._handler, self._held, self._start
+        run, conversation = await self._run()
+        begun = conversation.noted
+        output, noted = await read_reply_noted(
+            start.provider, start.content_type, body, start.format, start=begun
+        )
+        # kept whatever is decided: the provider continues from what it sent
+        conversation.noted = noted
+        if self._ended is not None:
+            return self._ended
+        refusal = _ended(run, held.marks)
+        if refusal is not None:
+            held.exchange.ended = True
+            return refusal
+        reply = Reply(
+            id=start.id,
+            provider=start.provider,
+            format=start.format,
+            model=start.model,
+            user=start.user,
+            status=start.status,
+            content_type=start.content_type,
+            body=body,
+        )
+        if not output.choices:
+            if self._judged:
+                raise UnreadableError(
+                    "The reply's calls are not those judged as it arrived."
+                )
+            return handler._ended_meanwhile(held, run) or handler._passed(  # pyright: ignore[reportPrivateUsage]
+                held, run, conversation, None
+            )
+        message = self._same_id(output.message)
+        output.choices[0].message = message
+        calls = message.tool_calls or []
+        given = {call.id: call for call in calls}
+        if any(
+            id not in given
+            or (given[id].function, given[id].arguments)
+            != (call.function, call.arguments)
+            for id, call in self._judged.items()
+        ):
+            raise UnreadableError(
+                "The reply's calls are not those judged as it arrived."
+            )
+        if BeforeToolCall in handler._watched:  # pyright: ignore[reportPrivateUsage]
+            for call in calls:
+                if call.id in self._judged:
+                    continue
+                ended = await handler._judge_call(  # pyright: ignore[reportPrivateUsage]
+                    held,
+                    run,
+                    conversation,
+                    message,
+                    call,
+                    self._decided,
+                    turn_complete=True,
+                )
+                if ended is not None:
+                    return ended
+        return await handler._conclude(  # pyright: ignore[reportPrivateUsage]
+            reply,
+            held,
+            run,
+            conversation,
+            output,
+            begun,
+            noted,
+            self._decided,
+            edited=released,
+        )
+
+    async def _run(self) -> tuple[Run, Conversation]:
+        run = await self._handler._state.run(self._held.run)  # pyright: ignore[reportPrivateUsage]
+        conversation = run.conversations.setdefault(
+            self._held.conversation, Conversation()
+        )
+        return run, conversation
+
+    def _same_id(self, message: ChatMessageAssistant) -> ChatMessageAssistant:
+        # inspect_ai gives a message a new id each time it is read, and every
+        # step of one turn names the same message
+        if self._message_id is None:
+            self._message_id = message.id
+        return message.model_copy(update={"id": self._message_id})
 
 
 def _run_key(named: bool, key: str) -> str:
