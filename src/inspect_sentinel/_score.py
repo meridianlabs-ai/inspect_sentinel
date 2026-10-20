@@ -99,8 +99,7 @@ async def score_step(
     config: GenerateConfig | None = None,
     retry_refusals: int = 3,
 ) -> Observation:
-    # Scout imports duckdb and pandas, so load it only when a monitor scores;
-    # jinja2 comes with it
+    # loaded only when a monitor scores, as Scout is in step_as_str
     from jinja2 import Environment, StrictUndefined, meta
 
     if retry_refusals < 0:

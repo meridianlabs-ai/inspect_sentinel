@@ -10,7 +10,7 @@ inspect_ai #5514 and ts-mono #716 merged on 2026-10-08, so open inspect_ai and t
 
 Extract Inspect's wire types (`ChatMessage`, `ToolCall`, `ModelOutput` and what they reference) and the registry primitives into a leaf package. What it unblocks:
 
-- The dependency chain becomes `inspect_core ← inspect_sentinel ← inspect_ai`, so inspect_ai depends on sentinel directly. The lazy import, `TYPE_CHECKING`-only types and the temporary `--no-deps` CI install go away.
+- The dependency chain becomes `inspect_core ← inspect_sentinel ← inspect_ai`, so inspect_ai depends on sentinel directly. Sentinel's dependency on Scout has to go first, or the chain is a cycle. The lazy import, `TYPE_CHECKING`-only types and the temporary `--no-deps` CI install go away.
 - `@monitor` and `@protocol` register through the shared registry with no import-order hazard.
 - The wire types get a contract, which the proxy and codegen work in [sentinel-deployment.md](sentinel-deployment.md) need.
 - Sentinel can release against a version floor of the leaf package rather than an inspect_ai branch.

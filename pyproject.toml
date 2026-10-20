@@ -34,6 +34,9 @@ dependencies = [
     # same way as inspect_ai's, and release-pin-deps.yml raises this floor
     # on the Release Please release PR too.
     "inspect-scout>=0.6.0",
+    # Host.score's templates are Jinja. Scout depends on it too, but it is
+    # imported directly here, and a transitive dependency is not a promise.
+    "jinja2>=3.0",
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.
     "pydantic>=2.0",
