@@ -255,13 +255,13 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
     approvals = [e for e in sample.events if isinstance(e, ApprovalEvent)]
     refused = {e.call.id for e in approvals if e.decision in ("reject", "terminate")}
     modified = {e.call.id: e.modified for e in approvals if e.modified is not None}
-    # the calls the sentinel ended the sample at before they ran
-    terminated = {
+    # the calls the sentinel ended the sample at once they ran
+    ended = {
         e.step_id
         for e in sample.events
         if isinstance(e, SentinelEvent)
         and e.path == ""
-        and e.stage == "tool_call"
+        and e.stage == "tool_result"
         and e.action == "terminate"
         and e.status == "reported"
     }
@@ -361,18 +361,17 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
                     tools=tools,
                 ),
             )
-            # a call the sentinel rejected or ended the sample at, that was
-            # cancelled, or that a time limit cut off, has no result, and neither has one that raised, which
-            # failed the call and errored the sample; a call the sentinel ended
-            # the sample at once it ran failed too, but it had a result
+            # a call the sentinel rejected, that was cancelled, or that a time
+            # limit cut off reached no result; nor did a failed call, which
+            # raised or ended the sample, unless the sentinel ended it at the
+            # call's result
             if (
                 (
                     event.error is not None
                     and event.error.type in ("approval", "parsing", "cancelled")
                 )
-                or event.id in terminated
                 or event.pending
-                or (event.failed and sample.error is not None)
+                or (event.failed and event.id not in ended)
             ):
                 continue
             yield (

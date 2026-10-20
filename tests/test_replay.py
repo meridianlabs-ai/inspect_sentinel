@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -131,11 +132,24 @@ def agent_turn(
     )
 
 
-def run_eval(action: Literal["reject", "terminate"], log_dir: Path) -> str:
+@protocol
+def end_at_lookup_result(monitors: Monitor | MonitorGroup) -> Protocol:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
+        await run_monitors(monitors, context, step)
+        if isinstance(step, AfterToolCall) and step.call.function == "lookup":
+            return Decision.terminate("looked up")
+        return None
+
+    return forwards(decide)
+
+
+def run_eval(sentinel: Protocol, log_dir: Path) -> str:
     task = Task(
         dataset=[Sample(id="a", input="first " * 100), Sample(id="b", input="second")],
         solver=react(tools=[lookup(), forbidden()]),
-        sentinel=no_forbidden(counts(), action),
+        sentinel=sentinel,
         epochs=2,
     )
     [result] = eval(
@@ -151,7 +165,7 @@ def run_eval(action: Literal["reject", "terminate"], log_dir: Path) -> str:
 
 @pytest.fixture(scope="module")
 def log(tmp_path_factory: pytest.TempPathFactory) -> str:
-    return run_eval("reject", tmp_path_factory.mktemp("logs"))
+    return run_eval(no_forbidden(counts(), "reject"), tmp_path_factory.mktemp("logs"))
 
 
 def replayed_lines(capsys: pytest.CaptureFixture[str]) -> list[tuple[Any, ...]]:
@@ -216,14 +230,24 @@ def test_replay_reports_what_the_live_run_recorded(
     }
 
 
-def test_a_call_ended_at_its_tool_call_has_no_tool_result(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    ("sentinel", "last"),
+    [
+        (lambda: no_forbidden(counts(), "terminate"), ("tool_call", "call-2")),
+        (lambda: end_at_lookup_result(counts()), ("tool_result", "call-1")),
+    ],
+)
+def test_a_call_the_sample_ended_at_has_a_tool_result_only_if_it_ran(
+    sentinel: Callable[[], Protocol],
+    last: tuple[str, str],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    log = run_eval("terminate", tmp_path)
+    log = run_eval(sentinel(), tmp_path)
     main([log, "--sample", "a:1"])
     replayed = replayed_lines(capsys)
     assert replayed == recorded(log, {("a", 1)})
-    assert replayed[-1][2:4] == ("tool_call", "call-2")
+    assert replayed[-1][2:4] == last
 
 
 def test_a_call_a_time_limit_cut_off_has_no_tool_result(
