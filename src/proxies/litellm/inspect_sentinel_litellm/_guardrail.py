@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import collections
 import binascii
+import collections
 import importlib
+import importlib.metadata
 import json
 import logging
 import re
@@ -602,7 +603,14 @@ class _Relay:
         self._tasks.append(asyncio.ensure_future(self._read()))
         try:
             await guardrail._call(  # pyright: ignore[reportPrivateUsage]
-                "begin_reply", told | {"status": 200, "content_type": _STREAM}
+                "begin_reply",
+                told
+                | {
+                    "status": 200,
+                    "content_type": _STREAM,
+                    "keepalive": self._format not in (_CHAT, _RESPONSES)
+                    or _PASSES_BYTES_ON,
+                },
             )
             self._begun = True
             self._tasks.append(asyncio.ensure_future(self._upload()))
@@ -617,9 +625,13 @@ class _Relay:
                 for output in outputs:
                     kind = output.get("kind")
                     if kind == "release":
-                        for chunk in _released(
-                            _decoded(output), self._format, self._samples()
-                        ):
+                        data = _decoded(output)
+                        if _only_comments(data):
+                            # a keepalive holds nothing, so the reply may still
+                            # be let through unjudged after it
+                            yield data
+                            continue
+                        for chunk in _released(data, self._format, self._samples()):
                             if not sent:
                                 sent = True
                                 self._keep_nothing()
@@ -831,6 +843,7 @@ class _Relay:
         self._unsent.clear()
         self._unsent_bytes = 0
         self._room.set()
+
 
 def _listed(headers: str | Iterable[str] | None) -> tuple[str, ...]:
     names = headers.split(",") if isinstance(headers, str) else list(headers or ())
@@ -1114,6 +1127,27 @@ def _refused_mid_stream(held: list[Any], refused: HTTPException, format: str) ->
         "error": {"type": "api_error", "message": str(refused.detail)},
     }
     return f"event: error\ndata: {json.dumps(error)}\n\n".encode()
+
+
+def _only_comments(data: bytes) -> bool:
+    # a keepalive: SSE comments, and nothing else
+    lines = [line for line in _LINE_END.split(data.decode()) if line]
+    return bool(lines) and all(line.startswith(":") for line in lines)
+
+
+def _passes_bytes_on() -> bool:
+    # LiteLLM passes on the bytes a guardrail yields on its Chat and Responses
+    # routes from 1.105, the earliest version tested that does, and before
+    # writes them as JSON, which breaks the stream
+    try:
+        given = importlib.metadata.version("litellm")
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    numbers = re.findall(r"\d+", given)[:2]
+    return tuple(int(number) for number in numbers) >= (1, 105)
+
+
+_PASSES_BYTES_ON = _passes_bytes_on()
 
 
 def _events(body: bytes) -> list[dict[str, Any]]:

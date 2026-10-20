@@ -21,6 +21,7 @@ from inspect_sentinel.sidecar._json_rpc import (
     UNREADABLE,
 )
 from inspect_sentinel.sidecar._proxy_endpoint import PATH, proxy_app
+from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
 from tests.sidecar._traffic import (
     STREAM,
     anthropic_recorded,
@@ -28,6 +29,7 @@ from tests.sidecar._traffic import (
     request,
     weather_rule,
 )
+from tests.sidecar.test_early_release import slowly
 
 _BODY = anthropic_recorded("parallel-tool-calls")
 
@@ -395,3 +397,22 @@ async def test_a_stream_is_let_go_of_as_soon_as_its_end_is_acknowledged() -> Non
             gone = await _call(client, "next_release", id="x", after=len(outputs))
 
     assert gone["error"]["code"] == UNKNOWN_STREAM
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("carried", [True, False])
+async def test_a_proxy_hook_is_given_keepalives_only_if_it_can_send_them(
+    carried: bool,
+) -> None:
+    handler = Handler(slowly(0.2, "proceed"), release="early", keepalive=0.02)
+    await handler.request(request())
+
+    with anyio.fail_after(10):
+        async with _serving(handler) as client:
+            await _call(client, "begin_reply", **_begun(), keepalive=carried)
+            await _feed(client, _BODY)
+            outputs = await _collect(client)
+
+    kept_alive = {"kind": "release", "data": _b64(KEEPALIVE)}
+    assert (kept_alive in outputs) == carried
+    assert outputs[-1] == {"kind": "finished"}

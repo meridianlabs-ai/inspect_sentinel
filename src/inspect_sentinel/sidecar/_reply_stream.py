@@ -32,6 +32,12 @@ logger = logging.getLogger(__name__)
 PENDING_BYTES = 1024 * 1024
 """How much of a reply that goes out as it arrives may wait for the proxy to collect it, by default, before feeding waits for it to drain."""
 
+KEEPALIVE_SECONDS = 15.0
+"""How long a client of a reply released early is sent nothing, by default, before it is sent a keepalive."""
+
+KEEPALIVE = b": keepalive\n\n"
+"""A keepalive: an SSE comment, which every provider SDK skips."""
+
 
 @dataclass(frozen=True, kw_only=True)
 class ReplyStart:
@@ -94,6 +100,8 @@ class ReplyStream:
 
     Feeding waits only for output that can drain: while more than `max_pending_bytes` of a reply that goes out as it arrives is waiting for the proxy to collect it. It never waits on what is held back to judge, which can only go out once more has been fed. Once the output has ended, bytes still fed are dropped.
 
+    A reply released early that has sent nothing for `keepalive` seconds sends a keepalive, `KEEPALIVE`, as a `Release`, which sends the status: a turn refused after it is refused with an `ErrorEvent`. A reply held whole sends none, so that a refusal keeps its status.
+
     If the proxy stops before the end, it calls `abort`. A judgment already running goes on to the end, and its decision is kept for the run. A reply that ended before it was judged is recorded as cut off.
 
     Iterating raises what judging raised, as `Handler.reply` would, after the output that came before it. Output that stops without `Finished`, a `Refuse` or an `ErrorEvent` is never a complete reply.
@@ -106,6 +114,7 @@ class ReplyStream:
         *,
         max_held_bytes: int,
         max_pending_bytes: int = PENDING_BYTES,
+        keepalive: float | None = None,
     ) -> None:
         self._handler = handler
         self._start = start
@@ -135,6 +144,11 @@ class ReplyStream:
         )
         self._consumed = 0
         self._sent = False
+        self._keepalive = keepalive if self._early else None
+        # one output at a time, so that whether anything has gone out, which
+        # a refusal is written by, is never changed by a keepalive meanwhile
+        self._sending = anyio.Lock()
+        self._last_out = 0.0
 
     @property
     def start(self) -> ReplyStart:
@@ -186,7 +200,7 @@ class ReplyStream:
     async def run(self) -> None:
         """Judge the reply as it is handed over, until its output has ended."""
         try:
-            await self._run()
+            await self._kept_alive()
         except Exception as ex:
             if self._aborted:
                 # no one is reading the output to be told of it
@@ -209,6 +223,34 @@ class ReplyStream:
                 yield output
         if self._raised is not None:
             raise self._raised
+
+    async def _kept_alive(self) -> None:
+        # judging, with keepalives beside it until the output ends
+        every = self._keepalive
+        if every is None:
+            await self._run()
+            return
+        raised: Exception | None = None
+        self._last_out = anyio.current_time()
+        async with anyio.create_task_group() as group:
+            group.start_soon(self._keep_alive, every)
+            try:
+                await self._run()
+            except Exception as ex:
+                raised = ex
+            finally:
+                group.cancel_scope.cancel()
+        if raised is not None:
+            raise raised
+
+    async def _keep_alive(self, every: float) -> None:
+        while not self._closed():
+            due = self._last_out + every
+            now = anyio.current_time()
+            if now < due:
+                await anyio.sleep(due - now)
+                continue
+            await self._out(Release(KEEPALIVE), keepalive=every)
 
     async def _run(self) -> None:
         start = self._start
@@ -464,22 +506,30 @@ class ReplyStream:
                 return
             await self._arrived.wait()
 
-    async def _out(self, output: Output) -> None:
+    async def _out(self, output: Output, *, keepalive: float | None = None) -> None:
         if not isinstance(output, Release):
             # the last output, after which nothing fed is wanted
             self._finish()
         if self._aborted:
             return
-        # only the delivery is cut short by an abort: a judgment never runs
-        # inside this scope, so it goes on to the end
-        with anyio.CancelScope() as self._delivering:
-            if self._aborted:
-                return
-            try:
-                await self._send.send(output)
-            except (anyio.BrokenResourceError, anyio.ClosedResourceError):
-                # the proxy stopped reading without saying so
-                pass
+        async with self._sending:
+            if keepalive is not None:
+                # wanted only while nothing else goes out, and the status goes
+                # with it
+                if self._closed() or anyio.current_time() - self._last_out < keepalive:
+                    return
+                self._sent = True
+            # only the delivery is cut short by an abort: a judgment never runs
+            # inside this scope, so it goes on to the end
+            with anyio.CancelScope() as self._delivering:
+                if self._aborted:
+                    return
+                try:
+                    await self._send.send(output)
+                except (anyio.BrokenResourceError, anyio.ClosedResourceError):
+                    # the proxy stopped reading without saying so
+                    pass
+            self._last_out = anyio.current_time()
 
     def _reply(self, body: bytes) -> Reply:
         start = self._start

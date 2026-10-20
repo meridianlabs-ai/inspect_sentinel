@@ -21,6 +21,7 @@ from ._host import SidecarHost
 from ._http import HEALTH_PATH, health_route
 from ._proxy_endpoint import proxy_app
 from ._registration import MAX_TASK_EXPIRY, MAX_TASK_REGISTRATIONS, read_tasks_folder
+from ._reply_stream import KEEPALIVE_SECONDS
 from ._state import RUN_EXPIRY, MemoryState
 
 
@@ -79,6 +80,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         choices=["whole", "early"],
         default="whole",
         help="How a streamed reply is passed on. whole, the default, holds every reply until the sentinel has judged it. early passes on text and reasoning as they arrive and holds each call until it is judged, for a sentinel that can judge a complete call with only the part of the turn that has arrived. A sentinel that watches AfterGenerate keeps replies held whole.",
+    )
+    parser.add_argument(
+        "--keepalive",
+        type=float,
+        default=KEEPALIVE_SECONDS,
+        metavar="SECONDS",
+        help=f"Under --release early, how long a client may be sent nothing while a streamed reply is held, after which it is sent a keepalive that every provider SDK skips, so that something between them doesn't close a quiet connection. {KEEPALIVE_SECONDS:g} by default, and 0 for none. A keepalive sends the status, so a turn refused after one is refused with an error event in the stream.",
     )
     parser.add_argument(
         "--reject-status",
@@ -173,6 +181,7 @@ class ServerSettings(BaseModel):
     max_body_bytes: int | None = None
     run_expiry: float | None = None
     release: Literal["whole", "early"] | None = None
+    keepalive: float | None = None
 
 
 # each setting of the stanza, with the option that overrides it, and what it
@@ -204,6 +213,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "max_body_bytes",
             "run_expiry",
             "release",
+            "keepalive",
         )
     },
 }
@@ -328,6 +338,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         task_expiry=arguments.task_expiry,
         max_task_registrations=arguments.max_task_registrations,
         release=arguments.release,
+        keepalive=arguments.keepalive or None,
     )
 
 

@@ -6,6 +6,7 @@ These tests run in an environment of their own, with one LiteLLM version, and im
 import asyncio
 import base64
 import importlib
+import importlib.metadata
 import inspect
 import json
 import os
@@ -384,6 +385,14 @@ def _result(result: Any) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": 1, "result": result}
 
 
+_KEEPALIVE = b": keepalive\n\n"
+
+# LiteLLM passes on the bytes a guardrail yields on Chat and Responses from
+# 1.105, and writes them as JSON before
+_PASSES_BYTES_ON = tuple(
+    int(part) for part in importlib.metadata.version("litellm").split(".")[:2]
+) >= (1, 105)
+
 _STREAM_METHODS = frozenset(
     {"begin_reply", "reply_chunk", "end_reply", "abort_reply", "next_release"}
 )
@@ -438,7 +447,9 @@ def _scripted(
                     "params": stream["begun"] | {"body": body},
                 }
             )
-            stream["answer"] = _as_outputs(left.pop(0), body)
+            stream["answer"] = _as_outputs(
+                left.pop(0), body, stream["begun"].get("keepalive", True)
+            )
         answer = stream["answer"]
         if "error" in answer:
             return JSONResponse(answer)
@@ -450,14 +461,26 @@ def _scripted(
     return Starlette(routes=[Route(PATH, call, methods=["POST"])])
 
 
-def _as_outputs(answer: dict[str, Any], body: str) -> dict[str, Any]:
-    # a scripted answer to `judge_reply`, as a reply stream's outputs
+def _as_outputs(answer: dict[str, Any], body: str, carried: bool) -> dict[str, Any]:
+    # a scripted answer to `judge_reply`, as a reply stream's outputs, which a
+    # pass `kept_alive` opens with a keepalive where the hook can send one
     if "error" in answer:
         return answer
     result = answer["result"]
     action = result.get("action")
     if action == "pass":
-        return {"outputs": [{"kind": "release", "data": body}, {"kind": "finished"}]}
+        kept_alive = (
+            [{"kind": "release", "data": base64.b64encode(_KEEPALIVE).decode()}]
+            if result.get("kept_alive") and carried
+            else []
+        )
+        return {
+            "outputs": [
+                *kept_alive,
+                {"kind": "release", "data": body},
+                {"kind": "finished"},
+            ]
+        }
     if action == "replace":
         return {
             "outputs": [
@@ -2440,3 +2463,59 @@ def test_a_reply_let_through_after_its_stream_cant_begin_is_read_to_its_end(
         given, _ = _within(10, lambda: (asyncio.run(run(url)), None))
 
     assert given == 50
+
+
+@pytest.mark.parametrize(
+    "on", [_MESSAGES, _CHAT, _RESPONSES], ids=["messages", "chat", "responses"]
+)
+def test_a_keepalive_reaches_the_caller_where_litellm_passes_it_on(
+    monkeypatch: pytest.MonkeyPatch, on: _On
+) -> None:
+    passed = _result({"action": "pass"})
+    stream_calls: list[Any] = []
+    with _serving(
+        _scripted(
+            [],
+            passed,
+            _result({"action": "pass", "kept_alive": True}),
+            streamed=stream_calls,
+        )
+    ) as url:
+        _, let_go = _exchange(_make(monkeypatch, url), on, _data(on), True)
+    with _serving(_scripted([], passed, passed)) as url:
+        _, plain = _exchange(_make(monkeypatch, url), on, _data(on), True)
+
+    [begun] = [call for call in stream_calls if call["method"] == "begin_reply"]
+    carried = on is _MESSAGES or _PASSES_BYTES_ON
+    assert begun["params"]["keepalive"] is carried
+    written = _as_litellm_answers(on, let_go, _data(on))[2]
+    assert (_KEEPALIVE in written) is carried
+    assert (
+        written.replace(_KEEPALIVE, b"") == _as_litellm_answers(on, plain, _data(on))[2]
+    )
+
+
+def test_a_reply_kept_alive_is_still_let_through_when_set_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            if params["after"] == 0:
+                kept_alive = base64.b64encode(_KEEPALIVE).decode()
+                return {
+                    "position": 1,
+                    "outputs": [{"kind": "release", "data": kept_alive}],
+                }
+            return {"error": {"code": -32603, "message": "No."}}
+        return {"taken": True}
+
+    with _serving(_stand_in(answer)) as url:
+        guardrail = _make(monkeypatch, url, unreachable_fallback="fail_open")
+        _, reply = _within(
+            10, lambda: _exchange(guardrail, _MESSAGES, _data(_MESSAGES), True)
+        )
+
+    # a keepalive holds nothing, so the reply can go on unjudged after it
+    assert b"".join(reply) == _KEEPALIVE + b"".join(_MESSAGES.stream())

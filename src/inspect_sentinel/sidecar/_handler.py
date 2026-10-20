@@ -60,7 +60,7 @@ from ._registration import (
     TaskFacts,
     UnregisteredSampleError,
 )
-from ._reply_stream import PENDING_BYTES, ReplyStart, ReplyStream
+from ._reply_stream import KEEPALIVE_SECONDS, PENDING_BYTES, ReplyStart, ReplyStream
 from ._state import (
     MADE_KEPT,
     Attempt,
@@ -195,6 +195,7 @@ class Handler:
         task_expiry: float = MAX_TASK_EXPIRY,
         max_task_registrations: int = MAX_TASK_REGISTRATIONS,
         release: Literal["whole", "early"] = "whole",
+        keepalive: float | None = KEEPALIVE_SECONDS,
     ) -> None:
         """Create a handler.
 
@@ -210,7 +211,16 @@ class Handler:
             task_expiry: The longest a task an eval registered is kept once no request has named it, in seconds, whatever the registration asks.
             max_task_registrations: How many tasks registered by evals are kept at once. A registration past it is refused.
             release: How a streamed reply is passed on. `whole`, the default, holds every reply whole until the sentinel has judged it. `early` passes on text and reasoning as they arrive and holds each call until it is judged, which says the sentinel can judge a complete call with only the part of the turn that has arrived. A sentinel that watches `AfterGenerate` is given the finished turn, so its replies are held whole whatever this says.
+            keepalive: Under early release, the longest a client is sent nothing while a streamed reply is held, in seconds, after which it is sent a keepalive, an SSE comment that every provider SDK skips. The keepalive sends the status, so a turn refused after it is refused with an error event in the stream. None sends no keepalives.
+
+        Raises:
+            ValueError: If `keepalive` isn't a positive number of seconds.
         """
+        if keepalive is not None and not keepalive > 0:
+            raise ValueError(
+                f"A keepalive is sent after some seconds, not {keepalive}."
+            )
+        self._keepalive = keepalive
         self._protocol = resolve_sentinel(sentinel)
         # a stage nothing watches is never built, as in Inspect's own process
         self._watched = watched_stages(self._protocol)
@@ -237,6 +247,11 @@ class Handler:
     def release(self) -> Literal["whole", "early"]:
         """How a streamed reply is passed on: `early` only when it was asked for and the sentinel doesn't watch `AfterGenerate`."""
         return self._release
+
+    @property
+    def keepalive(self) -> float | None:
+        """Under early release, how many seconds a client may be sent nothing before it is sent a keepalive, or None for no keepalives."""
+        return self._keepalive
 
     async def request(self, request: Request) -> Answer:
         """Judge a request before the proxy sends it.
@@ -325,6 +340,7 @@ class Handler:
         *,
         max_held_bytes: int = MAX_BODY_BYTES,
         max_pending_bytes: int = PENDING_BYTES,
+        keepalive: bool = True,
     ) -> ReplyStream:
         """Judge a reply that the proxy hands over as it arrives, rather than whole.
 
@@ -334,12 +350,14 @@ class Handler:
             start: The reply's status and headers, before any of its body.
             max_held_bytes: The most of the reply the stream holds back to judge. A reply larger than it is refused with a 502, and not judged.
             max_pending_bytes: How much of what goes out as it arrives may wait for the proxy to collect it before feeding waits.
+            keepalive: Whether the proxy can send its client a keepalive. Where it can't, none is given, so that a refusal keeps its status for as long as nothing else has gone out.
         """
         return ReplyStream(
             self,
             start,
             max_held_bytes=max_held_bytes,
             max_pending_bytes=max_pending_bytes,
+            keepalive=self._keepalive if keepalive else None,
         )
 
     async def early_turn(

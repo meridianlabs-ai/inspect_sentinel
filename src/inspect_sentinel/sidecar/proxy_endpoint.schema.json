@@ -59,6 +59,12 @@
           "description": "The reply's content type, which says whether it is one JSON object or a stream of events.",
           "title": "Content Type",
           "type": "string"
+        },
+        "keepalive": {
+          "default": true,
+          "description": "Whether the proxy hook can send the caller a keepalive, an SSE comment, as a `release` while the reply is held. Where it can't, none is given, so that a refusal keeps its status for as long as nothing else has gone out.",
+          "title": "Keepalive",
+          "type": "boolean"
         }
       },
       "required": [

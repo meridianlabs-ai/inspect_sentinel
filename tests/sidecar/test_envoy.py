@@ -26,6 +26,7 @@ from inspect_sentinel._step import BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, read_reply
 from inspect_sentinel.sidecar._handler import RequestResult
+from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
 from inspect_sentinel.sidecar.envoy import envoy_yaml
 from tests.sidecar._envoy import IMAGE, Scripted, Stack, docker_missing, envoy_stack
 from tests.sidecar._traffic import (
@@ -39,6 +40,7 @@ from tests.sidecar._traffic import (
     weather,
     weather_rule,
 )
+from tests.sidecar.test_early_release import slowly
 
 _MISSING = docker_missing()
 
@@ -913,3 +915,34 @@ def test_reply_released_early_with_trailers_ends_at_its_trailers(stack: Stack) -
     )
 
     assert _ask(stack, "anthropic", True) == ["Paris", "Lima"]
+
+
+@pytest.mark.parametrize("api", _APIS)
+def test_a_client_waiting_through_envoy_on_a_judgment_is_kept_alive(
+    stack: Stack, api: str
+) -> None:
+    stack.use(Handler(slowly(0.3, "proceed"), release="early", keepalive=0.05))
+    sent = _answer_with(stack, api, True)
+
+    answered = httpx.post(
+        f"{stack.url}{_path(api)}", json=_body(api, True), timeout=_TIMEOUT
+    )
+
+    assert answered.status_code == 200
+    assert KEEPALIVE in answered.content
+    assert answered.content.replace(KEEPALIVE, b"") == sent
+    assert _ask(stack, api, True) == ["Paris", "Tokyo", "Lima"]
+
+
+def test_turn_of_calls_alone_refused_after_a_keepalive_raises_in_the_sdk(
+    stack: Stack,
+) -> None:
+    # the keepalive sent the status, so the refusal is an error event
+    stack.use(Handler(slowly(0.3, "reject"), release="early", keepalive=0.05))
+    _answer_with(stack, "chat", True)
+
+    with pytest.raises(openai.APIError) as raised:
+        _ask(stack, "chat", True)
+
+    assert not isinstance(raised.value, openai.APIStatusError)
+    assert "Lookups are not allowed." in str(raised.value)

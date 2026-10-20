@@ -54,6 +54,10 @@ class BeginReplyParams(BaseModel):
     content_type: str = Field(
         description="The reply's content type, which says whether it is one JSON object or a stream of events."
     )
+    keepalive: bool = Field(
+        default=True,
+        description="Whether the proxy hook can send the caller a keepalive, an SSE comment, as a `release` while the reply is held. Where it can't, none is given, so that a refusal keeps its status for as long as nothing else has gone out.",
+    )
 
 
 class ReplyChunkParams(BaseModel):
@@ -220,6 +224,7 @@ class ReplyStreams:
             ),
             max_held_bytes=self._max_body_bytes,
             max_pending_bytes=self._max_pending_bytes,
+            keepalive=given.keepalive,
         )
         open = _Open(stream, given)
         self._open[given.id] = open

@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any
+from typing import Any, Literal
 
 import anthropic
 import anyio
@@ -26,6 +26,7 @@ from inspect_sentinel.sidecar import (
     ReplyStream,
 )
 from inspect_sentinel.sidecar._handler import RequestResult
+from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
 from tests.sidecar._traffic import JSON, STREAM, message, request, weather
 from tests.sidecar.test_early_turn import _exchange, noting
 
@@ -527,3 +528,97 @@ async def test_no_call_is_judged_once_the_client_goes_among_calls_complete_toget
             go.set()
 
     assert seen == ["call_0"]
+
+
+@protocol
+def slowly(seconds: float, action: str) -> Protocol:
+    """Decide `action`, `proceed` or `reject`, for every call, after `seconds`."""
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        await anyio.sleep(seconds)
+        if action == "reject":
+            return Decision.reject("every lookup", message="Lookups are not allowed.")
+        return Decision.proceed()
+
+    return decide
+
+
+def _events_read_with_sdk(name: str, body: bytes) -> list[Any]:
+    # the events a client of the provider's SDK reads from a stream it is sent
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, headers={"content-type": STREAM}, content=body)
+
+    http = httpx2.Client(transport=httpx2.MockTransport(answer))
+    if name == "anthropic":
+        client = anthropic.Anthropic(api_key="x", http_client=http)
+        stream: Any = client.messages.create(
+            model="m",
+            max_tokens=10,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+        )
+    elif name == "chat":
+        stream = openai.OpenAI(api_key="x", http_client=http).chat.completions.create(
+            model="m", messages=[{"role": "user", "content": "hi"}], stream=True
+        )
+    else:
+        stream = openai.OpenAI(api_key="x", http_client=http).responses.create(
+            model="m", input="hi", stream=True
+        )
+    return [event.model_dump() for event in stream]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("name", _FORMATS)
+async def test_a_client_waiting_on_a_judgment_is_kept_alive_with_what_its_sdk_skips(
+    name: str,
+) -> None:
+    asked, reply = _exchange(name, inspect=False)
+    handler = Handler(slowly(0.2, "proceed"), release="early", keepalive=0.02)
+    await handler.request(asked)
+
+    outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
+
+    assert Release(KEEPALIVE) in outputs
+    assert outputs[-1] == Finished()
+    sent = _sent(outputs)
+    assert _events_read_with_sdk(name, sent) == _events_read_with_sdk(
+        name, sent.replace(KEEPALIVE, b"")
+    )
+
+
+@pytest.mark.anyio
+async def test_a_turn_refused_after_a_keepalive_went_out_is_an_error_event() -> None:
+    asked, reply = _exchange("chat", inspect=False)
+    handler = Handler(slowly(0.2, "reject"), release="early", keepalive=0.02)
+    await handler.request(asked)
+
+    outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
+
+    # the keepalive sent the status, so the refusal can't have one of its own
+    assert outputs[0] == Release(KEEPALIVE)
+    assert isinstance(outputs[-1], ErrorEvent)
+    _read_with_sdk("chat", _sent(outputs))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("release", "keepalive", "carried"),
+    [("whole", 0.02, True), ("early", 0.02, False), ("early", None, True)],
+    ids=["held whole", "not carried", "turned off"],
+)
+async def test_no_keepalive_goes_out_where_it_isnt_wanted(
+    release: Literal["whole", "early"], keepalive: float | None, carried: bool
+) -> None:
+    asked, reply = _exchange("chat", inspect=False)
+    handler = Handler(slowly(0.2, "proceed"), release=release, keepalive=keepalive)
+    await handler.request(asked)
+
+    outputs = await _streamed(
+        handler.reply_stream(_start(reply), keepalive=carried), reply.body, 61
+    )
+
+    assert Release(KEEPALIVE) not in outputs
+    assert outputs[-1] == Finished()
