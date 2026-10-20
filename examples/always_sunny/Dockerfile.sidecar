@@ -13,16 +13,16 @@ RUN apt-get update \
 COPY --from=uv /uv /usr/local/bin/uv
 
 WORKDIR /src
+# inspect-ai's main, as development installs it (CONTRIBUTING.md), and before
+# the version below, which would otherwise be inspect-ai's too
+RUN uv venv /src/.venv \
+ && uv pip install --python /src/.venv/bin/python \
+        git+https://github.com/UKGovernmentBEIS/inspect_ai.git
 # the package takes its version from git, which stays out of the image
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml README.md ./
 COPY src ./src
-RUN uv sync \
-        --frozen \
-        --no-dev \
-        --extra anthropic \
-        --extra openai \
-        --extra sidecar
+RUN uv pip install --python /src/.venv/bin/python ".[anthropic,openai,sidecar]"
 ENV PATH=/src/.venv/bin:$PATH
 # the example's rule, which the sentinel names as weather_rules/always_sunny
 COPY examples/always_sunny/rule /rule

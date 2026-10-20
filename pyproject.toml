@@ -22,10 +22,12 @@ dependencies = [
     #
     # Development tracks inspect_ai's `main`, because sentinel and inspect_ai
     # co-develop and most sentinel changes need hooks that have not shipped.
-    # The git ref never reaches PyPI: release-pin-deps.yml rewrites it to a
-    # `>=<latest>` floor on the Release Please release PR, and
-    # release-dep-guard.yml blocks the release if it is still a git ref.
-    "inspect-ai @ git+https://github.com/UKGovernmentBEIS/inspect_ai@main",
+    # That is done by installing, not by this line: CI and the setup in
+    # CONTRIBUTING.md install inspect_ai from git first, and the floor below
+    # leaves that install in place. Only the Release Please release PR skips
+    # it, so a release is tested against PyPI, after release-pin-deps.yml
+    # raises this floor to the latest inspect_ai release.
+    "inspect-ai>=0.3.282",
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.
     "pydantic>=2.0",
@@ -102,10 +104,6 @@ doc = [
 ]
 dist = ["twine", "build"]
 
-# lets `uv sync --group dev` keep working; the lists live in the extras above
-[dependency-groups]
-dev = ["inspect_sentinel[dev]"]
-
 [tool.hatch.build]
 only-packages = true
 exclude = ["docs/", "tests/", "design/"]
@@ -119,11 +117,6 @@ version-file = "src/inspect_sentinel/_version.py"
 
 [tool.hatch.version.raw-options]
 local_scheme = "no-local-version" # Important for PyPI compatibility
-
-# hatchling rejects PEP 508 direct references (the inspect-ai git ref above)
-# without this
-[tool.hatch.metadata]
-allow-direct-references = true
 
 [tool.uv]
 managed = true

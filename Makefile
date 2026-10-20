@@ -14,7 +14,8 @@ test:
 # The LiteLLM guardrail is a package of its own, tested and checked in an
 # environment of its own with one LiteLLM version, which this repository's
 # environment never has. Its tests start a real sidecar from this repository's
-# environment, so run `uv sync` first.
+# environment, `.venv`, so set that up first (CONTRIBUTING.md). `uv run
+# --isolated --no-project` never reads or installs this repository's project.
 LITELLM ?= 1.105.0
 LITELLM_ENV = cd src/proxies/litellm && uv run --isolated --no-project \
 	--with "litellm[proxy]==$(LITELLM)" --with-editable . \
