@@ -341,3 +341,57 @@ async def _latest(handler: Handler) -> tuple[str, str | None]:
     result = await handler.request_result("request_456")
     assert isinstance(result, RequestResult)
     return result.latest.state, result.latest.reason
+
+
+@pytest.mark.anyio
+# asyncio's own tasks are listed by name, as anyio names them
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_an_abort_lets_go_of_a_stream_waiting_for_room() -> None:
+    import asyncio
+
+    handler = Handler(weather_rule())
+    await handler.request(request())
+    error = json.dumps({"type": "error", "error": {"message": "x" * 400}}).encode()
+
+    with anyio.fail_after(10):
+        async with _serving(handler, max_pending_bytes=100) as client:
+            await _call(
+                client,
+                "begin_reply",
+                **_begun(status=500, content_type="application/json"),
+            )
+            for seq in range(4):
+                await _call(client, "reply_chunk", id="x", seq=seq, data=_b64(error))
+            # nothing collected, so the stream waits for room
+            await anyio.wait_all_tasks_blocked()
+            assert any(
+                task.get_name().endswith("._collect") for task in asyncio.all_tasks()
+            )
+            await _call(client, "abort_reply", id="x")
+            await anyio.wait_all_tasks_blocked()
+            waiting = [
+                task
+                for task in asyncio.all_tasks()
+                if task.get_name().endswith("._collect") and not task.done()
+            ]
+
+    assert waiting == []
+
+
+@pytest.mark.anyio
+async def test_a_stream_is_let_go_of_as_soon_as_its_end_is_acknowledged() -> None:
+    handler = Handler(weather_rule("reject", "Cairo"))
+    await handler.request(request())
+
+    with anyio.fail_after(10):
+        async with _serving(handler, poll_seconds=30) as client:
+            await _call(client, "begin_reply", **_begun())
+            await _feed(client, _BODY)
+            outputs = await _collect(client)
+            # answered at once, though the wait for output is 30 seconds
+            with anyio.fail_after(5):
+                done = await _call(client, "next_release", id="x", after=len(outputs))
+            assert done["result"]["outputs"] == []
+            gone = await _call(client, "next_release", id="x", after=len(outputs))
+
+    assert gone["error"]["code"] == UNKNOWN_STREAM

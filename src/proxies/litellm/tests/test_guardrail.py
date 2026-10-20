@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 import urllib.request
-from collections.abc import AsyncIterator, Callable, Generator
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -2163,3 +2163,145 @@ def test_a_turn_ended_after_a_call_went_out_raises_in_the_sdk(
         _read_by_the_sdk(_CHAT, _as_litellm_writes(_CHAT, let_go, data))
 
     assert "ended this run" in str(raised.value)
+
+
+def _stand_in(answer: Callable[[str, dict[str, Any]], Any]) -> Starlette:
+    """A stand-in for the sidecar that answers each call with what `answer` gives for its method and parameters: a result, or a JSON-RPC error as `{"error": ...}`."""
+
+    async def call(http: HttpRequest) -> JSONResponse:
+        asked = await http.json()
+        given: Any = answer(asked["method"], asked.get("params", {}))
+        if isinstance(given, Awaitable):
+            given = await cast(Awaitable[Any], given)
+        if isinstance(given, dict) and "error" in given:
+            return JSONResponse({"jsonrpc": "2.0", "id": 1, **given})
+        return JSONResponse(_result(given))
+
+    return Starlette(routes=[Route(PATH, call, methods=["POST"])])
+
+
+async def _never_ready(after: int) -> dict[str, Any]:
+    # a release that never comes, as from a stream whose input never ended
+    await asyncio.sleep(0.05)
+    return {"position": after, "outputs": []}
+
+
+def _within(seconds: float, exchange: Callable[[], tuple[Any, Any]]) -> tuple[Any, Any]:
+    # an exchange that hangs would leave the test waiting, so it fails fast
+    done: list[tuple[Any, Any]] = []
+    raised: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            done.append(exchange())
+        except BaseException as ex:
+            raised.append(ex)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    assert not thread.is_alive(), "the exchange didn't end"
+    if raised:
+        raise raised[0]
+    return done[0]
+
+
+def test_a_reply_whose_chunks_the_sidecar_wont_take_is_refused_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "reply_chunk":
+            return {"error": {"code": -32603, "message": "No."}}
+        if method == "next_release":
+            return _never_ready(params["after"])
+        return {"taken": True}
+
+    with _serving(_stand_in(answer)) as url:
+        _, reply = _within(
+            10, lambda: _exchange(_make(monkeypatch, url), _CHAT, _data(_CHAT), True)
+        )
+
+    [event] = reply
+    assert (_error_event(event)["code"], _error_event(event)["message"]) == _UNANSWERED
+
+
+def test_a_reply_whose_stream_cant_begin_is_let_through_when_set_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        return {"error": {"code": -32603, "message": "No."}}
+
+    with _serving(_stand_in(answer)) as url:
+        guardrail = _make(monkeypatch, url, unreachable_fallback="fail_open")
+        _, reply = _within(10, lambda: _exchange(guardrail, _CHAT, _data(_CHAT), True))
+
+    assert [_written(chunk) for chunk in reply] == [
+        _written(chunk) for chunk in _CHAT.stream()
+    ]
+
+
+def test_a_reply_too_large_to_judge_is_let_through_whole_when_set_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            return _never_ready(params["after"])
+        return {"taken": True}
+
+    with _serving(_stand_in(answer)) as url:
+        guardrail = _make(
+            monkeypatch, url, unreachable_fallback="fail_open", max_reply_bytes=100
+        )
+        _, reply = _within(10, lambda: _exchange(guardrail, _CHAT, _data(_CHAT), True))
+
+    # every chunk, those after the limit too
+    assert [_written(chunk) for chunk in reply] == [
+        _written(chunk) for chunk in _CHAT.stream()
+    ]
+
+
+def test_a_reply_stream_s_end_is_acknowledged(monkeypatch: pytest.MonkeyPatch) -> None:
+    passed = _result({"action": "pass"})
+    stream_calls: list[Any] = []
+
+    with _serving(_scripted([], passed, passed, streamed=stream_calls)) as url:
+        _exchange(_make(monkeypatch, url), _CHAT, _data(_CHAT), True)
+
+    # the outputs are the reply and its end, both of which the sidecar is told
+    # the guardrail has, so that it lets go of the stream
+    last = stream_calls[-1]
+    assert (last["method"], last["params"]["after"]) == ("next_release", 2)
+
+
+def test_the_session_to_the_sidecar_is_made_one_way_whoever_makes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
+    seen: list[dict[str, Any]] = []
+    _without_eval_route(proxy)
+
+    async def call(guardrail: Any) -> int:
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=proxy.app), base_url="http://litellm"
+            ) as client:
+                await client.get(
+                    "/sentinel/info", headers={"authorization": "Bearer sk-caller"}
+                )
+            # an eval's probe made it, and a reply stream shares it
+            return guardrail._session.connector.limit
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_sidecar_for_evals(seen)) as url:
+        guardrail = _make(monkeypatch, url)
+        guardrail.serve_eval_routes()
+        limit = asyncio.run(call(guardrail))
+
+    assert seen and limit == 0

@@ -267,6 +267,8 @@ class ReplyStreams:
             await open.stream.abort()
             open.done = True
             open.changed.set()
+            # a collector waiting for room has none to wait for
+            open.collected.set()
         return TakenResult()
 
     async def next(self, given: NextReleaseParams) -> NextReleaseResult:
