@@ -1,0 +1,8 @@
+services:
+  default:
+    image: monitor-eval-sandbox:1
+    network_mode: none
+    init: true
+    command: tail -f /dev/null
+    mem_limit: 1g
+    cpus: 1.0
