@@ -1,6 +1,8 @@
-# Temporary: runs a sentinel over the samples of an eval log, until the replay
-# of design/sentinel-development.md (workstream 10) replaces it. Not exported;
-# delete it then.
+# Temporary, for the maintainer's own use: runs a sentinel over the samples of
+# an eval log. It does not attempt the replay design/sentinel-development.md
+# describes (as_scanner(), steps_from_messages(), replay_monitor(), workstream
+# 10) and meets none of its requirements. Not exported; delete it when that
+# replay lands.
 
 from __future__ import annotations
 
@@ -100,7 +102,7 @@ async def replay_eval(
 ) -> AsyncIterator[ReplayedStep]:
     """Run a sentinel over the steps of samples in an eval log, as if it had watched them live, yielding each step as it is judged.
 
-    Temporary, until the replay `design/sentinel-development.md` describes replaces it.
+    Temporary, for the maintainer's own use. It does not attempt the replay `design/sentinel-development.md` describes (`as_scanner()` and the functions under it) and meets none of its requirements; it goes when that replay lands.
 
     Steps are rebuilt from the sample's events, as inspect_ai builds them live. Each agent turn gives a `BeforeGenerate` from its first `ModelEvent`, so attempts a provider error made inspect_ai retry are one step, and an `AfterGenerate` from the attempt that returned output. Each `ToolEvent` gives a `BeforeToolCall` of the call as the sentinel would have seen it, after an approver's modification, unless the call never reached the sentinel (it did not parse, named no tool the model was offered, or an approver rejected it), and an `AfterToolCall` if the call ran to a result. Only model and tool calls made while the solvers ran count, none inside a sentinel's own span, and no model call inside a tool's. Only the stages the sentinel watches are run, in the order of the events they come from, with one store per sample.
 
@@ -424,7 +426,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     """
     parser = argparse.ArgumentParser(
         prog="python -m inspect_sentinel._replay",
-        description="Run a sentinel over the samples of an eval log, as if it had watched them live. Temporary. The sentinel's monitors and protocols must be registered by an installed package; for ones a task file defines, import it and call replay_eval() instead.",
+        description="Run a sentinel over the samples of an eval log, as if it had watched them live. Temporary, for the maintainer's own use; it is not the replay design/sentinel-development.md describes (as_scanner()). The sentinel's monitors and protocols must be registered by an installed package; for ones a task file defines, import it and call replay_eval() instead.",
     )
     parser.add_argument("log", help="The eval log file.")
     parser.add_argument(
