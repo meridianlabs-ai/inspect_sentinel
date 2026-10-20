@@ -175,7 +175,7 @@ static_resources:
             address:
               socket_address:
                 address: sidecar
-                port_value: 8901
+                port_value: 8902
     typed_extension_protocol_options:
       envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
         '@type': type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions

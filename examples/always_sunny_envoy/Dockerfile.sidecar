@@ -28,7 +28,7 @@ ENV PATH=/src/.venv/bin:$PATH
 COPY examples/always_sunny_envoy/rule /rule
 RUN uv pip install --python /src/.venv/bin/python --no-deps /rule
 
-# 8900 for the sidecar's endpoints, 8901 for the Envoy shim
-EXPOSE 8900 8901
+# 8900 for the sidecar's endpoints, 8902 for the Envoy shim
+EXPOSE 8900 8902
 # the ports and the address are in the sentinel file's server stanza
 ENTRYPOINT ["python", "-m", "inspect_sentinel.sidecar"]

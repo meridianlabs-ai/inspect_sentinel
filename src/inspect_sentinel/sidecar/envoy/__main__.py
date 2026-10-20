@@ -20,10 +20,13 @@ def main() -> None:
         "--sidecar-host", default="127.0.0.1", help="Where Envoy reaches the sidecar."
     )
     parser.add_argument(
-        "--sidecar-port", type=int, default=8900, help="The sidecar's --port."
+        "--sidecar-port",
+        type=int,
+        default=8900,
+        help="Where Envoy sends /sentinel/: the sidecar's --port, or its --eval-port where it has one, unless --no-eval-endpoint.",
     )
     parser.add_argument(
-        "--shim-port", type=int, default=8901, help="The sidecar's --envoy-port."
+        "--shim-port", type=int, default=8902, help="The sidecar's --envoy-port."
     )
     parser.add_argument(
         "--anthropic",
@@ -63,6 +66,11 @@ def main() -> None:
         metavar="PATH",
         help="The certificates Envoy trusts a provider's to be signed by, in Envoy's file system.",
     )
+    parser.add_argument(
+        "--no-eval-endpoint",
+        action="store_true",
+        help="Route no /sentinel/ to the sidecar, whose endpoint for evals has a port of its own (its --eval-port), which an eval reaches directly.",
+    )
     arguments = parser.parse_args()
     try:
         sys.stdout.write(
@@ -76,6 +84,7 @@ def main() -> None:
                 max_body_bytes=arguments.max_body_bytes,
                 message_timeout=arguments.message_timeout,
                 ca_file=arguments.ca_file,
+                eval_endpoint=not arguments.no_eval_endpoint,
             )
         )
     except ValueError as ex:

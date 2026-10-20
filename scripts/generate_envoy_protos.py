@@ -1,6 +1,6 @@
 """Generate the Python code for Envoy's ext_proc service, which the sidecar's Envoy shim serves.
 
-Run with `make envoy-protos`. It downloads Envoy's API at `ENVOY_VERSION`, and the protos of cncf/xds and protoc-gen-validate at the versions that Envoy release pins, checking each download against the hash Envoy pins for it. It then generates the messages, their type stubs and the service's gRPC code into `PACKAGE`, with each import moved under it, so that the shim installs no top-level `envoy`, `udpa`, `xds` or `validate` package of its own.
+Run with `make envoy-protos`. It downloads Envoy's source at `ENVOY_VERSION`, checked against `ENVOY_SHA256`, and the protos of cncf/xds and protoc-gen-validate at the versions that Envoy release pins, checked against the hashes it pins for them. It then generates the messages, their type stubs and the service's gRPC code into `PACKAGE`, with each import moved under it, so that the shim installs no top-level `envoy`, `udpa`, `xds` or `validate` package of its own.
 
 The generated code requires a protobuf runtime at least as new as the protoc of `grpcio-tools` that generated it, and a grpcio at least as new as `grpcio-tools`, so the `envoy` extra's floors are those versions (the Makefile pins them).
 """
@@ -24,6 +24,9 @@ from grpc_tools import protoc
 
 ENVOY_VERSION = "1.39.4"
 """The Envoy release whose API the shim speaks."""
+
+ENVOY_SHA256 = "d70c16f78cd4326717c124d520a3aadfa0ccd67dc2bd470d5dad95f3ca1397ac"
+"""The sha256 of GitHub's archive of that release's source, which holds the pins checked for the rest. Change it with `ENVOY_VERSION`."""
 
 SERVICE = "envoy/service/ext_proc/v3/external_processor.proto"
 
@@ -59,7 +62,9 @@ def _envoy_api(work: Path) -> Path:
     url = (
         f"https://github.com/envoyproxy/envoy/archive/refs/tags/v{ENVOY_VERSION}.tar.gz"
     )
-    with tarfile.open(fileobj=io.BytesIO(_download(url)), mode="r:gz") as archive:
+    data = _download(url)
+    _check(url, data, ENVOY_SHA256)
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
         top = f"envoy-{ENVOY_VERSION}/"
         members = [
             member
@@ -105,9 +110,7 @@ def _named(call: ast.Call, name: str) -> bool:
 def _fetch(pin: dict[str, str], into: Path) -> Path:
     url = pin["url"].format(version=pin["version"])
     data = _download(url)
-    digest = hashlib.sha256(data).hexdigest()
-    if digest != pin["sha256"]:
-        sys.exit(f"{url} has sha256 {digest}, not the {pin['sha256']} Envoy pins.")
+    _check(url, data, pin["sha256"])
     if url.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             archive.extractall(into)
@@ -115,6 +118,12 @@ def _fetch(pin: dict[str, str], into: Path) -> Path:
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
             archive.extractall(into, filter="data")
     return into / pin.get("strip_prefix", "").format(version=pin["version"])
+
+
+def _check(url: str, data: bytes, pinned: str) -> None:
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != pinned:
+        sys.exit(f"{url} has sha256 {digest}, not the {pinned} pinned for it.")
 
 
 def _download(url: str) -> bytes:

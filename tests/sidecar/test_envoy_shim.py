@@ -2,20 +2,30 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-from inspect_sentinel.sidecar import Handler
-from inspect_sentinel.sidecar._serve import parse_arguments
+from inspect_sentinel.sidecar import Handler, Replace, Request
+from inspect_sentinel.sidecar._handler import RequestResult
+from inspect_sentinel.sidecar._serve import (
+    parse_arguments,
+)
 from inspect_sentinel.sidecar.envoy import EnvoyShim, envoy_config, envoy_yaml
 from inspect_sentinel.sidecar.envoy._proto.envoy.config.core.v3 import base_pb2 as core
 from inspect_sentinel.sidecar.envoy._proto.envoy.service.ext_proc.v3 import (
     external_processor_pb2 as pb,
 )
-from tests.sidecar._traffic import message, weather, weather_rule
+from tests.sidecar._traffic import (
+    every_call_rule,
+    inspect_headers,
+    message,
+    weather,
+    weather_rule,
+)
 
 
 @pytest.fixture
@@ -38,27 +48,29 @@ class _Context:
         return self._metadata
 
 
-def _headers(headers: dict[str, str]) -> pb.HttpHeaders:
+def _headers(headers: dict[str, str], *, end_of_stream: bool = False) -> pb.HttpHeaders:
     return pb.HttpHeaders(
         headers=core.HeaderMap(
             headers=[
                 core.HeaderValue(key=name, raw_value=value.encode())
                 for name, value in headers.items()
             ]
-        )
+        ),
+        end_of_stream=end_of_stream,
     )
 
 
 async def _process(
     messages: Sequence[pb.ProcessingRequest],
-    handler: Handler | None = None,
+    handler: Any = None,
     metadata: Sequence[tuple[str, str]] = _ANTHROPIC,
+    max_body_bytes: int = 1024 * 1024,
 ) -> list[pb.ProcessingResponse]:
     async def sent() -> AsyncIterator[pb.ProcessingRequest]:
         for each in messages:
             yield each
 
-    shim = EnvoyShim(handler or Handler(weather_rule()), max_body_bytes=1024 * 1024)
+    shim = EnvoyShim(handler or Handler(weather_rule()), max_body_bytes=max_body_bytes)
     return [
         answer async for answer in shim.Process(sent(), cast(Any, _Context(metadata)))
     ]
@@ -114,21 +126,6 @@ async def test_route_that_doesnt_say_the_api_is_refused() -> None:
     refused = answers[0].immediate_response
     assert refused.status.code == 500
     assert b"sentinel-format" in refused.body
-
-
-@pytest.mark.anyio
-async def test_compressed_request_is_refused() -> None:
-    answers = await _process(
-        [
-            pb.ProcessingRequest(
-                request_headers=_headers(
-                    {"content-type": "application/json", "content-encoding": "gzip"}
-                )
-            )
-        ]
-    )
-
-    assert answers[0].immediate_response.status.code == 415
 
 
 @pytest.mark.anyio
@@ -191,3 +188,137 @@ def test_example_sidecar_serves_where_its_envoy_looks() -> None:
 
     assert clusters["sentinel_sidecar"] == arguments.port
     assert clusters["sentinel_shim"] == arguments.envoy_port
+
+
+_BODY = b'{"model": "claude-test", "max_tokens": 1, "messages": [{"role": "user", "content": "Weather?"}]}'
+
+
+def _from_inspect(**headers: str) -> pb.ProcessingRequest:
+    return pb.ProcessingRequest(
+        request_headers=_headers(
+            {"content-type": "application/json", **inspect_headers(), **headers}
+        )
+    )
+
+
+def _reply(*parts: bytes, **headers: str) -> list[pb.ProcessingRequest]:
+    return [
+        pb.ProcessingRequest(
+            response_headers=_headers(
+                {":status": "200", "content-type": "application/json", **headers}
+            )
+        ),
+        *(
+            pb.ProcessingRequest(
+                response_body=pb.HttpBody(
+                    body=part, end_of_stream=index == len(parts) - 1
+                )
+            )
+            for index, part in enumerate(parts)
+        ),
+    ]
+
+
+async def _not_judged(handler: Handler) -> tuple[str, str | None]:
+    result = await handler.request_result("request_456")
+    assert isinstance(result, RequestResult)
+    return result.latest.state, result.latest.reason
+
+
+@pytest.mark.anyio
+async def test_compressed_request_is_refused_and_the_eval_told_it_wasnt_judged() -> (
+    None
+):
+    handler = Handler(weather_rule())
+    answers = await _process(
+        [
+            _from_inspect(**{"content-encoding": "gzip"}),
+            pb.ProcessingRequest(
+                request_body=pb.HttpBody(
+                    body=b"\x1f\x8b compressed", end_of_stream=True
+                )
+            ),
+        ],
+        handler,
+    )
+
+    assert answers[-1].immediate_response.status.code == 400
+    assert await _not_judged(handler) == ("not_judged", "unreadable")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("max_body_bytes", "headers"),
+    [(64, {}), (1024 * 1024, {"content-encoding": "gzip"})],
+    ids=["larger than the shim holds", "compressed"],
+)
+async def test_reply_refused_unread_tells_the_eval_it_wasnt_judged(
+    max_body_bytes: int, headers: dict[str, str]
+) -> None:
+    handler = Handler(weather_rule())
+    body = message(weather("Paris"))
+    answers = await _process(
+        [
+            _from_inspect(),
+            pb.ProcessingRequest(
+                request_body=pb.HttpBody(body=_BODY, end_of_stream=True)
+            ),
+            *_reply(body[:100], body[100:], **headers),
+        ],
+        handler,
+        max_body_bytes=max_body_bytes,
+    )
+
+    assert answers[-1].immediate_response.status.code == 502
+    # not still awaiting the reply the client was refused
+    assert await _not_judged(handler) == ("not_judged", "unreadable")
+
+
+@pytest.mark.anyio
+async def test_refusal_outside_the_error_statuses_is_sent_as_a_500() -> None:
+    answers = await _process(
+        [*_REQUEST, *_reply(message(weather("Paris")))],
+        Handler(every_call_rule(), reject_status=700),
+    )
+
+    refused = answers[-1].immediate_response
+    assert refused.status.code == 500
+    # the body is written for the status sent
+    assert json.loads(refused.body)["error"]["type"] == "api_error"
+
+
+class _ReplacesEveryRequest:
+    async def request(self, request: Request) -> Replace:
+        return Replace(b"{}")
+
+
+@pytest.mark.anyio
+async def test_request_without_a_body_that_the_sidecar_replaces_is_refused() -> None:
+    answers = await _process(
+        [
+            pb.ProcessingRequest(
+                request_headers=_headers(
+                    {"content-type": "application/json"}, end_of_stream=True
+                )
+            )
+        ],
+        _ReplacesEveryRequest(),
+    )
+
+    assert [answer.WhichOneof("response") for answer in answers] == [
+        "immediate_response"
+    ]
+    assert answers[0].immediate_response.status.code == 500
+
+
+def test_eval_endpoint_left_out_is_not_routed() -> None:
+    config = envoy_config(eval_endpoint=False)
+    manager = config["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][
+        0
+    ]["typed_config"]
+    routes = manager["route_config"]["virtual_hosts"][0]["routes"]
+
+    assert "/sentinel/" not in [route["match"].get("prefix") for route in routes]
+    assert "sentinel_sidecar" in [
+        cluster["name"] for cluster in config["static_resources"]["clusters"]
+    ]

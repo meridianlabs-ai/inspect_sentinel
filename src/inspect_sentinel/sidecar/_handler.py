@@ -276,6 +276,19 @@ class Handler:
             attempt.withheld = held.exchange.withheld
         return answer
 
+    async def reply_not_judged(self, id: str, reason: NotJudged) -> None:
+        """Let go of a request whose reply the proxy refused without handing it over, as one larger than it holds.
+
+        The request is no longer kept, and an eval that names it is told its reply was not judged, for the reason given, rather than that it is still awaited.
+
+        Args:
+            id: The proxy's id for the request.
+            reason: Why the reply was not judged.
+        """
+        held = await self._state.release(id)
+        if held is not None and held.attempt is not None:
+            held.attempt.not_judged(reason)
+
     async def request_result(
         self, id: str
     ) -> RequestResult | Literal["dropped", "unknown"]:

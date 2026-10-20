@@ -42,12 +42,13 @@ def envoy_config(
     port: int = 8080,
     sidecar_host: str = "127.0.0.1",
     sidecar_port: int = 8900,
-    shim_port: int = 8901,
+    shim_port: int = 8902,
     anthropic: str | None = "https://api.anthropic.com",
     openai: str | None = "https://api.openai.com",
     max_body_bytes: int = MAX_BODY_BYTES,
     message_timeout: float = MESSAGE_TIMEOUT,
     ca_file: str = CA_FILE,
+    eval_endpoint: bool = True,
 ) -> dict[str, Any]:
     """Envoy's configuration for a model proxy with the sidecar behind it.
 
@@ -70,13 +71,14 @@ def envoy_config(
     Args:
         port: The port Envoy listens on, on every address.
         sidecar_host: Where Envoy reaches the sidecar.
-        sidecar_port: The sidecar's port for its endpoints, its `--port`.
+        sidecar_port: The port Envoy sends `/sentinel/` to: the sidecar's `--port`, or its `--eval-port` where it has one.
         shim_port: The sidecar's port for the Envoy shim, its `--envoy-port`.
         anthropic: Anthropic's API, or None to leave its routes out. An `http` URL is reached without TLS, as for a stand-in provider.
         openai: OpenAI's API, or None to leave its routes out.
         max_body_bytes: The largest request Envoy holds while the shim judges it, the sidecar's `--max-body-bytes`.
         message_timeout: How long Envoy waits for the shim to judge a request, in seconds, at most an hour. A request that takes longer is answered with a 504, and the sentinel still decides.
         ca_file: The certificates Envoy trusts a provider's to be signed by, in Envoy's file system. Envoy's image keeps the system's at the default.
+        eval_endpoint: Whether Envoy routes `/sentinel/` to the sidecar's endpoint for evals, on `sidecar_port`. Leave it out when the sidecar serves that endpoint on a port of its own (`--eval-port`), which an eval reaches directly rather than through Envoy; `/sentinel/` is then answered with a 404.
 
     Raises:
         ValueError: If a provider's URL has a path, or no host, or `message_timeout` is more than an hour.
@@ -113,13 +115,14 @@ def envoy_config(
             routes.insert(
                 0, _to_provider(path, providers[provider], {"disabled": True})
             )
-    routes.append(
-        {
-            "match": {"prefix": "/sentinel/"},
-            "route": {"cluster": _SIDECAR_CLUSTER, "timeout": "0s"},
-            "typed_per_filter_config": _per_route({"disabled": True}),
-        }
-    )
+    if eval_endpoint:
+        routes.append(
+            {
+                "match": {"prefix": "/sentinel/"},
+                "route": {"cluster": _SIDECAR_CLUSTER, "timeout": "0s"},
+                "typed_per_filter_config": _per_route({"disabled": True}),
+            }
+        )
     routes.append(
         {
             "match": {"prefix": "/"},

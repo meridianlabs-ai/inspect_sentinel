@@ -10,6 +10,6 @@ server:
   port: 8900
   envoy:
     # the Envoy shim, which Envoy's ext_proc filter calls over gRPC
-    port: 8901
+    port: 8902
   # a status Inspect retries by itself, so the model is told of a rejection
   reject_status: 503

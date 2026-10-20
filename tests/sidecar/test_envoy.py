@@ -289,6 +289,19 @@ def test_refusal_carries_the_sentinel_field_for_an_inspect_client(
         assert refused["error"]["type"] == "invalid_request_error"
 
 
+def test_refusal_keeps_a_status_envoy_doesnt_name(stack: Stack) -> None:
+    # Envoy's own list of statuses stops at 511, and it sends any other
+    # refusal status as given: 529 is Anthropic's for overloaded
+    stack.use(Handler(every_call_rule(), reject_status=529))
+    _answer_with(stack, "anthropic", False)
+
+    with pytest.raises(anthropic.APIStatusError) as refused:
+        _ask(stack, "anthropic", False)
+
+    assert refused.value.status_code == 529
+    assert refused.value.body["error"]["type"] == "overloaded_error"  # type: ignore[index]
+
+
 def test_provider_is_asked_for_an_uncompressed_reply(stack: Stack) -> None:
     stack.use(Handler(weather_rule()))
     _answer_with(stack, "anthropic", False)

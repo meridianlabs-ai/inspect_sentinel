@@ -53,7 +53,7 @@ The sidecar's settings are in `sentinel.yaml`, under `server:`. `port` serves th
 Envoy's settings are in `envoy.yaml`. Write it with the generator rather than by hand, since many of Envoy's defaults are wrong for holding a reply: a request has 200 ms to be judged, a reply's body can't be held whole, and a provider's certificate isn't checked. Tell the generator where the sidecar is, with ports that match `sentinel.yaml`:
 
 ```bash
-python -m inspect_sentinel.sidecar.envoy --sidecar-host sidecar --sidecar-port 8900 --shim-port 8901 > envoy.yaml
+python -m inspect_sentinel.sidecar.envoy --sidecar-host sidecar --sidecar-port 8900 --shim-port 8902 > envoy.yaml
 ```
 
 Between each pair of parts:

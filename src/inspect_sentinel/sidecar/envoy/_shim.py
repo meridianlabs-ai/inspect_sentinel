@@ -36,8 +36,6 @@ _ANTHROPIC_ERRORS = {
     529: "overloaded_error",
 }
 
-# the statuses Envoy sends a local reply with; it refuses any other
-_STATUSES = frozenset(http_status.StatusCode.values())
 
 T = TypeVar("T")
 
@@ -142,6 +140,7 @@ class _Exchange:
         self._status = 0
         self._content_type = ""
         self._declared_length = False
+        self._request_encoding = "identity"
         self._held = bytearray()
         self._replied = False
         self.finished = False
@@ -183,14 +182,7 @@ class _Exchange:
         self._headers = {
             name: value for name, value in received.items() if name in self._shown
         }
-        encoding = received.get("content-encoding", "identity").lower()
-        if encoding != "identity":
-            return [
-                self._refuse(
-                    415,
-                    f"A request body in content encoding {encoding!r} isn't judged.",
-                )
-            ]
+        self._request_encoding = received.get("content-encoding", "identity").lower()
         # Inspect's headers are the sidecar's, and never reach the provider
         answer = pb.ProcessingResponse(
             request_headers=pb.HeadersResponse(
@@ -209,9 +201,26 @@ class _Exchange:
         judged = await self._request_body(b"")
         if judged.WhichOneof("response") == "immediate_response":
             return [judged]
+        if judged.request_body.response.HasField("body_mutation"):
+            # the handler replaced a request that has no body to replace,
+            # which Envoy can't be told to send
+            return [
+                self._refuse(
+                    500,
+                    "The sidecar replaced a request without a body, which it can't send.",
+                )
+            ]
         return [answer]
 
     async def _request_body(self, body: bytes) -> pb.ProcessingResponse:
+        if self._request_encoding != "identity":
+            # Handed over as it is, the handler can't read it, and the eval is
+            # told so; why is kept here.
+            logger.warning(
+                "The request %r is in content encoding %r, which isn't read.",
+                self._id,
+                self._request_encoding,
+            )
         self._model = _model(body)
         request = Request(
             id=self._id,
@@ -257,6 +266,7 @@ class _Exchange:
         if encoding != "identity":
             # Envoy's route asks the provider for an uncompressed reply, so a
             # compressed one is a provider that didn't listen
+            await self._handler.reply_not_judged(self._id, "unreadable")
             return [
                 self._refuse(
                     502,
@@ -297,8 +307,9 @@ class _Exchange:
         if len(self._held) > self._max_body_bytes:
             self._replied = True
             self.finished = True
-            # a judgment of the reply never comes, so the handler isn't told
-            # of it: its record of the request expires with the run's state
+            # the reply isn't read, as the endpoint for proxies doesn't read a
+            # call larger than it takes
+            await self._handler.reply_not_judged(self._id, "unreadable")
             return [
                 self._refuse(
                     502,
@@ -378,9 +389,10 @@ class _Exchange:
     def _refusal(self, refused: Refuse) -> pb.ProcessingResponse:
         self.finished = True
         status = refused.status
-        if status not in _STATUSES:
-            status = 500 if status >= 500 else 400
-        error = _error(self._format, refused.status, refused.message)
+        if not 400 <= status <= 599:
+            # a refusal is an error, as the endpoint for proxies bounds it
+            status = 500
+        error = _error(self._format, status, refused.message)
         if refused.sentinel is not None:
             error["sentinel"] = dict(refused.sentinel)
         return pb.ProcessingResponse(
