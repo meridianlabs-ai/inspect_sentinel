@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import collections
 import binascii
 import importlib
 import json
@@ -87,6 +88,10 @@ _PATH = "/proxy/v1"
 # a call to `next_release` waits up to 20 seconds for output, and is given as
 # long again to answer
 _POLL_TIMEOUT = aiohttp.ClientTimeout(total=40)
+# how much a reply stream reads ahead of what it has handed to the sidecar
+_PENDING_BYTES = 1024 * 1024
+# the size a chunk this can't write counts as, for what is kept of it
+_UNSIZED = 1024
 # what an eval reaches through LiteLLM: everything under it is the sidecar's
 # endpoint for evals, and the paths an eval calls first
 _EVAL_PREFIX = "/sentinel"
@@ -559,9 +564,18 @@ class _Relay:
         self._told = told
         self._chunks = chunks
         self._format: str = told["format"]
-        # every chunk LiteLLM yielded, kept for the classes released events are
-        # made in, and for a reply let through unjudged
-        self.held: list[Any] = []
+        # a chunk of each kind LiteLLM yielded, which released events are made
+        # in the classes of, and the stream's opening and its latest chunk,
+        # which a failed Responses stream is built on
+        self._kinds: dict[Any, Any] = {}
+        self._context: list[Any] = []
+        # the chunks not yet yielded of a reply that may be let through
+        # unjudged, with their sizes: kept only where the guardrail lets such
+        # a reply through, and only while nothing has gone out
+        self._unsent: collections.deque[tuple[Any, int]] = collections.deque()
+        self._unsent_bytes = 0
+        self._keeping = guardrail._let_through  # pyright: ignore[reportPrivateUsage]
+        self._room = asyncio.Event()
         self._pending = bytearray()
         self._size = 0
         self._read_all = False
@@ -604,14 +618,16 @@ class _Relay:
                     kind = output.get("kind")
                     if kind == "release":
                         for chunk in _released(
-                            _decoded(output), self._format, self.held
+                            _decoded(output), self._format, self._samples()
                         ):
-                            sent = True
+                            if not sent:
+                                sent = True
+                                self._keep_nothing()
                             yield chunk
                     elif kind == "error_event":
                         self._ended_at = position
                         for chunk in _released(
-                            _decoded(output), self._format, self.held
+                            _decoded(output), self._format, self._samples()
                         ):
                             yield chunk
                         return
@@ -624,13 +640,13 @@ class _Relay:
                     else:
                         raise _failed("a release of a kind this class doesn't know")
         except HTTPException as refused:
-            yield _refused_stream(self.held, refused, self._format)
+            yield _refused_stream(self._context, refused, self._format)
         except SidecarError:
             if sent:
                 # what went out can't be matched to what LiteLLM yielded, so
                 # the reply can't go on unjudged from where it is
                 yield _refused_mid_stream(
-                    self.held,
+                    self._context,
                     HTTPException(503, "The sentinel sidecar gave no usable answer."),
                     self._format,
                 )
@@ -638,7 +654,7 @@ class _Relay:
             try:
                 guardrail._unanswered()  # pyright: ignore[reportPrivateUsage]
             except HTTPException as refused:
-                yield _refused_stream(self.held, refused, self._format)
+                yield _refused_stream(self._context, refused, self._format)
                 return
             # let through unjudged, as LiteLLM yields it
             async for chunk in self._unjudged():
@@ -674,13 +690,17 @@ class _Relay:
             )
         )
         failing = asyncio.ensure_future(self._failed.wait())
-        done, _ = await asyncio.wait(
-            {polling, failing}, return_when=asyncio.FIRST_COMPLETED
-        )
-        failing.cancel()
-        if polling not in done:
-            polling.cancel()
+        try:
+            done, _ = await asyncio.wait(
+                {polling, failing}, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            # neither outlives the wait, however it ends
+            for racing in (polling, failing):
+                if not racing.done():
+                    racing.cancel()
             await asyncio.wait({polling, failing})
+        if polling not in done:
             if self._raised is not None:
                 # LiteLLM's own error, which LiteLLM sees as it would have
                 raise self._raised
@@ -689,22 +709,31 @@ class _Relay:
         return polling.result()
 
     async def _read(self) -> None:
-        # LiteLLM's chunks, kept, and handed over as the caller would be sent
-        # them while the reply is no larger than is held to be judged; the
-        # rest is read all the same, for a reply let through unjudged
+        # LiteLLM's chunks, handed over as the caller would be sent them while
+        # the reply is no larger than is held to be judged, and kept while it
+        # may be let through unjudged. The reader waits while what it has read
+        # waits on the handing over, or on the caller of a reply let through.
         limit = self._guardrail._max_reply_bytes  # pyright: ignore[reportPrivateUsage]
         try:
             async for chunk in self._chunks:
-                self.held.append(chunk)
+                self._note(chunk)
+                written = _written_or_none(chunk)
+                size = len(written) if written is not None else _UNSIZED
+                if self._keeping:
+                    self._unsent.append((chunk, size))
+                    self._unsent_bytes += size
                 if self._stopped is None:
-                    written = _event(chunk)
-                    self._size += len(written)
-                    if self._size > limit:
-                        self._stop(_failed("a reply larger than max_reply_bytes"))
+                    if written is None:
+                        self._stop(_failed("a reply stream of a kind this can't write"))
                     else:
-                        self._pending += written
+                        self._size += size
+                        if self._size > limit:
+                            self._stop(_failed("a reply larger than max_reply_bytes"))
+                        else:
+                            self._pending += written
                 self._to_upload.set()
                 self._to_yield.set()
+                await self._wait_for_room(limit)
         except Exception as ex:
             self._raised = ex
             self._failed.set()
@@ -724,6 +753,7 @@ class _Relay:
                     return
                 if self._pending:
                     data, self._pending = bytes(self._pending), bytearray()
+                    self._room.set()
                     await self._guardrail._call(  # pyright: ignore[reportPrivateUsage]
                         "reply_chunk",
                         {
@@ -747,22 +777,57 @@ class _Relay:
         # handing over can't go on, which ends the relay
         if self._stopped is None:
             self._stopped = why
+        self._pending = bytearray()
         self._failed.set()
+        self._room.set()
+
+    async def _wait_for_room(self, limit: int) -> None:
+        # What is kept of a reply that may be let through is bounded by the
+        # limit, past which the reply is no longer handed over, so a reply let
+        # through is read no faster than the caller takes it.
+        while True:
+            self._room.clear()
+            uploading = self._stopped is None and len(self._pending) >= _PENDING_BYTES
+            # past the limit, as a reply exactly at it is still judged
+            keeping = self._keeping and self._unsent_bytes > limit
+            if not (uploading or keeping):
+                return
+            await self._room.wait()
 
     async def _unjudged(self) -> AsyncIterator[Any]:
-        # every chunk LiteLLM yields, as the reader keeps them
-        given = 0
+        # every chunk LiteLLM yields, as the reader keeps them, each let go of
+        # once yielded
         while True:
             self._to_yield.clear()
-            while given < len(self.held):
-                yield self.held[given]
-                given += 1
+            while self._unsent:
+                chunk, size = self._unsent.popleft()
+                self._unsent_bytes -= size
+                self._room.set()
+                yield chunk
             if self._read_all:
                 if self._raised is not None:
                     raise self._raised
                 return
             await self._to_yield.wait()
 
+    def _note(self, chunk: Any) -> None:
+        # what released events and a failed stream are made from
+        if isinstance(chunk, BaseModel):
+            self._kinds.setdefault(getattr(chunk, "type", None), chunk)
+        if len(self._context) < 2:
+            self._context.append(chunk)
+        else:
+            self._context[1] = chunk
+
+    def _samples(self) -> list[Any]:
+        return list(self._kinds.values())
+
+    def _keep_nothing(self) -> None:
+        # once something has gone out, nothing can be let through unjudged
+        self._keeping = False
+        self._unsent.clear()
+        self._unsent_bytes = 0
+        self._room.set()
 
 def _listed(headers: str | Iterable[str] | None) -> tuple[str, ...]:
     names = headers.split(",") if isinstance(headers, str) else list(headers or ())
@@ -982,6 +1047,14 @@ def _replaced_whole(response: Any, body: bytes) -> Any:
         return replaced
     except Exception:
         raise _failed("a replaced reply LiteLLM can't take") from None
+
+
+def _written_or_none(chunk: Any) -> bytes | None:
+    # as the caller is sent it, or None for a chunk of a kind this can't write
+    try:
+        return _event(chunk)
+    except SidecarError:
+        return None
 
 
 def _decoded(output: dict[str, Any]) -> bytes:

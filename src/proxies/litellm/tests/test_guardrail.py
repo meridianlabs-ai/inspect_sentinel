@@ -2305,3 +2305,99 @@ def test_the_session_to_the_sidecar_is_made_one_way_whoever_makes_it(
         limit = asyncio.run(call(guardrail))
 
     assert seen and limit == 0
+
+
+def test_nothing_is_left_running_when_the_caller_goes_mid_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    polled = threading.Event()
+
+    async def slow(after: int) -> dict[str, Any]:
+        polled.set()
+        await asyncio.sleep(5)
+        return {"position": after, "outputs": []}
+
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            return slow(params["after"])
+        return {"taken": True}
+
+    async def run(url: str) -> list[asyncio.Task[Any]]:
+        guardrail = _make(monkeypatch, url)
+        data = _data(_CHAT)
+        await guardrail.async_pre_call_hook(_USER, None, data, _CHAT.call_type)
+        released = guardrail.async_post_call_streaming_iterator_hook(
+            _USER, _chunks(_CHAT.stream()), data
+        )
+
+        async def read() -> None:
+            async for _ in released:
+                pass
+
+        reading = asyncio.ensure_future(read())
+        while not polled.is_set():
+            await asyncio.sleep(0.01)
+        # the caller goes while the guardrail waits for a release
+        reading.cancel()
+        await asyncio.wait({reading})
+        await released.aclose()
+        await guardrail.aclose()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        return [
+            task
+            for task in asyncio.all_tasks()
+            if task is not asyncio.current_task() and not task.done()
+        ]
+
+    with _serving(_stand_in(answer)) as url:
+        left = asyncio.run(run(url))
+
+    assert left == []
+
+
+def test_a_reply_let_through_is_read_no_faster_than_the_caller_takes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pulled = 0
+    chunk = _CHAT.stream()[1]
+
+    async def provider() -> AsyncIterator[Any]:
+        nonlocal pulled
+        for _ in range(50):
+            pulled += 1
+            yield chunk
+
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            return _never_ready(params["after"])
+        return {"taken": True}
+
+    async def run(url: str) -> tuple[int, int]:
+        guardrail = _make(
+            monkeypatch, url, unreachable_fallback="fail_open", max_reply_bytes=500
+        )
+        data = _data(_CHAT)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, _CHAT.call_type)
+            released = guardrail.async_post_call_streaming_iterator_hook(
+                _USER, provider(), data
+            )
+            await released.__anext__()
+            # the caller is slow: what is read meanwhile stays bounded
+            await asyncio.sleep(0.5)
+            read_while_slow = pulled
+            given = 1 + len([each async for each in released])
+            return read_while_slow, given
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_stand_in(answer)) as url:
+        read_while_slow, given = asyncio.run(run(url))
+
+    assert read_while_slow < 20
+    assert given == 50
