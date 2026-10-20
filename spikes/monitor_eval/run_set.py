@@ -32,12 +32,31 @@ def main() -> None:
     parser.add_argument("--concurrency", type=int, default=12)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--label", default="")
-    parser.add_argument("--author", choices=["none", "coding"], default="none")
+    parser.add_argument(
+        "--author",
+        default="none",
+        help="none, a name in authors.AUTHORS, or auto: the author for each transcript's task.metadata.domain (coding when unset)",
+    )
+    parser.add_argument(
+        "--domains", type=Path, help="a generator key, for each transcript's domain"
+    )
+    parser.add_argument(
+        "--ref", help="with --variant current, score the package at this commit"
+    )
+    parser.add_argument("--siblings", choices=["none", "calls", "results"])
+    parser.add_argument("--scope", choices=["call", "turn"])
+    parser.add_argument(
+        "--opts",
+        default="{}",
+        help="JSON of more Host.score keyword arguments (config is a GenerateConfig dict)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     if args.variant == "baseline":
         harness.use_baseline()
+    elif args.ref:
+        harness.use_baseline(args.ref)
     import anyio
     from inspect_ai.util import Store
     from transcript import STAGES, DryRunHost, ReplayHost, load_transcript
@@ -57,11 +76,41 @@ def main() -> None:
         f for p in args.paths for f in (sorted(p.glob("*.json")) if p.is_dir() else [p])
     )
     scout = importlib.metadata.version("inspect-scout")
-    from authors import AUTHORS
+    from authors import AUTHORS, DOMAIN_AUTHOR
 
-    options = _run.score_options(
-        args.judging, harness.JUDGED, harness.JUDGING, AUTHORS[args.author]
-    )
+    # a generator key's domain per transcript, for --author auto
+    domains: dict[str, str] = {}
+    if args.domains:
+        domains = {
+            t["id"]: t["domain"]
+            for t in json.loads(args.domains.read_text())["transcripts"]
+        }
+
+    from inspect_ai.model import GenerateConfig
+
+    from inspect_sentinel import StepPreprocessor
+
+    def options_for(t: Any) -> dict[str, Any]:
+        author = args.author
+        if author == "auto":
+            domain = domains.get(t.id) or (t.task.metadata or {}).get(
+                "domain", "coding"
+            )
+            author = DOMAIN_AUTHOR[domain]
+        options = _run.score_options(
+            args.judging, harness.JUDGED, harness.JUDGING, AUTHORS[author]
+        )
+        if args.variant == "current":
+            if args.siblings:
+                options["preprocessor"] = StepPreprocessor(siblings=args.siblings)
+            if args.scope:
+                options["scope"] = args.scope
+        extra = json.loads(args.opts)
+        if "config" in extra:
+            extra["config"] = GenerateConfig(**extra["config"])
+        options.update(extra)
+        return options
+
     stages = args.stage or list(STAGES)
     wanted = set(args.step or [])
 
@@ -107,7 +156,7 @@ def main() -> None:
                             s.step,
                             DIMENSION,
                             policy=t.policy,
-                            **options,
+                            **options_for(t),
                             model=None if args.dry_run else args.model,
                         )
                 except Exception as e:  # recorded, so one failure does not stop the set
@@ -122,6 +171,10 @@ def main() -> None:
                             "variant": args.variant,
                             "judging": args.judging,
                             "author": args.author,
+                            "siblings": args.siblings,
+                            "scope": args.scope,
+                            "opts": args.opts,
+                            "ref": args.ref,
                             "label": args.label,
                             "model": args.model,
                             "scout": scout,

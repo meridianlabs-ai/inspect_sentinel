@@ -56,13 +56,14 @@ JUDGING = {
 }
 
 
-def use_baseline() -> str:
-    # extract the baseline package source once per ref and put it first on
-    # sys.path, ahead of the editable install of this worktree
-    cache = Path.home() / ".cache" / "inspect_sentinel_monitor_eval" / BASELINE_REF
+def use_baseline(ref: str = BASELINE_REF) -> str:
+    # extract the package source at `ref` (the baseline by default) once per
+    # ref and put it first on sys.path, ahead of the editable install of this
+    # worktree, so a run scores a commit, not a tree being edited
+    cache = Path.home() / ".cache" / "inspect_sentinel_monitor_eval" / ref
     if not (cache / "inspect_sentinel" / "_score.py").exists():
         archive = subprocess.run(
-            ["git", "-C", str(REPO), "archive", BASELINE_REF, "src/inspect_sentinel"],
+            ["git", "-C", str(REPO), "archive", ref, "src/inspect_sentinel"],
             check=True,
             capture_output=True,
         ).stdout
