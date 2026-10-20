@@ -8,7 +8,7 @@ It is set in LiteLLM's config, beside `guardrail`, `mode` and `default_on`:
 
 - `api_base`: the sidecar's address for proxies, as `https://<sentinel host>:<port>`. Required.
 - `unreachable_fallback`: `fail_closed` refuses a call when the sidecar gives no usable answer, and `fail_open` lets it through. `fail_closed` unless set, which is LiteLLM's own default.
-- `timeout`: how many seconds the sidecar may take to answer. No limit unless set, because a sentinel may ask a person.
+- `timeout`: how many seconds the sidecar may take to answer, counted for a streamed reply from when the sidecar has the whole of it. No limit unless set, because a sentinel may ask a person.
 - `sidecar_headers`: request headers the sidecar is shown besides Inspect's own, as a list of names, or prefixes ending in `*`. None unless set.
 - `max_reply_bytes`: the largest reply that is held to be judged. 32 MiB unless set.
 
@@ -214,7 +214,7 @@ class LiteLLMGuardrail(CustomGuardrail):
     Args:
         api_base: The sidecar's address for proxies. The path of the methods this calls is added to it.
         unreachable_fallback: `fail_closed` refuses a call when the sidecar gives no usable answer, and `fail_open` lets it through.
-        timeout: How many seconds the sidecar may take to answer. No limit when None.
+        timeout: How many seconds the sidecar may take to answer, counted for a streamed reply from when the sidecar has the whole of it. No limit when None.
         sidecar_headers: Request headers the sidecar is shown besides Inspect's own, as names, or prefixes ending in `*`. A comma-separated string is read as a list.
         max_reply_bytes: The largest reply that is held to be judged.
         **kwargs: LiteLLM's own settings for a guardrail, which it passes to every one.
@@ -596,6 +596,9 @@ class _Relay:
         # once the sidecar has given the reply's end, how many outputs that
         # makes, which it is told the guardrail has, so it lets go of them
         self._ended_at: int | None = None
+        # the guardrail's timeout, counted from when the sidecar has the whole
+        # reply, as for a reply that isn't streamed
+        self._timer: asyncio.TimerHandle | None = None
 
     async def released(self) -> AsyncIterator[Any]:
         """The chunks to yield to LiteLLM, as the sidecar releases them."""
@@ -694,6 +697,8 @@ class _Relay:
 
     async def close(self) -> None:
         """Stop reading and handing over, and tell the sidecar the guardrail is done with the stream: that it has the reply's end, or that it stopped before it."""
+        if self._timer is not None:
+            self._timer.cancel()
         for task in self._tasks:
             task.cancel()
         if self._tasks:
@@ -801,9 +806,18 @@ class _Relay:
                     await self._guardrail._call(  # pyright: ignore[reportPrivateUsage]
                         "end_reply", {"id": self._told["id"]}
                     )
+                    seconds = self._guardrail._timeout.total  # pyright: ignore[reportPrivateUsage]
+                    if seconds is not None:
+                        self._timer = asyncio.get_running_loop().call_later(
+                            seconds, self._out_of_time
+                        )
                     return
         except SidecarError as ex:
             self._stop(ex)
+
+    def _out_of_time(self) -> None:
+        if self._ended_at is None:
+            self._stop(_failed("no answer within the timeout"))
 
     def _stop(self, why: SidecarError) -> None:
         # handing over can't go on, which ends the relay

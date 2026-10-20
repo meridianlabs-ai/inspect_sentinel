@@ -2591,9 +2591,7 @@ def test_a_streamed_reply_is_not_judged_again_once_whole(
                 _USER, _chunks(on.stream()), data
             ):
                 pass
-            return await guardrail.async_post_call_success_hook(
-                data, _USER, on.whole()
-            )
+            return await guardrail.async_post_call_success_hook(data, _USER, on.whole())
         finally:
             await guardrail.aclose()
 
@@ -2602,3 +2600,65 @@ def test_a_streamed_reply_is_not_judged_again_once_whole(
 
     assert answered is None
     assert [call["method"] for call in calls] == ["judge_request", "judge_reply"]
+
+
+@pytest.mark.parametrize("fallback", ["fail_closed", "fail_open"])
+def test_a_streamed_reply_not_judged_within_the_timeout_is_a_reply_unanswered(
+    monkeypatch: pytest.MonkeyPatch, fallback: str
+) -> None:
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            # a sentinel that never finishes
+            return _never_ready(params["after"])
+        return {"taken": True}
+
+    with _serving(_stand_in(answer)) as url:
+        guardrail = _make(monkeypatch, url, unreachable_fallback=fallback, timeout=0.3)
+        _, reply = _within(5, lambda: _exchange(guardrail, _CHAT, _data(_CHAT), True))
+
+    if fallback == "fail_open":
+        assert [_written(chunk) for chunk in reply] == [
+            _written(chunk) for chunk in _CHAT.stream()
+        ]
+    else:
+        [event] = reply
+        assert (_error_event(event)["code"], _error_event(event)["message"]) == (
+            _UNANSWERED
+        )
+
+
+def test_a_slow_provider_is_not_held_to_the_sidecar_s_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the timeout is the sidecar's, from when it has the whole reply, as for
+    # a reply that isn't streamed
+    passed = _result({"action": "pass"})
+
+    async def slowly() -> AsyncIterator[Any]:
+        for chunk in _CHAT.stream():
+            await asyncio.sleep(0.05)
+            yield chunk
+
+    async def run(url: str) -> list[Any]:
+        guardrail = _make(monkeypatch, url, timeout=0.2)
+        data = _data(_CHAT)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, _CHAT.call_type)
+            return [
+                chunk
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    _USER, slowly(), data
+                )
+            ]
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_scripted([], passed, passed)) as url:
+        reply = asyncio.run(run(url))
+
+    assert len(_CHAT.stream()) * 0.05 > 0.2
+    assert [_written(chunk) for chunk in reply] == [
+        _written(chunk) for chunk in _CHAT.stream()
+    ]
