@@ -158,6 +158,10 @@ exclude = ["src/inspect_sentinel/sidecar/envoy/_proto"]
 typeCheckingMode = "strict"
 pythonPlatform = "All"
 pythonVersion = "3.11"
+# the development environment, so `.venv/bin/pyright` reads it without an
+# activated venv, as CI runs it; `--pythonpath` still picks another
+venvPath = "."
+venv = ".venv"
 
 # tests may exercise private helpers directly
 [[tool.pyright.executionEnvironments]]
