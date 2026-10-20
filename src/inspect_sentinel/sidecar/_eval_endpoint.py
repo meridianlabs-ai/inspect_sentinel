@@ -178,7 +178,13 @@ def eval_routes(
     """
 
     async def info(http: HttpRequest) -> Response:
-        return JSONResponse({"service": "inspect_sentinel", "versions": VERSIONS})
+        return JSONResponse(
+            {
+                "service": "inspect_sentinel",
+                "versions": VERSIONS,
+                "release": handler.release,
+            }
+        )
 
     async def call(http: HttpRequest) -> Response:
         if token is not None:

@@ -130,7 +130,7 @@ class BeforeToolCall:
     """Id linking this agent's steps across compactions."""
 
     message: str
-    """Assistant text alongside the call."""
+    """Assistant text alongside the call: the whole turn's text when `turn_complete` is true, and otherwise only the text the model wrote before the call."""
 
     message_id: str
     """Id of the assistant message that made the call, so a monitor model can cite it."""
@@ -160,6 +160,9 @@ class BeforeToolCall:
 
     tool_choice: ToolChoice | None = None
     """The tool choice of the model call that produced the call, as the transcript's `ModelEvent` recorded it. `None` exactly when `input` is `None`."""
+
+    turn_complete: bool = field(default=True, kw_only=True)
+    """Whether the model's turn had finished when judging began. Inspect's own process always judges a call after its turn has finished. A sidecar passing on a reply as it arrives (`release: early`) judges a call as soon as its arguments are complete, before the rest of the turn exists: `message` is then only the text before the call, and the calls after it in the turn are not known yet. The call's arguments are complete either way. A protocol that returns `None` here abstains, as anywhere else; that does not hold the call until the turn has finished."""
 
 
 @dataclass(frozen=True)

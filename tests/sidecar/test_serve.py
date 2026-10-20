@@ -105,6 +105,7 @@ def test_defaults_are_one_port_and_no_limits() -> None:
 
     assert (arguments.host, arguments.port) == ("127.0.0.1", 8900)
     assert arguments.reject_status == 400
+    assert arguments.release == "whole"
     assert arguments.time_limit is None
     assert arguments.max_body_bytes == 64 * 1024 * 1024
     assert arguments.run_expiry == 24 * 60 * 60
@@ -224,6 +225,7 @@ server:
     monitor: mockllm/model
   port: 9000
   reject_status: 503
+  release: early
   eval_results: false
   runtime_task_registration: false
   task_expiry: 60
@@ -243,6 +245,7 @@ def test_the_server_stanza_sets_what_the_options_would(tmp_path: Path) -> None:
 
     assert arguments.model_role == ["monitor=mockllm/model"]
     assert (arguments.port, arguments.reject_status) == (9000, 503)
+    assert arguments.release == "early"
     assert (arguments.no_eval_results, arguments.no_runtime_task_registration) == (
         True,
         True,

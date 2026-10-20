@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal
@@ -79,6 +80,8 @@ from ._wire import (
     request_marks,
 )
 
+logger = logging.getLogger(__name__)
+
 # rejected turns in a row before the run is ended, as inspect_ai's bridge has
 # it: a model that keeps proposing rejected calls would otherwise never stop
 _MAX_CONSECUTIVE_REJECTIONS = 3
@@ -86,7 +89,6 @@ _MAX_CONSECUTIVE_REJECTIONS = 3
 # what inspect_ai tells the model of a rejected call that has no message
 _REJECTED = "Tool call not approved."
 _NOT_RUN = "This call was not run, because another call in the same turn was rejected."
-
 
 REQUEST_ID = "x-irid"
 """The header an Inspect eval names each of its model requests in."""
@@ -153,6 +155,7 @@ class Handler:
         runtime_task_registration: bool = True,
         task_expiry: float = MAX_TASK_EXPIRY,
         max_task_registrations: int = MAX_TASK_REGISTRATIONS,
+        release: Literal["whole", "early"] = "whole",
     ) -> None:
         """Create a handler.
 
@@ -167,10 +170,17 @@ class Handler:
             runtime_task_registration: Whether an eval may register its tasks itself, at task init.
             task_expiry: The longest a task an eval registered is kept once no request has named it, in seconds, whatever the registration asks.
             max_task_registrations: How many tasks registered by evals are kept at once. A registration past it is refused.
+            release: How a streamed reply is passed on. `whole`, the default, holds every reply whole until the sentinel has judged it. `early` passes on text and reasoning as they arrive and holds each call until it is judged, which says the sentinel can judge a complete call with only the part of the turn that has arrived. A sentinel that watches `AfterGenerate` is given the finished turn, so its replies are held whole whatever this says.
         """
         self._protocol = resolve_sentinel(sentinel)
         # a stage nothing watches is never built, as in Inspect's own process
         self._watched = watched_stages(self._protocol)
+        self._release: Literal["whole", "early"] = release
+        if release == "early" and AfterGenerate in self._watched:
+            self._release = "whole"
+            logger.warning(
+                "The sentinel watches AfterGenerate, which is given the finished turn, so replies are held whole although early release was asked for."
+            )
         self._host: HostNative = host if host is not None else SidecarHost()
         self._state: State = state if state is not None else MemoryState()
         self._reject_status = reject_status
@@ -183,6 +193,11 @@ class Handler:
         # the tool results being judged now, by run, conversation and digest,
         # so that a request holding one waits for the request judging it
         self._judging: dict[tuple[str, str, str], anyio.Event] = {}
+
+    @property
+    def release(self) -> Literal["whole", "early"]:
+        """How a streamed reply is passed on: `early` only when it was asked for and the sentinel doesn't watch `AfterGenerate`."""
+        return self._release
 
     async def request(self, request: Request) -> Answer:
         """Judge a request before the proxy sends it.

@@ -511,11 +511,14 @@ At task init, Inspect sends a probe there: `GET /sentinel/info`, at the proxy's 
 ```json
 {
   "service": "inspect_sentinel",
-  "versions": [1]
+  "versions": [1],
+  "release": "whole"
 }
 ```
 
-If the answer is not this, or no answer comes, Inspect runs the task with no sentinel in a sidecar: it sends no `x-inspect-context` and registers nothing. A proxy with no sidecar behind it answers with an error, or passes the path on to the provider, which answers with one.
+`release` says how the sidecar passes on a streamed reply: `whole` when every reply is held until it is judged, and `early` when text and reasoning go out as they arrive and each call is held until it is judged ([section 5](#which-sentinels-may-release-early)). It is the mode the sidecar uses, which is `whole` for a sentinel that watches `AfterGenerate` even where `early` was configured.
+
+If the answer does not name the service and a version Inspect knows, or no answer comes, Inspect runs the task with no sentinel in a sidecar: it sends no `x-inspect-context` and registers nothing. A proxy with no sidecar behind it answers with an error, or passes the path on to the provider, which answers with one.
 
 ### Registering a task
 

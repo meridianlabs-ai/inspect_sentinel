@@ -6,7 +6,7 @@ import os
 import sys
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import anyio
 import uvicorn
@@ -72,6 +72,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default=[],
         metavar="NAME",
         help="A request header the Envoy shim shows the sentinel, besides Inspect's own. May be repeated. A credential is never shown.",
+    )
+    parser.add_argument(
+        "--release",
+        choices=["whole", "early"],
+        default="whole",
+        help="How a streamed reply is passed on. whole, the default, holds every reply until the sentinel has judged it. early passes on text and reasoning as they arrive and holds each call until it is judged, for a sentinel that can judge a complete call with only the part of the turn that has arrived. A sentinel that watches AfterGenerate keeps replies held whole.",
     )
     parser.add_argument(
         "--reject-status",
@@ -165,6 +171,7 @@ class ServerSettings(BaseModel):
     max_task_registrations: int | None = None
     max_body_bytes: int | None = None
     run_expiry: float | None = None
+    release: Literal["whole", "early"] | None = None
 
 
 # each setting of the stanza, with the option that overrides it, and what it
@@ -195,6 +202,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "max_task_registrations",
             "max_body_bytes",
             "run_expiry",
+            "release",
         )
     },
 }
@@ -318,6 +326,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         runtime_task_registration=not arguments.no_runtime_task_registration,
         task_expiry=arguments.task_expiry,
         max_task_registrations=arguments.max_task_registrations,
+        release=arguments.release,
     )
 
 

@@ -53,6 +53,8 @@ def test_before_tool_call_holds_the_hosts_lists() -> None:
     )
     assert step.input is model_input
     assert step.agent_messages is history
+    # judged after its turn finished, as Inspect's own process always judges
+    assert step.turn_complete
 
 
 def test_after_tool_call_holds_result_and_untruncated_output() -> None:
