@@ -42,6 +42,10 @@ To run a single test:
 pytest tests/path/to/test.py::test_name -v
 ```
 
+The Envoy shim's tests run a real Envoy in Docker, and are skipped where Docker isn't running. To test against another Envoy release, set `SENTINEL_ENVOY_IMAGE`, such as `envoyproxy/envoy:v1.39.1`.
+
+The shim's gRPC code in `src/inspect_sentinel/sidecar/envoy/_proto` is generated from Envoy's protos. Don't edit it: change `scripts/generate_envoy_protos.py`, or the Envoy release it names, and run `make envoy-protos`.
+
 ## Code style
 
 - Type-annotate all functions (including tests). Use modern syntax (`X | None`, `list[str]`).
