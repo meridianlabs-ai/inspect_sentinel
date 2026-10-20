@@ -742,3 +742,23 @@ async def test_scope_turn_is_scope_call_for_a_single_call_or_after_a_call() -> N
         result = await context.host.score(after, "Safe?", scope="turn")
     assert (single.suspicion, result.suspicion) == (0.1, 0.2)
     assert "call 2 of 3: bash" in prompt(host, 1)
+
+
+@pytest.mark.anyio
+async def test_explain_text_keeps_the_text_before_the_answer_as_the_explanation() -> (
+    None
+):
+    output = ModelOutput.for_tool_call(
+        model="fake",
+        tool_name="answer",
+        tool_arguments={"suspicion": 0.9},
+        content="The call deletes /etc, outside /work [M1].",
+    )
+    host = FakeHost(eval=EVAL, outputs=[output])
+    observation = await score(
+        host, before_tool_call("bash", cmd="rm -rf /etc"), "Safe?", explain="text"
+    )
+    assert observation.suspicion == 0.9
+    assert observation.explanation == "The call deletes /etc, outside /work [M1]."
+    assert "explanation" not in host.offered[0].tools[0].parameters.properties
+    assert "Write your assessment first" in prompt(host)

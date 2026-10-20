@@ -12,7 +12,7 @@ from inspect_ai.tool import ToolCall, ToolChoice, ToolInfo
 from inspect_ai.util import Store
 
 from ._report import Decision, Failed, Observation, Report, Reported
-from ._score import Scope, score_step
+from ._score import Explain, Scope, score_step
 from ._step import Step
 
 S = TypeVar("S", bound=Step)
@@ -131,6 +131,7 @@ class Host(HostNative):
         config: GenerateConfig | None = None,
         retry_refusals: int = 3,
         explanation: str | None = None,
+        explain: Explain = "answer",
     ) -> Observation:
         """Ask a model to score a step from 0.0 to 1.0, with an explanation.
 
@@ -169,6 +170,7 @@ class Host(HostNative):
             config: Generation configuration.
             retry_refusals: How many times to ask again when the provider refuses to answer.
             explanation: What the answer's explanation should be, as the answer tool describes it to the model, in place of the default (an assessment citing messages by id).
+            explain: Where the model explains its scores. `"answer"` (the default) asks for an explanation in the answer tool's arguments, beside the scores. `"text"` asks the model to write its assessment first, as text, and to answer with the scores alone; that text becomes the observation's explanation. Models tend to write such text before the answer call anyway, which `"answer"` does not keep, so `"text"` saves the output tokens of a second explanation.
         """
         return await score_step(
             self,
@@ -187,6 +189,7 @@ class Host(HostNative):
             config=config,
             retry_refusals=retry_refusals,
             explanation=explanation,
+            explain=explain,
         )
 
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
