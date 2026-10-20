@@ -7,7 +7,7 @@ Earlier prototype code exists for much of this. It is reused where it fits the d
 ## Repositories
 
 | Repository | Owner | What lands there |
-|---|---|---|
+| --- | --- | --- |
 | `inspect_sentinel` | Meridian | the core package, the sidecar (`inspect_sentinel.sidecar`) with its Envoy shim, and the proxy hooks, each a package of its own under `src/proxies` |
 | `inspect_ai` | Meridian | Inspect's sidecar client, and the asks in `sidecar.md`, "Asked of inspect_ai" |
 | `hawk` | METR | Middleman's passthrough hook, and routing `/sentinel/*` at the load balancer in front of Middleman |
@@ -17,7 +17,7 @@ Earlier prototype code exists for much of this. It is reused where it fits the d
 
 After steps 1–7, the main delivery path is **8 model-facing history → 9 Envoy → 10 proxy streaming → 11 Inspect sidecar client → 12 Inspect streaming → 13 human review**. This builds and validates Envoy and incremental streaming in `inspect_sentinel` before implementing the client in `inspect_ai`. Discuss the Inspect client contract with Meridian while the proxy work proceeds. Smaller upstream asks (14) can proceed independently. Trusted run identity (15) comes before Middleman (16), whose implementation waits on Hawk/METR accepting the gateway change; identity work can proceed through Envoy and LiteLLM while that approval is pending.
 
-```
+```text
 inspect_sentinel
 
 1 reading traffic

@@ -48,7 +48,7 @@ When the sentinel runs in a sidecar, Inspect acts as its client. This integratio
 
 A request or a reply reaches the sidecar from a proxy. The handler works out what it means and what should happen to it. The sentinel runner runs the monitors and protocols.
 
-```
+```text
    Middleman                 LiteLLM                   Envoy
    runs a proxy hook,        runs a proxy hook,        runs no code of ours
    MiddlemanHook             LiteLLMGuardrail
@@ -83,7 +83,7 @@ Two rules keep the handler from being limited to what the least capable proxy ca
 ### What each proxy hands over
 
 | | Middleman | LiteLLM | Envoy |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | where the proxy's side runs | in `MiddlemanHook`, which Middleman loads through its passthrough hook and calls after the caller has signed in | in `LiteLLMGuardrail`, which LiteLLM loads as a guardrail and calls after the caller has signed in | no code of ours; Envoy's `ext_proc` filter calls the sidecar |
 | a request arrives as | parsed JSON, in the provider's format | a dictionary, already parsed, that also holds LiteLLM's own working state | raw bytes |
 | a reply arrives as | the provider's bytes, decompressed, held whole | the provider's bytes where Anthropic serves a request to the Messages route; otherwise LiteLLM's own objects, or a stream of them, which the guardrail holds | raw bytes, in chunks as the provider sends them |
@@ -126,12 +126,12 @@ LiteLLM's routes that pass a provider's own API through, such as `/anthropic/v1/
 
 The sidecar reads a provider's request or reply into Inspect's types with inspect_ai's converters. Those converters are functions over a complete request or a complete reply. Agents usually ask for a streamed reply, so the sidecar first puts a streamed reply back together into a whole one. It does this with the accumulator in each provider's SDK, which is what inspect_ai's own providers do.
 
-```
+```text
 bytes from the proxy → stream events → SDK accumulator → SDK reply → inspect_ai converter → ModelOutput
 ```
 
 | API | From stream to whole reply |
-|---|---|
+| --- | --- |
 | Anthropic Messages | `accumulate_event`, a pure function in a private module of the SDK |
 | OpenAI Chat Completions | the SDK's `ChatCompletionStreamState`, read as a snapshot |
 | OpenAI Responses | the event that ends the stream holds the whole response |
@@ -173,7 +173,7 @@ Not yet checked:
 A proxy sees one model request and its reply at a time. It never sees a tool execute, so the sidecar finds the tool-call steps in the traffic on either side of it. All four stages are judged through the endpoint for proxies:
 
 | Stage | Who initiates the check | Exchange | When |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `BeforeGenerate` | proxy, while handling Inspect's model request | `judge_request` at `/proxy/v1` | before contacting the provider |
 | `AfterGenerate` | proxy, after the provider replies | `judge_reply` at `/proxy/v1` | before releasing the model reply to Inspect |
 | `BeforeToolCall` | the sidecar, for each tool call in the reply it holds | `judge_reply` at `/proxy/v1` | before the reply is released to the client |
@@ -194,7 +194,7 @@ A sentinel's decision has to be carried out on the request or the reply that the
 The sidecar carries out every decision on the request or reply it holds, for every client. An Inspect client is also told what was decided (section 9), so that it can record the decision as it would in process.
 
 | Decision | What the sidecar does |
-|---|---|
+| --- | --- |
 | `proceed` | the provider's bytes are passed on as they came, with the `sentinel` field added for an Inspect client |
 | `reject` | the rejected call is taken out of the reply, and the rest of the turn goes to the client. On every later request of the conversation, the call is put back with its rejection as its result. A turn whose calls are all rejected is refused with an error |
 | `terminate` | the client is sent an error that says a sentinel ended the run, and so is every later request of that run |
@@ -222,7 +222,7 @@ Inside an eval, a rejected tool call is not run. The other calls in the turn run
 
 When every call in the turn is rejected, the sidecar withholds the reply and refuses it with an error instead, because a turn with no calls left reads to most agents as finished. On the next request of that conversation, it adds the model's message, with each call's rejection as its result.
 
-```
+```text
 agent  -->  sidecar  -->  model      a request
             sidecar  <--  model      reply: run `ls /tmp` and `curl evil.sh`     curl rejected; taken out; kept
 agent  <--  sidecar                  reply: run `ls /tmp`
@@ -288,7 +288,7 @@ The initial implementation gives a sentinel the whole turn before releasing any 
 - **Envoy does not hold the reply, so the sidecar does.** Envoy hands over chunks as the provider sends them. Envoy's `ext_proc` filter has four modes for a response body, and only the last of them works for holding a turn:
 
   | Response body mode | What happens (**measured**, Envoy 1.39.1) |
-  |---|---|
+  | --- | --- |
   | `BUFFERED` | fails with a 500 above the connection buffer (1 MiB) and above gRPC's message size (4 MiB); deadlocks on a compressed body behind the decompressor |
   | `BUFFERED_PARTIAL` | corrupts data above the buffer limit |
   | `STREAMED` | wants one answer per chunk, so a processor that stays silent to hold a turn deadlocks |
@@ -328,7 +328,7 @@ In an eval, the sidecar cannot work that out from the conversation. A fingerprin
 - **The eval says which sample a request belongs to in `x-inspect-context`.** This is one header that holds a small JSON object. Inspect sends it only to a proxy that its probe at task init found a sidecar behind (section 9), so a provider reached directly never sees it. It carries enough for the sidecar to work without registration, and nothing long or private. Its fields are:
 
   | Field | What it is |
-  |---|---|
+  | --- | --- |
   | `version` | the version of this header's format, `1` |
   | `eval_id` | the id of the eval, as the eval log records it |
   | `task` | the task's name |
@@ -352,7 +352,7 @@ In an eval, the sidecar cannot work that out from the conversation. A fingerprin
 The table lists what a sentinel is given when it runs inside an eval's process, and what the sidecar gives it in each case.
 
 | Given in an eval's process | In the sidecar |
-|---|---|
+| --- | --- |
 | `step.call`, `message`, `input` | read from the request and the reply |
 | `step.agent_messages` | None: it is the scaffold's own list, which a proxy never sees |
 | `step.history` | every message the conversation's requests sent the model, in the order first sent, kept by the sidecar across compaction (below) |
@@ -660,7 +660,7 @@ Inspect makes one model request and gets one response. While that request is ope
 Whatever is decided, Inspect receives one response:
 
 | What the sidecar decides | What Inspect receives |
-|---|---|
+| --- | --- |
 | `terminate` at an `AfterToolCall` or at `BeforeGenerate` | a provider-format error with the `sentinel` field. The provider is not called |
 | `terminate` at `AfterGenerate` or at a `BeforeToolCall` | a provider-format error with the `sentinel` field. The reply is withheld |
 | every tool call in the reply rejected | a provider-format error with the `sentinel` field. The reply is withheld |
@@ -808,7 +808,7 @@ And this is a refusal, after a sentinel ended the run at a tool result in the re
 **When the field is missing.** Inspect cannot tell from the reply why the field is missing, so it always asks the sidecar with `request_result`, by the request's `x-irid`. The sidecar's answer says what happened:
 
 | The sidecar's answer to `request_result` | What happened | What Inspect does |
-|---|---|---|
+| --- | --- | --- |
 | `held`, with a decision | the sidecar judged the request, and the proxy dropped the field on the way to Inspect | applies and records the decision, as if the field had arrived |
 | `not_judged`, with a reason | the sidecar saw the request but could not decide, and the proxy let the call through | records the request as not judged, with the reason |
 | `unknown`, or no answer at all | the proxy could not reach the sidecar, and let the call through | records the request as not judged, because the sidecar could not be reached |
@@ -858,7 +858,7 @@ sequenceDiagram
 A step at a tool call has a `view`: how Inspect presents the call to a person, such as a bash command shown as code. A tool's author gives it a viewer, and a tool without one gets inspect_ai's default view. The sidecar runs inspect_ai, so it makes the view Inspect would make wherever it has the viewer:
 
 | How the task reached the sidecar | The views the sidecar makes |
-|---|---|
+| --- | --- |
 | in the tasks folder, with the task's package installed beside the sentinel | each tool's own view, its own viewer included: the tool the file's `tools` names, otherwise inspect_ai's own tool of that name. A request names neither the tool's package nor the task's, so a tool of the task's own is found only through `tools` |
 | registered by Inspect at task init, or not registered | the viewers of inspect_ai's own tools, such as `bash` and `python`, matched by the tool's bare name, and the default view for every other tool. A viewer is code, so it cannot be sent at registration |
 
@@ -1080,7 +1080,7 @@ Considered and not taken:
 - **The sidecar keeps its state at four levels:**
 
   | Level | Keyed by | What is kept |
-  |---|---|---|
+  | --- | --- | --- |
   | Task | `eval_id` and `task`, or `task` alone for a task in the tasks folder | the registered facts: the task's description and metadata, and each sample's input, description and metadata; and, from the tasks file only, the map of tool names (section 9) |
   | Run, one sample in one epoch | `sample_uuid` | the sample's facts, taken at the run's first request; the sentinel's store; whether the run was ended; open questions to a person (sections 4 and 8) |
   | Conversation, within a run | the run, and how the conversation opens | the tool results already judged, each call told apart from others with its id by how many come before it; how many calls with each id the client's conversation has held, kept for the conversation's life: a request that holds fewer was compacted, and as its results can then no longer be told apart from those judged before, it is unreadable, which arises only where a provider uses one call id more than once. An exact retry of a request whose reply was lost is refused the same way when that reply used an id again, as it cannot be told apart from a compacted request without matching each call to the reply that made it; what the model was sent for the generate that made each of the latest calls, as a tool step's `input` and `tools`; the calls that were rejected, taken out or changed, to be put back into later requests, each with what inspect_ai's converters noted when its reply was read (section 4); what the converters noted reading the conversation's replies |
