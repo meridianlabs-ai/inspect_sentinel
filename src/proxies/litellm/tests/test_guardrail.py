@@ -23,6 +23,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
+import anthropic
 import httpx
 import jsonschema
 import openai
@@ -2519,3 +2520,54 @@ def test_a_reply_kept_alive_is_still_let_through_when_set_to(
 
     # a keepalive holds nothing, so the reply can go on unjudged after it
     assert b"".join(reply) == _KEEPALIVE + b"".join(_MESSAGES.stream())
+
+
+def test_a_reply_kept_alive_is_refused_in_the_stream_when_the_sidecar_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            if params["after"] == 0:
+                kept_alive = base64.b64encode(_KEEPALIVE).decode()
+                return {
+                    "position": 1,
+                    "outputs": [{"kind": "release", "data": kept_alive}],
+                }
+            return {"error": {"code": -32603, "message": "No."}}
+        return {"taken": True}
+
+    with _serving(_stand_in(answer)) as url:
+        _, reply = _within(
+            10,
+            lambda: _exchange(
+                _make(monkeypatch, url), _MESSAGES, _data(_MESSAGES), True
+            ),
+        )
+    status, _, written = _as_litellm_answers(_MESSAGES, reply, _data(_MESSAGES))
+
+    # the keepalive sent the status, so only an error event refuses the reply
+    async def sent(_: HttpRequest) -> HttpResponse:
+        return HttpResponse(written, status_code=status, media_type=_EVENT_STREAM)
+
+    async def read(url: str) -> None:
+        client = anthropic.AsyncAnthropic(api_key="sk-caller", base_url=url)
+        try:
+            asked: dict[str, Any] = {
+                "model": "a-model",
+                "max_tokens": 100,
+                "messages": [_QUESTION],
+            }
+            async for _ in await client.messages.create(**asked, stream=True):
+                pass
+        finally:
+            await client.close()
+
+    routes = [Route("/v1/messages", sent, methods=["POST"])]
+    with _serving(Starlette(routes=routes)) as url:
+        with pytest.raises(anthropic.APIStatusError) as raised:
+            asyncio.run(read(url))
+
+    assert status == 200
+    assert "gave no usable answer" in str(raised.value)

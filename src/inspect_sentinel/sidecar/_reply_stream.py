@@ -144,6 +144,7 @@ class ReplyStream:
         )
         self._consumed = 0
         self._sent = False
+        self._events = _Released(start)
         self._keepalive = keepalive if self._early else None
         # one output at a time, so that whether anything has gone out, which
         # a refusal is written by, is never changed by a keepalive meanwhile
@@ -245,10 +246,14 @@ class ReplyStream:
 
     async def _keep_alive(self, every: float) -> None:
         while not self._closed():
-            due = self._last_out + every
-            now = anyio.current_time()
-            if now < due:
-                await anyio.sleep(due - now)
+            wait = self._last_out + every - anyio.current_time()
+            if wait > 0:
+                await anyio.sleep(wait)
+                continue
+            if self._events.format is None:
+                # a refusal can be written in the stream only once its format
+                # is known, so until then nothing may send the status
+                await anyio.sleep(every)
                 continue
             await self._out(Release(KEEPALIVE), keepalive=every)
 
@@ -310,7 +315,6 @@ class ReplyStream:
         # complete and judged, and the rest once the turn is judged. Before
         # anything has gone out a failure is raised, for the proxy to refuse
         # with a real status; after, it is an error event in the stream.
-        self._events = _Released(self._start)
         try:
             await self._release_early(early)
         except Exception as ex:

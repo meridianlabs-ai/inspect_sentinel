@@ -597,7 +597,11 @@ class _Relay:
     async def released(self) -> AsyncIterator[Any]:
         """The chunks to yield to LiteLLM, as the sidecar releases them."""
         guardrail, told = self._guardrail, self._told
-        sent = False
+        # whether any of the reply's content has gone out, after which it
+        # can't be let through unjudged, and whether anything has, a keepalive
+        # included, after which the status has gone and a refusal is an error
+        # event in the stream
+        sent = committed = False
         # read from the start, so that a reply let through is read whatever
         # becomes of the stream
         self._tasks.append(asyncio.ensure_future(self._read()))
@@ -629,11 +633,12 @@ class _Relay:
                         if _only_comments(data):
                             # a keepalive holds nothing, so the reply may still
                             # be let through unjudged after it
+                            committed = True
                             yield data
                             continue
                         for chunk in _released(data, self._format, self._samples()):
                             if not sent:
-                                sent = True
+                                sent = committed = True
                                 self._keep_nothing()
                             yield chunk
                     elif kind == "error_event":
@@ -652,7 +657,7 @@ class _Relay:
                     else:
                         raise _failed("a release of a kind this class doesn't know")
         except HTTPException as refused:
-            yield _refused_stream(self._context, refused, self._format)
+            yield self._refused(refused, committed)
         except SidecarError as why:
             # nothing more is handed over, so nothing waits to be, whether or
             # not handing over ever began
@@ -669,11 +674,20 @@ class _Relay:
             try:
                 guardrail._unanswered()  # pyright: ignore[reportPrivateUsage]
             except HTTPException as refused:
-                yield _refused_stream(self._context, refused, self._format)
+                yield self._refused(refused, committed)
                 return
             # let through unjudged, as LiteLLM yields it
             async for chunk in self._unjudged():
                 yield chunk
+
+    def _refused(self, refused: HTTPException, committed: bool) -> Any:
+        # The first event of a stream that is an error is answered as that
+        # error, with its status, by LiteLLM. Once a keepalive has gone first,
+        # the status has gone, and only the error event a provider's SDK
+        # raises on refuses the reply.
+        if committed:
+            return _refused_mid_stream(self._context, refused, self._format)
+        return _refused_stream(self._context, refused, self._format)
 
     async def close(self) -> None:
         """Stop reading and handing over, and tell the sidecar the guardrail is done with the stream: that it has the reply's end, or that it stopped before it."""

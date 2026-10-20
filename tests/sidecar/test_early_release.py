@@ -1,5 +1,6 @@
 import json
 import re
+from dataclasses import replace
 from typing import Any, Literal
 
 import anthropic
@@ -27,6 +28,7 @@ from inspect_sentinel.sidecar import (
 )
 from inspect_sentinel.sidecar._handler import RequestResult
 from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
+from inspect_sentinel.sidecar._wire import UnreadableError
 from tests.sidecar._traffic import JSON, STREAM, message, request, weather
 from tests.sidecar.test_early_turn import _exchange, noting
 
@@ -622,3 +624,32 @@ async def test_no_keepalive_goes_out_where_it_isnt_wanted(
 
     assert Release(KEEPALIVE) not in outputs
     assert outputs[-1] == Finished()
+
+
+@pytest.mark.anyio
+async def test_no_keepalive_goes_out_before_the_format_is_known() -> None:
+    # without a format, a refusal can be written only as an HTTP error, so the
+    # status has to wait for the stream to say which API it is in
+    asked, reply = _exchange("chat", inspect=False)
+    handler = Handler(slowly(0, "proceed"), release="early", keepalive=0.02)
+    await handler.request(asked)
+    stream = handler.reply_stream(replace(_start(reply), format=None))
+    outputs: list[Output] = []
+    raised: list[UnreadableError] = []
+
+    async def read() -> None:
+        try:
+            async for output in stream:
+                outputs.append(output)
+        except UnreadableError as ex:
+            raised.append(ex)
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(stream.run)
+            group.start_soon(read)
+            await anyio.sleep(0.2)
+            await stream.end()
+
+    # nothing went out, so the proxy refuses the reply with a real status
+    assert outputs == [] and raised
