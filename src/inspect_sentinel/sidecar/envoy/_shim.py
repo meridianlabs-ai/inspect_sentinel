@@ -87,14 +87,29 @@ class EnvoyShim(rpc.ExternalProcessorServicer):
             if exchange.finished:
                 return
 
-    async def _judged(self, judging: Awaitable[T]) -> T:
+    async def _judged(
+        self, judging: Awaitable[T], orphaned: Callable[[Exception], object]
+    ) -> T:
         # The judgment runs as a task of its own, which a stream that ends
         # doesn't cancel: the sentinel finishes and its decision is kept, as
         # when a proxy hook stops waiting for the endpoint for proxies.
         task = asyncio.ensure_future(judging)
         self._judging.add(task)
         task.add_done_callback(self._judging.discard)
-        return await asyncio.shield(task)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Envoy stopped waiting. What the judgment raises later goes to
+            # `orphaned`, as it would have been handled here, rather than to
+            # asyncio's report of an exception nothing retrieved.
+            def retrieved(done: asyncio.Future[T]) -> None:
+                if not done.cancelled():
+                    raised = done.exception()
+                    if isinstance(raised, Exception):
+                        orphaned(raised)
+
+            task.add_done_callback(retrieved)
+            raise
 
 
 # never shown to a sentinel, whatever the operator lists
@@ -116,7 +131,9 @@ class _Exchange:
         self,
         handler: Handler,
         *,
-        judged: Callable[[Awaitable[Answer]], Awaitable[Answer]],
+        judged: Callable[
+            [Awaitable[Answer], Callable[[Exception], object]], Awaitable[Answer]
+        ],
         max_body_bytes: int,
         shown: Collection[str],
         metadata: Collection[tuple[str, str | bytes]],
@@ -143,6 +160,7 @@ class _Exchange:
         self._request_encoding = "identity"
         self._held = bytearray()
         self._replied = False
+        self._passing = False
         self.finished = False
 
     async def on(self, message: pb.ProcessingRequest) -> list[pb.ProcessingResponse]:
@@ -262,6 +280,8 @@ class _Exchange:
         received = _read(headers.headers)
         self._status = int(received.get(":status", "0") or 0)
         self._content_type = received.get("content-type", "")
+        if self._status != 200:
+            return await self._provider_error(headers.end_of_stream)
         encoding = received.get("content-encoding", "identity").lower()
         if encoding != "identity":
             # Envoy's route asks the provider for an uncompressed reply, so a
@@ -289,17 +309,42 @@ class _Exchange:
         self.finished = True
         if isinstance(answer, Refuse):
             return [self._refusal(answer)]
-        common = pb.CommonResponse()
         if isinstance(answer, Replace):
-            common = pb.CommonResponse(
-                status=pb.CommonResponse.CONTINUE_AND_REPLACE,
-                body_mutation=pb.BodyMutation(body=answer.body),
-            )
+            # a body for a reply that has none, which Envoy can't be told to
+            # send on a stream whose headers have no body after them
+            return [
+                self._refuse(
+                    500,
+                    "The sidecar replaced a reply without a body, which it can't send.",
+                )
+            ]
         return [
-            pb.ProcessingResponse(response_headers=pb.HeadersResponse(response=common))
+            pb.ProcessingResponse(
+                response_headers=pb.HeadersResponse(response=pb.CommonResponse())
+            )
+        ]
+
+    async def _provider_error(self, end_of_stream: bool) -> list[pb.ProcessingResponse]:
+        # A provider's error goes on unjudged, and the handler reads nothing
+        # of it: it is told at the headers, and the body passes through as it
+        # comes, whatever its size or encoding.
+        self._replied = self._passing = True
+        answer = await self._judge(
+            self._handler.reply(self._reply_of(b"")), "reply", reply=True
+        )
+        if isinstance(answer, Refuse):
+            return [self._refusal(answer)]
+        self.finished = end_of_stream
+        return [
+            pb.ProcessingResponse(
+                response_headers=pb.HeadersResponse(response=pb.CommonResponse())
+            )
         ]
 
     async def _response_body(self, body: pb.HttpBody) -> list[pb.ProcessingResponse]:
+        if self._passing:
+            self.finished = body.end_of_stream
+            return [_streamed(body.body, end_of_stream=body.end_of_stream)]
         if self._replied:
             # Envoy may send more after the end it was answered at
             return []
@@ -335,19 +380,7 @@ class _Exchange:
             self.finished = True
             return [self._refusal(answer)]
         body = answer.body if isinstance(answer, Replace) else bytes(self._held)
-        return [
-            pb.ProcessingResponse(
-                response_body=pb.BodyResponse(
-                    response=pb.CommonResponse(
-                        body_mutation=pb.BodyMutation(
-                            streamed_response=pb.StreamedBodyResponse(
-                                body=body, end_of_stream=end_of_stream
-                            )
-                        )
-                    )
-                )
-            )
-        ]
+        return [_streamed(body, end_of_stream=end_of_stream)]
 
     def _reply_of(self, body: bytes) -> Reply:
         return Reply(
@@ -364,24 +397,30 @@ class _Exchange:
     async def _judge(
         self, judging: Awaitable[Answer], what: str, *, reply: bool
     ) -> Answer:
+        def not_judged(ex: Exception) -> Refuse:
+            return self._not_judged(ex, what, reply=reply)
+
+        try:
+            return await self._judged(judging, not_judged)
+        except Exception as ex:
+            return not_judged(ex)
+
+    def _not_judged(self, ex: Exception, what: str, *, reply: bool) -> Refuse:
         # what couldn't be judged is refused, with the status a proxy hook's
         # failure would bring, and a reason that never quotes the traffic
-        try:
-            return await self._judged(judging)
-        except TimeLimitError as ex:
+        if isinstance(ex, TimeLimitError):
             return Refuse(504, str(ex))
-        except UnregisteredSampleError as ex:
+        if isinstance(ex, UnregisteredSampleError):
             return Refuse(400, str(ex))
-        except UnreadableError as ex:
+        if isinstance(ex, UnreadableError):
             # why is kept here, since it may quote the request or the reply
             logger.warning("The %s %r was not judged: %s", what, self._id, ex)
             return Refuse(
                 502 if reply else 400,
                 f"The {what} couldn't be read, so it was not judged.",
             )
-        except Exception:
-            logger.exception("The %s %r was not judged.", what, self._id)
-            return Refuse(500, f"The sentinel failed, so the {what} was not judged.")
+        logger.error("The %s %r was not judged.", what, self._id, exc_info=ex)
+        return Refuse(500, f"The sentinel failed, so the {what} was not judged.")
 
     def _refuse(self, status: int, message: str) -> pb.ProcessingResponse:
         return self._refusal(Refuse(status, message))
@@ -407,6 +446,20 @@ class _Exchange:
                 details="sentinel_refused",
             )
         )
+
+
+def _streamed(body: bytes, *, end_of_stream: bool) -> pb.ProcessingResponse:
+    return pb.ProcessingResponse(
+        response_body=pb.BodyResponse(
+            response=pb.CommonResponse(
+                body_mutation=pb.BodyMutation(
+                    streamed_response=pb.StreamedBodyResponse(
+                        body=body, end_of_stream=end_of_stream
+                    )
+                )
+            )
+        )
+    )
 
 
 def _error(format: Format | None, status: int, message: str) -> dict[str, Any]:
@@ -491,5 +544,7 @@ def envoy_server(
     rpc.add_ExternalProcessorServicer_to_server(
         EnvoyShim(handler, max_body_bytes=max_body_bytes, headers=headers), server
     )
-    server.add_insecure_port(f"{host}:{port}")
+    # gRPC takes an IPv6 address in brackets, where uvicorn takes it bare
+    bound = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    server.add_insecure_port(f"{bound}:{port}")
     return server

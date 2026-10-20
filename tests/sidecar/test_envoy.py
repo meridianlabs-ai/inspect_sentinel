@@ -674,6 +674,24 @@ def test_reply_larger_than_the_shim_holds_is_refused() -> None:
     assert "larger than" in answered.json()["error"]["message"]
 
 
+def test_providers_error_larger_than_the_shim_holds_passes_through() -> None:
+    with envoy_stack(max_body_bytes=64 * 1024) as small:
+        small.use(Handler(weather_rule()))
+        error = json.dumps(
+            {"type": "error", "error": {"type": "api_error", "message": "x" * 100_000}}
+        ).encode()
+        small.provider.script = lambda _: Scripted(
+            body=_split(error, 8 * 1024), status=500
+        )
+
+        answered = httpx.post(
+            f"{small.url}/v1/messages", json=_body("anthropic", False)
+        )
+
+    assert answered.status_code == 500
+    assert answered.content == error
+
+
 def test_request_is_refused_when_the_shim_cant_be_reached() -> None:
     with envoy_stack(shim=False) as alone:
         alone.provider.script = lambda _: Scripted(
