@@ -60,7 +60,7 @@ from ._registration import (
     TaskFacts,
     UnregisteredSampleError,
 )
-from ._reply_stream import ReplyStart, ReplyStream
+from ._reply_stream import PENDING_BYTES, ReplyStart, ReplyStream
 from ._state import (
     MADE_KEPT,
     Attempt,
@@ -320,7 +320,11 @@ class Handler:
         return answer
 
     def reply_stream(
-        self, start: ReplyStart, *, max_held_bytes: int = MAX_BODY_BYTES
+        self,
+        start: ReplyStart,
+        *,
+        max_held_bytes: int = MAX_BODY_BYTES,
+        max_pending_bytes: int = PENDING_BYTES,
     ) -> ReplyStream:
         """Judge a reply that the proxy hands over as it arrives, rather than whole.
 
@@ -329,8 +333,14 @@ class Handler:
         Args:
             start: The reply's status and headers, before any of its body.
             max_held_bytes: The most of the reply the stream holds back to judge. A reply larger than it is refused with a 502, and not judged.
+            max_pending_bytes: How much of what goes out as it arrives may wait for the proxy to collect it before feeding waits.
         """
-        return ReplyStream(self, start, max_held_bytes=max_held_bytes)
+        return ReplyStream(
+            self,
+            start,
+            max_held_bytes=max_held_bytes,
+            max_pending_bytes=max_pending_bytes,
+        )
 
     async def early_turn(
         self, start: ReplyStart, *, stopped: Callable[[], bool] = lambda: False

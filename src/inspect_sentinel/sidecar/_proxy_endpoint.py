@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,6 +25,7 @@ from ._json_rpc import (
     METHOD_NOT_FOUND,
     SENTINEL_FAILED,
     TIME_LIMIT,
+    UNKNOWN_STREAM,
     UNREADABLE,
     UNREGISTERED,
     RpcError,
@@ -30,6 +33,18 @@ from ._json_rpc import (
     failed,
     invalid_params,
     read_call,
+)
+from ._proxy_streams import (
+    PENDING_BYTES,
+    POLL_SECONDS,
+    STREAM_EXPIRY,
+    BeginReplyParams,
+    NextReleaseParams,
+    NextReleaseResult,
+    ReplyChunkParams,
+    ReplyStreams,
+    StreamParams,
+    TakenResult,
 )
 from ._registration import UnregisteredSampleError
 from ._wire import Format, UnreadableError
@@ -130,6 +145,10 @@ _ERRORS: dict[int, tuple[str, str]] = {
         "unregistered",
         f"The request names a sample that a task registered with the sidecar beforehand doesn't hold, so it is not part of the eval that was registered. {_NOT_JUDGED}",
     ),
+    UNKNOWN_STREAM: (
+        "unknown_stream",
+        f"The reply stream a call names was never begun, has ended, or expired after no call named it. A proxy hook that lost its stream refuses the call. {_NOT_JUDGED}",
+    ),
 }
 
 _METHODS: dict[str, tuple[type[BaseModel], tuple[type[BaseModel], ...]]] = {
@@ -141,13 +160,27 @@ _METHODS: dict[str, tuple[type[BaseModel], tuple[type[BaseModel], ...]]] = {
         JudgeReplyParams,
         (PassResult, ReplaceReplyResult, RefuseResult),
     ),
+    "begin_reply": (BeginReplyParams, (TakenResult,)),
+    "reply_chunk": (ReplyChunkParams, (TakenResult,)),
+    "end_reply": (StreamParams, (TakenResult,)),
+    "abort_reply": (StreamParams, (TakenResult,)),
+    "next_release": (NextReleaseParams, (NextReleaseResult,)),
 }
 
 
-def proxy_app(handler: Handler, *, max_body_bytes: int = MAX_BODY_BYTES) -> Starlette:
+def proxy_app(
+    handler: Handler,
+    *,
+    max_body_bytes: int = MAX_BODY_BYTES,
+    poll_seconds: float = POLL_SECONDS,
+    stream_expiry: float = STREAM_EXPIRY,
+    max_pending_bytes: int = PENDING_BYTES,
+) -> Starlette:
     """An ASGI app that answers proxies: the sidecar's endpoint for them.
 
     Every call is a JSON-RPC 2.0 request POSTed to `/proxy/v1`. A proxy hook calls `judge_request` with each model request and `judge_reply` with the provider's reply, and each is answered with a result whose `action` is `pass`, `replace` or `refuse`. A proxy hook is a package of its own, and nothing of this package runs in the proxy.
+
+    A proxy hook that hands over a streamed reply as it arrives uses a reply stream instead of `judge_reply`: `begin_reply` with the reply's status and headers, `reply_chunk` with each part of its body in order, and `end_reply` once it has ended, or `abort_reply` if its caller goes. Meanwhile it calls `next_release` again and again, and sends the caller what each answer gives: bytes to send, a refusal with a status, which comes only while nothing has been sent, an error event to send once something has, or the reply's end. Every call can be sent again safely. The reply is held whole, or released as it arrives, as the handler's `release` says. A reply stream runs in the app's lifespan.
 
     A refusal is a result, because it is a decision. A request or reply that was not judged is answered with a JSON-RPC error: one that couldn't be read, one the sentinel failed on, and one the sentinel didn't finish judging within the handler's time limit each have a code of their own, which the schema lists under `errors`. A proxy hook refuses the call on any of them, unless its operator has chosen to let calls that weren't judged through, as Inspect fails a sample whose sentinel fails. A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
 
@@ -156,7 +189,23 @@ def proxy_app(handler: Handler, *, max_body_bytes: int = MAX_BODY_BYTES) -> Star
     Args:
         handler: Judges each request and each reply.
         max_body_bytes: The largest call that is read. It has to cover the largest reply the proxy holds, which is sent as base64.
+        poll_seconds: How long `next_release` waits for output before answering that none is ready yet.
+        stream_expiry: How long a reply stream is kept once no call has named it, after which it is aborted.
+        max_pending_bytes: How much of a reply stream's output may wait for the proxy hook to collect it, after which `reply_chunk` waits.
     """
+    streams = ReplyStreams(
+        handler,
+        max_body_bytes=max_body_bytes,
+        not_judged=lambda ex, id: _not_judged(ex, "reply", id),
+        poll_seconds=poll_seconds,
+        expiry=stream_expiry,
+        max_pending_bytes=max_pending_bytes,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: Starlette) -> AsyncGenerator[None]:
+        async with streams.serving():
+            yield
 
     async def call(http: HttpRequest) -> Response:
         body = await read_within(http, max_body_bytes)
@@ -174,21 +223,36 @@ def proxy_app(handler: Handler, *, max_body_bytes: int = MAX_BODY_BYTES) -> Star
                     INVALID_REQUEST,
                     "A call needs an id, because its answer says what to do.",
                 )
-            result = await _judge(handler, asked.method, asked.params)
+            result = await _judge(handler, streams, asked.method, asked.params)
         except RpcError as ex:
             return failed(id, ex)
         return answered(id, result)
 
-    return Starlette(routes=[Route(PATH, call, methods=["POST"]), health_route()])
+    return Starlette(
+        routes=[Route(PATH, call, methods=["POST"]), health_route()],
+        lifespan=lifespan,
+    )
 
 
-async def _judge(handler: Handler, method: str, params: dict[str, Any]) -> BaseModel:
+async def _judge(
+    handler: Handler, streams: ReplyStreams, method: str, params: dict[str, Any]
+) -> BaseModel:
     if method not in _METHODS:
         raise RpcError(METHOD_NOT_FOUND, f"There is no method {method!r}.")
     try:
         given = _METHODS[method][0].model_validate(params)
     except ValidationError as ex:
         raise invalid_params(ex) from None
+    if isinstance(given, BeginReplyParams):
+        return await streams.begin(given)
+    if isinstance(given, ReplyChunkParams):
+        return await streams.chunk(given)
+    if isinstance(given, StreamParams):
+        if method == "end_reply":
+            return await streams.end(given)
+        return await streams.abort(given)
+    if isinstance(given, NextReleaseParams):
+        return await streams.next(given)
     if isinstance(given, JudgeRequestParams):
         what, id = "request", given.id
         judging = handler.request(_request(given))
@@ -199,21 +263,26 @@ async def _judge(handler: Handler, method: str, params: dict[str, Any]) -> BaseM
         raise TypeError(f"No method takes {type(given).__name__}.")
     try:
         return _result(await judging, reply=what == "reply")
-    except TimeLimitError as ex:
-        raise RpcError(TIME_LIMIT, str(ex)) from None
-    except UnregisteredSampleError as ex:
-        raise RpcError(UNREGISTERED, str(ex)) from None
-    except UnreadableError as ex:
+    except Exception as ex:
+        raise _not_judged(ex, what, id) from None
+
+
+def _not_judged(ex: Exception, what: str, id: str) -> RpcError:
+    # the JSON-RPC error that says a request or reply wasn't judged, and why
+    if isinstance(ex, TimeLimitError):
+        return RpcError(TIME_LIMIT, str(ex))
+    if isinstance(ex, UnregisteredSampleError):
+        return RpcError(UNREGISTERED, str(ex))
+    if isinstance(ex, UnreadableError):
         # why is kept here, since it may quote the request or the reply
         logger.warning("The %s %r was not judged: %s", what, id, ex)
-        raise RpcError(
+        return RpcError(
             UNREADABLE, f"The {what} couldn't be read, so it was not judged."
-        ) from None
-    except Exception:
-        logger.exception("The %s %r was not judged.", what, id)
-        raise RpcError(
-            SENTINEL_FAILED, f"The sentinel failed, so the {what} was not judged."
-        ) from None
+        )
+    logger.error("The %s %r was not judged.", what, id, exc_info=ex)
+    return RpcError(
+        SENTINEL_FAILED, f"The sentinel failed, so the {what} was not judged."
+    )
 
 
 def _request(given: JudgeRequestParams) -> Request:

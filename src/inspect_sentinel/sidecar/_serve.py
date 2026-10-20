@@ -349,7 +349,16 @@ def apps(
         evals = eval_routes(
             handler, max_body_bytes=arguments.max_body_bytes, results=results
         )
-        return [(Starlette(routes=[*proxy.routes, *evals]), arguments.port)]
+        # with the proxy app's lifespan, in which its reply streams run
+        return [
+            (
+                Starlette(
+                    routes=[*proxy.routes, *evals],
+                    lifespan=proxy.router.lifespan_context,
+                ),
+                arguments.port,
+            )
+        ]
     token = os.environ.get(TOKEN_VARIABLE, "")
     if not token:
         raise ValueError(

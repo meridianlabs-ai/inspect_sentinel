@@ -1,6 +1,110 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
+    "BeginReplyParams": {
+      "description": "Parameters of `begin_reply`: a provider's reply, as its status and headers arrive, to be handed over as it arrives.",
+      "properties": {
+        "id": {
+          "description": "The `id` of the request this is the reply to.",
+          "title": "Id",
+          "type": "string"
+        },
+        "provider": {
+          "description": "The provider whose format the body is in, such as `anthropic` or `openai`. Where `format` is given, the body is read by `format`, and this can be any name the proxy has for the provider.",
+          "title": "Provider",
+          "type": "string"
+        },
+        "format": {
+          "anyOf": [
+            {
+              "enum": [
+                "anthropic-messages",
+                "openai-chat",
+                "openai-responses"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which API the body is written in: `anthropic-messages`, `openai-chat` or `openai-responses`. A proxy that knows says, and the body is then read as that, whatever `provider` is. Without it, the API is worked out from `provider` and the body.",
+          "title": "Format"
+        },
+        "model": {
+          "description": "The model, by the name the proxy shows for it.",
+          "title": "Model",
+          "type": "string"
+        },
+        "user": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Who the proxy signed the caller in as.",
+          "title": "User"
+        },
+        "status": {
+          "description": "The HTTP status of the provider's reply.",
+          "title": "Status",
+          "type": "integer"
+        },
+        "content_type": {
+          "description": "The reply's content type, which says whether it is one JSON object or a stream of events.",
+          "title": "Content Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "model",
+        "status",
+        "content_type"
+      ],
+      "title": "BeginReplyParams",
+      "type": "object"
+    },
+    "ErrorEventOutput": {
+      "description": "Send the caller this error event, written in the provider's format, and end the reply. It refuses the turn once something has been sent.",
+      "properties": {
+        "kind": {
+          "const": "error_event",
+          "default": "error_event",
+          "title": "Kind",
+          "type": "string"
+        },
+        "data": {
+          "description": "The event, as base64.",
+          "title": "Data",
+          "type": "string"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "ErrorEventOutput",
+      "type": "object"
+    },
+    "FinishedOutput": {
+      "description": "The reply has ended: end it for the caller.",
+      "properties": {
+        "kind": {
+          "const": "finished",
+          "default": "finished",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "title": "FinishedOutput",
+      "type": "object"
+    },
     "JudgeReplyParams": {
       "description": "Parameters of `judge_reply`: a provider's reply, held whole before the caller is sent any of it.",
       "properties": {
@@ -150,6 +254,73 @@
       "title": "JudgeRequestParams",
       "type": "object"
     },
+    "NextReleaseParams": {
+      "description": "Parameters of `next_release`: what the caller is to be sent after what the proxy hook has.",
+      "properties": {
+        "id": {
+          "description": "The `id` of the reply's request.",
+          "title": "Id",
+          "type": "string"
+        },
+        "after": {
+          "description": "How many outputs the proxy hook already has. Asking again with the same `after` gives the same outputs.",
+          "minimum": 0,
+          "title": "After",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "after"
+      ],
+      "title": "NextReleaseParams",
+      "type": "object"
+    },
+    "NextReleaseResult": {
+      "description": "What the caller is to be sent next. No outputs means none was ready within the wait, never that the reply has ended: it ends with `finished`, `refuse` or `error_event`.",
+      "properties": {
+        "position": {
+          "description": "How many outputs the proxy hook has once it has these, for its next `next_release`.",
+          "title": "Position",
+          "type": "integer"
+        },
+        "outputs": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "error_event": "#/$defs/ErrorEventOutput",
+                "finished": "#/$defs/FinishedOutput",
+                "refuse": "#/$defs/RefuseOutput",
+                "release": "#/$defs/ReleaseOutput"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/ReleaseOutput"
+              },
+              {
+                "$ref": "#/$defs/RefuseOutput"
+              },
+              {
+                "$ref": "#/$defs/ErrorEventOutput"
+              },
+              {
+                "$ref": "#/$defs/FinishedOutput"
+              }
+            ]
+          },
+          "title": "Outputs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "position",
+        "outputs"
+      ],
+      "title": "NextReleaseResult",
+      "type": "object"
+    },
     "PassResult": {
       "description": "Send the request or the reply on as it is.",
       "properties": {
@@ -161,6 +332,47 @@
         }
       },
       "title": "PassResult",
+      "type": "object"
+    },
+    "RefuseOutput": {
+      "description": "Send the caller this error, with this status. It comes only while nothing has been sent, and ends the reply.",
+      "properties": {
+        "kind": {
+          "const": "refuse",
+          "default": "refuse",
+          "title": "Kind",
+          "type": "string"
+        },
+        "status": {
+          "description": "The HTTP status of the error.",
+          "maximum": 599,
+          "minimum": 400,
+          "title": "Status",
+          "type": "integer"
+        },
+        "message": {
+          "description": "What the caller is told.",
+          "title": "Message",
+          "type": "string"
+        },
+        "sentinel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelField"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "For an Inspect client: what was decided, which the proxy hook puts into the error as a top-level `sentinel` field."
+        }
+      },
+      "required": [
+        "status",
+        "message"
+      ],
+      "title": "RefuseOutput",
       "type": "object"
     },
     "RefuseResult": {
@@ -204,6 +416,27 @@
       "title": "RefuseResult",
       "type": "object"
     },
+    "ReleaseOutput": {
+      "description": "Send these bytes to the caller, after what was sent before.",
+      "properties": {
+        "kind": {
+          "const": "release",
+          "default": "release",
+          "title": "Kind",
+          "type": "string"
+        },
+        "data": {
+          "description": "The bytes, as base64.",
+          "title": "Data",
+          "type": "string"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "ReleaseOutput",
+      "type": "object"
+    },
     "ReplaceReplyResult": {
       "description": "Send the caller this reply body in place of the provider's. An Inspect client's reply is always replaced, to add the `sentinel` field.",
       "properties": {
@@ -245,6 +478,34 @@
         "body"
       ],
       "title": "ReplaceRequestResult",
+      "type": "object"
+    },
+    "ReplyChunkParams": {
+      "description": "Parameters of `reply_chunk`: the next bytes of a reply, in order.",
+      "properties": {
+        "id": {
+          "description": "The `id` of the reply's request.",
+          "title": "Id",
+          "type": "string"
+        },
+        "seq": {
+          "description": "The chunk's place, from 0. A chunk sent again with the same bytes is taken once.",
+          "minimum": 0,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "data": {
+          "description": "The chunk's bytes, as base64.",
+          "title": "Data",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "seq",
+        "data"
+      ],
+      "title": "ReplyChunkParams",
       "type": "object"
     },
     "SentinelField": {
@@ -392,6 +653,34 @@
       "title": "SentinelStep",
       "type": "object"
     },
+    "StreamParams": {
+      "description": "Parameters of `end_reply` and `abort_reply`: a reply, by its request's `id`.",
+      "properties": {
+        "id": {
+          "description": "The `id` of the reply's request.",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "StreamParams",
+      "type": "object"
+    },
+    "TakenResult": {
+      "description": "The call was taken.",
+      "properties": {
+        "taken": {
+          "const": true,
+          "default": true,
+          "title": "Taken",
+          "type": "boolean"
+        }
+      },
+      "title": "TakenResult",
+      "type": "object"
+    },
     "WithheldTurn": {
       "description": "The model's turn, which the client was refused.",
       "properties": {
@@ -456,6 +745,66 @@
           }
         ]
       }
+    },
+    "begin_reply": {
+      "params": {
+        "$ref": "#/$defs/BeginReplyParams"
+      },
+      "result": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/TakenResult"
+          }
+        ]
+      }
+    },
+    "reply_chunk": {
+      "params": {
+        "$ref": "#/$defs/ReplyChunkParams"
+      },
+      "result": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/TakenResult"
+          }
+        ]
+      }
+    },
+    "end_reply": {
+      "params": {
+        "$ref": "#/$defs/StreamParams"
+      },
+      "result": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/TakenResult"
+          }
+        ]
+      }
+    },
+    "abort_reply": {
+      "params": {
+        "$ref": "#/$defs/StreamParams"
+      },
+      "result": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/TakenResult"
+          }
+        ]
+      }
+    },
+    "next_release": {
+      "params": {
+        "$ref": "#/$defs/NextReleaseParams"
+      },
+      "result": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/NextReleaseResult"
+          }
+        ]
+      }
     }
   },
   "errors": {
@@ -474,6 +823,10 @@
     "-32006": {
       "name": "unregistered",
       "description": "The request names a sample that a task registered with the sidecar beforehand doesn't hold, so it is not part of the eval that was registered. A proxy hook refuses the call, unless its operator has chosen to let calls that weren't judged through."
+    },
+    "-32007": {
+      "name": "unknown_stream",
+      "description": "The reply stream a call names was never begun, has ended, or expired after no call named it. A proxy hook that lost its stream refuses the call. A proxy hook refuses the call, unless its operator has chosen to let calls that weren't judged through."
     }
   }
 }
