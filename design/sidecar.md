@@ -48,7 +48,7 @@ When the sentinel runs in a sidecar, Inspect acts as its client. This integratio
 
 A request or a reply reaches the sidecar from a proxy. The handler works out what it means and what should happen to it. The sentinel runner runs the monitors and protocols.
 
-```
+```text
    Middleman                 LiteLLM                   Envoy
    runs a proxy hook,        runs a proxy hook,        runs no code of ours
    MiddlemanHook             LiteLLMGuardrail
@@ -72,7 +72,7 @@ A request or a reply reaches the sidecar from a proxy. The handler works out wha
 
 - **A proxy hook** is what a proxy runs, where the proxy can load code. It turns what that proxy hands over into the sidecar's messages, sends them, and carries out the answer in that proxy's terms. It knows nothing about sentinels or about model providers. Each proxy hook is a small package of its own, under `src/proxies`. LiteLLM's is `LiteLLMGuardrail`. Middleman's is `MiddlemanHook`, which needs Middleman to have a passthrough hook (below).
 - **The endpoint for proxies** is the same for every proxy hook. A proxy hook puts each request and each reply to it, and is answered with pass, replace or refuse. The endpoint for proxies uses JSON-RPC 2.0, at `POST /proxy/v1`, with the methods `judge_request` and `judge_reply`. JSON-RPC was chosen to be consistent with the endpoint for evals. The methods and their results are described by `proxy_endpoint.schema.json`, which is written from the endpoint's own models and kept beside it. A proxy hook is tested against that file.
-- **A shim** is for a proxy that can run no code of ours, such as Envoy. It speaks that proxy's own protocol, inside the sidecar. Its dependencies are an optional extra, so only a deployment behind that proxy installs them. The Envoy shim is planned in [PR 9](sidecar-plan.md#pr-9-the-envoy-shim); no shim is built yet.
+- **A shim** is for a proxy that can run no code of ours, such as Envoy. It speaks that proxy's own protocol, inside the sidecar. Its dependencies are an optional extra, so only a deployment behind that proxy installs them. The Envoy shim is `inspect_sentinel.sidecar.envoy`, with the `envoy` extra (below).
 - **The handler** is the same for every proxy. The endpoint for proxies, or a shim, gives the handler a `Request` or a `Reply`, and the handler returns one of three answers: `Pass`, `Replace` or `Refuse`. The answer says what was decided. It does not say how the proxy should carry that out, because that is the proxy hook's job, or the shim's. A `Refuse` holds what the client is told: the status, the message, the response headers and, for an Inspect client, the `sentinel` field (section 9). The proxy hook puts all of them into the error it sends the client, in the proxy's own form, and does not read them on the way. The `sentinel` field on a generate reply that goes through is put in by the handler, because a proxy hook knows nothing of provider formats and cannot put it in itself. So for an Inspect client the handler never answers a reply with `Pass`: it answers with `Replace`, whose body is the reply with the field added.
 - **The sentinel runner** is the core package's `run_sentinel` function, unchanged. It runs in the sidecar's process. Only steps and decisions pass between the handler and the runner, as plain data, so the runner can be moved to a process of its own later. Reasons to move it would be throughput, keeping a sentinel that fails away from the traffic, or running beside a proxy that is not written in Python.
 
@@ -83,7 +83,7 @@ Two rules keep the handler from being limited to what the least capable proxy ca
 ### What each proxy hands over
 
 | | Middleman | LiteLLM | Envoy |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | where the proxy's side runs | in `MiddlemanHook`, which Middleman loads through its passthrough hook and calls after the caller has signed in | in `LiteLLMGuardrail`, which LiteLLM loads as a guardrail and calls after the caller has signed in | no code of ours; Envoy's `ext_proc` filter calls the sidecar |
 | a request arrives as | parsed JSON, in the provider's format | a dictionary, already parsed, that also holds LiteLLM's own working state | raw bytes |
 | a reply arrives as | the provider's bytes, decompressed, held whole | the provider's bytes where Anthropic serves a request to the Messages route; otherwise LiteLLM's own objects, or a stream of them, which the guardrail holds | raw bytes, in chunks as the provider sends them |
@@ -122,16 +122,28 @@ With each request, the proxy hook tells the sidecar the provider, the model's pu
 
 LiteLLM's routes that pass a provider's own API through, such as `/anthropic/v1/messages`, are not judged. LiteLLM's source shows no call that lets a guardrail hold a streamed reply on such a route.
 
+**Envoy's side is the Envoy shim**, `inspect_sentinel.sidecar.envoy`, which runs in the sidecar's process. Envoy runs no code of ours. Its `ext_proc` filter opens a gRPC stream to the shim for each model request, and sends the request's headers and body, then the reply's headers, body and trailers. The sidecar serves the shim on a port of its own, `--envoy-port`, beside its endpoints. Envoy's configuration is written by `python -m inspect_sentinel.sidecar.envoy`, because many of Envoy's defaults are wrong for holding a reply. The configuration is written for Envoy 1.39.4, the latest 1.39 release, and 1.39.1 is the earliest that works (section 5). The shim's gRPC code is generated from Envoy's protos and kept in the package (`make envoy-protos`), so that the extra installs only `grpcio` and `protobuf`, and no top-level `envoy` package. The generated modules register Envoy's protos in a descriptor pool of their own, not protobuf's default one, so they load beside another copy of the same protos in the process, such as `xds-protos`'s, which would otherwise fail on the duplicate names; the messages are the same on the wire. [`examples/always_sunny_envoy`](../examples/always_sunny_envoy) runs the example task through Envoy.
+
+- **Envoy's route says what the request is.** The configuration judges three routes, Anthropic's `/v1/messages` and OpenAI's `/v1/chat/completions` and `/v1/responses`, and each tells the shim the provider and the API in gRPC metadata. Anthropic's `/v1/messages/count_tokens` goes to the provider unjudged, since it calls no model, and Inspect asks it before compacting. `/sentinel/` goes to the sidecar's endpoint for evals, unless the generator is told to leave it out for a sidecar whose endpoint for evals has a port of its own, which an eval reaches directly. Every other path is answered with a 404, so that nothing reaches a provider unjudged.
+- **A request is judged whole.** Envoy sends the request's body in one message, and waits for the shim's answer for up to an hour, where it waits 200 ms by default. A request the sidecar replaces is sent with its own `content-length`, which Envoy otherwise keeps from the original (**measured**). A request with a content encoding is handed to the handler as it came, which can't read it, so it is refused as unreadable and an eval is told it wasn't judged.
+- **A provider's error is not held.** An error is a reply in a status outside 2xx; one in any 2xx is the model's and judged, since a provider's SDK reads every 2xx as success. The handler passes an error on unjudged and reads nothing of it, so the shim tells the handler at the reply's headers, and the body passes through as it comes, whatever its size or encoding.
+- **A reply is held whole.** The shim answers the reply's headers at once, which sends the client nothing, and answers nothing about the body until it has all of it (**measured**, Envoy 1.39.4). The body ends at a chunk marked as the end, or at the trailers. Envoy 1.39 sends an empty chunk now and then that is not the end, so an empty chunk ends nothing. The shim then sends the reply on, replaced, or refuses it with an immediate response, with a real status. A reply's trailers reach the client, which Envoy drops over HTTP/1.1 unless told otherwise.
+- **A refusal is written in the provider's error format**, by the shim, with the `sentinel` field for an Inspect client, so the provider's SDK raises its own API error with the sentinel's message.
+- **What can't be judged is refused.** A request or reply that can't be read is refused with a 400 or a 502, one the sentinel fails on with a 500, one it doesn't finish within `--time-limit` with a 504, and a reply larger than `--max-body-bytes` with a 502. A reply in a content encoding other than `identity` is refused with a 502: the route asks the provider for an uncompressed reply. A reply refused unread is still reported to the handler, so an eval is told it wasn't judged rather than that it is still awaited. A refusal keeps its status, 529 included, though Envoy's own list of statuses stops at 511 (**measured**, Envoy 1.39.1 and 1.39.4). Envoy itself refuses a request with a 500 when the shim can't be reached, and with a 504 when the shim takes longer than its wait. There is no setting to let what wasn't judged through.
+- **A judgment goes on when Envoy stops waiting**, as when the client disconnects. The sentinel finishes, and its decision is kept for the run and for the endpoint for evals, as behind a proxy hook.
+- **Inspect's headers never reach the provider.** The shim takes `x-inspect-context` and `x-irid` out of each request it judges, and the route takes them out of what it passes unjudged. The sentinel is shown those two headers and any the operator lists with `--envoy-header`, and never a credential.
+- **The provider's certificate is checked**, against the system's trusted certificates and for the provider's host name. Envoy checks none by default.
+
 ## 2. Reading provider traffic
 
 The sidecar reads a provider's request or reply into Inspect's types with inspect_ai's converters. Those converters are functions over a complete request or a complete reply. Agents usually ask for a streamed reply, so the sidecar first puts a streamed reply back together into a whole one. It does this with the accumulator in each provider's SDK, which is what inspect_ai's own providers do.
 
-```
+```text
 bytes from the proxy → stream events → SDK accumulator → SDK reply → inspect_ai converter → ModelOutput
 ```
 
 | API | From stream to whole reply |
-|---|---|
+| --- | --- |
 | Anthropic Messages | `accumulate_event`, a pure function in a private module of the SDK |
 | OpenAI Chat Completions | the SDK's `ChatCompletionStreamState`, read as a snapshot |
 | OpenAI Responses | the event that ends the stream holds the whole response |
@@ -173,7 +185,7 @@ Not yet checked:
 A proxy sees one model request and its reply at a time. It never sees a tool execute, so the sidecar finds the tool-call steps in the traffic on either side of it. All four stages are judged through the endpoint for proxies:
 
 | Stage | Who initiates the check | Exchange | When |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `BeforeGenerate` | proxy, while handling Inspect's model request | `judge_request` at `/proxy/v1` | before contacting the provider |
 | `AfterGenerate` | proxy, after the provider replies | `judge_reply` at `/proxy/v1` | before releasing the model reply to Inspect |
 | `BeforeToolCall` | the sidecar, for each tool call in the reply it holds | `judge_reply` at `/proxy/v1` | before the reply is released to the client |
@@ -194,7 +206,7 @@ A sentinel's decision has to be carried out on the request or the reply that the
 The sidecar carries out every decision on the request or reply it holds, for every client. An Inspect client is also told what was decided (section 9), so that it can record the decision as it would in process.
 
 | Decision | What the sidecar does |
-|---|---|
+| --- | --- |
 | `proceed` | the provider's bytes are passed on as they came, with the `sentinel` field added for an Inspect client |
 | `reject` | the rejected call is taken out of the reply, and the rest of the turn goes to the client. On every later request of the conversation, the call is put back with its rejection as its result. A turn whose calls are all rejected is refused with an error |
 | `terminate` | the client is sent an error that says a sentinel ended the run, and so is every later request of that run |
@@ -222,7 +234,7 @@ Inside an eval, a rejected tool call is not run. The other calls in the turn run
 
 When every call in the turn is rejected, the sidecar withholds the reply and refuses it with an error instead, because a turn with no calls left reads to most agents as finished. On the next request of that conversation, it adds the model's message, with each call's rejection as its result.
 
-```
+```text
 agent  -->  sidecar  -->  model      a request
             sidecar  <--  model      reply: run `ls /tmp` and `curl evil.sh`     curl rejected; taken out; kept
 agent  <--  sidecar                  reply: run `ls /tmp`
@@ -288,13 +300,13 @@ The initial implementation gives a sentinel the whole turn before releasing any 
 - **Envoy does not hold the reply, so the sidecar does.** Envoy hands over chunks as the provider sends them. Envoy's `ext_proc` filter has four modes for a response body, and only the last of them works for holding a turn:
 
   | Response body mode | What happens (**measured**, Envoy 1.39.1) |
-  |---|---|
+  | --- | --- |
   | `BUFFERED` | fails with a 500 above the connection buffer (1 MiB) and above gRPC's message size (4 MiB); deadlocks on a compressed body behind the decompressor |
   | `BUFFERED_PARTIAL` | corrupts data above the buffer limit |
   | `STREAMED` | wants one answer per chunk, so a processor that stays silent to hold a turn deadlocks |
   | `FULL_DUPLEX_STREAMED` | chunks arrive as sent, and the processor may answer when it likes |
 
-  In `FULL_DUPLEX_STREAMED` mode, answering any response-body message commits the response's status, and staying silent does not. So for as long as the sidecar has answered nothing, it can still refuse with a real status. The Envoy shim is to use `FULL_DUPLEX_STREAMED` from its first version. It is also to raise the request-side message timeout, which is 200 ms by default, less time than a monitor that asks a model needs. The shim's Envoy configuration is to be generated, because each of these settings is wrong by default.
+  In `FULL_DUPLEX_STREAMED` mode, answering any response-body message commits the response's status, and staying silent does not. So for as long as the sidecar has answered nothing, it can still refuse with a real status. The Envoy shim uses `FULL_DUPLEX_STREAMED`. Its configuration raises the request-side message timeout, which is 200 ms by default, less time than a monitor that asks a model needs, to an hour, the most Envoy allows. The configuration is generated, because each of these settings is wrong by default.
 - **A hold has two limits: a largest size and a longest time.** There is a defined answer when either limit is passed. While nothing has been released to the client, that answer can be a real 503. Middleman has both limits: unless set otherwise, it waits 30 seconds for each answer from the sidecar and holds up to 32 MiB of reply. The sidecar has a size limit of its own on each message it reads from a proxy. That limit is 64 MiB by default and is set with `--max-body-bytes`. The sidecar answers a larger message with a 413 and does not pass it to the handler, and the proxy treats that as a turn that could not be judged. The default of 64 MiB is large enough for Middleman's largest reply, because Middleman sends a reply as base64, which is a third larger than the reply itself.
 - **A sentinel is not timed by default.** When a proxy stops waiting for the sidecar's answer, the sidecar is not told, and the sentinel carries on until it has decided. This is deliberate. An eval can still ask the sidecar what was decided (section 9), and a late `reject` or `terminate` still counts for the run. What a late decision cannot do is change what the client received, because by then the proxy has acted without it. A proxy that refuses a failed call has refused this one and discarded the reply. A proxy that is set to let a failed call through has already sent the reply on, so a late `reject` is recorded against a reply the client has. So if a monitor is usually slower than the proxy's wait, the proxy's wait needs to be raised. Behind Middleman the wait is `MIDDLEMAN_PASSTHROUGH_HOOK_TIMEOUT_SECONDS`, which is 30 seconds unless set. That default suits a rule that decides at once. A decision can take far longer, up to hours when a person is asked, so an operator sets the wait for the slowest decision they expect and not for a typical one. It applies to each call of `MiddlemanHook` separately, one for the request and one for the reply, and the call for a reply starts only once Middleman has the whole reply. It is not a limit on how long a turn is held. An operator who wants a ceiling on the sentinel sets `--time-limit`, in seconds. A sentinel that passes the limit is cancelled, the sidecar answers the proxy's hook with a 504, and the request is recorded as not judged, with the time limit as the reason. Only a monitor that is waiting, for a model or for the network, can be cancelled this way. Whatever the monitor had already written to the run's store stays there.
 - **What a refusal looks like to the agent's SDK depends on how much has been released** (**measured** with the earlier Envoy processor):
@@ -303,8 +315,8 @@ The initial implementation gives a sentinel the whole turn before releasing any 
   - Some content was released, and then an error event is sent inside the stream. The SDK raises a typed API error, although the HTTP status was 200.
 - **A long hold can lose the connection.** While a turn is held, the client is sent nothing. Something between the client and the proxy, such as a load balancer, may close a connection that has been silent for too long, whatever the proxy's own wait is set to. Keepalives address idle deadlines, but only on a streaming reply: a request held before the provider is called, as for an `AfterToolCall` question, and a non-streaming reply have nothing to carry them. A client's total request deadline can also end a long review. So in [PR 13](sidecar-plan.md#pr-13-human-review) a question outlives the exchange that raised it: after a bounded wait the client is refused with a retryable error, and a retry of the same request finds the question still pending or answered. PR 13 also defines question expiry and what happens to a pending review when its client disconnects.
 - **Keeping the connection alive while holding.** Middleman could do this alone, with no change to the sidecar. Middleman would send the success status and its keepalives at once, hold all of the content, and deliver a refusal as an error event inside the stream. The client would no longer wait in silence, but a refusal would no longer have a real HTTP status. Provider-compatible keepalives during incremental holds are part of [PR 10](sidecar-plan.md#pr-10-proxy-incremental-streaming). Not built.
-- **Releasing part of a turn early.** This means passing on text as the model writes it, while still holding the tool calls. It worked with the earlier Envoy processor: the sentinel's decisions were still enforced. It has two costs. The status line has already been sent, so a refusal cannot have a real status. And released content cannot be recalled if a later decision refuses the rest of the turn. [PR 10](sidecar-plan.md#pr-10-proxy-incremental-streaming) adds the incremental handler and transport through Envoy and LiteLLM, preserving call edits, later-request amendments, the `sentinel` field and endpoint results. Its SDK and test-client coverage does not require changes to Inspect; [PR 12](sidecar-plan.md#pr-12-inspect-incremental-streaming) adds actual Inspect transcript and outcome conformance. PR 10 must establish eligibility, the context of a call judged before the turn ends, and the completion boundary for each provider format. Sentinels still judge complete steps; a policy watching `AfterGenerate` keeps whole-response holding. Behind Envoy the shim already receives chunks. LiteLLM needs its guardrail to hand them over as they arrive. Middleman also needs a change to hand over chunks, which follows its initial integration and does not block the other proxies. Not built. The Envoy shim in PR 9 is to hold everything at first.
-- **Compressed bodies.** This applies to a proxy that hands over the provider's bytes as they came, as Envoy does. The sidecar decodes a reply by its `Content-Encoding` in order to read it. A reply that passes is sent on as the provider's original bytes. A reply that is replaced is sent in an encoding the client accepts, with headers that match the bytes sent. The Envoy shim is to start by asking the provider for an uncompressed reply.
+- **Releasing part of a turn early.** This means passing on text as the model writes it, while still holding the tool calls. It worked with the earlier Envoy processor: the sentinel's decisions were still enforced. It has two costs. The status line has already been sent, so a refusal cannot have a real status. And released content cannot be recalled if a later decision refuses the rest of the turn. [PR 10](sidecar-plan.md#pr-10-proxy-incremental-streaming) adds the incremental handler and transport through Envoy and LiteLLM, preserving call edits, later-request amendments, the `sentinel` field and endpoint results. Its SDK and test-client coverage does not require changes to Inspect; [PR 12](sidecar-plan.md#pr-12-inspect-incremental-streaming) adds actual Inspect transcript and outcome conformance. PR 10 must establish eligibility, the context of a call judged before the turn ends, and the completion boundary for each provider format. Sentinels still judge complete steps; a policy watching `AfterGenerate` keeps whole-response holding. Behind Envoy the shim already receives chunks. LiteLLM needs its guardrail to hand them over as they arrive. Middleman also needs a change to hand over chunks, which follows its initial integration and does not block the other proxies. Not built. The Envoy shim holds every reply whole.
+- **Compressed bodies.** This applies to a proxy that hands over the provider's bytes as they came, as Envoy does. The sidecar decodes a reply by its `Content-Encoding` in order to read it. A reply that passes is sent on as the provider's original bytes. A reply that is replaced is sent in an encoding the client accepts, with headers that match the bytes sent. The Envoy shim asks the provider for an uncompressed reply, and refuses a compressed one with a 502.
 
 ## 6. Providers that keep the conversation
 
@@ -328,7 +340,7 @@ In an eval, the sidecar cannot work that out from the conversation. A fingerprin
 - **The eval says which sample a request belongs to in `x-inspect-context`.** This is one header that holds a small JSON object. Inspect sends it only to a proxy that its probe at task init found a sidecar behind (section 9), so a provider reached directly never sees it. It carries enough for the sidecar to work without registration, and nothing long or private. Its fields are:
 
   | Field | What it is |
-  |---|---|
+  | --- | --- |
   | `version` | the version of this header's format, `1` |
   | `eval_id` | the id of the eval, as the eval log records it |
   | `task` | the task's name |
@@ -352,7 +364,7 @@ In an eval, the sidecar cannot work that out from the conversation. A fingerprin
 The table lists what a sentinel is given when it runs inside an eval's process, and what the sidecar gives it in each case.
 
 | Given in an eval's process | In the sidecar |
-|---|---|
+| --- | --- |
 | `step.call`, `message`, `input` | read from the request and the reply |
 | `step.agent_messages` | None: it is the scaffold's own list, which a proxy never sees |
 | `step.history` | every message the conversation's requests sent the model, in the order first sent, kept by the sidecar across compaction (below) |
@@ -660,7 +672,7 @@ Inspect makes one model request and gets one response. While that request is ope
 Whatever is decided, Inspect receives one response:
 
 | What the sidecar decides | What Inspect receives |
-|---|---|
+| --- | --- |
 | `terminate` at an `AfterToolCall` or at `BeforeGenerate` | a provider-format error with the `sentinel` field. The provider is not called |
 | `terminate` at `AfterGenerate` or at a `BeforeToolCall` | a provider-format error with the `sentinel` field. The reply is withheld |
 | every tool call in the reply rejected | a provider-format error with the `sentinel` field. The reply is withheld |
@@ -808,7 +820,7 @@ And this is a refusal, after a sentinel ended the run at a tool result in the re
 **When the field is missing.** Inspect cannot tell from the reply why the field is missing, so it always asks the sidecar with `request_result`, by the request's `x-irid`. The sidecar's answer says what happened:
 
 | The sidecar's answer to `request_result` | What happened | What Inspect does |
-|---|---|---|
+| --- | --- | --- |
 | `held`, with a decision | the sidecar judged the request, and the proxy dropped the field on the way to Inspect | applies and records the decision, as if the field had arrived |
 | `not_judged`, with a reason | the sidecar saw the request but could not decide, and the proxy let the call through | records the request as not judged, with the reason |
 | `unknown`, or no answer at all | the proxy could not reach the sidecar, and let the call through | records the request as not judged, because the sidecar could not be reached |
@@ -858,7 +870,7 @@ sequenceDiagram
 A step at a tool call has a `view`: how Inspect presents the call to a person, such as a bash command shown as code. A tool's author gives it a viewer, and a tool without one gets inspect_ai's default view. The sidecar runs inspect_ai, so it makes the view Inspect would make wherever it has the viewer:
 
 | How the task reached the sidecar | The views the sidecar makes |
-|---|---|
+| --- | --- |
 | in the tasks folder, with the task's package installed beside the sentinel | each tool's own view, its own viewer included: the tool the file's `tools` names, otherwise inspect_ai's own tool of that name. A request names neither the tool's package nor the task's, so a tool of the task's own is found only through `tools` |
 | registered by Inspect at task init, or not registered | the viewers of inspect_ai's own tools, such as `bash` and `python`, matched by the tool's bare name, and the default view for every other tool. A viewer is code, so it cannot be sent at registration |
 
@@ -1080,7 +1092,7 @@ Considered and not taken:
 - **The sidecar keeps its state at four levels:**
 
   | Level | Keyed by | What is kept |
-  |---|---|---|
+  | --- | --- | --- |
   | Task | `eval_id` and `task`, or `task` alone for a task in the tasks folder | the registered facts: the task's description and metadata, and each sample's input, description and metadata; and, from the tasks file only, the map of tool names (section 9) |
   | Run, one sample in one epoch | `sample_uuid` | the sample's facts, taken at the run's first request; the sentinel's store; whether the run was ended; open questions to a person (sections 4 and 8) |
   | Conversation, within a run | the run, and how the conversation opens | the tool results already judged, each call told apart from others with its id by how many come before it; how many calls with each id the client's conversation has held, kept for the conversation's life: a request that holds fewer was compacted, and as its results can then no longer be told apart from those judged before, it is unreadable, which arises only where a provider uses one call id more than once. An exact retry of a request whose reply was lost is refused the same way when that reply used an id again, as it cannot be told apart from a compacted request without matching each call to the reply that made it; what the model was sent for the generate that made each of the latest calls, as a tool step's `input` and `tools`; the calls that were rejected, taken out or changed, to be put back into later requests, each with what inspect_ai's converters noted when its reply was read (section 4); what the converters noted reading the conversation's replies |
@@ -1089,15 +1101,15 @@ Considered and not taken:
   A sidecar that runs as several processes needs those processes to share this state, because a run's requests, and the calls to the endpoint for evals, may each reach a different process. A run that outlasts a restart needs it kept. The state is kept behind one interface. Its default implementation keeps the state in memory, in one process, and implementations that share and keep it, possibly on Valkey or S3, can follow. The interface is not designed. A run's state is dropped when the eval calls `end_run`, or once no request has named the run for a day, which `--run-expiry` sets (section 9). Records are kept for a limited window. A task's registration made by Inspect is dropped a day after the last request that names the task, or later if the registration asked for longer; a task an admin registered is kept (section 9). Not designed: the tallies kept at the task level, shared by every sample of a task (section 7).
 - **A record log that can't be rewritten**, not yet designed. Records are to leave the sidecar as they are made, to somewhere neither the sidecar nor a client can change them afterwards. What the sidecar keeps is then a copy for the result methods of section 9, and not the record itself.
 - **A health check is answered at `GET /health`, on each port the sidecar listens on.** The answer is `ok` with status 200. The route asks for no credential, on the endpoint for evals as well, and it checks nothing. The sidecar loads its sentinel before it listens, so an answer means the sidecar is ready to judge, and a sidecar whose sentinel can't be loaded stops without ever listening. The route is for whatever runs the sidecar to probe, so that a sidecar that has stopped answering is restarted. A proxy does not call it, and it is not part of the messages a proxy and the sidecar exchange. Health checks are left out of the sidecar's access log, which would otherwise gain a line for every probe.
-- **Access is the operator's to control.** The port a proxy sends requests and replies to is protected by where the sidecar listens: an operator makes it reachable by the proxy alone, and uses `https` unless the two run side by side. By default, the endpoint for evals is reached only through the proxy, with the same access control as the proxy's model calls. As an advanced option, it has a port and a token of its own (section 9). Other forms of authentication, such as a credential on what a proxy sends, may be supported later.
+- **Access is the operator's to control.** The port a proxy sends requests and replies to is protected by where the sidecar listens: an operator makes it reachable by the proxy alone, and uses `https` unless the two run side by side. By default, the endpoint for evals is reached only through the proxy, with the same access control as the proxy's model calls. As an advanced option, it has a port and a token of its own (section 9). The Envoy shim's port is plain gRPC, protected the same way, by where the sidecar listens: only Envoy reaches it. TLS on every port the sidecar listens on, with client certificates from the proxies, is planned in [PR 16](sidecar-plan.md#pr-16-tls-on-the-sidecars-listeners). Other forms of authentication, such as a credential on what a proxy sends, may be supported later.
 - **What `MiddlemanHook` adds to a model call** is two round trips to the sidecar: one for the request and one for the reply. The time they add has not been measured.
 
 ## 11. Testing
 
 - **A replay corpus.** Replies recorded from the live Anthropic and OpenAI APIs, streamed and not streamed, with the cases that must be unreadable kept beside them. A provider SDK release that changes the private Anthropic accumulator fails these tests.
 - **The handler, without a proxy.** The endpoint for proxies is tested through its methods and held to its schema file. Each proxy hook is tested against the same file, and against a running sidecar.
-- **Each proxy, live.** A real proxy with its proxy hook, a running sidecar, and a stand-in provider that answers from the replay corpus. Each route is called streamed and not streamed, with a model from each provider, with the reply passed, edited and refused, and the `sentinel` field is checked each time. For LiteLLM this runs against each LiteLLM version the guardrail supports, because the guardrail depends on parts of LiteLLM that are not documented for plugins.
-- **A conformance suite.** The same monitors and the same steps give the same decisions and records in Inspect's own process and in the sidecar, and Inspect's transcript is the same either way. The first part runs: a real Inspect eval, against a stand-in provider, once with the sentinel in its own process and once with an unmodified Inspect behind the sidecar, must send the model the same request after a turn with a call rejected or changed. It covers Anthropic's Messages API, streamed, and OpenAI's Chat Completions and Responses APIs. The one difference allowed is where inspect_ai's Anthropic provider puts its cache marks, which it moves on every request.
+- **Each proxy, live.** A real proxy with its proxy hook, a running sidecar, and a stand-in provider that answers from the replay corpus. Each route is called streamed and not streamed, with a model from each provider, with the reply passed, edited and refused, and the `sentinel` field is checked each time. For LiteLLM this runs against each LiteLLM version the guardrail supports, because the guardrail depends on parts of LiteLLM that are not documented for plugins. For Envoy, a real Envoy runs in Docker with the generated configuration, in front of the shim and a stand-in provider that controls how a reply is split, when each part arrives, and its trailers. It also covers bodies larger than Envoy's buffer and gRPC's message, provider errors, a sentinel that fails or takes too long, a client that disconnects, and a shim that can't be reached.
+- **A conformance suite.** The same monitors and the same steps give the same decisions and records in Inspect's own process and in the sidecar, and Inspect's transcript is the same either way. The first part runs: a real Inspect eval, against a stand-in provider, once with the sentinel in its own process and once with an unmodified Inspect behind the sidecar, must send the model the same request after a turn with a call rejected or changed. It covers Anthropic's Messages API, streamed, and OpenAI's Chat Completions and Responses APIs. Each step's history is compared too, behind a stand-in for a proxy hook and behind a real Envoy. The one difference allowed is where inspect_ai's Anthropic provider puts its cache marks, which it moves on every request.
 - **The whole chain.** An Inspect task runs through a proxy and the sidecar on each provider: registering the task, a rejected call, a `terminate`, and the run's state read before scoring.
 - **Middleman's passthrough hook is tested in Middleman's own test suite**, which is Hawk's.
 

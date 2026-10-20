@@ -113,6 +113,7 @@ def test_defaults_are_one_port_and_no_limits() -> None:
     assert arguments.no_runtime_task_registration is False
     assert arguments.task_expiry == 30 * 24 * 60 * 60
     assert arguments.max_task_registrations == 1000
+    assert (arguments.envoy_port, arguments.envoy_header) == (None, [])
 
 
 @pytest.mark.anyio
@@ -227,6 +228,9 @@ server:
   runtime_task_registration: false
   task_expiry: 60
   max_task_registrations: 5
+  envoy:
+    port: 9001
+    headers: [x-team]
 tasks_folder: tasks
 """
 
@@ -245,6 +249,7 @@ def test_the_server_stanza_sets_what_the_options_would(tmp_path: Path) -> None:
     )
     assert arguments.task_expiry == 60
     assert arguments.max_task_registrations == 5
+    assert (arguments.envoy_port, arguments.envoy_header) == (9001, ["x-team"])
     # the tasks folder is found beside the configuration file
     assert arguments.tasks_folder == str(tmp_path.resolve() / "tasks")
     # the sentinel is built from the file's sentinel, which the core reads
@@ -304,6 +309,10 @@ def test_a_registered_name_is_found_as_an_eval_finds_it() -> None:
     [
         ("sentinel:\n  name: no_tokyo\nserver:\n  colour: blue\n", "doesn't fit"),
         (
+            "sentinel:\n  name: no_tokyo\nserver:\n  envoy:\n    colour: blue\n",
+            "doesn't fit",
+        ),
+        (
             "sentinel:\n  name: no_tokyo\nserver: {}\nother: 1\n",
             "and nothing else",
         ),
@@ -317,6 +326,7 @@ def test_a_registered_name_is_found_as_an_eval_finds_it() -> None:
     ],
     ids=[
         "a setting the server doesn't have",
+        "a setting the Envoy shim doesn't have",
         "another key",
         "no sentinel",
         "a tasks folder that isn't a path",
@@ -361,17 +371,21 @@ def lets_all_through():
 """
 
 
-@pytest.mark.parametrize("ports", [1, 2], ids=["one port", "a port for evals"])
-def test_ctrl_c_stops_the_sidecar_cleanly(ports: int, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "second",
+    [None, "--eval-port", "--envoy-port"],
+    ids=["one port", "a port for evals", "the Envoy shim"],
+)
+def test_ctrl_c_stops_the_sidecar_cleanly(second: str | None, tmp_path: Path) -> None:
     (tmp_path / "lets_all_through.py").write_text(_RULE)
     free: list[int] = []
-    for _ in range(ports):
+    for _ in range(1 if second is None else 2):
         with socket.socket() as found:
             found.bind(("127.0.0.1", 0))
             free.append(found.getsockname()[1])
     given = ["--port", str(free[0])]
-    if ports == 2:
-        given += ["--eval-port", str(free[1])]
+    if second is not None:
+        given += [second, str(free[1])]
     serving = subprocess.Popen(
         [
             sys.executable,
@@ -397,6 +411,9 @@ def test_ctrl_c_stops_the_sidecar_cleanly(ports: int, tmp_path: Path) -> None:
             except httpx.HTTPError:
                 assert serving.poll() is None and time.monotonic() < deadline
                 time.sleep(0.1)
+        if second == "--envoy-port":
+            # the shim listens before the endpoints do
+            socket.create_connection(("127.0.0.1", free[1]), timeout=5).close()
         serving.send_signal(signal.SIGINT)
         _, errors = serving.communicate(timeout=30)
     finally:

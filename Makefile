@@ -29,6 +29,16 @@ test-litellm:
 check-litellm:
 	$(LITELLM_ENV) --with pyright pyright
 
+# The Envoy shim's gRPC code, generated from Envoy's protos into
+# src/inspect_sentinel/sidecar/envoy/_proto. The versions of grpcio-tools and
+# its protoc are the floors of the `envoy` extra: generated code needs a
+# runtime at least as new as what generated it.
+.PHONY: envoy-protos
+envoy-protos:
+	uv run --python 3.13 --isolated --no-project \
+		--with grpcio-tools==1.74.0 --with mypy-protobuf==5.1.0 \
+		python scripts/generate_envoy_protos.py
+
 .PHONY: docs
 docs:
 	cd docs && PATH="$(CURDIR)/.venv/bin:$$PATH" ../.venv/bin/quarto render

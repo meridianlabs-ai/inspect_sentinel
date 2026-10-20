@@ -58,6 +58,10 @@ build-backend = "hatchling.build"
 # published against it. uvicorn's is the first that hands a signal on to a
 # second server in the same process, which stopping the sidecar relies on.
 sidecar = ["starlette>=1.3.1", "uvicorn>=0.29.0"]
+# The Envoy shim, which serves Envoy's ext_proc over gRPC beside the sidecar's
+# endpoints. Its code is generated from Envoy's protos (`make envoy-protos`),
+# and needs a grpcio and a protobuf at least as new as what generated it.
+envoy = ["inspect_sentinel[sidecar]", "grpcio>=1.74.0", "protobuf>=6.31.1"]
 # The sidecar reads a provider's traffic with that provider's SDK, as
 # inspect-ai does, so each is installed only where it is wanted. The floors
 # are inspect-ai's own.
@@ -76,8 +80,12 @@ dev = [
     # from Scout into inspect_ai, design/pr-series.md)
     "inspect-scout",
     # the sidecar's tests read recorded Anthropic and OpenAI traffic, call its
-    # server through httpx, and hold its answers to its schema file
-    "inspect_sentinel[anthropic,openai,sidecar]",
+    # server through httpx and its Envoy shim through grpcio, and hold its
+    # answers to its schema file
+    "inspect_sentinel[anthropic,envoy,openai,sidecar]",
+    # the Envoy shim's generated code is typed against these
+    "types-grpcio",
+    "types-protobuf",
     "httpx",
     "jsonschema",
     "inspect_sentinel[doc]",
@@ -121,7 +129,8 @@ allow-direct-references = true
 managed = true
 
 [tool.ruff]
-extend-exclude = ["docs", "design"]
+# generated code, from `make envoy-protos`
+extend-exclude = ["docs", "design", "src/inspect_sentinel/sidecar/envoy/_proto"]
 src = [".", "src"]
 
 [tool.ruff.lint]
@@ -150,6 +159,9 @@ timeout = 120
 # this environment. `make check-litellm` checks the LiteLLM guardrail in one
 # of its own.
 include = ["src/inspect_sentinel", "tests", "examples"]
+# generated code, from `make envoy-protos`, which is read for its types but
+# not checked
+exclude = ["src/inspect_sentinel/sidecar/envoy/_proto"]
 typeCheckingMode = "strict"
 pythonPlatform = "All"
 pythonVersion = "3.11"

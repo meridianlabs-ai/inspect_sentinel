@@ -1,13 +1,13 @@
 """The sidecar's work against Inspect's own process.
 
-Each test runs a real Inspect eval twice against a stand-in provider. Once with the sentinel in the eval's own process, and once without it, with the provider's replies first put through a sidecar, as a model proxy would, and the eval's requests after them too. The request the model is sent after a turn with a call rejected or changed must be the same either way.
+Each test runs a real Inspect eval twice against a stand-in provider. Once with the sentinel in the eval's own process, and once without it, with the provider's replies first put through a sidecar, as a model proxy would, and the eval's requests after them too. The request the model is sent after a turn with a call rejected or changed must be the same either way. The tests of what each step is given run the sidecar both behind a stand-in for a proxy hook and behind a real Envoy, which needs Docker.
 """
 
 import asyncio
 import json
 import threading
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -43,6 +43,13 @@ from inspect_sentinel import (
 )
 from inspect_sentinel.sidecar import Handler, Pass, Refuse, Replace, Reply, Request
 from inspect_sentinel.sidecar._anthropic import settled
+from tests.sidecar._envoy import (
+    Received,
+    Scripted,
+    Stack,
+    docker_missing,
+    envoy_stack,
+)
 from tests.sidecar._traffic import JSON, STREAM
 
 _ASKED = "What is the weather in Tokyo and Paris?"
@@ -441,6 +448,49 @@ def _proxied(api: _Api, replies: list[bytes], handler: Handler) -> Generator[str
         serving.join()
 
 
+@pytest.fixture(scope="module")
+def _envoy() -> Iterator[Stack]:
+    missing = docker_missing()
+    if missing is not None:
+        pytest.skip(f"Envoy runs in Docker, and {missing}")
+    with envoy_stack() as stack:
+        yield stack
+
+
+@contextmanager
+def _sidecar(
+    behind: str,
+    api: _Api,
+    replies: list[bytes],
+    handler: Handler,
+    request: pytest.FixtureRequest,
+) -> Generator[str]:
+    """A stand-in provider behind a sidecar, with the sidecar behind a stand-in for a proxy hook or behind a real Envoy, and the URL a client reaches it at."""
+    if behind == "proxy hook":
+        with _proxied(api, replies, handler) as url:
+            yield url
+        return
+    stack: Stack = request.getfixturevalue("_envoy")
+    stack.use(handler)
+    left = list(replies)
+
+    def answer(received: Received) -> Scripted:
+        if received.path == "/v1/messages/count_tokens":
+            counted = {"input_tokens": len(received.body) // 8}
+            return Scripted(body=[json.dumps(counted).encode()])
+        return Scripted(
+            body=[left.pop(0)],
+            content_type=api.content_type,
+            chunked=api.content_type == STREAM,
+        )
+
+    stack.provider.script = answer
+    yield stack.url
+
+
+_BEHIND = ["proxy hook", "envoy"]
+
+
 def _told(message: ChatMessage) -> str:
     # What the model is told of a message. Inspect's own process holds a
     # rejected call's result as an error, which the wire carries as text, and
@@ -505,17 +555,18 @@ def _by_step(seen: str) -> dict[str, list[list[tuple[object, ...]]]]:
     return found
 
 
+@pytest.mark.parametrize("behind", _BEHIND)
 @pytest.mark.parametrize("name", _APIS)
 @pytest.mark.parametrize("action", ["proceed", "reject", "modify"])
 def test_each_step_is_given_the_history_inspect_gives_it_in_its_own_process(
-    name: str, action: str, tmp_path: Path
+    name: str, action: str, behind: str, tmp_path: Path, request: pytest.FixtureRequest
 ) -> None:
     api = _APIS[name]
     replies = [api.reply([("call_1", "Tokyo"), ("call_2", "Paris")]), api.reply(None)]
 
     _run(api, replies, tmp_path, records_histories("in process", action))
     handler = Handler(records_histories("sidecar", action))
-    with _proxied(api, replies, handler) as url:
+    with _sidecar(behind, api, replies, handler, request) as url:
         log = eval(
             Task(
                 dataset=[Sample(input=_ASKED)],
@@ -533,9 +584,10 @@ def test_each_step_is_given_the_history_inspect_gives_it_in_its_own_process(
     assert sidecar == in_process
 
 
+@pytest.mark.parametrize("behind", _BEHIND)
 @pytest.mark.parametrize("name", _APIS)
 def test_the_history_keeps_what_inspects_own_compaction_drops(
-    name: str, tmp_path: Path
+    name: str, behind: str, tmp_path: Path, request: pytest.FixtureRequest
 ) -> None:
     # A compaction that keeps the conversation's opening, as Inspect's own
     # do, leaves the sidecar the same conversation, and what it drops stays
@@ -574,7 +626,7 @@ def test_the_history_keeps_what_inspects_own_compaction_drops(
     # the agent compacted: the request after its last lookup holds the first no more
     assert b"call_0" not in asked[-1]
     handler = Handler(records_histories("sidecar"))
-    with _proxied(api, replies, handler) as url:
+    with _sidecar(behind, api, replies, handler, request) as url:
         run(url, None)
 
     in_process, sidecar = _by_step("in process"), _by_step("sidecar")
