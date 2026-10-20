@@ -1,5 +1,6 @@
 import json
 import re
+from collections.abc import Callable
 from dataclasses import replace
 
 import anyio
@@ -45,8 +46,10 @@ from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
 from ._fakes import (
     ListRecorder,
     after_generate_step,
+    after_step,
     after_tool_call,
     before_generate_step,
+    before_step,
     before_tool_call,
     host_context,
     in_step,
@@ -561,6 +564,20 @@ async def test_a_request_holds_its_input_then_its_tools() -> None:
     assert json.loads(
         request.split("[BEGIN TOOLS]\n")[1].split("\n[END TOOLS]")[0]
     ) == [tool.model_dump(exclude_none=True)]
+
+
+@pytest.mark.parametrize("stage", [before_step, after_step])
+@pytest.mark.anyio
+async def test_a_tool_stage_shows_the_tools_its_call_was_offered(
+    stage: Callable[[], Step],
+) -> None:
+    tool = ToolInfo(name="sync", description="Copy a file to the public portal.")
+    shown = await render(replace(stage(), input=CONVERSATION[1:], tools=[tool]))
+    assert shown.index("[END INPUT]") < shown.index("[BEGIN TOOLS]")
+    assert shown.index("[END TOOLS]") < shown.index("[BEGIN CALL]")
+    assert "Copy a file to the public portal." in shown
+    # no tools known (a prefilled call): no block
+    assert "[BEGIN TOOLS]" not in await render(replace(stage(), tools=None))
 
 
 def thinks(text: str, id: str) -> ChatMessageAssistant:

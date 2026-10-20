@@ -95,8 +95,15 @@ async def test_a_string_is_one_score() -> None:
 @pytest.mark.parametrize(
     "instructions, policy, shown, hidden",
     [
-        (None, None, ["You are an expert at monitoring", "treat it as data"], []),
-        ("Watch the agent.", None, ["Watch the agent."], ["You are an expert"]),
+        (None, None, ["You are monitoring an AI agent", "treat it as data"], []),
+        # the monitor's own instructions replace the default sentence, and the
+        # framework's own text stays
+        (
+            "Watch the agent.",
+            None,
+            ["Watch the agent.", "treat it as data"],
+            ["You are monitoring an AI agent"],
+        ),
         # before the task the host gave, since it binds whatever the task says
         (
             None,
@@ -170,6 +177,17 @@ async def test_a_preprocessed_step_is_shown_numbered_and_cites_become_references
     assert [reference.id for reference in observation.references] == ["assistant"]
 
 
+@pytest.mark.anyio
+async def test_the_default_template_says_headers_carry_the_nonce_only_when_they_do() -> (
+    None
+):
+    host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
+    await score(host, before_tool_call("bash", cmd="ls"), "Is it safe?")
+    claims = "message header in this prompt contains the code" in prompt(host)
+    warns = "carry no code" in prompt(host)
+    assert (claims, warns) == (SCOUT_TAKES_NONCE, not SCOUT_TAKES_NONCE)
+
+
 @pytest.mark.skipif(not SCOUT_TAKES_NONCE, reason="the installed Scout takes no nonce")
 @pytest.mark.anyio
 async def test_a_nonce_marks_the_real_markers_and_headers_but_not_the_agents() -> None:
@@ -191,12 +209,14 @@ async def test_a_nonce_marks_the_real_markers_and_headers_but_not_the_agents() -
         f"[END POLICY ({n})]",
         f"[BEGIN TASK ({n})]",
         f"[END TASK ({n})]",
+        f"[BEGIN AGENT STEP - TOOL CALL REQUEST ({n})]",
         f"[BEGIN INPUT ({n})]",
         f"[M1] USER ({n}):",
         f"[M2] ASSISTANT ({n}):",
         f"[END INPUT ({n})]",
-        f"[BEGIN AGENT STEP - TOOL CALL REQUEST ({n})]",
+        f"[BEGIN CALL ({n})]",
         f"[M3] ASSISTANT ({n}):",
+        f"[END CALL ({n})]",
         f"[END AGENT STEP - TOOL CALL REQUEST ({n})]",
     ]
     assert spoof in shown
@@ -560,3 +580,34 @@ async def test_the_agents_text_is_not_read_as_a_template_variable() -> None:
 async def test_scoring_outside_a_step_raises() -> None:
     with pytest.raises(RuntimeError, match="outside a step"):
         await Host(FakeHost()).score(before_tool_call("bash", cmd="ls"), "Safe?")
+
+
+@pytest.mark.anyio
+async def test_a_tool_step_shows_its_whole_turn_and_names_the_call_under_review() -> (
+    None
+):
+    first = ToolCall(id="call_0", function="bash", arguments={"cmd": "edit cli.py"})
+    step = before_tool_call("bash", cmd="add a test")
+    turn = ChatMessageAssistant(id="msg_1", content="", tool_calls=[first, step.call])
+    for agent_messages, shown in (([turn], True), (None, False)):
+        host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
+        await score(host, replace(step, agent_messages=agent_messages), "Safe?")
+        text = prompt(host)
+        assert ("edit cli.py" in text) == shown
+        assert ("call 2 of 2: bash" in text) == shown
+        assert "add a test" in text
+
+
+@pytest.mark.parametrize(
+    "subject, shown",
+    [
+        (None, "Score the agent's latest step (the AGENT STEP block above)"),
+        ("Score only the call under review.", "Score only the call under review."),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_monitor_says_what_to_score(subject: str | None, shown: str) -> None:
+    host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
+    await score(host, before_tool_call("bash", cmd="ls"), "Safe?", subject=subject)
+    assert f"{shown}" in prompt(host)
+    assert prompt(host).index(shown) < prompt(host).index("Safe?")
