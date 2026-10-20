@@ -18,7 +18,12 @@ import uvicorn
 from inspect_ai import Task, eval
 from inspect_ai.agent import react
 from inspect_ai.dataset import Sample
-from inspect_ai.model import ChatMessage, ChatMessageTool, CompactionTrim
+from inspect_ai.model import (
+    ChatMessage,
+    ChatMessageAssistant,
+    ChatMessageTool,
+    CompactionTrim,
+)
 from inspect_ai.solver import generate, use_tools
 from inspect_ai.tool import Tool, tool
 from starlette.applications import Starlette
@@ -446,44 +451,62 @@ def _told(message: ChatMessage) -> str:
     return message.text.removeprefix("Error: ")
 
 
+def _said(message: ChatMessage) -> tuple[object, ...]:
+    # what a message says that the history must keep as Inspect does: its
+    # role and what the model is told of it, each call it makes, and the call
+    # a result answers
+    calls = [
+        (call.id, call.function, call.arguments)
+        for call in (
+            message.tool_calls if isinstance(message, ChatMessageAssistant) else None
+        )
+        or []
+    ]
+    answers = message.tool_call_id if isinstance(message, ChatMessageTool) else None
+    return (message.role, _told(message), calls, answers)
+
+
 # each step's history, as the sentinels below saw it, by the step
-_HISTORIES: dict[str, list[tuple[str, list[tuple[str, str]]]]] = {}
+_HISTORIES: dict[str, list[tuple[str, list[tuple[object, ...]]]]] = {}
 
 
 @protocol
 def records_histories(seen: str, action: str = "proceed") -> Protocol:
-    """Keep each step's history, as roles and texts, and reject a lookup of Tokyo if asked."""
+    """Keep each step's history, as `_said` gives each message, and reject a lookup of Tokyo, or change it to Oslo, if asked."""
 
     async def decide(
         context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         call = step.call.id if isinstance(step, BeforeToolCall | AfterToolCall) else ""
-        history = [(m.role, _told(m)) for m in step.history or []]
+        history = [_said(m) for m in step.history or []]
         _HISTORIES.setdefault(seen, []).append(
             (f"{type(step).__name__}{call}", history)
         )
         if (
-            action == "reject"
-            and isinstance(step, BeforeToolCall)
+            isinstance(step, BeforeToolCall)
             and step.call.arguments.get("location") == "Tokyo"
         ):
-            return Decision.reject("Tokyo", message="Tokyo is not allowed.")
+            if action == "reject":
+                return Decision.reject("Tokyo", message="Tokyo is not allowed.")
+            if action == "modify":
+                oslo = replace(step.call, arguments={"location": "Oslo"})
+                return Decision(action="modify", modified=oslo)
         return Decision.proceed()
 
     return decide
 
 
-def _by_step(seen: str) -> dict[str, list[list[tuple[str, str]]]]:
+def _by_step(seen: str) -> dict[str, list[list[tuple[object, ...]]]]:
     # the order of the steps differs, as a sidecar judges a result only when
     # the request that holds it arrives, so they are compared by step
-    found: dict[str, list[list[tuple[str, str]]]] = {}
+    found: dict[str, list[list[tuple[object, ...]]]] = {}
     for step, history in _HISTORIES.pop(seen, []):
         found.setdefault(step, []).append(history)
     return found
 
 
 @pytest.mark.parametrize("name", _APIS)
-@pytest.mark.parametrize("action", ["proceed", "reject"])
+@pytest.mark.parametrize("action", ["proceed", "reject", "modify"])
 def test_each_step_is_given_the_history_inspect_gives_it_in_its_own_process(
     name: str, action: str, tmp_path: Path
 ) -> None:
