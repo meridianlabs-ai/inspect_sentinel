@@ -333,18 +333,27 @@ def sent_since() -> MonitorGroup:
     return MonitorGroup(calls)
 
 
+# `history` holds each version of an edited message under its one id
+V1 = ChatMessageUser(content="v1", id="edited")
+V2 = ChatMessageUser(content="v2", id="edited")
+NEXT = user("next")
+
+
+@pytest.mark.parametrize(
+    "histories, expected",
+    [
+        (
+            [[V1, NEXT], [V1, NEXT, V2], [V1, NEXT, V2]],
+            [["v1", "next"], ["v2"], []],
+        ),
+        # the message shown last is edited later: what came between is new
+        ([[V1], [V1, NEXT, V2]], [["v1"], ["next", "v2"]]),
+    ],
+)
 @pytest.mark.anyio
-async def test_new_since_last_report_resumes_after_the_last_version_of_a_message() -> (
-    None
-):
-    # `history` holds each version of an edited message under its one id
-    first = ChatMessageUser(content="v1", id="edited")
-    second = ChatMessageUser(content="v2", id="edited")
-    histories = [
-        [first, user("next")],
-        [first, user("next"), second],
-        [first, user("next"), second],
-    ]
+async def test_new_since_last_report_resumes_after_the_copy_shown_last(
+    histories: list[list[ChatMessage]], expected: list[list[str]]
+) -> None:
     store = Store()
     seen: list[list[str]] = []
     for history in histories:
@@ -353,7 +362,7 @@ async def test_new_since_last_report_resumes_after_the_last_version_of_a_message
             observations = await run_monitors({"judge": sent_since()}, context, step)
         [observation] = observations.succeeded
         seen.append(json.loads(observation.report.explanation or ""))
-    assert seen == [["v1", "next"], ["v2"], []]
+    assert seen == expected
 
 
 @pytest.mark.anyio
@@ -587,7 +596,12 @@ async def test_every_stage_shows_the_request_as_its_input_then_its_tools(
         (replace(before_generate_step(), input=REQUEST), ["[BEGIN TOOLS]"]),
         # a tool stage whose request is not known
         (
-            replace(before_tool_call("bash", cmd="ls"), input=None),
+            replace(
+                before_tool_call("bash", cmd="ls"),
+                input=None,
+                tools=[BASH],
+                tool_choice="auto",
+            ),
             ["[BEGIN TOOLS]", "[TOOL CHOICE]"],
         ),
     ],

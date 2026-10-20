@@ -80,7 +80,7 @@ class LastMessages:
 class NewSinceLastReport:
     """Keep the messages after the last one this monitor reported on, so an incremental monitor does not re-read its conversations.
 
-    The last message shown is recorded by id in the monitor's store (by `context.path`), separately for each conversation, for each list it windows, and for each function of the monitor. It is recorded only when the function returns or decides final and the runner accepts what it returned, so a function that raises or is cancelled is shown those messages again at the next step. A conversation whose recorded message is gone, as after a compaction, is kept whole. Preprocess with it from the monitor or protocol function the runner is running; elsewhere preprocessing raises `RuntimeError`.
+    The last message shown is recorded by id in the monitor's store (by `context.path`), separately for each conversation, for each list it windows, and for each function of the monitor. It is recorded only when the function returns or decides final and the runner accepts what it returned, so a function that raises or is cancelled is shown those messages again at the next step. An edited version of a message, which `history` holds again under the same id, is new. A conversation whose recorded message is gone, as after a compaction, is kept whole. Preprocess with it from the monitor or protocol function the runner is running; elsewhere preprocessing raises `RuntimeError`.
     """
 
     context: Context
@@ -210,6 +210,11 @@ async def step_as_str(
             if body
         )
 
+    # a request whose input is not known shows none of its parts, even when a
+    # transform kept them
+    tools, choice = (
+        (step.tools, step.tool_choice) if step.input is not None else (None, None)
+    )
     # rendered in this order, so messages are numbered in it too
     parts = [
         blocks(
@@ -236,12 +241,10 @@ async def step_as_str(
                     step.input, "The model input for this call is not available."
                 ),
             ),
-            ("TOOLS", _tools(step.tools)),
+            ("TOOLS", _tools(tools)),
         ),
         # one line, so it needs no end marker
-        ""
-        if step.tool_choice is None
-        else f"[TOOL CHOICE{mark}] {_tool_choice(step.tool_choice)}",
+        "" if choice is None else f"[TOOL CHOICE{mark}] {_tool_choice(choice)}",
     ]
     if isinstance(step, AfterGenerate):
         parts.append(blocks(("REPLY", await text(_reply(step), ""))))
@@ -270,8 +273,9 @@ def scout_nonce(nonce: str) -> dict[str, str]:
 
 
 class _Marks(StoreModel):
-    # "<conversation>/<source>/<function>" -> id of the last message shown
-    marks: dict[str, str] = Field(default_factory=dict)
+    # "<conversation>/<source>/<function>" -> id of the last message shown,
+    # and how many copies of that id the list held then
+    marks: dict[str, tuple[str, int]] = Field(default_factory=dict)
 
 
 def _cut(
@@ -315,16 +319,16 @@ def _after_mark(
     ids = [m.id for m in messages]
     last = next((m.id for m in reversed(messages) if m.id is not None), None)
     if last is not None:
+        mark = (last, ids.count(last))
         node.on_success.append(
-            lambda: setattr(store, "marks", {**store.marks, key: last})
+            lambda: setattr(store, "marks", {**store.marks, key: mark})
         )
-    # from the last copy: `history` holds each edited version of a message
-    # under its one id
-    return (
-        messages[len(ids) - ids[::-1].index(seen) :]
-        if seen is not None and seen in ids
-        else messages
-    )
+    if seen is None:
+        return messages
+    # from the copy shown last: `history` holds each edited version of a
+    # message under its one id, so a later version is new
+    copies = [i for i, id in enumerate(ids) if id == seen[0]]
+    return messages[copies[seen[1] - 1] + 1 :] if len(copies) >= seen[1] else messages
 
 
 def _omitted(messages: list[ChatMessage], p: StepPreprocessor[S]) -> list[ChatMessage]:
