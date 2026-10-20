@@ -38,9 +38,18 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
       - name: Install dependencies
-        run: uv sync --group dev
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          uv venv
+          # Track inspect_ai main everywhere EXCEPT the release PR, where we
+          # validate against the shipped version pulled in via .[dev] below.
+          if [ "$HEAD_REF" != "release-please--branches--main" ]; then
+            uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git
+          fi
+          uv pip install -e ".[dev]"
       - name: Run pyright
-        run: uv run pyright
+        run: .venv/bin/pyright
 
   py-test:
     runs-on: ubuntu-latest
@@ -58,9 +67,21 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
       - name: Install dependencies
-        run: uv sync --group dev
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          uv venv
+          # Track inspect_ai main everywhere EXCEPT the release PR, where we
+          # validate against the shipped version pulled in via .[dev] below.
+          if [ "$HEAD_REF" != "release-please--branches--main" ]; then
+            uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git
+          fi
+          uv pip install -e ".[dev]"
       - name: Run tests
-        run: uv run pytest
+        # .venv/bin directly, not `uv run`: there is no uv.lock, so `uv run`
+        # would lock and sync, and could replace the git-installed inspect_ai
+        # above with a registry resolution.
+        run: .venv/bin/pytest
 
   # The LiteLLM guardrail is a package of its own, which runs in LiteLLM's
   # process and never beside this one, so it is tested and checked in an
@@ -80,7 +101,16 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
       - name: Install the sidecar, which the tests start
-        run: uv sync --group dev
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          uv venv
+          # Track inspect_ai main everywhere EXCEPT the release PR, where we
+          # validate against the shipped version pulled in via .[dev] below.
+          if [ "$HEAD_REF" != "release-please--branches--main" ]; then
+            uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git
+          fi
+          uv pip install -e ".[dev]"
       - name: Run the guardrail's tests
         run: make test-litellm LITELLM=${{ matrix.litellm-version }}
       - name: Run pyright on the guardrail
@@ -103,9 +133,22 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
       - name: Build package
         run: uv build
-      - name: Verify package
+      - name: Install the package
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
-          uv run --with dist/*.whl python -c "import inspect_sentinel; print('Package imported successfully')"
+          uv venv
+          # Track inspect_ai main everywhere EXCEPT the release PR, where we
+          # validate against the shipped version the wheel pulls in below.
+          if [ "$HEAD_REF" != "release-please--branches--main" ]; then
+            uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git
+          fi
+          uv pip install dist/*.whl
+      - name: Verify package
+        # -I so the import resolves to the installed wheel, not a module at the
+        # checkout root.
+        run: |
+          .venv/bin/python -I -c "import inspect_sentinel; print('Package imported successfully')"
       - name: Build the LiteLLM guardrail
         run: uv build src/proxies/litellm --out-dir dist-litellm
       - name: Verify the LiteLLM guardrail

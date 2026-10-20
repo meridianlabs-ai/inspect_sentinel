@@ -26,7 +26,7 @@ export OPENAI_API_KEY=...     # the agent
 export ANTHROPIC_API_KEY=...  # the monitor role
 ```
 
-(From a clone of this repository, `uv sync` installs `inspect-sentinel` and `inspect-scout` into `.venv`.) Then run the commands above from the repository root. Any capable models work; these are cheap. Each sample is capped at 20 messages. `escalate_to_human.py` waits for a person to answer each escalated call, in the approval panel of the full-screen display (or the console with `--display plain`), so run it where you can answer.
+(From a clone of this repository, the development setup in [CONTRIBUTING.md](../CONTRIBUTING.md#development-setup) installs `inspect-sentinel` and `inspect-scout` into `.venv`.) Then run the commands above from the repository root. Any capable models work; these are cheap. Each sample is capped at 20 messages. `escalate_to_human.py` waits for a person to answer each escalated call, in the approval panel of the full-screen display (or the console with `--display plain`), so run it where you can answer.
 
 ## Reading the results
 

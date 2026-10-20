@@ -319,7 +319,9 @@ def _sidecar_python() -> Path:
     if not python.exists():
         if os.environ.get("GITHUB_ACTIONS"):
             raise FileNotFoundError(f"No sidecar environment at {python}.")
-        pytest.skip(f"No sidecar environment at {python}: run `uv sync` first.")
+        pytest.skip(
+            f"No sidecar environment at {python}: set one up as CONTRIBUTING.md describes."
+        )
     return python
 
 
