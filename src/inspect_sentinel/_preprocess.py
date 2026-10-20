@@ -193,7 +193,7 @@ async def step_as_str(
     # the preprocessor has already decided what is left out
     numbered, extract_refs = message_numbering(
         MessagesPreprocessor(exclude_system=False),
-        **({} if nonce is None else scout_nonce(nonce)),  # pyright: ignore[reportArgumentType]
+        **scout_nonce(nonce),
     )
 
     async def text(messages: list[ChatMessage] | None, unknown: str) -> str:
@@ -263,13 +263,17 @@ async def step_as_str(
     )
 
 
-def scout_nonce(nonce: str) -> dict[str, str]:
+def scout_nonce(nonce: str | None) -> dict[str, str]:
     # Scout 0.5.5 and earlier take no nonce; until this package requires a
     # later Scout, it is passed only to one that takes it. Scout added it to
     # messages_as_str and message_numbering together, so one check serves both
     from inspect_scout import messages_as_str
 
-    return {"nonce": nonce} if "nonce" in signature(messages_as_str).parameters else {}
+    return (
+        {"nonce": nonce}
+        if nonce is not None and "nonce" in signature(messages_as_str).parameters
+        else {}
+    )
 
 
 class _Marks(StoreModel):
