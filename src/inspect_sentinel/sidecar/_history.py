@@ -55,7 +55,7 @@ def record_sent(
 
 
 EXACT_PAIRS = 40_000
-"""How many pairs of messages, one of the earlier request and one of this, are compared to match what follows the beginning two requests share exactly. Past it, they are matched in order instead, so that a request of many messages alike costs time in proportion to its length."""
+"""How many pairs of messages, one of the earlier request and one of this, are compared to match what follows the beginning two requests share exactly. Past it, they are matched in order instead, so that a request of many messages alike costs time in proportion to its length, at the cost of matching a repeated message less well (`_in_order`)."""
 
 
 def _begun(earlier: Sequence[str], keys: Sequence[str]) -> int:
@@ -93,10 +93,11 @@ def _shared(earlier: Sequence[str], keys: Sequence[str], begun: int) -> set[int]
 
 def _in_order(earlier: Sequence[str], keys: Sequence[str]) -> list[int]:
     # Each message of the request matched to the first like it in the
-    # earlier request after the one last matched. For messages alike this
-    # matches as many as the exact matcher; a request that moves a message
-    # ahead of others it shares can match fewer, which counts them again,
-    # and never leaves a new one out.
+    # earlier request after the one last matched. For a run of messages
+    # alike this matches as the exact matcher does. Where the earlier
+    # request holds the same messages scattered before a run of them, a new
+    # repetition can be matched with an earlier one and left out, or a
+    # message counted again, where the exact matcher prefers the run.
     places: dict[str, list[int]] = {}
     for position, key in enumerate(earlier):
         places.setdefault(key, []).append(position)

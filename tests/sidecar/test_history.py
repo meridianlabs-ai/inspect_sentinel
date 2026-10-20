@@ -10,7 +10,7 @@ from inspect_ai.model import (
 )
 from inspect_ai.tool import ToolCall
 
-from inspect_sentinel.sidecar._history import record_sent
+from inspect_sentinel.sidecar._history import EXACT_PAIRS, record_sent
 from inspect_sentinel.sidecar._state import Conversation
 
 
@@ -256,3 +256,38 @@ def test_a_long_request_after_a_compaction_is_matched_in_order() -> None:
         _read("u:Task.", *turns),
         _read("u:Task.", "u:Summary.", *turns[50:], "a:New."),
     ) == ["u:Task.", *turns, "u:Summary.", "a:New."]
+
+
+def test_messages_repeated_past_the_exact_bound_can_be_taken_for_earlier_ones() -> None:
+    # A limit, kept here so that a change to it is seen. The earlier request
+    # holds B, C and D scattered, then A, then B, C and D together; this one
+    # sends B, C and D after a summary, then A again, which is new. Past what
+    # is compared exactly, they are matched in order, with the scattered
+    # ones, so the new A is taken for the earlier one and left out. Compared
+    # exactly, the run would be matched and the new A counted.
+    asides = [f"u:Aside {number}." for number in range(200)]
+    earlier = [
+        "u:B.",
+        "u:X.",
+        "u:C.",
+        "u:Y.",
+        "u:D.",
+        "u:A.",
+        *asides,
+        "u:B.",
+        "u:C.",
+        "u:D.",
+    ]
+    later = [
+        "u:Summary.",
+        "u:B.",
+        "u:C.",
+        "u:D.",
+        "u:A.",
+        *[f"a:New {n}." for n in range(200)],
+    ]
+    assert len(earlier) * len(later) > EXACT_PAIRS
+
+    sent = _sent(_read("u:Task.", *earlier), _read("u:Task.", *later))
+
+    assert sent.count("u:A.") == 1
