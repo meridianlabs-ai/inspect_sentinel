@@ -183,3 +183,43 @@ def test_an_id_the_request_carries_is_known_however_the_body_writes_it(
         "a:",
         "a:",
     ]
+
+
+def test_turns_said_again_after_a_compaction_are_new() -> None:
+    # The request after the compaction continues the compacted one, which it
+    # begins as, though an earlier one shares more with it. What the agent
+    # says again after the summary is new.
+    assert _sent(
+        _read("s:Be brief.", "u:Weather?", "a:Done.", "u:Continue."),
+        _read("s:Be brief.", "u:Weather?", "u:Summary."),
+        _read("s:Be brief.", "u:Weather?", "u:Summary.", "a:Done.", "u:Continue."),
+    ) == [
+        "s:Be brief.",
+        "u:Weather?",
+        "a:Done.",
+        "u:Continue.",
+        "u:Summary.",
+        "a:Done.",
+        "u:Continue.",
+    ]
+
+
+def test_a_compaction_that_keeps_the_latest_turns_continues_the_agents_request() -> (
+    None
+):
+    # a monitor's call that opens alike begins as the compacted request does
+    # for as long as the agent's does, and the agent's shares more
+    assert _sent(
+        _read("u:Task.", "a:One.", "u:Go.", "a:Two.", "u:Go on."),
+        _read("u:Task.", "u:Rate this."),
+        _read("u:Task.", "u:Summary.", "a:Two.", "u:Go on.", "a:Three."),
+    ) == [
+        "u:Task.",
+        "a:One.",
+        "u:Go.",
+        "a:Two.",
+        "u:Go on.",
+        "u:Rate this.",
+        "u:Summary.",
+        "a:Three.",
+    ]

@@ -19,7 +19,7 @@ _NOT_SENT = {"id": None, "source": None, "metadata": None, "model": None}
 
 
 RECENT_REQUESTS = 16
-"""How many of a conversation's latest requests a request is matched against. Requests that open alike share a conversation, such as agents given the same task, and each request is matched against the one it continues; this many such agents taking turns are told apart."""
+"""How many of a conversation's latest requests a request is matched against, to find the one it continues."""
 
 
 def record_sent(
@@ -27,7 +27,7 @@ def record_sent(
 ) -> None:
     """Add what one request of the conversation sent the model to what it has sent.
 
-    A message counts once, as in Inspect's own process. Inspect tells a message it sent before by its id, which a request doesn't carry: each read gives a message a new one. So a request is matched by what each message says, in order, against the earlier request it continues: of the conversation's latest requests, the one it shares most with. Requests that open alike share a conversation, such as an agent's, a monitor's call that opens as the agent's does, and another agent given the same task, so the request just before may not be the one this continues. A message matched there was sent before; any other is new, even one that says what an earlier message said, as a user may say the same thing twice. A compaction that keeps the latest turns behind a summary leaves them matched, and only the summary is new.
+    A message counts once, as in Inspect's own process. Inspect tells a message it sent before by its id, which a request doesn't carry: each read gives a message a new one. So a request is matched by what each message says, in order, against the earlier request it continues. Requests that open alike share a conversation, such as an agent's, a monitor's call that opens as the agent's does, and another agent given the same task, so the request just before may not be that one. Of the conversation's latest requests, it is the one the request begins as, for the most messages, as a request continues the one before it by adding to its end; then the one that shares most with it, as a compaction keeps the opening and the latest turns; then the latest. A message matched there was sent before; any other is new, even one that says what an earlier message said, as a user may say the same thing twice. A compaction that keeps the latest turns behind a summary leaves them matched, and only the summary is new.
 
     Args:
         conversation: The conversation.
@@ -37,16 +37,27 @@ def record_sent(
     carried = _strings(body)
     keys = [_digest(_key(message, carried)) for message in input]
     matched: set[int] = set()
+    best: tuple[int, int] = (-1, -1)
     for earlier in conversation.recent:
+        begun = next(
+            (
+                position
+                for position, (was, now) in enumerate(zip(earlier, keys, strict=False))
+                if was != now
+            ),
+            min(len(earlier), len(keys)),
+        )
+        if begun < best[0]:
+            continue
         found = SequenceMatcher(None, earlier, keys, autojunk=False)
         shared = {
             block.b + offset
             for block in found.get_matching_blocks()
             for offset in range(block.size)
         }
-        # the latest of those that share most, as they come latest last
-        if len(shared) >= len(matched):
-            matched = shared
+        # the latest of those alike, as they come latest last
+        if (begun, len(shared)) >= best:
+            best, matched = (begun, len(shared)), shared
     for position, message in enumerate(input):
         if position not in matched:
             conversation.sent.append(message)
