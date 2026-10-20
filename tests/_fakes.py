@@ -20,7 +20,7 @@ from inspect_sentinel._host import (
     enter_layer,
     running_step,
 )
-from inspect_sentinel._report import Decision, Failed, Report, Reported
+from inspect_sentinel._report import Decision, Escalations, Failed, Report, Reported
 from inspect_sentinel._step import (
     AfterGenerate,
     AfterToolCall,
@@ -32,6 +32,7 @@ from inspect_sentinel._step import (
 
 class Asked(NamedTuple):
     step: Step
+    escalations: Escalations
     choices: tuple[str, ...]
 
 
@@ -58,8 +59,13 @@ class FakeHost:
         self.inputs: list[list[ChatMessage]] = []
         self.offered: list[Offered] = []
 
-    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
-        self.asked.append(Asked(step, tuple(choices)))
+    async def ask_human(
+        self,
+        step: Step,
+        escalations: Escalations,
+        choices: Sequence[str],
+    ) -> HumanAnswer:
+        self.asked.append(Asked(step, escalations, tuple(choices)))
         return self.answers.pop(0)
 
     async def generate(
@@ -185,7 +191,7 @@ def before_tool_call(function: str, /, **arguments: Any) -> BeforeToolCall:
         call=ToolCall(id="call_1", function=function, arguments=arguments),
         view=ToolCallView(),
         input=[],
-        history=[],
+        agent_messages=[],
     )
 
 
@@ -211,7 +217,7 @@ def after_tool_call(
         output=result,
         view=before.view,
         input=before.input,
-        history=before.history,
+        agent_messages=before.agent_messages,
     )
 
 
@@ -220,7 +226,7 @@ def before_generate_step() -> BeforeGenerate:
         model="mockllm/model",
         conversation="c",
         input=[ChatMessageUser(content="go")],
-        history=[ChatMessageUser(content="go")],
+        agent_messages=[ChatMessageUser(content="go")],
         tools=[],
         tool_choice="auto",
         config=GenerateConfig(),
@@ -232,7 +238,7 @@ def after_generate_step() -> AfterGenerate:
         model="mockllm/model",
         conversation="c",
         input=[ChatMessageUser(content="go")],
-        history=[ChatMessageUser(content="go")],
+        agent_messages=[ChatMessageUser(content="go")],
         tools=[],
         tool_choice="auto",
         config=GenerateConfig(),

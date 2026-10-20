@@ -21,13 +21,15 @@ There are two registerable types. A **monitor** observes: it returns an `Observa
 ``` python
 @protocol
 def no_curl() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(context: Context, step: BeforeToolCall, escalations: Escalations) -> Decision | None:
         if "curl" in str(step.call.arguments):
             return Decision.reject("uses curl", message="network access is not allowed")
         return None
 
     return decide
 ```
+
+A protocol's third parameter holds the escalations of the links before it in a `sequential()` (see Composition below); it is empty here. A monitor takes only `(context, step)`, so it never sees what another monitor or protocol decided.
 
 And here is a monitor that scores each tool call, wrapped in the `threshold()` protocol that decides what the score means:
 
@@ -54,7 +56,7 @@ Both run before the tool call executes (the `step` they take is `BeforeToolCall`
 
 Each function handles one stage and never dispatches on the payload type; a protocol that only forwards the step, such as `concurrent`, annotates `Step` to run at every stage.
 
-Every step carries both `input`, exactly what the model was sent for that generate (at the tool stages `None` when no model call produced the call or its record is gone), and `history`, the conversation as the scaffold holds it: at the tool stages the scaffold's full list, pre-compaction turns included; at the generate stages the caller's messages, which may already be compacted. `history` is `None` where the host cannot know that list, under a proxy or in a replay that cannot establish it; in-process Inspect always provides it. Scaffolds edit what they send, so neither list is derivable from the other. A view of everything the model was sent over an agent's run is a separate query, deferred (AISI R10). The tool stages also carry the `tools` that producing call offered, `None` exactly when `input` is, and `AfterToolCall.truncated`, the cut the host made to the result as the log's `ToolEvent` records it: a `Truncation`, `False` for no cut, or `None` when the host cannot tell (AISI R3). Each step also carries a `conversation` id, shared with the loop's `ModelEvent`s and `CompactionEvent`s, that links one agent's steps across compactions when several agents share a sample.
+Every step carries both `input`, exactly what the model was sent for that generate (at the tool stages `None` when no model call produced the call or its record is gone), and `agent_messages`, the conversation as the scaffold holds it: at the tool stages the scaffold's full list, pre-compaction turns included; at the generate stages the caller's messages, which may already be compacted. `agent_messages` is `None` where the host cannot know that list, under a proxy or in a replay that cannot establish it; in-process Inspect always provides it. Scaffolds edit what they send, so neither list is derivable from the other. A third field, `history`, holds everything the model was sent over the agent instance's run (AISI R10): each message once in the order sent, edits kept as versions, `None` when the host cannot produce it (a proxy, or replay for now). The tool stages also carry the `tools` that producing call offered, `None` exactly when `input` is, and `AfterToolCall.truncated`, the cut the host made to the result as the log's `ToolEvent` records it: a `Truncation`, `False` for no cut, or `None` when the host cannot tell (AISI R3). Each step also carries a `conversation` id that links one agent's steps across compactions when several agents share a sample. And each carries `human_decisions`, the answers a person gave through `human()` at earlier steps of that conversation, so a monitor can tell which calls a person already approved (AISI R4); monitors' scores and other protocols' decisions are never in it, so monitors stay independent.
 
 The sentinel API will include a variety of view functions that help with presenting task context and agent actions to the monitor (e.g. like the `messages_as_str()` function in Inspect Scout).
 
@@ -140,8 +142,8 @@ Built-in protocols cover the common compositions and basic control scenarios. `c
 | `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `escalate` \> `proceed`). What a list containing a protocol resolves to. Use for independent guards that must all be satisfied. |
 | `sequential()` | Runs children in order until one decides; first non-`escalate` wins, and escalations are handed to the next link so a human at the end sees who asked and why. Use for a cheap rule ahead of an expensive judge. |
 | `observe_only()` | Records every observation and acts on none. How monitors run with nothing acting, since `Task(sentinel=)` takes no bare monitors, and how a benign score distribution gets collected. |
-| `threshold()` | Acts on scores: `escalate_at`, `reject_at` and `terminate_at` are floors, and the strongest action any score reaches decides; each is one number or a mapping per dimension (`{"audit.sabotage": 0.6, "*": 0.9}`). Escalations carry every monitor's score to `human()` through `step.escalations`. The smallest protocol, and the one calibration feeds. |
-| `human()` | Asks a person whenever it is reached, at the stages named in its required `stages` (`tool_call`, `tool_result`, `model_output`), through `Host.ask_human(step, choices)`. The answer is an ordinary decision: it ends a `sequential()`, and beside other protocols in a `concurrent()` it is one vote; a reject's typed reason is the `message` the agent reads. Put it at the end of a `sequential()` to ask when the links before it escalate, or abstain, as a `threshold()` does when none of its monitors reported. |
+| `threshold()` | Acts on scores: `escalate_at`, `reject_at` and `terminate_at` are floors, and the strongest action any score reaches decides; each is one number or a mapping per dimension (`{"audit.sabotage": 0.6, "*": 0.9}`). Escalations carry every monitor's score to a `human()` after it, in the `escalations` it is handed. The smallest protocol, and the one calibration feeds. |
+| `human()` | Asks a person whenever it is reached, at the stages named in its required `stages` (`tool_call`, `tool_result`, `model_output`), through `Host.ask_human(step, escalations, choices)`, passing on the escalations it was handed. The answer is an ordinary decision: it ends a `sequential()`, and beside other protocols in a `concurrent()` it is one vote; a reject's typed reason is the `message` the agent reads. Put it at the end of a `sequential()` to ask when the links before it escalate, or abstain, as a `threshold()` does when none of its monitors reported. |
 | `resample()` | Above a threshold, draws further completions, scores each, and executes the least suspicious; escalates if none clears. |
 
 ### Writing a Protocol
@@ -166,7 +168,7 @@ def threshold(
         ("escalate", thresholds(escalate_at)),
     ]
 
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(context: Context, step: Step, escalations: Escalations) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None

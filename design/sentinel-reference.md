@@ -40,7 +40,7 @@ The smallest protocol is a rule with no monitors:
 ```python
 @protocol
 def no_curl() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(context: Context, step: BeforeToolCall, escalations: Escalations) -> Decision | None:
         if step.call.function == "bash" and "curl" in step.call.arguments.get("cmd", ""):
             return Decision.reject("uses curl", message="network access is out of bounds")
         return None
@@ -148,11 +148,12 @@ class BeforeGenerate:
     model: str
     conversation: str           # links this agent's steps across compactions
     input: list[ChatMessage]    # exactly what the model is sent
-    history: list[ChatMessage] | None  # the scaffold's full conversation, pre-compaction turns included; None when the host cannot know it
+    agent_messages: list[ChatMessage] | None  # the scaffold's full conversation, pre-compaction turns included; None when the host cannot know it
+    history: list[ChatMessage] | None = field(default=None, kw_only=True)  # every message this agent instance has sent, in order sent; None when the host cannot produce it
+    human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)  # human() decisions at earlier steps of this conversation
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
-    escalations: tuple[Reported[Decision], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -160,12 +161,13 @@ class AfterGenerate:
     model: str
     conversation: str
     input: list[ChatMessage]    # exactly what the model was sent
-    history: list[ChatMessage] | None
+    agent_messages: list[ChatMessage] | None
+    history: list[ChatMessage] | None = field(default=None, kw_only=True)
+    human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
     output: ModelOutput
-    escalations: tuple[Reported[Decision], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -175,8 +177,9 @@ class BeforeToolCall:
     call: ToolCall              # the call as it will execute
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
-    history: list[ChatMessage] | None  # the scaffold's full conversation; None when the host cannot know it
-    escalations: tuple[Reported[Decision], ...] = ()
+    agent_messages: list[ChatMessage] | None  # the scaffold's full conversation; None when the host cannot know it
+    history: list[ChatMessage] | None = field(default=None, kw_only=True)
+    human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
     tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
 
 
@@ -189,8 +192,9 @@ class AfterToolCall:
     output: ToolResult          # the tool's untruncated return value
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
-    history: list[ChatMessage] | None
-    escalations: tuple[Reported[Decision], ...] = ()
+    agent_messages: list[ChatMessage] | None
+    history: list[ChatMessage] | None = field(default=None, kw_only=True)
+    human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
     tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
     truncated: Truncation | Literal[False] | None = None  # the host's cut; False: not cut; None: can't tell
 
@@ -201,17 +205,32 @@ class Truncation:
     limit_bytes: int            # the limit it was cut to
 
 
+@dataclass(frozen=True)
+class HumanDecision:
+    stage: Literal["model_input", "model_output", "tool_call", "tool_result"]  # as SentinelEvent.stage
+    step_id: str                # as SentinelEvent.step_id
+    call_ids: tuple[str, ...]   # the calls it covered: the call at a tool stage, every call in the turn at model_output
+    decided: Reported[Decision] # the human() instance and its decision; the person's reason is the explanation
+
+
+def human_decision_for(step: Step, call_id: str) -> HumanDecision | None: ...  # the latest decision covering the call
+
+
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall
 """The union. Protocols annotate this to run at every stage."""
 ```
 
-Everything in `step` except `conversation`, `truncated` and `escalations` was written or shaped by the agent under observation and can carry prompt injection. Nothing in `context` came from the agent. Treat `step` as evidence and `context` as instructions.
+Everything in `step` except `conversation`, `truncated` and `human_decisions` was written or shaped by the agent under observation and can carry prompt injection. Nothing in `context` came from the agent. Treat `step` as evidence and `context` as instructions.
 
-`escalations` is filled only inside a `sequential()`: when an earlier link returns `escalate`, its report is handed to the next link here, so a human at the end sees who is asking and why. It is empty everywhere else. The reports are written by protocols, but their explanations may quote agent text, so label them as prior verdicts if you render them into a prompt.
+Escalations are not on the step: the payloads hold only facts about the conversation that the host provides, the same live and in replay. A protocol takes them as its third parameter, `async def decide(context, step, escalations)`, with `escalations: Escalations`, the exported alias of `tuple[Reported[Decision], ...]`. It is filled only inside a `sequential()`: when an earlier link returns `escalate`, its report is handed to the next link's protocols here, so a human at the end sees who is asking and why. It is empty everywhere else. A monitor takes `(context, step)` and never sees them, so it cannot read another monitor's score through a `threshold` escalation's `metadata["observations"]`. The reports are written by protocols, but their explanations may quote agent text, so label them as prior verdicts if you render them into a prompt. See `sentinel.md`, "Escalations are a protocol's parameter".
 
-`input` is exactly what the model was sent for this step's generate; `history` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. At the tool stages `input` is `None` when no model call produced the call or the event that recorded it is no longer available (inspect_ai finds it through the transcript's bounded-memory history); it is never approximated from `history`. `history` is `None` when the host cannot know the scaffold's list: a proxy, which sees only the request; a replay from a log that cannot establish the list at that step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`. A monitor that reads it checks for `None` and says the history is unavailable rather than judging an empty list. The tool stages also carry that request's `tools`, `None` exactly when `input` is, and `AfterToolCall.truncated` is the host's cut to the result as `ToolEvent.truncated` records it: a `Truncation` (original size and limit, in bytes) for a cut, `False` for none, `None` when the host cannot tell (proxy, replay from messages). Monitors read it rather than the forgeable "output was too long" notice in `result`; a sandbox output-limit or timeout cut is reported by `result.error` instead. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
+`human_decisions` holds the decisions a person made through `human()` at earlier steps of the same `conversation`, oldest first (AISI R4), for annotating the past calls a person already reviewed when rendering the conversation into a prompt; `human_decision_for(step, call_id)` finds the latest covering a call. They annotate past calls, and are not a standing permission: mark the exact call a decision covers, and never lower suspicion of a new call because it resembles one a person approved. The same command can mean something else once the state has changed (an `rm -rf build/` approved in one working directory deletes something else after a `cd`), and an agent can get a benign call approved and then issue a similar harmful one. A prompt the person cancelled or closed without choosing is recorded as the surface's fail-closed answer, a `reject` or `terminate`, with an explanation that says so (ACP: "ACP client cancelled the permission request."; inspect_ai's own fallback: "The person closed the prompt without choosing; failing closed."): render the explanation, and do not present it as the person's judgment. A step is its stage and step id, so a decision before call X is there at X's `AfterToolCall`, and a turn decision at `AfterGenerate` at each of its calls' tool stages (`call_ids`). Never a decision from the step itself or from a parallel step still running, never one a supersession withdrew, and never another protocol's decision or a monitor's score: a `human()` decision carries only the person's action and reason. It is what the person decided, not the step's outcome, so mark only calls that ran, which have a result without an error in the history (a call rejected before it ran also gets a tool message, with an `approval` error, so a tool message alone does not prove the call ran). `None` when the host cannot tell (a proxy that keeps no record). The person's reason is untrusted text that can quote the agent: quote it, labelled as a prior verdict.
 
-`BeforeToolCall` and `AfterToolCall` are the `Approver` and `Reviewer` payloads with the same fields. `view` and `output` are optional under a proxy, which has no registered tool definitions to render a view from, and `history` is `None` there, since a proxy sees only the request.
+`input` is exactly what the model was sent for this step's generate; `agent_messages` is the scaffold's full conversation, including turns a compaction has folded away. They differ whenever the scaffold edits what it sends (`react` inserts a composed system message; a bridge rewrites the request) and after any compaction, so neither is derived from the other, and the system prompt the model saw is `input[0]`. At the tool stages `input` is `None` when no model call produced the call or the event that recorded it is no longer available (inspect_ai finds it through the transcript's bounded-memory history); it is never approximated from `agent_messages`. `agent_messages` is `None` when the host cannot know the scaffold's list: a proxy, which sees only the request; a replay from a log that cannot establish the list at that step, since a log records the sample's final messages and what the model was sent, not the scaffold's list at each step; or a step with no scaffold conversation behind it. In-process Inspect always provides it, and it is never approximated from `input`. A monitor that reads it checks for `None` and says the history is unavailable rather than judging an empty list. The tool stages also carry that request's `tools`, `None` exactly when `input` is, and `AfterToolCall.truncated` is the host's cut to the result as `ToolEvent.truncated` records it: a `Truncation` (original size and limit, in bytes) for a cut, `False` for none, `None` when the host cannot tell (proxy, replay from messages). Monitors read it rather than the forgeable "output was too long" notice in `result`; a sandbox output-limit or timeout cut is reported by `result.error` instead. `conversation` links one agent's steps across compactions when several agents share a sample. `ModelEvent` and `CompactionEvent` should record the same id; that is a core requirement and is not built yet. See `sentinel.md`, "Two histories".
+
+`history` is every message this agent instance has sent to the model so far, in the order sent: the inputs of its model calls taken together, each message once where it was first sent, so the opening prompts as the model saw them come first and turns a compaction dropped stay. Use it, not `store_as()` state accumulated from `input`, for "what has this agent been told". A message sent again changed appears again as its new version; a message the host rebuilds with a fresh id each call (a configured system message) is not repeated while it is unchanged at the same index, nor when its latest rebuilt copy comes back later. Outputs appear once a later call sends them back, so at `BeforeGenerate` it does not include `input` yet. Only the instance's agent turns count: not a sub-agent's, a parallel agent's, a compaction summary's or a monitor's. A model call a scaffold makes inside its agent loop does count (ControlArena's own monitor, for example); a scaffold keeps one out by running it through `inspect_ai.agent.run()`, as an agent with its own conversation. It is filled for every monitor and protocol while a sentinel runs, and `None` when the host cannot produce it: a proxy, or a replay from a log (not yet recorded). See `sentinel.md`, "The history as sent".
+
+`BeforeToolCall` and `AfterToolCall` are the `Approver` and `Reviewer` payloads with the same fields. `view` and `output` are optional under a proxy, which has no registered tool definitions to render a view from, and `agent_messages` is `None` there, since a proxy sees only the request.
 
 ### Context
 
@@ -525,7 +544,9 @@ Which surfaces exist where:
 | Untruncated tool output | yes | no | no | evidence |
 | `ToolCallView` | yes | no | from events only | evidence |
 | Exact model input (`step.input`) | yes | yes, the request | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
-| Full history, pre-compaction turns included (`step.history`) | yes | proxy: no, `None`; bridged in-process: yes | only where replay can establish it; else `None` | evidence |
+| Full history, pre-compaction turns included (`step.agent_messages`) | yes | proxy: no, `None`; bridged in-process: yes | only where replay can establish it; else `None` | evidence |
+| Every message the agent instance has sent, in order sent (`step.history`) | yes | proxy: no, `None`; bridged in-process: yes, one conversation per bridge | not yet, `None` (R7) | evidence |
+| Earlier `human()` decisions in the conversation (`step.human_decisions`) | yes | no: `None`, unless the proxy keeps its own `ask_human` answers | from `SentinelEvent`s | prior verdicts |
 | Reasoning | provider-dependent | whatever the wire carries | as logged | evidence |
 | System prompt, as the model saw it (`step.input[0]` when present) | yes | yes, but written by the scaffold under observation | from events only | evidence |
 | Tool definitions (`step.tools`; at a tool stage the producing call's), config | yes | yes | from events only; `None` at a tool stage without one | evidence |
@@ -536,7 +557,7 @@ Rules:
 
 - **The system prompt is evidence, not instruction.** In an eval the author wrote it; under a proxy the agent's scaffold did. The briefing in `context.eval` is the only instruction-class input, and outside an eval there is none. The helpers exclude the system prompt by default.
 - **Reasoning is rendered at whatever fidelity exists.** `<thinking>`, `<thinking_summary>`, or `<thinking_redacted/>`, so the prompt says which. Exclude it in the preprocessor to score actions without it. A protocol withholds it from a child by transforming `step` before the call.
-- **A monitor never sees** the sandbox itself, other samples, sibling monitors' reports at the same step, the protocol's thresholds or budget, or whether its own explanation was shown.
+- **A monitor never sees** the sandbox itself, other samples, other monitors' reports, at the same step or earlier (`human_decisions` holds only a person's `human()` answers), the protocol's thresholds or budget, or whether its own explanation was shown.
 
 The helpers, lowest level first. The first two exist in Scout today and move down to `inspect_sentinel`, with Scout re-exporting them:
 
@@ -544,11 +565,11 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 |---|---|
 | `messages_as_str`, `message_as_str`, `MessagesPreprocessor` | Scout's message rendering: roles, tool calls and results, `<thinking>` blocks, media placeholders; exclusions and a `transform` via the preprocessor |
 | `message_numbering()` | `[M1]`-style numbering plus `extract_refs` for citations in explanations |
-| `Excerpt`; `drop_input`, `drop_reasoning`, `drop_tool_usage`, `keep_history`, `keep_system`, `last_turns`, `last_messages`, `new_since_last_report` | **Built (2026-10-13).** An `Excerpt[S]` is the step plus the `input` and `history` to show with it, cut before the step's own part; a `history` of None, where the host cannot provide it, stays None through every window. Each window takes a step or an excerpt and returns an excerpt, cutting `input` and `history` alike, so they compose. `new_since_last_report` keeps the last message shown per conversation and monitor function in the monitor's store, saved only when the function succeeds, so an incremental monitor does not re-read its conversations and does not skip what a failed call was shown |
+| `Excerpt`; `drop_input`, `drop_reasoning`, `drop_tool_usage`, `keep_agent_messages`, `keep_system`, `last_turns`, `last_messages`, `new_since_last_report` | **Built (2026-10-13).** An `Excerpt[S]` is the step plus the `input` and `agent_messages` to show with it, cut before the step's own part; a `agent_messages` of None, where the host cannot provide it, stays None through every window. Each window takes a step or an excerpt and returns an excerpt, cutting `input` and `agent_messages` alike, so they compose. `new_since_last_report` keeps the last message shown per conversation and monitor function in the monitor's store, saved only when the function succeeds, so an incremental monitor does not re-read its conversations and does not skip what a failed call was shown |
 | `call_as_str(call, view=None)` | the Python-call rendering approvers use, honouring a `ToolCallView` |
 | `result_as_str(result, truncated=None)` | a tool result with the truncation (`step.truncated`) marked: that the model saw a cut, and how much was cut |
 | `briefing_as_str(context)`, `step_as_str(excerpt, *, nonce=None, messages_as_str=None)` | the instruction and evidence sections. `step_as_str` is built: `INPUT`, `HISTORY` and an `AGENT STEP` block named for the stage (`[AGENT STEP - BEGIN TOOL CALL]`; `TOOL CALL AND RESULT`, `MODEL REQUEST`, `MODEL REPLY`), each when kept, `HISTORY` only when it holds a message `INPUT` does not, every marker carrying the nonce when one is given (`[END INPUT (3f9a1c7e)]`), rendered with Scout's `messages_as_str` or a numbering one; an unknown model input, and a shown history the host could not provide, are named. Naming other absent surfaces (`view`, untruncated `output`) is not built |
-| `monitor_prompt(context, step, *, question, answer=...)` | the analogue of Scout's `scanner_prompt`: briefing, delimited evidence envelope, escalations as prior verdicts, the question |
+| `monitor_prompt(context, step, *, question, answer=...)` | the analogue of Scout's `scanner_prompt`: briefing, delimited evidence envelope, the question |
 
 ```python
 @monitor
@@ -571,7 +592,7 @@ def suspicion_monitor(model: str | None = None, role: str | None = None) -> Moni
 
 Rules:
 
-- **Use `monitor_prompt` for LLM monitors.** Its default output keeps briefing and evidence in separately labelled sections, wraps evidence in an envelope described as agent-written, and renders escalations as prior verdicts. Do not concatenate context and history yourself.
+- **Use `monitor_prompt` for LLM monitors.** Its default output keeps briefing and evidence in separately labelled sections, and wraps evidence in an envelope described as agent-written. Do not concatenate context and history yourself.
 - **Use `message_numbering` so explanations cite.** Put `extract_refs(explanation)` in `references`, and the cites in the explanation resolve to messages, which Inspect View and Scout's viewer render as links.
 - **Window history with a helper.** `new_since_last_report` is the incremental shape; full history is the safe one. Whichever you choose is visible in the call.
 - **Screenshots need a message-list prompt.** The text helpers render media as placeholders. A monitor that must see an image builds a `list[ChatMessage]` itself, which `Host.generate` accepts.
@@ -613,7 +634,7 @@ def threshold(
         ("escalate", thresholds(escalate_at)),
     ]
 
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(context: Context, step: Step, escalations: Escalations) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None
@@ -632,15 +653,18 @@ def threshold(
     return per_stage(decide, monitors)
 ```
 
-It holds the constants a monitor must not, validates them and its children when it is configured, reads its children's scores through the runner, and returns a decision. Each threshold is a floor, at or above which the step gets at least that action, and the strongest action reached decides. A decision is explained for the log: `explain` names the highest score that reached its threshold and carries its monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`; the decision carries every reporting monitor's references, and `metadata["observations"]` lists each monitor's score and explanation, so they reach a person reviewing an escalation through `step.escalations`; inspect_ai's approval card shows them once its renderer lists them ([pr-series.md](pr-series.md), Deferred, "inspect_ai's human view shows every score"). None sets `message`, so the agent gets the host's default "not approved" text and learns nothing about what the monitors saw, which matters where the agent is the adversary.
+It holds the constants a monitor must not, validates them and its children when it is configured, reads its children's scores through the runner, and returns a decision. Each threshold is a floor, at or above which the step gets at least that action, and the strongest action reached decides. A decision is explained for the log: `explain` names the highest score that reached its threshold and carries its monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host`; the decision carries every reporting monitor's references, and `metadata["observations"]` lists each monitor's score and explanation, so they reach a person reviewing an escalation through the `escalations` a `human()` after it is handed; inspect_ai's approval card shows them once its renderer lists them ([pr-series.md](pr-series.md), Deferred, "inspect_ai's human view shows every score"). None sets `message`, so the agent gets the host's default "not approved" text and learns nothing about what the monitors saw, which matters where the agent is the adversary.
 
 ```python
+
+Escalations: TypeAlias = tuple[Reported[Decision], ...]   # exported: a protocol's third parameter
+
 Protocol: TypeAlias = (
-    Callable[[Context, Step], Awaitable[Decision | None]]
-    | Callable[[Context, BeforeGenerate], Awaitable[Decision | None]]
-    | Callable[[Context, AfterGenerate], Awaitable[Decision | None]]
-    | Callable[[Context, BeforeToolCall], Awaitable[Decision | None]]
-    | Callable[[Context, AfterToolCall], Awaitable[Decision | None]]
+    Callable[[Context, Step, Escalations], Awaitable[Decision | None]]
+    | Callable[[Context, BeforeGenerate, Escalations], Awaitable[Decision | None]]
+    | Callable[[Context, AfterGenerate, Escalations], Awaitable[Decision | None]]
+    | Callable[[Context, BeforeToolCall, Escalations], Awaitable[Decision | None]]
+    | Callable[[Context, AfterToolCall, Escalations], Awaitable[Decision | None]]
 )
 
 Monitors: TypeAlias = Mapping[str, Monitor | MonitorGroup] | Sequence[Monitor | MonitorGroup]
@@ -687,17 +711,23 @@ async def run_monitors(
 
 
 async def run_protocols(
-    protocols: Protocol | ProtocolGroup | Protocols, context: Context, step: Step
+    protocols: Protocol | ProtocolGroup | Protocols,
+    context: Context,
+    step: Step,
+    *,
+    escalations: Sequence[Reported[Decision]] = (),
 ) -> Decisions:
-    """The same, for protocols. Cancels siblings when one returns terminate or calls decide_final()."""
+    """The same, for protocols, each handed `escalations` (none unless given). Cancels siblings when one returns terminate or calls decide_final()."""
 
 
 async def run_children(
     children: Sentinels,
     context: Context,
     step: Step,
+    *,
+    escalations: Sequence[Reported[Decision]] = (),
 ) -> Reports:
-    """Both families in one task group. What concurrent() uses."""
+    """Both families in one task group, the protocols handed `escalations` and the monitors never. What concurrent() and sequential() use."""
 
 
 @dataclass(frozen=True)
@@ -767,7 +797,7 @@ An `escalate` that reaches the root has nobody to hand it to and is treated as a
 | Runs | every child, concurrently | children in order, until one decides |
 | Decides | strongest decision | first non-`escalate` |
 | monitor children | recorded; the observations are available to a parent | recorded; fall through |
-| `escalate` | outranks `proceed`, below `modify`; all-escalate is `escalate` | handed to the next link in `step.escalations`; all-escalate is `escalate` |
+| `escalate` | outranks `proceed`, below `modify`; all-escalate is `escalate` | handed to the next link's protocols as `escalations`; all-escalate is `escalate` |
 | `modify` | honoured only if it was the only decision; otherwise `reject` naming the modifier | honoured; only one link decides |
 | `terminate` | cancels the other children | ends the loop |
 | Use for | independent guards that must all be satisfied | a cheap rule ahead of an expensive judge; a human at the end |
@@ -778,7 +808,7 @@ Rules:
 
 - **Use `sequential()` to ask a person only on escalation.** A `human()` in a `concurrent()`, including the root a top-level list or mapping resolves to, is allowed and asks about every call it is reached on, which can be intended; beside other protocols it is one vote.
 - **Do not expect ordered composition by default.** Ordered-by-default silences children: if A approves, B never runs, and B might have terminated. That is the defect #5423 reported against approval. Concurrent fails safe; its cost is latency and tokens.
-- **`step.escalations` never crosses layers.** A link's `escalate` goes to the next link in its own `sequential`. A `sequential` whose every deciding link escalated returns the last escalate, passing it up; one where only monitors participated returns `proceed`, and one where nothing participated abstains.
+- **Escalations never cross layers.** A link's `escalate` goes to the next link in its own `sequential`, as the `escalations` parameter of its protocols; a monitor link never receives them, and every other composition hands its children none. A `sequential` whose every deciding link escalated returns the last escalate, passing it up; one where only monitors participated returns `proceed`, and one where nothing participated abstains.
 - **An uncovered call proceeds in a `sequential`.** This matches review. The approval adapter keeps approval's `reject` for an uncovered call on its own path. A `sequential` that wants fail-closed ends with a rejecting rule.
 
 `sequential()` as ordinary code over the runner:
@@ -790,12 +820,11 @@ def sequential(children: Sentinels) -> Protocol:
     if not named:
         raise ValueError("sequential needs at least one child.")
 
-    async def run(context: Context, step: Step) -> Decision | None:
-        escalations: list[Reported[Decision]] = []   # starts empty for each run
+    async def run(context: Context, step: Step, escalations: Escalations) -> Decision | None:
+        handed: list[Reported[Decision]] = []   # starts empty for each run, ignoring `escalations`
         participated = False
         for name, child in named:
-            current = replace(step, escalations=tuple(escalations))
-            observations, decisions = await run_children({name: child}, context, current)
+            observations, decisions = await run_children({name: child}, context, step, escalations=handed)
             warn_failed(observations.failed)          # a failed monitor is logged and falls through
             if observations.failed or observations.succeeded:
                 participated = True      # recorded; falls through
@@ -805,9 +834,9 @@ def sequential(children: Sentinels) -> Protocol:
             participated = True
             if strongest.report.action != "escalate":
                 return strongest.report
-            escalations.extend(d for d in decisions if d.report.action == "escalate")
-        if escalations:
-            return escalations[-1].report   # nobody decided; pass it up
+            handed.extend(d for d in decisions if d.report.action == "escalate")
+        if handed:
+            return handed[-1].report   # nobody decided; pass it up
         return Decision.proceed() if participated else None
 
     return run
@@ -820,7 +849,7 @@ def sequential(children: Sentinels) -> Protocol:
 - `stages` is required: any of `"tool_call"`, `"tool_result"` and `"model_output"`. Leaving it out, an empty list, or an unknown or unsupported stage (`"model_input"`) is a configuration error when the factory is called. One function per chosen stage, a `ProtocolGroup` when several.
 - No escalation filter: inside a `sequential` it is reached only when every earlier link watching the stage escalated; alone, `human(stages=["tool_call"])` asks about every call.
 - `choices` use inspect's approval words. Default before a call `approve`, `reject`, `terminate` (`modify` may be offered); after a call and after a generate `approve`, `terminate`, and `reject` or `modify` there is a configuration error.
-- The answer maps `approve` to `proceed`, `reject` to `reject` with the person's reason as both `message` and `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
+- The answer maps `approve` to `proceed` explained by the person's reason, `reject` to `reject` with the person's reason as both `message` and `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
 - The answer is an ordinary decision. Inside a `sequential` it ends that chain; above the chain the usual vote applies, so beside other protocols in a `concurrent()` it is one vote: a peer's `reject` outranks the person's `approve`, and the person's `reject` or `terminate` is not weakened. Human surfaces queue requests, so two `sequential`s that both end in a person prompt one after the other and both answers vote; a `terminate` cancels the other prompt.
 
 It asks through the host:
@@ -833,10 +862,12 @@ class HumanAnswer:
     modified: ToolCall | None = None  # the replacement call for a tool-stage modify
 
 class HostNative(Protocol):  # what a host implements; monitors call it as `context.host.ask_human`
-    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer: ...
+    async def ask_human(
+        self, step: Step, escalations: Escalations, choices: Sequence[str]
+    ) -> HumanAnswer: ...
 ```
 
-The host is handed the step and renders it by its type: the call, its view, the conversation and `step.escalations`, plus the result after a call; after a generate the whole assistant turn, its text and every tool call it makes, with `step.escalations`. It notifies the person, marks the sample as awaiting a person, and raises a clear error for a stage it cannot render. When the person ends the prompt without one of the choices, the host answers `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered. inspect_ai renders the tool stages and `AfterGenerate` with its human approval surfaces, a turn as one view; a proxy implements the same method, e.g. as a review queue.
+`human()` passes on the escalations it was handed. The host is handed the step and renders it by its type, with the escalations: the call, its view and the conversation, plus the result after a call; after a generate the whole assistant turn, its text and every tool call it makes. It notifies the person, marks the sample as awaiting a person, and raises a clear error for a stage it cannot render. When the person ends the prompt without one of the choices, the host answers `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered. inspect_ai renders the tool stages and `AfterGenerate` with its human approval surfaces, a turn as one view; a proxy implements the same method, e.g. as a review queue.
 
 ### Static checking
 
@@ -916,7 +947,7 @@ threshold(
 - **A threshold that can never apply is a configuration error.** It is dead when a stronger action's threshold is at or below it for every score it covers, as `escalate_at=0.9` beside `terminate_at=0.8`; the error names both. A key one mapping lists and another does not is not dead. Configuration also checks well-formed keys, qualified keys naming a configured monitor, and finite values.
 - **Stages.** It runs at each stage its monitors watch, monitors of different stages each thresholded at their own, so a proposed-action monitor and a tool-result monitor combine in one `threshold`. With `reject_at` every monitor must watch only `BeforeToolCall`, since a reject is not legal after a call.
 - **An escalation is answered by what follows it** in a `sequential()`, a `human()` or `handle_escalation()`: `sequential([threshold(monitors, escalate_at=0.6, terminate_at=0.9), human(stages=["tool_call"])])`. One that reaches the root unanswered ends the sample.
-- **Every score reaches the reviewer.** A decision's `metadata["observations"]` lists `{"monitor", "suspicion", "explanation"}` for every monitor that reported at the step, and its references are every reporting monitor's; a `human()` after it finds both in `step.escalations`. inspect_ai's approval card shows them once it renders `metadata["observations"]` ([pr-series.md](pr-series.md), Deferred, "inspect_ai's human view shows every score"); until then it shows the explanation.
+- **Every score reaches the reviewer.** A decision's `metadata["observations"]` lists `{"monitor", "suspicion", "explanation"}` for every monitor that reported at the step, and its references are every reporting monitor's; a `human()` after it finds both in the `escalations` it is handed. inspect_ai's approval card shows them once it renders `metadata["observations"]` ([pr-series.md](pr-series.md), Deferred, "inspect_ai's human view shows every score"); until then it shows the explanation.
 - **The explanation names the highest score that reached the decision's threshold**, the first in configuration order on a tie, with its monitor's explanation: `sabotage 0.72 ≥ 0.60 from audit: <reason>` when the threshold came from the dimension's own key, and `suspicion 0.95 from audit: <reason>` when it came from `"*"` or the monitor reports a single number. It is log-only; the agent gets the default text.
 
 | Protocol | Where | What it does |
@@ -936,7 +967,7 @@ threshold(
 ```python
 @protocol
 def resample(monitors: Monitor | MonitorGroup | Monitors, threshold: float, n: int = 3) -> Protocol:
-    async def decide(context: Context, step: AfterGenerate) -> Decision | None:
+    async def decide(context: Context, step: AfterGenerate, escalations: Escalations) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         score = observations.max_suspicion()
         if score is None or score < threshold:
@@ -1137,7 +1168,7 @@ What each stage sees:
 Rules for portable monitors:
 
 - **Prefer `BeforeGenerate`, `AfterGenerate`, and `BeforeToolCall`.** `AfterToolCall` should decline to fire under a proxy or bridged agent and say why, rather than run on lossy data.
-- **Expect `view`, `output` and `history` to be absent.** A proxy has wire types, not registered tool definitions, and sees only the request, not the scaffold's list. The [rendering helpers](#view) are to name an absent surface in the prompt rather than omit it; today `step_as_str` names an unknown model input and an unknown history, and does not render `view` or `output`.
+- **Expect `view`, `output`, `agent_messages` and `history` to be absent.** A proxy has wire types, not registered tool definitions, and sees only the request, not the scaffold's list or earlier requests. The [rendering helpers](#view) are to name an absent surface in the prompt rather than omit it; today `step_as_str` names an unknown model input and an unknown history, and does not render `view` or `output`.
 - **Expect `terminate` to be best-effort.** In an eval it is total and synchronous. Under a proxy it is an error response plus an out-of-band `host.terminate()`, the same shape as `bridge.request_terminate()`, and the host may not support it. There is no separate set of portable actions. Whether `terminate` works is a property of the host.
 - **Take state from `context.store_as`,** never from an ambient accessor. A proxy has nothing to bind an ambient accessor to.
 - **Keep the module's imports light.** Bundling is per-module because the import closure is a module property. One `import requests` at the top of a file disqualifies every monitor in it. A bundler finds monitors with `ast` alone, which works because monitors are top-level functions.
@@ -1185,7 +1216,7 @@ Issue #5423 proposed that `approval` and `review` accept a dict of named policy 
 | per-monitor events | one `SentinelEvent` per participating child, from the runner |
 | a framework severity order | `terminate > reject > modify > escalate > proceed` in `Decisions.strongest()` |
 | an ordered chain inside each group; `escalate` stays inside it | `sequential()`; escalations never cross layers |
-| a human at the end who sees who escalated and why | `human()`, reading `step.escalations` |
+| a human at the end who sees who escalated and why | `human()`, reading the `escalations` it is handed |
 | named chains, and the name in the log | mapping keys as instance names; `SentinelEvent.path` |
 | a summary event when several chains participated | the top-level `concurrent` event |
 | `terminate` cancels the other chains | `run_protocols` |
@@ -1212,13 +1243,13 @@ What exists today and where it falls short:
 
 State is the biggest gap. An approver is constructed once and called from every sample at once, so `self` is shared across samples. The `Hooks` docstring warns about the same hazard with the same workaround: key a dict by `sample_id` and remember to evict. Nothing carries across the four stages either.
 
-### Why the signature is `(context, step)`
+### Why the signature is `(context, step)`, and a protocol's `(context, step, escalations)`
 
 The two arguments separate what should be happening (context) from what just happened (step). `Solver(state, generate)` and `Scorer(state, target)` are two-argument callbacks, and OpenAI's guardrails also take context first.
 
 The split is also the injection boundary. Everything in `step` is agent-influenced. Nothing in `context` is. Making that a property of the signature rather than of field ordering is the framework's main defence against prompt injection, and it has no runtime cost.
 
-Each argument is one dataclass rather than positional fields because adding a dataclass field breaks nothing, while adding a positional parameter breaks every monitor. The concern is with many positional parameters. Two fixed arguments are fine.
+Each argument is one dataclass rather than positional fields because adding a dataclass field breaks nothing, while adding a positional parameter breaks every monitor. The concern is with many positional parameters. Two fixed arguments are fine, and a protocol's third, `escalations`, is the one exception: see [Why escalations are a protocol's parameter](#why-escalations-are-a-protocols-parameter).
 
 The parameter is named `step` because all four payloads describe one step in the agent's trajectory, and `step.call`, `step.output`, and `step.history` read naturally. The payloads are named before/after rather than for the object they wrap because `BeforeToolCall` has a `call` field and `AfterGenerate` has an `output` field, which would collide.
 
@@ -1290,9 +1321,9 @@ A constructor, `protocol(monitors, decide=...)`, with the framework invoking the
 
 Many people will want a chain, and a chain is what approval users know. But ordered-by-default silences monitors: if A approves, B never runs, and B might have terminated. That is the defect #5423 reported. Concurrent fails safe, with latency and tokens as the cost. A default is hard to change later without silently changing every configuration, so the safe one is chosen now and `sequential()` is one explicit word. The most common mistake the wrong default would produce, a `human()` in a concurrent group, is not an error, since asking about every call can be intended; the docs recommend `sequential()` for asking only on escalation.
 
-### Why `escalations` is on the step
+### Why escalations are a protocol's parameter
 
-A `sequential` hands earlier escalations to the next link so a human sees who is asking and why. #5423 did this by appending to `view.context`, but `view` exists only on the tool stages and is absent under a proxy. A field on all four payloads works everywhere. It is on `step` rather than `Context` because it changes per step, and `Context` is constant for the sample. It is the one field on `step` that protocols wrote rather than the agent, so the injection rule names it as the exception.
+A `sequential` hands earlier escalations to the next link so a human sees who is asking and why. #5423 did this by appending to `view.context`, but `view` exists only on the tool stages and is absent under a proxy. Until 2026-10-14 they were a field on all four payloads, which `sequential` set with `replace()`. That put chain state on the step, which otherwise holds only facts about the conversation that the host provides and that read the same live and in replay, and it let a monitor after a `threshold` in a chain read the escalation, including every other monitor's score in its `metadata["observations"]`, which breaks monitor independence. So a protocol takes them as a third parameter, and a monitor's two-parameter signature means it cannot receive them. Not on `Context`, which is constant for the sample; not a context variable, which is hidden state; not an `oversight` sub-object on the step, which is still the step.
 
 ### Why `decide_final()` is control flow
 
@@ -1459,7 +1490,7 @@ What keeps the simple case simple:
 19. **`ControlProtocol` or `Protocol`?** Settled: `Protocol`, pairing with `@protocol` as `Tool` pairs with `@tool`. The collision with `typing.Protocol` is accepted: a monitor author's file rarely defines structural types, the package imports typing's under an alias, and the docs say "a control protocol, not `typing.Protocol`" on first use.
 20. **Should `sequential` and `concurrent` accept monitors at all?** They do here, recorded and falling through, so that a mixed top-level list has a meaning and a `sequential` can carry a scorer beside its rules. The alternative is protocols only, with `observe_only()` as the way to record a monitor.
 21. **What is the umbrella called?** Settled: `sentinel`, for the feature, `Task(sentinel=)`, the package and the event, with `monitor` kept for the scorer and `protocol` for the decider. `Task(monitor=)` read as "the monitor plus the protocol".
-22. **Where does `conversation` come from, and is `history` eager?** In-process the dispatcher takes the current agent span's id (the sample uuid outside any agent span); whether `AgentState` should carry it instead is open. `history` is a reference in-process and `None` under a proxy; a replay that reconstructs it materialises it per step, O(n) per step unless the runner hands out a shared, append-only view.
+22. **Where does `conversation` come from, and is `agent_messages` eager?** In-process the dispatcher takes the current agent span's id (the sample uuid outside any agent span); whether `AgentState` should carry it instead is open. `agent_messages` is a reference in-process and `None` under a proxy; a replay that reconstructs it materialises it per step, O(n) per step unless the runner hands out a shared, append-only view.
 23. **Is `decide_final()` the right design at all?** Any protocol at any depth, third-party code inside `observe_only()` or `threshold()` included, can call it and bypass every layer above, while this design presents child decisions as advisory to the parent. The options to weigh: a declared capability (`@protocol(final=True)`, recorded in the registry and the log, with an undeclared call raising); parent control (`allow_final=` on a layer, or finalization only at the root); containment (`shadow()`); or a different mechanism. `human()` no longer uses it, which weakens the case for keeping it.
 24. **What should an `escalate` that reaches the root mean?** Today the step proceeds, is recorded as the root's decision, and the host warns once per process. The alternatives are rejecting it (fail-closed, as approval does when every approver escalates) or a setting with a chosen default. Rejecting turns every unsure rule into a blocked call.
 25. **How do `review=` and tool approvers migrate?** Is `review=` deprecated in favour of after-call protocols, as [Relationship to approval and review](#relationship-to-approval-and-review) proposes? How does `approval=` coexist with `sentinel=`? The ordering is already written down: approval and then the sentinel before a call, review and then the sentinel after. Can an existing approver run as a protocol through an `as_protocol(approver)` adapter? Tracked in `pr-series.md`, Deferred.

@@ -18,7 +18,12 @@ from inspect_sentinel import (
 )
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
-from inspect_sentinel._report import Action, Decision, Observation
+from inspect_sentinel._report import (
+    Action,
+    Decision,
+    Escalations,
+    Observation,
+)
 from inspect_sentinel._resolve import resolve_sentinel
 from inspect_sentinel._runner import run_monitors, run_sentinel
 from inspect_sentinel._step import BeforeToolCall, Step
@@ -46,7 +51,9 @@ def scores(value: float = 0.5) -> Monitor:
 
 @protocol
 def says(action: Action = "proceed") -> Protocol:
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
         return Decision(action=action)
 
     return decide
@@ -151,7 +158,9 @@ async def test_a_cancelled_monitor_is_not_recorded_as_failed() -> None:
 
     @protocol
     def stops() -> Protocol:
-        async def decide(context: Context, step: Step) -> Decision | None:
+        async def decide(
+            context: Context, step: Step, escalations: Escalations
+        ) -> Decision | None:
             await started.wait()
             return Decision.terminate()
 
@@ -350,7 +359,11 @@ async def test_sequential_records_a_failed_monitor_and_falls_through(
 
 @protocol
 def tolerant(monitors: dict[str, Monitor], reject_at: float) -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if observations.failed and not observations.succeeded:
             return Decision.escalate("every monitor failed")

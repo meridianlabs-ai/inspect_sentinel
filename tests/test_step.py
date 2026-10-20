@@ -11,7 +11,6 @@ from inspect_ai.model import (
 )
 from inspect_ai.tool import ToolCall, ToolCallView, ToolResult
 
-from inspect_sentinel._report import Decision, Reported
 from inspect_sentinel._step import (
     AfterGenerate,
     AfterToolCall,
@@ -41,7 +40,7 @@ def _history() -> list[ChatMessage]:
     ]
 
 
-def test_before_tool_call_defaults_to_no_escalations() -> None:
+def test_before_tool_call_holds_the_hosts_lists() -> None:
     model_input, history = _input(), _history()
     step = BeforeToolCall(
         conversation="conv",
@@ -49,30 +48,10 @@ def test_before_tool_call_defaults_to_no_escalations() -> None:
         call=_call(),
         view=ToolCallView(),
         input=model_input,
-        history=history,
+        agent_messages=history,
     )
-    assert step.escalations == ()
     assert step.input is model_input
-    assert step.history is history
-
-
-def test_before_tool_call_carries_escalations() -> None:
-    escalation = Reported(
-        name="guard",
-        path="attempt/guard",
-        report=Decision.escalate("unsure"),
-        function="decide",
-    )
-    step = BeforeToolCall(
-        conversation="conv",
-        message="ok",
-        call=_call(),
-        view=ToolCallView(),
-        input=_input(),
-        history=_history(),
-        escalations=(escalation,),
-    )
-    assert step.escalations == (escalation,)
+    assert step.agent_messages is history
 
 
 def test_after_tool_call_holds_result_and_untruncated_output() -> None:
@@ -84,7 +63,7 @@ def test_after_tool_call_holds_result_and_untruncated_output() -> None:
         output="the full untruncated output",
         view=ToolCallView(),
         input=_input(),
-        history=_history(),
+        agent_messages=_history(),
     )
     assert step.result.content == "short"
     assert step.output == "the full untruncated output"
@@ -100,7 +79,7 @@ def test_after_tool_call_output_may_be_structured_content() -> None:
         output=output,
         view=ToolCallView(),
         input=_input(),
-        history=_history(),
+        agent_messages=_history(),
     )
     assert step.output == output
 
@@ -112,7 +91,7 @@ def test_tool_steps_default_to_no_tools_and_no_truncation() -> None:
         call=_call(),
         view=ToolCallView(),
         input=None,
-        history=_history(),
+        agent_messages=_history(),
     )
     after = AfterToolCall(
         conversation="conv",
@@ -122,7 +101,7 @@ def test_tool_steps_default_to_no_tools_and_no_truncation() -> None:
         output="out",
         view=ToolCallView(),
         input=None,
-        history=_history(),
+        agent_messages=_history(),
     )
     assert before.tools is None
     assert after.tools is None

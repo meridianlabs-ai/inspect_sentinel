@@ -3,14 +3,14 @@
 A *monitor* observes a step of an agent's execution and reports a suspicion score. A *protocol* decides what happens at that step, optionally after consulting monitors. See `design/` for the design these will implement.
 """
 
-from ._context import Context, EvalContext
+from ._context import Context, EvalContext, InspectSample, ProxyContext
 from ._decorators import monitor, protocol
 from ._excerpt import (
     Excerpt,
     drop_input,
     drop_reasoning,
     drop_tool_usage,
-    keep_history,
+    keep_agent_messages,
     keep_system,
     last_messages,
     last_turns,
@@ -31,6 +31,7 @@ from ._protocols import (
 from ._report import (
     Action,
     Decision,
+    Escalations,
     Failed,
     Observation,
     Report,
@@ -50,8 +51,10 @@ from ._step import (
     AfterToolCall,
     BeforeGenerate,
     BeforeToolCall,
+    HumanDecision,
     Step,
     Truncation,
+    human_decision_for,
 )
 from ._types import (
     Monitor,
@@ -79,11 +82,14 @@ __all__ = [
     "Context",
     "Decision",
     "Decisions",
+    "Escalations",
     "EvalContext",
     "Excerpt",
     "Failed",
     "Host",
     "HumanAnswer",
+    "HumanDecision",
+    "InspectSample",
     "Monitor",
     "MonitorFailedError",
     "MonitorGroup",
@@ -93,6 +99,7 @@ __all__ = [
     "PortabilityError",
     "Protocol",
     "ProtocolGroup",
+    "ProxyContext",
     "Protocols",
     "Report",
     "Reported",
@@ -111,7 +118,8 @@ __all__ = [
     "find_words",
     "handle_escalation",
     "human",
-    "keep_history",
+    "human_decision_for",
+    "keep_agent_messages",
     "keep_system",
     "last_messages",
     "last_turns",

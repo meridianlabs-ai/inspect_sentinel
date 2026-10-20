@@ -1,0 +1,479 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "JudgeReplyParams": {
+      "description": "Parameters of `judge_reply`: a provider's reply, held whole before the caller is sent any of it.",
+      "properties": {
+        "id": {
+          "description": "The `id` of the request this is the reply to.",
+          "title": "Id",
+          "type": "string"
+        },
+        "provider": {
+          "description": "The provider whose format the body is in, such as `anthropic` or `openai`. Where `format` is given, the body is read by `format`, and this can be any name the proxy has for the provider.",
+          "title": "Provider",
+          "type": "string"
+        },
+        "format": {
+          "anyOf": [
+            {
+              "enum": [
+                "anthropic-messages",
+                "openai-chat",
+                "openai-responses"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which API the body is written in: `anthropic-messages`, `openai-chat` or `openai-responses`. A proxy that knows says, and the body is then read as that, whatever `provider` is. Without it, the API is worked out from `provider` and the body.",
+          "title": "Format"
+        },
+        "model": {
+          "description": "The model, by the name the proxy shows for it.",
+          "title": "Model",
+          "type": "string"
+        },
+        "user": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Who the proxy signed the caller in as.",
+          "title": "User"
+        },
+        "status": {
+          "description": "The HTTP status of the provider's reply.",
+          "title": "Status",
+          "type": "integer"
+        },
+        "content_type": {
+          "description": "The reply's content type, which says whether it is one JSON object or a stream of events.",
+          "title": "Content Type",
+          "type": "string"
+        },
+        "body": {
+          "description": "The reply's body, as base64.",
+          "title": "Body",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "model",
+        "status",
+        "content_type",
+        "body"
+      ],
+      "title": "JudgeReplyParams",
+      "type": "object"
+    },
+    "JudgeRequestParams": {
+      "description": "Parameters of `judge_request`: a model request, before it goes to the provider.",
+      "properties": {
+        "id": {
+          "description": "Chosen by the proxy, and given again with the reply to this request.",
+          "title": "Id",
+          "type": "string"
+        },
+        "provider": {
+          "description": "The provider whose format the body is in, such as `anthropic` or `openai`. Where `format` is given, the body is read by `format`, and this can be any name the proxy has for the provider.",
+          "title": "Provider",
+          "type": "string"
+        },
+        "format": {
+          "anyOf": [
+            {
+              "enum": [
+                "anthropic-messages",
+                "openai-chat",
+                "openai-responses"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which API the body is written in: `anthropic-messages`, `openai-chat` or `openai-responses`. A proxy that knows says, and the body is then read as that, whatever `provider` is. Without it, the API is worked out from `provider` and the body.",
+          "title": "Format"
+        },
+        "model": {
+          "description": "The model, by the name the proxy shows for it.",
+          "title": "Model",
+          "type": "string"
+        },
+        "user": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Who the proxy signed the caller in as.",
+          "title": "User"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The caller's request headers the proxy passes on, without credentials. They are the caller's claims.",
+          "title": "Headers",
+          "type": "object"
+        },
+        "body": {
+          "additionalProperties": true,
+          "description": "The request's JSON body.",
+          "title": "Body",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "model",
+        "body"
+      ],
+      "title": "JudgeRequestParams",
+      "type": "object"
+    },
+    "PassResult": {
+      "description": "Send the request or the reply on as it is.",
+      "properties": {
+        "action": {
+          "const": "pass",
+          "default": "pass",
+          "title": "Action",
+          "type": "string"
+        }
+      },
+      "title": "PassResult",
+      "type": "object"
+    },
+    "RefuseResult": {
+      "description": "Send nothing on, and answer the caller with an error.",
+      "properties": {
+        "action": {
+          "const": "refuse",
+          "default": "refuse",
+          "title": "Action",
+          "type": "string"
+        },
+        "status": {
+          "description": "The HTTP status of the error.",
+          "maximum": 599,
+          "minimum": 400,
+          "title": "Status",
+          "type": "integer"
+        },
+        "message": {
+          "description": "What the caller is told.",
+          "title": "Message",
+          "type": "string"
+        },
+        "sentinel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelField"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "For an Inspect client: what was decided. The proxy hook puts it into the error it sends the caller, as a top-level `sentinel` field beside the error's own, without reading it."
+        }
+      },
+      "required": [
+        "status",
+        "message"
+      ],
+      "title": "RefuseResult",
+      "type": "object"
+    },
+    "ReplaceReplyResult": {
+      "description": "Send the caller this reply body in place of the provider's. An Inspect client's reply is always replaced, to add the `sentinel` field.",
+      "properties": {
+        "action": {
+          "const": "replace",
+          "default": "replace",
+          "title": "Action",
+          "type": "string"
+        },
+        "body": {
+          "description": "The reply's body, as base64.",
+          "title": "Body",
+          "type": "string"
+        }
+      },
+      "required": [
+        "body"
+      ],
+      "title": "ReplaceReplyResult",
+      "type": "object"
+    },
+    "ReplaceRequestResult": {
+      "description": "Send this request body to the provider in place of the one that was sent.",
+      "properties": {
+        "action": {
+          "const": "replace",
+          "default": "replace",
+          "title": "Action",
+          "type": "string"
+        },
+        "body": {
+          "additionalProperties": true,
+          "description": "The request's JSON body.",
+          "title": "Body",
+          "type": "object"
+        }
+      },
+      "required": [
+        "body"
+      ],
+      "title": "ReplaceRequestResult",
+      "type": "object"
+    },
+    "SentinelField": {
+      "description": "What a sentinel decided during one exchange, for an Inspect client: the `sentinel` field.",
+      "properties": {
+        "version": {
+          "const": 1,
+          "default": 1,
+          "description": "The version of the field.",
+          "title": "Version",
+          "type": "integer"
+        },
+        "outcome": {
+          "description": "What the exchange came to: `proceed` when the reply goes on, `reject` when the model's turn was refused and the run goes on, and `terminate` when the run has ended, in this exchange or before it.",
+          "enum": [
+            "proceed",
+            "reject",
+            "terminate"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "trimmed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "True when the sidecar was told not to send results, so each step holds only what Inspect acts on: its stage, its call, `original`, and its decision's action, message and modified call.",
+          "title": "Trimmed"
+        },
+        "steps": {
+          "description": "Every step judged during the exchange, in the order they were judged. A step that ended the run is the last. Empty when the run had already ended.",
+          "items": {
+            "$ref": "#/$defs/SentinelStep"
+          },
+          "title": "Steps",
+          "type": "array"
+        },
+        "withheld": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WithheldTurn"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model's turn, when the client was refused it because a call in it was rejected."
+        },
+        "proposed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WithheldTurn"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model's turn as it proposed it, when the client was handed it with calls taken out because they were rejected. `results` holds what the model is told of each call taken out. The sidecar puts those calls and results back in each later request of the conversation that doesn't already hold them."
+        }
+      },
+      "required": [
+        "outcome",
+        "steps"
+      ],
+      "title": "SentinelField",
+      "type": "object"
+    },
+    "SentinelStep": {
+      "description": "One step judged during an exchange.",
+      "properties": {
+        "stage": {
+          "description": "Where the step was judged, as Inspect's sentinel events name it.",
+          "enum": [
+            "model_input",
+            "model_output",
+            "tool_call",
+            "tool_result"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "call": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The id of the tool call, at a tool stage.",
+          "title": "Call"
+        },
+        "original": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The call the model proposed, as Inspect writes a tool call. There only when the client is not handed the call as the model proposed it.",
+          "title": "Original"
+        },
+        "decision": {
+          "additionalProperties": true,
+          "description": "The step's final decision, as the core package writes a `Decision`.",
+          "title": "Decision",
+          "type": "object"
+        },
+        "recorded": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What each monitor and protocol recorded for the step. Left out of a trimmed field.",
+          "title": "Recorded"
+        }
+      },
+      "required": [
+        "stage",
+        "decision"
+      ],
+      "title": "SentinelStep",
+      "type": "object"
+    },
+    "WithheldTurn": {
+      "description": "The model's turn, which the client was refused.",
+      "properties": {
+        "message": {
+          "additionalProperties": true,
+          "description": "The model's message, every call in it included, as Inspect writes a `ChatMessageAssistant`.",
+          "title": "Message",
+          "type": "object"
+        },
+        "results": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "What the model is told happened to each of its calls, by call id. The sidecar adds the turn and these results to each later request of the conversation that doesn't already hold the turn.",
+          "title": "Results",
+          "type": "object"
+        }
+      },
+      "required": [
+        "message",
+        "results"
+      ],
+      "title": "WithheldTurn",
+      "type": "object"
+    }
+  },
+  "title": "Inspect Sentinel: the endpoint for proxies",
+  "description": "JSON-RPC 2.0 methods, POSTed to /proxy/v1. `methods` names the definition that a method's `params` fit, and the definitions that its `result` fits one of. `errors` lists the codes of the JSON-RPC errors that say a call was not judged, and what a proxy hook does on each.",
+  "methods": {
+    "judge_request": {
+      "params": {
+        "$ref": "#/$defs/JudgeRequestParams"
+      },
+      "result": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/PassResult"
+          },
+          {
+            "$ref": "#/$defs/ReplaceRequestResult"
+          },
+          {
+            "$ref": "#/$defs/RefuseResult"
+          }
+        ]
+      }
+    },
+    "judge_reply": {
+      "params": {
+        "$ref": "#/$defs/JudgeReplyParams"
+      },
+      "result": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/PassResult"
+          },
+          {
+            "$ref": "#/$defs/ReplaceReplyResult"
+          },
+          {
+            "$ref": "#/$defs/RefuseResult"
+          }
+        ]
+      }
+    }
+  },
+  "errors": {
+    "-32003": {
+      "name": "unreadable",
+      "description": "The request or reply couldn't be read, so it was not judged. A proxy hook refuses the call, unless its operator has chosen to let calls that weren't judged through."
+    },
+    "-32004": {
+      "name": "sentinel_failed",
+      "description": "The sentinel failed, so the request or reply was not judged. A proxy hook refuses the call, unless its operator has chosen to let calls that weren't judged through."
+    },
+    "-32005": {
+      "name": "time_limit",
+      "description": "The sentinel didn't finish judging within the sidecar's time limit, and was cancelled. A proxy hook refuses the call, unless its operator has chosen to let calls that weren't judged through."
+    },
+    "-32006": {
+      "name": "unregistered",
+      "description": "The request names a sample that a task registered with the sidecar beforehand doesn't hold, so it is not part of the eval that was registered. A proxy hook refuses the call, unless its operator has chosen to let calls that weren't judged through."
+    }
+  }
+}

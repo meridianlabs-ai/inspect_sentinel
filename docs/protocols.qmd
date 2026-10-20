@@ -10,7 +10,7 @@ This page is an outline: a summary and the sections planned for it, not yet the 
 
 ## Overview
 
-How to write a protocol: a `@protocol` factory returning a function that returns a `Decision`. Covers rules (protocols with no children), the five actions and where each is legal, what the agent is told (`message`) versus what the log records (`explanation`), modifying a tool call, and protocols that consult monitors or other protocols through the runner.
+How to write a protocol: a `@protocol` factory returning a function that takes a `Context`, a step and the escalations handed to it, and returns a `Decision`. Covers rules (protocols with no children), the five actions and where each is legal, what the agent is told (`message`) versus what the log records (`explanation`), modifying a tool call, and protocols that consult monitors or other protocols through the runner.
 
 ## Planned Sections
 
@@ -25,6 +25,7 @@ How to write a protocol: a `@protocol` factory returning a function that returns
 - Taking children as a parameter, and naming them
 - The boundary check: shape errors raised before a decision takes effect
 - Running at every stage with `Step`
+- Reading `escalations`, the third parameter, annotated `Escalations`: the escalations of the links before a protocol in a `sequential()`, each a `Reported[Decision]` with the escalating instance's name and its explanation, empty anywhere else; a monitor never receives them. Handing them on to children with `run_protocols(..., escalations=...)` or `run_children(..., escalations=...)`
 - Shipping protocols in a package
 
 ## Helpers for Rules
@@ -45,6 +46,7 @@ from inspect_sentinel import (
     BeforeToolCall,
     Context,
     Decision,
+    Escalations,
     Protocol,
     call_text,
     find_words,
@@ -57,7 +59,11 @@ INSTALL_WORDS = ["pip install", "npm install", "apt-get install"]
 
 @protocol
 def installs() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         if not tool_matches(step.call, "bash", case_sensitive=False):
             return None
         found = find_words(call_text(step.call), INSTALL_WORDS)
