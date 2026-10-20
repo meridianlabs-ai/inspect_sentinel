@@ -168,6 +168,11 @@ class _Exchange:
         self._passing = False
         # the reply, judged as it arrives, and whether its body ends at trailers
         self._stream: ReplyStream | None = None
+        # delivering the stream's output, which only forwards it, so it ends
+        # with the exchange while the stream's judging goes on
+        self._delivery: asyncio.Task[None] | None = None
+        # the request was sent on to the provider, and a reply is owed
+        self._forwarded = False
         self._body_ended = False
         self._trailers = False
         # the answers for Envoy, in order, which end with None
@@ -206,9 +211,14 @@ class _Exchange:
         return await self._answers.get()
 
     async def close(self) -> None:
-        """Stop the reply's stream if it hasn't ended, as when Envoy has stopped waiting."""
+        """Stop the reply's stream if it hasn't ended, as when Envoy has stopped waiting. A request sent on whose reply never began is recorded as cut off."""
+        if self._delivery is not None:
+            self._delivery.cancel()
         if self._stream is not None:
             await self._stream.abort()
+        elif self._forwarded and not self._replied:
+            self._replied = True
+            await self._handler.reply_not_judged(self._id, "cut_off")
 
     async def _answer(self, answer: pb.ProcessingResponse) -> None:
         await self._answers.put(answer)
@@ -276,7 +286,8 @@ class _Exchange:
             return [judged]
         if judged.request_body.response.HasField("body_mutation"):
             # the handler replaced a request that has no body to replace,
-            # which Envoy can't be told to send
+            # which Envoy can't be told to send, so it doesn't go on
+            self._forwarded = False
             return [
                 self._refuse(
                     500,
@@ -309,6 +320,7 @@ class _Exchange:
         )
         if isinstance(answer, Refuse):
             return self._refusal(answer)
+        self._forwarded = True
         if isinstance(answer, Pass):
             return pb.ProcessingResponse(
                 request_body=pb.BodyResponse(response=pb.CommonResponse())
@@ -332,6 +344,8 @@ class _Exchange:
     async def _response_headers(
         self, headers: pb.HttpHeaders
     ) -> list[pb.ProcessingResponse]:
+        # the reply has begun, and is answered from here on
+        self._replied = True
         received = _read(headers.headers)
         self._status = int(received.get(":status", "0") or 0)
         self._content_type = received.get("content-type", "")
@@ -365,7 +379,7 @@ class _Exchange:
             )
             # the stream's judging outlives Envoy's stream, as a judgment does
             self._spawn(self._stream.run())
-            self._spawn(self._deliver(self._stream))
+            self._delivery = asyncio.ensure_future(self._deliver(self._stream))
             return [
                 pb.ProcessingResponse(
                     response_headers=pb.HeadersResponse(response=pb.CommonResponse())

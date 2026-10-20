@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
@@ -526,3 +526,65 @@ def test_envoys_protos_load_beside_another_copy_of_them(
     )
 
     assert loaded.returncode == 0, loaded.stderr
+
+
+async def _until_blocked() -> None:
+    # every task waits on something, which the shim's tasks do once settled
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+
+def _delivering() -> list[asyncio.Task[Any]]:
+    return [
+        task
+        for task in asyncio.all_tasks()
+        if "_deliver" in repr(task.get_coro()) and not task.done()
+    ]
+
+
+@pytest.mark.anyio(backends=["asyncio"])
+async def test_nothing_is_left_delivering_once_envoy_stops_reading() -> None:
+    shim = EnvoyShim(Handler(weather_rule()), max_body_bytes=1024 * 1024)
+
+    async def sent() -> AsyncIterator[pb.ProcessingRequest]:
+        for each in [*_REQUEST, *_reply(message(weather("Paris")))]:
+            yield each
+        await asyncio.Event().wait()
+
+    answers = cast(
+        AsyncGenerator[pb.ProcessingResponse],
+        shim.Process(sent(), cast(Any, _Context(_ANTHROPIC))),
+    )
+    # the request's answers, and then nothing more is read: the reply's
+    # answers wait to be delivered
+    await answers.__anext__()
+    await answers.__anext__()
+    await _until_blocked()
+    await answers.aclose()
+    await _until_blocked()
+
+    assert _delivering() == []
+
+
+@pytest.mark.anyio(backends=["asyncio"])
+async def test_a_request_sent_on_whose_reply_never_began_is_recorded_as_cut_off() -> (
+    None
+):
+    handler = Handler(weather_rule())
+    shim = EnvoyShim(handler, max_body_bytes=1024 * 1024)
+
+    async def sent() -> AsyncIterator[pb.ProcessingRequest]:
+        for each in [_from_inspect(), _REQUEST[1]]:
+            yield each
+        await asyncio.Event().wait()
+
+    answers = cast(
+        AsyncGenerator[pb.ProcessingResponse],
+        shim.Process(sent(), cast(Any, _Context(_ANTHROPIC))),
+    )
+    await answers.__anext__()
+    await answers.__anext__()
+    # Envoy goes away before the provider's reply begins
+    await answers.aclose()
+
+    assert await _not_judged(handler) == ("not_judged", "cut_off")
