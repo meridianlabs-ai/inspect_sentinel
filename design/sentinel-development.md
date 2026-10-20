@@ -45,13 +45,13 @@ Three things fall out of this that the rest of the document works through:
 
 ## Packages
 
-`inspect_sentinel` is its own distribution, to depend only on `inspect_core` once that is extracted (see `inspect-core.md`; today it depends on `inspect_ai`). The chain is then:
+`inspect_sentinel` is its own distribution, to depend only on `inspect_core` once that is extracted (see `inspect-core.md`; today it depends on `inspect_ai`, and on `inspect_scout` for message rendering until that moves into inspect_ai, [pr-series.md](pr-series.md)). The chain is then:
 
 ```
 inspect_core  ←  inspect_sentinel  ←  inspect_ai  ←  inspect_scout
 ```
 
-Scout already depends on Inspect, so it gets `inspect_sentinel` transitively and the adapter lives in Scout with no new dependency. What goes where:
+Sentinel's dependency on Scout has to go before inspect_ai depends on sentinel, or the chain is a cycle. Scout already depends on Inspect, so it gets `inspect_sentinel` transitively and the adapter lives in Scout with no new dependency. What goes where:
 
 | Where | What | Why there |
 |------------------------|------------------------|------------------------|

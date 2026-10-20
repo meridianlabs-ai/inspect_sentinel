@@ -27,10 +27,10 @@ pip install inspect-sentinel
 
 It requires `inspect-ai` 0.3.278 or later, the first release with `Task(sentinel=...)` and the transcript events and viewer support that sentinels use.
 
-The example below uses an OpenAI model for the agent and an Anthropic model for the monitor, so install those providers' packages and set their API keys. Its LLM monitor also needs `inspect-scout`, which renders the agent's step for the monitor's model and is not yet a dependency of this package:
+The example below uses an OpenAI model for the agent and an Anthropic model for the monitor, so install those providers' packages and set their API keys.
 
 ```{.bash filename="Terminal"}
-pip install openai anthropic inspect-scout
+pip install openai anthropic
 export OPENAI_API_KEY=...     # the agent
 export ANTHROPIC_API_KEY=...  # the monitor
 ```

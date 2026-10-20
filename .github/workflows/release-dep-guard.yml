@@ -1,12 +1,12 @@
 name: Release dependency guard
 
 # Block *releases* that still point a runtime dependency at a git ref (e.g.
-# `inspect_ai @ git+...@main`). `main` names inspect_ai by a PyPI floor, and
-# development tracks inspect_ai's `main` by installing it rather than naming it
-# (CONTRIBUTING.md), so nothing should trip this; it is the backstop should a
-# git ref come back. It only gates the Release Please release PR — a package
-# must be pinned to a *released* version before it ships (PyPI rejects
-# direct-reference deps, and a git ref is not reproducible).
+# `inspect_ai @ git+...@main`). `main` names inspect_ai and inspect_scout by
+# PyPI floors, and development tracks their `main` by installing them rather
+# than naming them (CONTRIBUTING.md), so nothing should trip this; it is the
+# backstop should a git ref come back. It only gates the Release Please release
+# PR — a package must be pinned to a *released* version before it ships (PyPI
+# rejects direct-reference deps, and a git ref is not reproducible).
 
 on:
   pull_request:

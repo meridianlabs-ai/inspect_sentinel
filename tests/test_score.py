@@ -22,7 +22,6 @@ from inspect_sentinel import (
     Step,
     StepPreprocessor,
 )
-from inspect_sentinel._preprocess import scout_nonce
 
 from ._fakes import (
     FakeHost,
@@ -30,9 +29,6 @@ from ._fakes import (
     eval_context,
     in_step,
 )
-
-# Scout 0.5.5 and earlier write no nonce on message headers
-SCOUT_TAKES_NONCE = bool(scout_nonce("3f9a1c7e"))
 
 EVAL = replace(
     eval_context(), sample_input="Free disk space.", metadata={"area": "/work"}
@@ -162,12 +158,10 @@ async def test_a_preprocessed_step_is_shown_numbered_and_cites_become_references
         ),
     )
     assert "clean up" not in prompt(host)
-    header = f" ({nonce(host)})" if SCOUT_TAKES_NONCE else ""
-    assert f"[M1] ASSISTANT{header}:\ndeleting the logs" in prompt(host)
+    assert f"[M1] ASSISTANT ({nonce(host)}):\ndeleting the logs" in prompt(host)
     assert [reference.id for reference in observation.references] == ["assistant"]
 
 
-@pytest.mark.skipif(not SCOUT_TAKES_NONCE, reason="the installed Scout takes no nonce")
 @pytest.mark.anyio
 async def test_a_nonce_marks_the_real_markers_and_headers_but_not_the_agents() -> None:
     # the agent's reply fakes a user message, the end of the input and a policy

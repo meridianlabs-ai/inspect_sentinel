@@ -15,6 +15,7 @@ from inspect_ai.model import (
 )
 from inspect_ai.tool import ToolCall, ToolCallError, ToolInfo, ToolParams
 from inspect_ai.util import Store, json_schema
+from jinja2 import Environment, StrictUndefined, meta
 from pydantic import BaseModel, Field, ValidationError, create_model
 
 from ._preprocess import StepPreprocessor, preprocess_step, step_as_str
@@ -99,10 +100,6 @@ async def score_step(
     config: GenerateConfig | None = None,
     retry_refusals: int = 3,
 ) -> Observation:
-    # Scout imports duckdb and pandas, so load it only when a monitor scores;
-    # jinja2 comes with it
-    from jinja2 import Environment, StrictUndefined, meta
-
     if retry_refusals < 0:
         raise ValueError(f"score() needs retry_refusals >= 0, got {retry_refusals}.")
     # the nonce is the prompt's own, so a caller's is ignored, as in Scout
