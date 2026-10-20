@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 from inspect_ai.model import (
@@ -223,3 +224,35 @@ def test_a_compaction_that_keeps_the_latest_turns_continues_the_agents_request()
         "u:Summary.",
         "a:Three.",
     ]
+
+
+def test_many_messages_alike_are_matched_in_time_proportional_to_their_number() -> None:
+    # A request of many messages alike, which an exact match compares with
+    # every other, as a client might send, must not stall the sidecar.
+    messages = [ChatMessageUser(content="ok") for _ in range(4_000)]
+    requests = [messages[: 3_984 + count] for count in range(17)]
+    compacted = [messages[0], ChatMessageUser(content="Summary."), *messages[2:]]
+    conversation = Conversation()
+
+    started = time.perf_counter()
+    for input in [*requests, compacted]:
+        record_sent(conversation, input, b"")
+    elapsed = time.perf_counter() - started
+
+    # each counted once, and the summary new
+    assert [message.text for message in conversation.sent] == ["ok"] * 4_000 + [
+        "Summary."
+    ]
+    # an exact match took over ten seconds a request at this size
+    assert elapsed < 5
+
+
+def test_a_long_request_after_a_compaction_is_matched_in_order() -> None:
+    # past what is compared exactly, what follows the shared beginning is
+    # matched in order: the turns the compaction kept are matched, and only
+    # the summary and the new turn are new
+    turns = [f"a:Turn {number}." for number in range(300)]
+    assert _sent(
+        _read("u:Task.", *turns),
+        _read("u:Task.", "u:Summary.", *turns[50:], "a:New."),
+    ) == ["u:Task.", *turns, "u:Summary.", "a:New."]

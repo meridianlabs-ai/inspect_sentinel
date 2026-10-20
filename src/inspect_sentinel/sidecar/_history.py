@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from bisect import bisect_right
 from collections.abc import Sequence
 from difflib import SequenceMatcher
 from typing import Any, cast
@@ -36,33 +37,80 @@ def record_sent(
     """
     carried = _strings(body)
     keys = [_digest(_key(message, carried)) for message in input]
+    begins = [_begun(earlier, keys) for earlier in conversation.recent]
+    longest = max(begins, default=0)
     matched: set[int] = set()
-    best: tuple[int, int] = (-1, -1)
-    for earlier in conversation.recent:
-        begun = next(
-            (
-                position
-                for position, (was, now) in enumerate(zip(earlier, keys, strict=False))
-                if was != now
-            ),
-            min(len(earlier), len(keys)),
-        )
-        if begun < best[0]:
+    for earlier, begun in zip(conversation.recent, begins, strict=True):
+        if begun != longest:
             continue
-        found = SequenceMatcher(None, earlier, keys, autojunk=False)
-        shared = {
-            block.b + offset
-            for block in found.get_matching_blocks()
-            for offset in range(block.size)
-        }
+        shared = _shared(earlier, keys, begun)
         # the latest of those alike, as they come latest last
-        if (begun, len(shared)) >= best:
-            best, matched = (begun, len(shared)), shared
+        if len(shared) >= len(matched):
+            matched = shared
     for position, message in enumerate(input):
         if position not in matched:
             conversation.sent.append(message)
     conversation.recent.append(keys)
     del conversation.recent[:-RECENT_REQUESTS]
+
+
+EXACT_PAIRS = 40_000
+"""How many pairs of messages, one of the earlier request and one of this, are compared to match what follows the beginning two requests share exactly. Past it, they are matched in order instead, so that a request of many messages alike costs time in proportion to its length."""
+
+
+def _begun(earlier: Sequence[str], keys: Sequence[str]) -> int:
+    # for how many messages the request begins as the earlier one did
+    return next(
+        (
+            position
+            for position, (was, now) in enumerate(zip(earlier, keys, strict=False))
+            if was != now
+        ),
+        min(len(earlier), len(keys)),
+    )
+
+
+def _shared(earlier: Sequence[str], keys: Sequence[str], begun: int) -> set[int]:
+    # The positions of the request that the earlier request also sent: the
+    # beginning they share, and what else of the rest matches, in order. A
+    # request that adds to the end of the earlier one, as most do, needs no
+    # more.
+    shared = set(range(begun))
+    rest, after = earlier[begun:], keys[begun:]
+    if not rest or not after:
+        return shared
+    if len(rest) * len(after) <= EXACT_PAIRS:
+        found = SequenceMatcher(None, rest, after, autojunk=False)
+        shared.update(
+            begun + block.b + offset
+            for block in found.get_matching_blocks()
+            for offset in range(block.size)
+        )
+    else:
+        shared.update(begun + position for position in _in_order(rest, after))
+    return shared
+
+
+def _in_order(earlier: Sequence[str], keys: Sequence[str]) -> list[int]:
+    # Each message of the request matched to the first like it in the
+    # earlier request after the one last matched. For messages alike this
+    # matches as many as the exact matcher; a request that moves a message
+    # ahead of others it shares can match fewer, which counts them again,
+    # and never leaves a new one out.
+    places: dict[str, list[int]] = {}
+    for position, key in enumerate(earlier):
+        places.setdefault(key, []).append(position)
+    last = -1
+    found: list[int] = []
+    for position, key in enumerate(keys):
+        candidates = places.get(key)
+        if candidates is None:
+            continue
+        next_place = bisect_right(candidates, last)
+        if next_place < len(candidates):
+            last = candidates[next_place]
+            found.append(position)
+    return found
 
 
 def _strings(body: bytes) -> frozenset[str]:
