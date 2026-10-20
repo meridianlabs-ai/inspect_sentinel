@@ -2401,3 +2401,42 @@ def test_a_reply_let_through_is_read_no_faster_than_the_caller_takes_it(
 
     assert read_while_slow < 20
     assert given == 50
+
+
+def test_a_reply_let_through_after_its_stream_cant_begin_is_read_to_its_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # more than may wait to be handed over, which nothing hands over once the
+    # stream couldn't begin
+    monkeypatch.setattr(
+        importlib.import_module("inspect_sentinel_litellm._guardrail"),
+        "_PENDING_BYTES",
+        200,
+    )
+    chunk = _CHAT.stream()[1]
+
+    async def provider() -> AsyncIterator[Any]:
+        for _ in range(50):
+            yield chunk
+
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        return {"error": {"code": -32603, "message": "No."}}
+
+    async def run(url: str) -> int:
+        guardrail = _make(monkeypatch, url, unreachable_fallback="fail_open")
+        data = _data(_CHAT)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, _CHAT.call_type)
+            released = guardrail.async_post_call_streaming_iterator_hook(
+                _USER, provider(), data
+            )
+            return len([each async for each in released])
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_stand_in(answer)) as url:
+        given, _ = _within(10, lambda: (asyncio.run(run(url)), None))
+
+    assert given == 50

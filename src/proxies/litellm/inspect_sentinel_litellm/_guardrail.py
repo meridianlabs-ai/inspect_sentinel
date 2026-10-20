@@ -641,7 +641,10 @@ class _Relay:
                         raise _failed("a release of a kind this class doesn't know")
         except HTTPException as refused:
             yield _refused_stream(self._context, refused, self._format)
-        except SidecarError:
+        except SidecarError as why:
+            # nothing more is handed over, so nothing waits to be, whether or
+            # not handing over ever began
+            self._stop(why)
             if sent:
                 # what went out can't be matched to what LiteLLM yielded, so
                 # the reply can't go on unjudged from where it is
