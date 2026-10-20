@@ -348,3 +348,69 @@ async def test_a_chat_call_changed_after_it_was_judged_fails_the_turn() -> None:
 
     assert isinstance(outputs[-1], ErrorEvent)
     assert b"couldn't be read" in outputs[-1].data
+
+
+@pytest.mark.anyio
+async def test_a_responses_call_whose_events_disagree_is_never_released() -> None:
+    asked, reply = _exchange("responses", inspect=False)
+    # the first call's deltas and arguments-done event name Tokyo, while its
+    # done item, which is what is judged, names Paris
+    lines = reply.body.decode().split("\n")
+    for at, line in enumerate(lines):
+        if not line.startswith("data: {"):
+            continue
+        data = json.loads(line[6:])
+        if data.get("output_index") != 1:
+            continue
+        if data["type"] == "response.function_call_arguments.delta":
+            data["delta"] = '{"location":"Tokyo, Japan"}'
+        elif data["type"] == "response.function_call_arguments.done":
+            data["arguments"] = '{"location":"Tokyo, Japan"}'
+        lines[at] = "data: " + json.dumps(data)
+    body = "\n".join(lines).encode()
+    handler = Handler(noting([], "reject", "Lima"), release="early")
+    await handler.request(asked)
+
+    outputs = await _streamed(handler.reply_stream(_start(reply)), body, 61)
+
+    assert not isinstance(outputs[-1], Finished)
+    assert b"call_7v64mPRsjnlrRF87GSbt0ACx" not in _sent(
+        [o for o in outputs if isinstance(o, Release)]
+    )
+
+
+@pytest.mark.anyio
+async def test_no_call_is_judged_after_the_client_has_gone() -> None:
+    asked, reply = _exchange("anthropic", inspect=True)
+    go, judging = anyio.Event(), anyio.Event()
+    seen: list[str] = []
+
+    @protocol
+    def counts() -> Protocol:
+        """Note each call judged, and wait for `go` at the first."""
+
+        async def decide(
+            context: Context, step: BeforeToolCall, escalations: Escalations
+        ) -> Decision | None:
+            seen.append(step.call.id)
+            judging.set()
+            await go.wait()
+            return Decision.proceed()
+
+        return decide
+
+    handler = Handler(counts(), release="early")
+    await handler.request(asked)
+    stream = handler.reply_stream(_start(reply))
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(stream.run)
+            # every call arrives in one chunk
+            await stream.feed(reply.body)
+            await judging.wait()
+            await stream.abort()
+            go.set()
+
+    # the call being judged was decided, and no other was asked about
+    assert len(seen) == 1

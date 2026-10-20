@@ -108,7 +108,7 @@ def edit_reply(
         if chat:
             return _edit_chunks(events, edits)
         edited = _edit_responses_stream(events, edits)
-        _check_responses_stream(edited)
+        check_responses_stream(edited)
         return write_events(edited)
     reply = json_object(body, "reply")
     if chat is None:
@@ -464,7 +464,7 @@ def _check_indexes(events: list[StreamEvent]) -> None:
             )
 
 
-def _check_responses_stream(events: list[StreamEvent]) -> None:
+def check_responses_stream(events: list[StreamEvent]) -> None:
     # What a client acts on in a Responses stream is not only the response
     # the stream ends with, which is all that is read to judge it: the SDK
     # builds each item from the events, and a client may act on an item when
@@ -519,7 +519,7 @@ def _check_responses_stream(events: list[StreamEvent]) -> None:
         # a call the client runs, which the client may run as any of its
         # events gives it
         if "call_id" in out:
-            _check_streamed_call(
+            check_streamed_call(
                 cast("dict[str, Any]", out), items.get(index, []), others.get(index, [])
             )
 
@@ -531,7 +531,7 @@ _STREAMED = {
 """The field each kind of call streams in deltas, and the prefix of the events that stream it."""
 
 
-def _check_streamed_call(
+def check_streamed_call(
     out: dict[str, Any],
     items: list[tuple[str, dict[str, Any]]],
     others: list[dict[str, Any]],

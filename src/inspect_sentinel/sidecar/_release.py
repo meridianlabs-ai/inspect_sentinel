@@ -469,6 +469,11 @@ class ClientCheck:
         self._format = format
         self._state: Any = None
         self._extra: dict[str, Any] = {}
+        # a Responses stream's events so far, and each item's events by its
+        # place in the output, as the stream as a whole is checked when held
+        self._seen: list[StreamEvent] = []
+        self._items: dict[int, list[tuple[str, dict[str, Any]]]] = {}
+        self._others: dict[int, list[dict[str, Any]]] = {}
         if format == "openai-chat":
             from openai.lib.streaming.chat import ChatCompletionStreamState
 
@@ -501,6 +506,8 @@ class ClientCheck:
             for event in events:
                 if event.data is not None:
                     self._take(copy.deepcopy(event.data))
+                if self._format == "openai-responses":
+                    self._agree(event)
         except UnreadableError:
             raise
         except Exception as ex:
@@ -508,6 +515,35 @@ class ClientCheck:
             raise UnreadableError(
                 "The reply stream as edited doesn't hold together."
             ) from ex
+
+    def _agree(self, event: StreamEvent) -> None:
+        # A Responses call is given whole in its done item, which is what is
+        # judged, and also in its argument deltas and its arguments-done
+        # event, which a client may act on instead. All of them must agree
+        # before the call goes out, and every item must be at its place in
+        # the response the stream ends with.
+        from ._openai import check_responses_stream, check_streamed_call
+
+        self._seen.append(event)
+        data = event.data or {}
+        kind = data.get("type")
+        if kind in ("response.completed", "response.incomplete"):
+            check_responses_stream(self._seen)
+            return
+        index = data.get("output_index")
+        if not isinstance(index, int):
+            return
+        item = data.get("item")
+        if kind in ("response.output_item.added", "response.output_item.done"):
+            if isinstance(item, dict):
+                entry = cast("dict[str, Any]", item)
+                self._items.setdefault(index, []).append((kind, entry))
+                if kind == "response.output_item.done" and "call_id" in entry:
+                    check_streamed_call(
+                        entry, self._items[index], self._others.get(index, [])
+                    )
+        else:
+            self._others.setdefault(index, []).append(data)
 
     def _take(self, data: dict[str, Any]) -> None:
         if self._format == "openai-chat":

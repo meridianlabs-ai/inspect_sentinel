@@ -6,7 +6,7 @@ import pytest
 from inspect_ai.model import ModelOutput
 from inspect_ai.tool import ToolCall
 
-from inspect_sentinel.sidecar._openai import _check_responses_stream
+from inspect_sentinel.sidecar._openai import check_responses_stream
 from inspect_sentinel.sidecar._wire import (
     Edits,
     UnreadableError,
@@ -167,7 +167,7 @@ def _responses_events() -> list[dict[str, Any]]:
 
 def _check(events: list[dict[str, Any]]) -> None:
     body = "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
-    _check_responses_stream(written_events(body))
+    check_responses_stream(written_events(body))
 
 
 @pytest.mark.anyio

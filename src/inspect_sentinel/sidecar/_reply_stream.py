@@ -309,6 +309,10 @@ class ReplyStream:
                 arrived += events.reader.finish()
             for event in arrived:
                 refused = await self._take(early, event)
+                if self._aborted:
+                    # no call is put to the sentinel once the client has gone
+                    early.cut_off()
+                    return
                 if refused is not None:
                     await self._fail(refused)
                     return
@@ -369,6 +373,8 @@ class ReplyStream:
     ) -> Refuse | None:
         events = self._events
         assert events.format is not None and events.turn is not None
+        if self._aborted:
+            return None
         # what can go out goes out before the sentinel is asked
         await self._release_ready(early)
         refused = await early.judge(
