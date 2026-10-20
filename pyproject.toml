@@ -126,7 +126,7 @@ managed = true
 
 [tool.ruff]
 # generated code, from `make envoy-protos`
-extend-exclude = ["docs", "design", "src/inspect_sentinel/sidecar/_envoy/_proto"]
+extend-exclude = ["docs", "design", "src/inspect_sentinel/sidecar/envoy/_proto"]
 src = [".", "src"]
 
 [tool.ruff.lint]
@@ -157,7 +157,7 @@ timeout = 120
 include = ["src/inspect_sentinel", "tests", "examples"]
 # generated code, from `make envoy-protos`, which is read for its types but
 # not checked
-exclude = ["src/inspect_sentinel/sidecar/_envoy/_proto"]
+exclude = ["src/inspect_sentinel/sidecar/envoy/_proto"]
 typeCheckingMode = "strict"
 pythonPlatform = "All"
 pythonVersion = "3.11"

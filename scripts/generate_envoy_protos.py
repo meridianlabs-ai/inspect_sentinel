@@ -28,7 +28,7 @@ ENVOY_VERSION = "1.39.4"
 SERVICE = "envoy/service/ext_proc/v3/external_processor.proto"
 
 REPOSITORY = Path(__file__).resolve().parent.parent
-PACKAGE = "inspect_sentinel.sidecar._envoy._proto"
+PACKAGE = "inspect_sentinel.sidecar.envoy._proto"
 OUT = REPOSITORY / "src" / Path(*PACKAGE.split("."))
 
 # the top-level packages the generated code imports, apart from protobuf's own

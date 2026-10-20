@@ -6,7 +6,7 @@ import os
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import anyio
 import uvicorn
@@ -58,6 +58,20 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         metavar="PORT",
         help=f"Serve the endpoint for evals on a port of its own, with a token of its own read from {TOKEN_VARIABLE}, for a deployment where something other than the eval can make model calls through the proxy. By default it shares --port, and the proxy's access control.",
+    )
+    parser.add_argument(
+        "--envoy-port",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help="Serve the Envoy shim, which Envoy's ext_proc filter calls over gRPC, on this port, for a sidecar behind Envoy. Needs the `envoy` extra. `python -m inspect_sentinel.sidecar.envoy` writes Envoy's configuration for it.",
+    )
+    parser.add_argument(
+        "--envoy-header",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="A request header the Envoy shim shows the sentinel, besides Inspect's own. May be repeated. A credential is never shown.",
     )
     parser.add_argument(
         "--reject-status",
@@ -130,6 +144,8 @@ class ServerSettings(BaseModel):
     host: str | None = None
     port: int | None = None
     eval_port: int | None = None
+    envoy_port: int | None = None
+    envoy_headers: list[str] | None = None
     reject_status: int | None = None
     time_limit: float | None = None
     eval_results: bool | None = None
@@ -148,6 +164,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
         "model_role",
         lambda roles, _: [f"{role}={model}" for role, model in roles.items()],
     ),
+    "envoy_headers": ("--envoy-header", "envoy_header", lambda names, _: list(names)),
     "eval_results": ("--no-eval-results", "no_eval_results", lambda on, _: not on),
     "runtime_task_registration": (
         "--no-runtime-task-registration",
@@ -160,6 +177,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "host",
             "port",
             "eval_port",
+            "envoy_port",
             "reject_status",
             "time_limit",
             "task_expiry",
@@ -318,35 +336,81 @@ def apps(
 
 
 def serve(handler: Handler, arguments: argparse.Namespace) -> None:
-    """Serve the endpoints for proxies and for evals.
+    """Serve the endpoints for proxies and for evals, and the Envoy shim if it has a port.
 
     Args:
         handler: The handler a proxy's requests and replies are put to.
         arguments: Parsed arguments that `add_arguments` defined.
+
+    Raises:
+        ValueError: If the Envoy shim has a port, and the `envoy` extra isn't installed.
     """
     _quiet_health_checks()
     servers = [
         uvicorn.Server(uvicorn.Config(app, host=arguments.host, port=port))
         for app, port in apps(handler, arguments)
     ]
+    shim = _envoy_shim(handler, arguments)
     try:
-        anyio.run(_serve_all, servers)
+        anyio.run(_serve_all, servers, shim)
     except KeyboardInterrupt:
         # a server that stops for Ctrl-C raises it again once it has stopped,
         # and stopping is what was asked, as `uvicorn.run` takes it
         pass
 
 
-async def _serve_all(servers: list[uvicorn.Server]) -> None:
+class _GrpcServer(Protocol):
+    async def start(self) -> None: ...
+
+    async def stop(self, grace: float | None) -> None: ...
+
+
+def _envoy_shim(
+    handler: Handler, arguments: argparse.Namespace
+) -> Callable[[], _GrpcServer] | None:
+    # the shim's server, made in the event loop it serves in
+    if arguments.envoy_port is None:
+        return None
+    try:
+        from .envoy import envoy_server
+    except ImportError as ex:
+        raise ValueError(
+            f"--envoy-port needs the `envoy` extra: pip install 'inspect_sentinel[envoy]' ({ex})."
+        ) from None
+    return lambda: envoy_server(
+        handler,
+        host=arguments.host,
+        port=arguments.envoy_port,
+        max_body_bytes=arguments.max_body_bytes,
+        headers=arguments.envoy_header,
+    )
+
+
+_SHIM_GRACE = 5.0
+"""How long the Envoy shim's open streams are given to finish when the sidecar stops, in seconds."""
+
+
+async def _serve_all(
+    servers: list[uvicorn.Server], shim: Callable[[], _GrpcServer] | None = None
+) -> None:
     async def until_one_stops(server: uvicorn.Server) -> None:
         await server.serve()
         # one signal stops only the server that caught it
         for other in servers:
             other.should_exit = True
 
-    async with anyio.create_task_group() as group:
-        for server in servers:
-            group.start_soon(until_one_stops, server)
+    envoy = shim() if shim is not None else None
+    if envoy is not None:
+        await envoy.start()
+    try:
+        async with anyio.create_task_group() as group:
+            for server in servers:
+                group.start_soon(until_one_stops, server)
+    finally:
+        if envoy is not None:
+            # the HTTP servers have stopped, on a signal, and the shim with them
+            with anyio.CancelScope(shield=True):
+                await envoy.stop(_SHIM_GRACE)
 
 
 class _HealthCheckFilter(logging.Filter):
