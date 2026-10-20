@@ -2571,3 +2571,34 @@ def test_a_reply_kept_alive_is_refused_in_the_stream_when_the_sidecar_fails(
 
     assert status == 200
     assert "gave no usable answer" in str(raised.value)
+
+
+@pytest.mark.parametrize("on", [_CHAT, _RESPONSES], ids=["chat", "responses"])
+def test_a_streamed_reply_is_not_judged_again_once_whole(
+    monkeypatch: pytest.MonkeyPatch, on: _On
+) -> None:
+    # LiteLLM 1.83 shows a guardrail a streamed reply again once it has gone
+    # out, put together whole, which the stream's own judging has covered
+    passed = _result({"action": "pass"})
+    calls: list[Any] = []
+    data = _data(on) | {"stream": True}
+
+    async def run(url: str) -> Any:
+        guardrail = _make(monkeypatch, url)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, on.call_type)
+            async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                _USER, _chunks(on.stream()), data
+            ):
+                pass
+            return await guardrail.async_post_call_success_hook(
+                data, _USER, on.whole()
+            )
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_scripted(calls, passed, passed, passed)) as url:
+        answered = asyncio.run(run(url))
+
+    assert answered is None
+    assert [call["method"] for call in calls] == ["judge_request", "judge_reply"]

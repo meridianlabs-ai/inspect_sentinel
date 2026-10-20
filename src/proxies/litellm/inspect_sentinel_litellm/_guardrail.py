@@ -344,7 +344,10 @@ class LiteLLMGuardrail(CustomGuardrail):
             HTTPException: The reply is refused, or the sidecar gave no usable answer and `unreachable_fallback` is `fail_closed`.
         """
         told = _told(data)
-        if told is None:
+        if told is None or data.get("stream"):
+            # LiteLLM 1.83 shows a streamed reply here too, put together once
+            # it has gone out, where it can't be stopped. The stream was judged
+            # as it went, and the sidecar has let go of its request.
             return None
         try:
             answer = await self._ask_about_reply(told, _JSON, _whole(response))
