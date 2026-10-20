@@ -28,7 +28,7 @@ from .._step import (
     Step,
 )
 from .._types import Sentinels
-from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request
+from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request, succeeded
 from ._history import record_sent
 from ._host import Record, RunHost, SidecarHost, stage
 from ._inspect_ai import VIEWED_TOOLS, tool_call_view
@@ -237,7 +237,7 @@ class Handler:
     async def reply(self, reply: Reply) -> Answer:
         """Judge a reply before the proxy passes any of it on.
 
-        The reply is put to the sentinel as an `AfterGenerate` step, then each tool call in it as a `BeforeToolCall` step, in order, leaving out a stage nothing in the sentinel watches. Every call is judged, as in Inspect's own process, unless one ends the run. The rejected calls are taken out of the reply and the rest of the turn goes on, answered with `Replace`, as the other calls of a turn still run in Inspect's own process. Each later request of the conversation that holds the turn has the calls taken out put back, each with its rejection as its result. A turn whose every call is rejected is refused whole, as is one that can't be edited, and its rejections are added to the later requests of its conversation. The third turn refused whole in a row within an attempt at a sample ends the run; a turn in which a call ran starts the count again. A provider's error is passed on unjudged.
+        The reply is put to the sentinel as an `AfterGenerate` step, then each tool call in it as a `BeforeToolCall` step, in order, leaving out a stage nothing in the sentinel watches. Every call is judged, as in Inspect's own process, unless one ends the run. The rejected calls are taken out of the reply and the rest of the turn goes on, answered with `Replace`, as the other calls of a turn still run in Inspect's own process. Each later request of the conversation that holds the turn has the calls taken out put back, each with its rejection as its result. A turn whose every call is rejected is refused whole, as is one that can't be edited, and its rejections are added to the later requests of its conversation. The third turn refused whole in a row within an attempt at a sample ends the run; a turn in which a call ran starts the count again. A provider's error, a reply in a status outside 2xx, is passed on unjudged; a reply in any 2xx is the model's, and judged, as the provider's SDK reads it so.
 
         For an Inspect client, a reply that goes on is answered with `Replace`, the reply with the `sentinel` field added, and a refusal carries the field. The field holds every step judged during the exchange, the request's first. A reply that goes on but has no event the field can go in, such as a stream that never sends its last event, is handed over as judged, without the field.
 
@@ -263,7 +263,7 @@ class Handler:
             raise
         if attempt is None or held is None:
             return answer
-        if reply.status != 200:
+        if not succeeded(reply.status):
             attempt.not_judged("provider_error")
         elif not isinstance(answer, Refuse):
             attempt.decide("proceed")
@@ -672,7 +672,7 @@ class Handler:
 
     async def _reply(self, reply: Reply, held: Held | None) -> Answer:
         answer = await self._judge_reply(reply, held)
-        if held is None or reply.status != 200:
+        if held is None or not succeeded(reply.status):
             return answer
         if held.proxy.inspect is None:
             return answer
@@ -690,7 +690,7 @@ class Handler:
             return answer
 
     async def _judge_reply(self, reply: Reply, held: Held | None) -> Answer:
-        if reply.status != 200:
+        if not succeeded(reply.status):
             # nothing came from the model to judge
             return Pass()
         if held is None:

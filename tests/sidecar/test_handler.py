@@ -113,6 +113,34 @@ async def test_provider_error_passes_unread() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("status", [201, 203, 299])
+async def test_reply_in_any_success_status_is_judged(status: int) -> None:
+    # a provider's SDK reads any 2xx as the model's reply, so the sidecar does
+    handler = Handler(weather_rule("reject", "Tokyo"))
+    await handler.request(request())
+
+    answer = await handler.reply(
+        reply(
+            anthropic_recorded("parallel-tool-calls"),
+            content_type=STREAM,
+            status=status,
+        )
+    )
+
+    assert isinstance(answer, Replace)
+    assert b"Tokyo" not in answer.body
+
+
+@pytest.mark.anyio
+async def test_unreadable_reply_in_a_success_status_is_not_passed() -> None:
+    handler = Handler(weather_rule())
+    await handler.request(request())
+
+    with pytest.raises(UnreadableError):
+        await handler.reply(reply(b"not a message", status=201))
+
+
+@pytest.mark.anyio
 async def test_reply_to_an_unseen_request_cannot_be_judged() -> None:
     with pytest.raises(UnreadableError, match="never shown"):
         await Handler(weather_rule()).reply(reply(message(weather("Tokyo"))))

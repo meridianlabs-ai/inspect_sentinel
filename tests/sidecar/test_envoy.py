@@ -5,6 +5,7 @@ Each test sends model requests to Envoy, with a provider's SDK or by hand, and E
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import json
 import subprocess
@@ -23,7 +24,8 @@ from inspect_sentinel._decorators import protocol
 from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol
-from inspect_sentinel.sidecar import Handler
+from inspect_sentinel.sidecar import Handler, read_reply
+from inspect_sentinel.sidecar._handler import RequestResult
 from inspect_sentinel.sidecar.envoy import envoy_yaml
 from tests.sidecar._envoy import IMAGE, Scripted, Stack, docker_missing, envoy_stack
 from tests.sidecar._traffic import (
@@ -300,6 +302,42 @@ def test_refusal_keeps_a_status_envoy_doesnt_name(stack: Stack) -> None:
 
     assert refused.value.status_code == 529
     assert refused.value.body["error"]["type"] == "overloaded_error"  # type: ignore[index]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["whole", "streamed"])
+def test_reply_in_a_success_status_other_than_200_is_judged(
+    stack: Stack, stream: bool
+) -> None:
+    # a provider's SDK reads any 2xx as the model's reply, so a 201 can't go
+    # on unjudged
+    handler = Handler(rejects("Tokyo"))
+    stack.use(handler)
+    content_type, body = _recorded("anthropic", stream)
+    stack.provider.script = lambda _: Scripted(
+        body=_split(body) if stream else [body],
+        content_type=content_type,
+        chunked=stream,
+        status=201,
+    )
+
+    answered = httpx.post(
+        f"{stack.url}/v1/messages",
+        json=_body("anthropic", stream),
+        headers=inspect_headers(),
+    )
+
+    assert answered.status_code == 201
+    # the calls the client is handed: the field beside them still names the
+    # rejected call, as it was proposed
+    output = asyncio.run(
+        read_reply("anthropic", answered.headers["content-type"], answered.content)
+    )
+    calls = output.message.tool_calls or []
+    assert [_city(call.arguments["location"]) for call in calls] == ["Paris", "Lima"]
+    assert b'"sentinel"' in answered.content
+    result = stack.run(handler.request_result("request_456"))
+    assert isinstance(result, RequestResult)
+    assert (result.latest.state, result.latest.outcome) == ("decided", "proceed")
 
 
 def test_provider_is_asked_for_an_uncompressed_reply(stack: Stack) -> None:

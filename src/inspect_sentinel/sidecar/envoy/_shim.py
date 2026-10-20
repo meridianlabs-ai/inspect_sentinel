@@ -9,7 +9,7 @@ from typing import Any, TypeVar, cast, get_args
 
 import grpc
 
-from .._exchange import Answer, Pass, Refuse, Replace, Reply, Request
+from .._exchange import Answer, Pass, Refuse, Replace, Reply, Request, succeeded
 from .._handler import Handler, TimeLimitError
 from .._registration import UnregisteredSampleError
 from .._wire import Format, UnreadableError
@@ -280,7 +280,7 @@ class _Exchange:
         received = _read(headers.headers)
         self._status = int(received.get(":status", "0") or 0)
         self._content_type = received.get("content-type", "")
-        if self._status != 200:
+        if not succeeded(self._status):
             return await self._provider_error(headers.end_of_stream)
         encoding = received.get("content-encoding", "identity").lower()
         if encoding != "identity":
