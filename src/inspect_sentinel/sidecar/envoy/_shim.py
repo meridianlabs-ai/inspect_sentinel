@@ -97,11 +97,13 @@ class EnvoyShim(rpc.ExternalProcessorServicer):
         self._judging.add(task)
         task.add_done_callback(self._judging.discard)
         try:
-            return await asyncio.shield(task)
+            # Cancelling the wait leaves the task running, as `asyncio.shield`
+            # would, without the report of its failure `shield` adds once its
+            # caller is cancelled (Python 3.14).
+            await asyncio.wait({task})
         except asyncio.CancelledError:
             # Envoy stopped waiting. What the judgment raises later goes to
-            # `orphaned`, as it would have been handled here, rather than to
-            # asyncio's report of an exception nothing retrieved.
+            # `orphaned`, as it would have been handled here.
             def retrieved(done: asyncio.Future[T]) -> None:
                 if not done.cancelled():
                     raised = done.exception()
@@ -110,6 +112,7 @@ class EnvoyShim(rpc.ExternalProcessorServicer):
 
             task.add_done_callback(retrieved)
             raise
+        return task.result()
 
 
 # never shown to a sentinel, whatever the operator lists
