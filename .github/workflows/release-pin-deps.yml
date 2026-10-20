@@ -1,14 +1,21 @@
 name: Pin inspect_ai for release
 
-# On the Release Please release PR, keep the `inspect_ai` dependency pinned to
-# the currently-shipped PyPI version:
-#   - rewrite a moving git ref (`inspect-ai @ git+...@main`) to
-#     `inspect-ai>=<latest>` — dev on `main` tracks inspect_ai's `main`, but a
-#     *published* scout must depend on a *released* inspect_ai (PyPI rejects
-#     direct-reference deps, and a git ref is not reproducible);
+# On the Release Please release PR, keep the `inspect_ai` floor at the
+# currently-shipped PyPI version:
 #   - bump a stale floor (`inspect-ai>=OLD`) to the latest shipped version, so
 #     the declared minimum matches what the release build actually validated
 #     against (pip resolves the latest, so a stale floor could ship untested).
+#     The release PR is the one build that skips installing inspect_ai's
+#     `main` (build.yaml), so it tests against exactly that release;
+#   - rewrite a moving git ref (`inspect-ai @ git+...@main`) to
+#     `inspect-ai>=<latest>`, should one come back. `main` keeps a floor, and
+#     development tracks inspect_ai's `main` by installing it, not by naming it
+#     in pyproject.toml (CONTRIBUTING.md); a *published* sentinel must depend
+#     on a *released* inspect_ai (PyPI rejects direct-reference deps, and a git
+#     ref is not reproducible).
+#
+# The floor bump is squash-merged to `main` with the release PR, which is
+# harmless: development installs inspect_ai's `main` over it all the same.
 #
 # Runs on release-PR events AND on a schedule: publishing a new inspect_ai to
 # PyPI produces no event in this repo, so the schedule is what turns "inspect
@@ -76,15 +83,13 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'release-please--branches--main' }}
           token: ${{ steps.app-token.outputs.token }}
 
-      # for the `uv lock` below: the pin changes pyproject.toml, and a release
-      # commit whose lockfile still names a git commit would be a lie
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        if: steps.relpr.outputs.found == 'true'
-
       - name: Pin/bump inspect_ai to the shipped PyPI version
         if: steps.relpr.outputs.found == 'true'
+        # -I keeps the checkout off sys.path: the release branch can carry
+        # agent-landed commits, and a json.py or re.py at its root would
+        # otherwise run here, beside the App token in .git/config.
         run: |
-          python3 - <<'PY'
+          python3 -I - <<'PY'
           import json, re, sys, urllib.request
 
           with urllib.request.urlopen("https://pypi.org/pypi/inspect-ai/json", timeout=30) as r:
@@ -131,9 +136,8 @@ jobs:
             echo "No change to commit."
             exit 0
           fi
-          uv lock
           git config user.name "meridian-release-bot[bot]"
           git config user.email "meridian-release-bot[bot]@users.noreply.github.com"
-          git add pyproject.toml uv.lock
+          git add pyproject.toml
           git commit -m "chore: pin inspect_ai to the shipped release for publishing"
           git push origin HEAD:release-please--branches--main

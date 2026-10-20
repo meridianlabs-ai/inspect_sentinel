@@ -22,10 +22,12 @@ dependencies = [
     #
     # Development tracks inspect_ai's `main`, because sentinel and inspect_ai
     # co-develop and most sentinel changes need hooks that have not shipped.
-    # The git ref never reaches PyPI: release-pin-deps.yml rewrites it to a
-    # `>=<latest>` floor on the Release Please release PR, and
-    # release-dep-guard.yml blocks the release if it is still a git ref.
-    "inspect-ai>=0.3.281",
+    # That is done by installing, not by this line: CI and the setup in
+    # CONTRIBUTING.md install inspect_ai from git first, and the floor below
+    # leaves that install in place. Only the Release Please release PR skips
+    # it, so a release is tested against PyPI, after release-pin-deps.yml
+    # raises this floor to the latest inspect_ai release.
+    "inspect-ai>=0.3.282",
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.
     "pydantic>=2.0",
@@ -33,6 +35,10 @@ dependencies = [
     # anyio too, but this is a direct import and a transitive dependency is not
     # a promise.
     "anyio>=4.0",
+    # TypeVar defaults (PEP 696) before Python 3.13, so a StepPreprocessor
+    # with no transform is a StepPreprocessor[Step]. Imported directly, so
+    # declared, though pydantic and inspect-ai depend on it too.
+    "typing-extensions>=4.12",
 ]
 
 [project.urls]
@@ -54,6 +60,10 @@ build-backend = "hatchling.build"
 # published against it. uvicorn's is the first that hands a signal on to a
 # second server in the same process, which stopping the sidecar relies on.
 sidecar = ["starlette>=1.3.1", "uvicorn>=0.29.0"]
+# The Envoy shim, which serves Envoy's ext_proc over gRPC beside the sidecar's
+# endpoints. Its code is generated from Envoy's protos (`make envoy-protos`),
+# and needs a grpcio and a protobuf at least as new as what generated it.
+envoy = ["inspect_sentinel[sidecar]", "grpcio>=1.74.0", "protobuf>=6.31.1"]
 # The sidecar reads a provider's traffic with that provider's SDK, as
 # inspect-ai does, so each is installed only where it is wanted. The floors
 # are inspect-ai's own.
@@ -72,8 +82,12 @@ dev = [
     # from Scout into inspect_ai, design/pr-series.md)
     "inspect-scout",
     # the sidecar's tests read recorded Anthropic and OpenAI traffic, call its
-    # server through httpx, and hold its answers to its schema file
-    "inspect_sentinel[anthropic,openai,sidecar]",
+    # server through httpx and its Envoy shim through grpcio, and hold its
+    # answers to its schema file
+    "inspect_sentinel[anthropic,envoy,openai,sidecar]",
+    # the Envoy shim's generated code is typed against these
+    "types-grpcio",
+    "types-protobuf",
     "httpx",
     "jsonschema",
     "inspect_sentinel[doc]",
@@ -90,10 +104,6 @@ doc = [
 ]
 dist = ["twine", "build"]
 
-# lets `uv sync --group dev` keep working; the lists live in the extras above
-[dependency-groups]
-dev = ["inspect_sentinel[dev]"]
-
 [tool.hatch.build]
 only-packages = true
 exclude = ["docs/", "tests/", "design/"]
@@ -108,16 +118,12 @@ version-file = "src/inspect_sentinel/_version.py"
 [tool.hatch.version.raw-options]
 local_scheme = "no-local-version" # Important for PyPI compatibility
 
-# hatchling rejects PEP 508 direct references (the inspect-ai git ref above)
-# without this
-[tool.hatch.metadata]
-allow-direct-references = true
-
 [tool.uv]
 managed = true
 
 [tool.ruff]
-extend-exclude = ["docs", "design"]
+# generated code, from `make envoy-protos`
+extend-exclude = ["docs", "design", "src/inspect_sentinel/sidecar/envoy/_proto"]
 src = [".", "src"]
 
 [tool.ruff.lint]
@@ -142,10 +148,20 @@ addopts = "-n auto"
 timeout = 120
 
 [tool.pyright]
-include = ["src", "tests", "examples"]
+# src/proxies is left out: a proxy hook imports its proxy, which is never in
+# this environment. `make check-litellm` checks the LiteLLM guardrail in one
+# of its own.
+include = ["src/inspect_sentinel", "tests", "examples"]
+# generated code, from `make envoy-protos`, which is read for its types but
+# not checked
+exclude = ["src/inspect_sentinel/sidecar/envoy/_proto"]
 typeCheckingMode = "strict"
 pythonPlatform = "All"
 pythonVersion = "3.11"
+# the development environment, so `.venv/bin/pyright` reads it without an
+# activated venv, as CI runs it; `--pythonpath` still picks another
+venvPath = "."
+venv = ".venv"
 
 # tests may exercise private helpers directly
 [[tool.pyright.executionEnvironments]]

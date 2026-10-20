@@ -27,6 +27,7 @@ def escalates() -> Protocol:
 _CALL = BeforeToolCall(
     conversation="c",
     message="",
+    message_id="m1",
     call=ToolCall(id="toolu_1", function="get_weather", arguments={}),
     view=ToolCallView(),
     input=None,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 from ._wire import Format
 
@@ -31,9 +31,6 @@ class Request:
 
     format: Format | None = None
     """Which API the body is written in, if the proxy said. Without it, the API is worked out from `provider` and the body."""
-
-    run: str | None = None
-    """What tells this run from every other, if the proxy was told. Without it, requests whose conversations open alike are taken for one run, which two epochs of a sample are not."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -65,6 +62,14 @@ class Reply:
     """Which API the body is written in, if the proxy said. Without it, the API is worked out from `provider` and the body."""
 
 
+def succeeded(status: int) -> bool:
+    """Whether a provider's reply in this status is the model's, to judge, rather than an error, which goes on unjudged.
+
+    Any 2xx is the model's, as a provider's SDK takes it, so that a reply can't go on unjudged for a status such as 201 that the client still reads as the model's.
+    """
+    return 200 <= status < 300
+
+
 @dataclass(frozen=True)
 class Pass:
     """Send it on as it is."""
@@ -87,6 +92,9 @@ class Refuse:
 
     message: str
     """What the client is told. A client that carries on hands this to the model."""
+
+    sentinel: Mapping[str, Any] | None = None
+    """For an Inspect client, the `sentinel` field: what was decided during the exchange. The proxy puts it into the error it sends the client, without reading it."""
 
 
 Answer: TypeAlias = Pass | Replace | Refuse

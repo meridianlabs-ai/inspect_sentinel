@@ -4,7 +4,7 @@ from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NamedTuple, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar, cast, runtime_checkable
 from typing import Protocol as TypingProtocol
 
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
@@ -15,9 +15,11 @@ from ._report import Decision, Escalations, Failed, Observation, Report, Reporte
 from ._score import score_step
 from ._step import Step
 
+S = TypeVar("S", bound=Step)
+
 if TYPE_CHECKING:
-    from ._context import Context, EvalContext
-    from ._excerpt import Excerpt
+    from ._context import Context, EvalContext, ProxyContext
+    from ._preprocess import StepPreprocessor
 
 
 @dataclass(frozen=True)
@@ -116,9 +118,10 @@ class Host(HostNative):
 
     async def score(
         self,
-        step: Step | Excerpt[Step],
+        step: S,
         dimensions: str | Mapping[str, str],
         *,
+        preprocessor: StepPreprocessor[S] | None = None,
         instructions: str | None = None,
         policy: str | None = None,
         template: str | None = None,
@@ -132,7 +135,7 @@ class Host(HostNative):
 
         The model is asked through `generate`, with the same `model`, `role` and `config`. It is sent a prompt built from `template`, and answers by calling an answer tool whose arguments are checked, so a missing or out-of-range score, or a reply with no answer (or no reply at all), goes back to the model to correct. When the model gives no valid answer within three attempts, `score` raises, and the runner records the monitor as failed. A reply the provider refuses (stop reason `content_filter`) is asked again without using an attempt, up to `retry_refusals` times, after which `score` raises. Needs `inspect_scout` installed, which renders the step and numbers its messages; it is not a dependency of this package yet, so without it `score` raises `ImportError`. Call it while the monitor or protocol runs, since it keeps the sample's nonce in the sample store; outside a step it raises `RuntimeError`.
 
-        Pass the step to show the model all of it, or narrow what it sees with the windowing functions, such as `last_turns(step, 6)` or `new_since_last_report(context, step)`.
+        What the model is shown of the step is set by `preprocessor`: by default all of the model's input, without system messages, and the step itself; pass a `StepPreprocessor` to window the conversations (`input_window=LastTurns(6)`, `NewSinceLastReport(context)`, `history_window=AllMessages()`), leave parts out, or change the step with a `transform`.
 
         The default template opens with `instructions` and a paragraph on the nonce, then shows the model `policy`, the task and the step, asks it to score the step from 0.0 to 1.0 against `dimensions`, and asks for an explanation. Templates are Jinja templates. A custom one uses the same variables, and must include `{{ step }}` and `{{ answer_format }}`:
 
@@ -140,7 +143,7 @@ class Host(HostNative):
         - `{{ policy }}`: `policy`, the policy the agent must follow whatever its task, between `[BEGIN POLICY (nonce)]` and `[END POLICY (nonce)]` lines; empty when there is none.
         - `{{ task }}`: the task the agent was given (in an eval, the sample's input), between `[BEGIN TASK (nonce)]` and `[END TASK (nonce)]` lines; empty outside an eval.
         - `{{ eval }}`: the eval the agent is running in, as `context.eval` holds it, such as `{{ eval.task }}` or `{{ eval.metadata.difficulty }}`; None outside an eval, so guard it with `{% if eval %}` in a monitor that may run outside one.
-        - `{{ step }}`: `step_as_str()` of the step or excerpt, its messages numbered `[M1]`, `[M2]` and so on so the explanation can cite them; the observation's `references` come from those cites.
+        - `{{ step }}`: `step_as_str()` of the preprocessed step, its messages numbered `[M1]`, `[M2]` and so on so the explanation can cite them; the observation's `references` come from those cites.
         - `{{ sentinel_nonce }}`: a nonce made on the sample's first `score` and used for the rest of the sample, so the monitor model's prompt cache keeps working from step to step; 8 hex characters, on every block marker and, where the installed Scout takes a nonce, every message header (`[M1] USER (3f9a1c7e):`). The agent never sees the prompt, so text it writes that looks like a marker or a header lacks the nonce, and the default template tells the model so. The nonce is kept in the sample store, so a tool that shows the agent the store, or a protocol that passes the agent a monitor explanation quoting the nonce, gives it away for the rest of the sample. A `sentinel_nonce` in `template_variables` is ignored.
         - `{{ dimensions }}`: `dimensions` as given, or each dimension's name followed by its text.
         - `{{ answer_format }}`: the instruction to call the answer tool.
@@ -149,8 +152,9 @@ class Host(HostNative):
         A template that uses a name that is none of these raises before the model is asked, so a misspelled variable is caught. The template is rendered once and values are inserted as text, so the agent's text is never read as template. A custom template states the 0.0 to 1.0 scale in its own words; without it the answer tool still rejects scores out of range.
 
         Args:
-            step: The step to score, whole, or an excerpt of it from a windowing function.
+            step: The step to score.
             dimensions: What to score and how. A string is the prompt text for a single score, and the observation's `suspicion` is one float. A mapping is each dimension's name to its prompt text, and `suspicion` is a dict keyed by name; a name is 1 to 64 letters, digits, `_`, `.` or `-` (what providers accept as a tool parameter name), must not start with `_`, and must not be `explanation` or an attribute of pydantic's `BaseModel`.
+            preprocessor: What the model is shown of the step; `StepPreprocessor()` when None.
             instructions: The monitor's own instructions, such as its role and the agent's setting, in place of the default instructions.
             policy: The policy the agent must follow whatever its task says, such as which files it may change; shown before the task.
             template: A replacement for the default prompt template, a Jinja template.
@@ -165,6 +169,7 @@ class Host(HostNative):
             active_step("Host.score()").store,
             step,
             dimensions,
+            preprocessor=preprocessor,
             instructions=instructions,
             policy=policy,
             template=template,
@@ -267,7 +272,7 @@ class Recorder(TypingProtocol):
 
 @dataclass(frozen=True, kw_only=True)
 class HostContext:
-    """What the host passes to `run_sentinel`: its `HostNative`, where the runner records reports, and the sample store.
+    """What the host passes to `run_sentinel`: its `HostNative`, where the runner records reports, the sample store, and, beside a proxy, what the proxy says about the request.
 
     It builds the top layer's `Context` from the host, with an empty `path` and a `Host` wrapping it. Monitors and protocols reach the store only through `Context.store_as()`, which namespaces it by their `path`; `Host.score` keeps the sample's nonce in it too.
     """
@@ -280,6 +285,9 @@ class HostContext:
 
     store: Store
     """The sample store that `Context.store_as()` and `Host.score` read and write while the step runs."""
+
+    proxy: ProxyContext | None = None
+    """What a proxy says about the model request the step was found in, for a host beside a proxy. None in an eval's own process."""
 
     def __post_init__(self) -> None:
         # a runtime check for hosts that are not type-checked against Recorder
@@ -294,7 +302,7 @@ class HostContext:
         # _context imports this module
         from ._context import Context
 
-        return Context(path="", host=Host(self.host))
+        return Context(path="", host=Host(self.host), proxy=self.proxy)
 
 
 @dataclass(frozen=True)

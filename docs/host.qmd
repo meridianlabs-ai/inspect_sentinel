@@ -17,8 +17,8 @@ How a monitor or protocol calls a model. Covers `context.host.generate()` and wh
 - `context.host.generate()`: prompts, messages, tools, `tool_choice` and `GenerateConfig`
 - `model=` and `role=` on an LLM monitor's factory: `model` is a model name, `role` a model role; a configured role wins, then `model`, and with neither the role is `monitor`
 - The `monitor` role: `--model-role monitor=...` and `Task(model_roles=...)`, and the fallback to the agent's model
-- `context.host.score()`: a score from 0.0 to 1.0 for the step, or one per named dimension, with an explanation; the default template and custom templates; narrowing what the model sees with the windowing functions, such as `last_turns(step, 6)`, its messages numbered so the explanation can cite them
-- `score()`'s prompt: `instructions=`, `policy=`, the task, escalations from earlier links of a `sequential()`, and `template=` with `template_variables=`
+- `context.host.score()`: a score from 0.0 to 1.0 for the step, or one per named dimension, with an explanation; the default template and custom templates; narrowing what the model sees with a `StepPreprocessor`, such as `StepPreprocessor(input_window=LastTurns(6))`, its messages numbered so the explanation can cite them
+- `score()`'s prompt: `instructions=`, `policy=`, the task, and `template=` with `template_variables=`
 - `score()`'s answer: a checked answer tool, three attempts before it raises and the monitor is recorded as failed, `retry_refusals=` for provider refusals, and `inspect_scout` needed for now
 - Structured output with `ResponseSchema`
 - Usage: monitor calls recorded separately and not charged to the agent's limits
