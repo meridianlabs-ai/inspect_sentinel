@@ -171,66 +171,103 @@ def _id(entry: object, key: str) -> str | None:
 
 
 def _edit_chunks(events: list[StreamEvent], edits: Edits) -> bytes:
-    # A call is told apart by its index, named with its id in its first
-    # fragment. A later call's index is moved down for each call taken out
-    # before it, and a changed call's arguments go out whole in its first
-    # fragment.
-    ids: dict[int, str] = {}
-    for event in events:
-        for call in _fragments(event):
-            index = call.get("index")
-            if not isinstance(index, int):
-                raise UnreadableError("A call in the reply stream has no index.")
-            if index not in ids:
-                id = call.get("id")
-                if not isinstance(id, str):
-                    raise UnreadableError(
-                        "A call in the reply stream starts without an id."
-                    )
-                ids[index] = id
-    removed = {index for index, id in ids.items() if id in edits.removed}
-    for index, id in ids.items():
-        if id in edits.modified and _fragments_kind(events, index) != "function":
-            raise UnreadableError(
-                f"The call {id!r} is not a function call, whose arguments this sidecar can change."
-            )
-    check_found(ids.values(), edits)
-    started: set[int] = set()
-    for event in events:
-        for choice in _choices(event):
-            delta = cast("dict[str, Any]", choice.get("delta") or {})
-            calls = cast("list[dict[str, Any]]", delta.get("tool_calls") or [])
-            if not calls:
-                continue
-            kept: list[dict[str, Any]] = []
-            for call in calls:
-                index = cast(int, call.get("index"))
-                if index in removed:
+    editor = ChunkEditor()
+    written = editor.edit(events, edits)
+    editor.finish(edits)
+    return write_events(written)
+
+
+class ChunkEditor:
+    """Takes calls out of a Chat Completions reply stream, and changes others, as its chunks go out in order.
+
+    A call is told apart by its index, named with its id in its first fragment. A later call's index is moved down for each call taken out before it, and a changed call's arguments go out whole in its first fragment. What is decided about a call must be in `edits` by the time its first fragment is edited.
+    """
+
+    def __init__(self) -> None:
+        self._ids: dict[int, str] = {}
+        # each call's type, from the first of its fragments that names it
+        self._kinds: dict[int, object] = {}
+        self._started: set[int] = set()
+
+    def edit(self, events: list[StreamEvent], edits: Edits) -> list[StreamEvent]:
+        """The next chunks, edited.
+
+        Raises:
+            UnreadableError: If a call has no index, starts without an id, or is to be changed and is not a function call.
+        """
+        for event in events:
+            for call in _fragments(event):
+                index = call.get("index")
+                if not isinstance(index, int):
+                    raise UnreadableError("A call in the reply stream has no index.")
+                if index not in self._ids:
+                    id = call.get("id")
+                    if not isinstance(id, str):
+                        raise UnreadableError(
+                            "A call in the reply stream starts without an id."
+                        )
+                    self._ids[index] = id
+                if "type" in call:
+                    self._kinds.setdefault(index, call["type"])
+            self._check_kinds(edits)
+            removed = {index for index, id in self._ids.items() if id in edits.removed}
+            for choice in _choices(event):
+                delta = cast("dict[str, Any]", choice.get("delta") or {})
+                calls = cast("list[dict[str, Any]]", delta.get("tool_calls") or [])
+                if not calls:
                     continue
-                call = dict(call)
-                moved = index - sum(1 for taken in removed if taken < index)
-                call["index"] = moved
-                id = ids[index]
-                if id in edits.modified:
-                    function = dict(cast("dict[str, Any]", call.get("function") or {}))
-                    if index not in started:
-                        function["arguments"] = json.dumps(edits.modified[id].arguments)
-                    else:
-                        function.pop("arguments", None)
-                    call["function"] = function
-                    if not function:
-                        del call["function"]
-                    if set(call) == {"index"}:
+                kept: list[dict[str, Any]] = []
+                for call in calls:
+                    index = cast(int, call.get("index"))
+                    if index in removed:
                         continue
-                started.add(index)
-                kept.append(call)
-            if kept != calls:
-                event.changed = True
-            if kept:
-                delta["tool_calls"] = kept
-            else:
-                del delta["tool_calls"]
-    return write_events(events)
+                    call = dict(call)
+                    moved = index - sum(1 for taken in removed if taken < index)
+                    call["index"] = moved
+                    id = self._ids[index]
+                    if id in edits.modified:
+                        function = dict(
+                            cast("dict[str, Any]", call.get("function") or {})
+                        )
+                        if index not in self._started:
+                            function["arguments"] = json.dumps(
+                                edits.modified[id].arguments
+                            )
+                        else:
+                            function.pop("arguments", None)
+                        call["function"] = function
+                        if not function:
+                            del call["function"]
+                        if set(call) == {"index"}:
+                            continue
+                    self._started.add(index)
+                    kept.append(call)
+                if kept != calls:
+                    event.changed = True
+                if kept:
+                    delta["tool_calls"] = kept
+                else:
+                    del delta["tool_calls"]
+        return events
+
+    def finish(self, edits: Edits) -> None:
+        """Check that the stream held every call of `edits`, and that each call changed was a function call.
+
+        Raises:
+            UnreadableError: If it didn't, or one wasn't.
+        """
+        self._check_kinds(edits)
+        check_found(self._ids.values(), edits)
+
+    def _check_kinds(self, edits: Edits) -> None:
+        for index, id in self._ids.items():
+            if (
+                id in edits.modified
+                and self._kinds.get(index, "function") != "function"
+            ):
+                raise UnreadableError(
+                    f"The call {id!r} is not a function call, whose arguments this sidecar can change."
+                )
 
 
 def _choices(event: StreamEvent) -> list[dict[str, Any]]:
@@ -257,15 +294,6 @@ def _fragments(event: StreamEvent) -> list[dict[str, Any]]:
                 if isinstance(call, dict)
             ]
     return fragments
-
-
-def _fragments_kind(events: list[StreamEvent], index: int) -> object:
-    # a call's type, from the first of its fragments that names it
-    for event in events:
-        for call in _fragments(event):
-            if call.get("index") == index and "type" in call:
-                return call["type"]
-    return "function"
 
 
 def _call_id(item: object) -> str | None:
@@ -308,88 +336,116 @@ _ITEM_EVENTS = ("response.output_item.added", "response.output_item.done")
 def _edit_responses_stream(
     events: list[StreamEvent], edits: Edits
 ) -> list[StreamEvent]:
-    # An item is told apart by its output index, which the later items' events
-    # are moved down by for each item taken out before them, so that each
-    # event's index is the item's place in the edited output. A changed call's
-    # arguments go out whole in its first delta, or in the item it was added
-    # with if it has none.
-    # A call is found by the event it is added with, or the one it is done
-    # with, since a stream may hold a call's done event alone, and a client
-    # may act on either.
-    _check_indexes(events)
-    items: dict[int, str] = {}
-    for event in events:
-        data = event.data or {}
-        index = data.get("output_index")
-        kind = data.get("type")
-        if kind not in _ITEM_EVENTS or not isinstance(index, int):
-            continue
-        id = _call_id(data.get("item"))
-        if id is None:
-            continue
-        if items.setdefault(index, id) != id:
-            raise UnreadableError(
-                f"The reply stream names two calls at output index {index}."
-            )
-    removed = {index for index, id in items.items() if id in edits.removed}
-    modified = {index: id for index, id in items.items() if id in edits.modified}
-    deltas = {
-        index
-        for event in events
-        if (event.data or {}).get("type") == "response.function_call_arguments.delta"
-        and isinstance(index := (event.data or {}).get("output_index"), int)
-    }
-    found: list[str] = list(items.values())
-    written: list[StreamEvent] = []
-    started: set[int] = set()
-    for event in events:
-        data = event.data
-        if data is None:
-            written.append(event)
-            continue
-        response = data.get("response")
-        if isinstance(response, dict):
-            output = cast("dict[str, Any]", response).get("output")
-            if isinstance(output, list) and output:
-                edited = _edit_output(cast("list[object]", output), edits, found)
-                if edited != output:
-                    response["output"] = edited
-                    event.changed = True
-        index = data.get("output_index")
-        if not isinstance(index, int):
-            written.append(event)
-            continue
-        if index in removed:
-            continue
-        moved = index - sum(1 for taken in removed if taken < index)
-        if moved != index:
-            data["output_index"] = moved
-            event.changed = True
-        if index in modified:
-            arguments = json.dumps(edits.modified[modified[index]].arguments)
-            kind = data.get("type")
-            item = data.get("item")
-            if kind == "response.function_call_arguments.delta":
-                if index in started:
-                    continue
-                started.add(index)
-                data["delta"] = arguments
-                event.changed = True
-            elif kind == "response.function_call_arguments.done":
-                data["arguments"] = arguments
-                event.changed = True
-            elif kind in ("response.output_item.added", "response.output_item.done"):
-                item = cast("dict[str, Any]", item) if isinstance(item, dict) else {}
-                if item.get("type") != "function_call":
-                    raise UnreadableError(
-                        f"The call {modified[index]!r} is not a function call, whose arguments this sidecar can change."
-                    )
-                added = kind == "response.output_item.added" and index in deltas
-                data["item"] = {**item, "arguments": "" if added else arguments}
-                event.changed = True
-        written.append(event)
-    check_found(found, edits)
+    editor = ResponsesEditor()
+    written = editor.edit(events, edits)
+    editor.finish(edits)
     return written
+
+
+class ResponsesEditor:
+    """Takes calls out of a Responses reply stream, and changes others, as its events go out in order.
+
+    An item is told apart by its output index, which the later items' events are moved down by for each item taken out before them, so that each event's index is the item's place in the edited output. A changed call's arguments go out whole in its first delta, or in the item it was added with if it has none. A call is found by the event it is added with, or the one it is done with, since a stream may hold a call's done event alone, and a client may act on either. What is decided about a call must be in `edits` by the time its first event is edited, and a call's events are edited together.
+    """
+
+    def __init__(self) -> None:
+        self._items: dict[int, str] = {}
+        self._deltas: set[int] = set()
+        self._found: list[str] = []
+        self._started: set[int] = set()
+
+    def edit(self, events: list[StreamEvent], edits: Edits) -> list[StreamEvent]:
+        """The next events, edited.
+
+        Raises:
+            UnreadableError: If an event names an item without its place in the output, two calls share a place, or a call to change is not a function call.
+        """
+        _check_indexes(events)
+        for event in events:
+            data = event.data or {}
+            index = data.get("output_index")
+            kind = data.get("type")
+            if kind == "response.function_call_arguments.delta" and isinstance(
+                index, int
+            ):
+                self._deltas.add(index)
+            if kind not in _ITEM_EVENTS or not isinstance(index, int):
+                continue
+            id = _call_id(data.get("item"))
+            if id is None:
+                continue
+            if index not in self._items:
+                self._found.append(id)
+            if self._items.setdefault(index, id) != id:
+                raise UnreadableError(
+                    f"The reply stream names two calls at output index {index}."
+                )
+        removed = {index for index, id in self._items.items() if id in edits.removed}
+        modified = {
+            index: id for index, id in self._items.items() if id in edits.modified
+        }
+        written: list[StreamEvent] = []
+        for event in events:
+            data = event.data
+            if data is None:
+                written.append(event)
+                continue
+            response = data.get("response")
+            if isinstance(response, dict):
+                output = cast("dict[str, Any]", response).get("output")
+                if isinstance(output, list) and output:
+                    edited = _edit_output(
+                        cast("list[object]", output), edits, self._found
+                    )
+                    if edited != output:
+                        response["output"] = edited
+                        event.changed = True
+            index = data.get("output_index")
+            if not isinstance(index, int):
+                written.append(event)
+                continue
+            if index in removed:
+                continue
+            moved = index - sum(1 for taken in removed if taken < index)
+            if moved != index:
+                data["output_index"] = moved
+                event.changed = True
+            if index in modified:
+                arguments = json.dumps(edits.modified[modified[index]].arguments)
+                kind = data.get("type")
+                item = data.get("item")
+                if kind == "response.function_call_arguments.delta":
+                    if index in self._started:
+                        continue
+                    self._started.add(index)
+                    data["delta"] = arguments
+                    event.changed = True
+                elif kind == "response.function_call_arguments.done":
+                    data["arguments"] = arguments
+                    event.changed = True
+                elif kind in _ITEM_EVENTS:
+                    item = (
+                        cast("dict[str, Any]", item) if isinstance(item, dict) else {}
+                    )
+                    if item.get("type") != "function_call":
+                        raise UnreadableError(
+                            f"The call {modified[index]!r} is not a function call, whose arguments this sidecar can change."
+                        )
+                    added = (
+                        kind == "response.output_item.added" and index in self._deltas
+                    )
+                    data["item"] = {**item, "arguments": "" if added else arguments}
+                    event.changed = True
+            written.append(event)
+        return written
+
+    def finish(self, edits: Edits) -> None:
+        """Check that the stream held every call of `edits`.
+
+        Raises:
+            UnreadableError: If it didn't.
+        """
+        check_found(self._found, edits)
 
 
 def _check_indexes(events: list[StreamEvent]) -> None:

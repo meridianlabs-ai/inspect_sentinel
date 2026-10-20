@@ -1,8 +1,10 @@
 import json
-from typing import Any
+from dataclasses import replace
+from typing import Any, cast
 
 import pytest
 
+from inspect_sentinel.sidecar import _anthropic, _openai
 from inspect_sentinel.sidecar._release import (
     AnthropicTurn,
     ChatTurn,
@@ -12,11 +14,14 @@ from inspect_sentinel.sidecar._release import (
     Turn,
 )
 from inspect_sentinel.sidecar._wire import (
+    Edits,
     StreamEvent,
     UnreadableError,
+    read_reply,
+    write_events,
     written_events,
 )
-from tests.sidecar._traffic import DATA
+from tests.sidecar._traffic import DATA, STREAM
 
 _RECORDINGS = sorted(path.name for path in DATA.glob("*.sse"))
 
@@ -276,3 +281,67 @@ def test_events_for_an_item_never_added_are_unreadable() -> None:
             ResponsesTurn(),
             {"type": "response.output_text.delta", "output_index": 3, "delta": "x"},
         )
+
+
+_EDITED = {
+    "anthropic": ("parallel-tool-calls.sse", AnthropicTurn, "anthropic-messages"),
+    "chat": ("openai-chat.sse", ChatTurn, "openai-chat"),
+    "responses": ("openai-responses.sse", ResponsesTurn, "openai-responses"),
+}
+
+
+def _editor(format: str) -> Any:
+    if format == "anthropic":
+        return _anthropic.StreamEditor()
+    return _openai.ChunkEditor() if format == "chat" else _openai.ResponsesEditor()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("format", list(_EDITED))
+@pytest.mark.parametrize(
+    "change", ["remove first", "remove middle", "modify last", "remove and modify"]
+)
+async def test_editing_a_stream_a_call_at_a_time_gives_what_editing_it_whole_gives(
+    format: str, change: str
+) -> None:
+    name, turn_type, api = _EDITED[format]
+    body = (DATA / name).read_bytes()
+    output = await read_reply("any", STREAM, body, cast(Any, api))
+    calls = output.message.tool_calls or []
+    first, middle, last = calls[0], calls[1], calls[-1]
+    changed = replace(last, arguments={"location": "Oslo"})
+    edits = {
+        "remove first": Edits(frozenset({first.id})),
+        "remove middle": Edits(frozenset({middle.id})),
+        "modify last": Edits(modified={last.id: changed}),
+        "remove and modify": Edits(frozenset({first.id}), {last.id: changed}),
+    }[change]
+    whole = _editor(format)
+    expected = write_events(whole.edit(written_events(body), edits))
+    whole.finish(edits)
+
+    # each call's events together, as early release hands them over once the
+    # call is decided, and everything else one event at a time
+    turn: Turn = turn_type()
+    batches: list[list[StreamEvent]] = []
+    for event in written_events(body):
+        placement = turn.place(event)
+        if (
+            placement.role == "call"
+            and batches
+            and getattr(batches[-1], "item", None) == placement.item
+        ):
+            batches[-1].append(event)
+            continue
+        batch: Any = _Batch([event])
+        batch.item = placement.item if placement.role == "call" else None
+        batches.append(batch)
+    editor = _editor(format)
+    edited = [e for batch in batches for e in editor.edit(list(batch), edits)]
+    editor.finish(edits)
+
+    assert write_events(edited) == expected
+
+
+class _Batch(list[StreamEvent]):
+    item: object = None
