@@ -216,7 +216,8 @@ class ReplyStream:
             await self._provider_error()
             return
         if self._early:
-            await self._run_early(await self._handler.early_turn(start))
+            early = await self._handler.early_turn(start, stopped=lambda: self._aborted)
+            await self._run_early(early)
             return
         await self._until(lambda: self._ended or self._aborted or self._over)
         if self._over:
@@ -340,6 +341,10 @@ class ReplyStream:
             events.check.check(tail)
         written = write_events(tail)
         answer = await early.finish(bytes(self._held), bytes(events.released) + written)
+        if answer is None:
+            # the client went before the turn could be answered
+            early.cut_off()
+            return
         if isinstance(answer, Refuse):
             await self._fail(answer)
             return

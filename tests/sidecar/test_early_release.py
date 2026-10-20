@@ -460,3 +460,70 @@ async def test_a_turn_whose_end_fails_its_check_is_recorded_as_not_judged() -> N
 
     assert isinstance(outputs[-1], ErrorEvent)
     assert await _result(handler) == ("not_judged", "unreadable")
+
+
+def _chat_chunk(delta: dict[str, Any], finish: str | None = None) -> bytes:
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-test",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+    }
+    return b"data: " + json.dumps(chunk).encode() + b"\n\n"
+
+
+@pytest.mark.anyio
+async def test_no_call_is_judged_once_the_client_goes_among_calls_complete_together() -> (
+    None
+):
+    asked, reply = _exchange("chat", inspect=False)
+    calls = [
+        {
+            "index": index,
+            "id": f"call_{index}",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": json.dumps({"location": city}),
+            },
+        }
+        for index, city in enumerate(["Paris", "Tokyo", "Lima"])
+    ]
+    # three calls in one chunk, all complete at the choice's finish
+    body = (
+        _chat_chunk({"role": "assistant", "content": None})
+        + _chat_chunk({"tool_calls": calls})
+        + _chat_chunk({}, "tool_calls")
+        + b"data: [DONE]\n\n"
+    )
+    go, judging = anyio.Event(), anyio.Event()
+    seen: list[str] = []
+
+    @protocol
+    def counts() -> Protocol:
+        """Note each call judged, and wait for `go` at the first."""
+
+        async def decide(
+            context: Context, step: BeforeToolCall, escalations: Escalations
+        ) -> Decision | None:
+            seen.append(step.call.id)
+            judging.set()
+            await go.wait()
+            return Decision.proceed()
+
+        return decide
+
+    handler = Handler(counts(), release="early")
+    await handler.request(asked)
+    stream = handler.reply_stream(_start(reply))
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(stream.run)
+            await stream.feed(body)
+            await judging.wait()
+            await stream.abort()
+            go.set()
+
+    assert seen == ["call_0"]

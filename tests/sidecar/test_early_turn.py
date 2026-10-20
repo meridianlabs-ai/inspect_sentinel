@@ -145,6 +145,7 @@ async def _early(
     )
     editor.finish(early.edits)
     answer = await early.finish(reply.body, released)
+    assert answer is not None
     return answer, released, early.field
 
 

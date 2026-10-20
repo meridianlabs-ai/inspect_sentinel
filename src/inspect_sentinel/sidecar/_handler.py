@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, TypeVar
 
@@ -332,11 +332,14 @@ class Handler:
         """
         return ReplyStream(self, start, max_held_bytes=max_held_bytes)
 
-    async def early_turn(self, start: ReplyStart) -> EarlyTurn:
+    async def early_turn(
+        self, start: ReplyStart, *, stopped: Callable[[], bool] = lambda: False
+    ) -> EarlyTurn:
         """Judge a streamed reply as it arrives, each call once it is complete, for a reply released early.
 
         Args:
             start: The reply's status and headers, before any of its body.
+            stopped: Whether the proxy has stopped waiting for the reply, as when its client went. No call is put to the sentinel after that; one being judged then is decided.
 
         Raises:
             UnreadableError: If the reply answers a request this handler was never shown, or no longer keeps.
@@ -348,7 +351,7 @@ class Handler:
             )
         if held.attempt is not None:
             held.attempt.state = "judging"
-        return EarlyTurn(self, start, held)
+        return EarlyTurn(self, start, held, stopped)
 
     async def reply_not_judged(self, id: str, reason: NotJudged) -> None:
         """Let go of a request whose reply the proxy refused without handing it over, as one larger than it holds.
@@ -1159,10 +1162,17 @@ class EarlyTurn:
     Each call judged before the turn has ended is put to the sentinel with `turn_complete` false, and with the assistant text written before it. The whole reply is read again at its end, as `Handler.reply` reads it, and its calls must be the ones judged as it arrived. What is decided is kept as `Handler.reply` keeps it.
     """
 
-    def __init__(self, handler: Handler, start: ReplyStart, held: Held) -> None:
+    def __init__(
+        self,
+        handler: Handler,
+        start: ReplyStart,
+        held: Held,
+        stopped: Callable[[], bool],
+    ) -> None:
         self._handler = handler
         self._start = start
         self._held = held
+        self._stopped = stopped
         self._decided = _Decided()
         self._judged: dict[str, ToolCall] = {}
         self._message_id: str | None = None
@@ -1208,7 +1218,7 @@ class EarlyTurn:
         assert isinstance(answered, Refuse)
         return answered
 
-    async def finish(self, body: bytes, released: bytes) -> Answer:
+    async def finish(self, body: bytes, released: bytes) -> Answer | None:
         """Judge the turn once the reply has ended.
 
         Args:
@@ -1216,7 +1226,7 @@ class EarlyTurn:
             released: The whole reply, as the client was sent it, with the calls taken out and changed.
 
         Returns:
-            What `Handler.reply` would answer, without the `sentinel` field on a turn that goes on, which for an Inspect client is `field`: `Pass`, `Replace` with `released` when calls were taken out or changed, or the refusal, with the field.
+            What `Handler.reply` would answer, without the `sentinel` field on a turn that goes on, which for an Inspect client is `field`: `Pass`, `Replace` with `released` when calls were taken out or changed, or the refusal, with the field. None if the proxy stopped waiting before the turn could be answered.
 
         Raises:
             UnreadableError: If the reply can't be read, its calls are not those judged as it arrived, or what the client was sent doesn't read as the reply with the decisions made.
@@ -1225,7 +1235,8 @@ class EarlyTurn:
         """
         if self._answer is not None:
             return self._answer
-        return self._answered(await self._guarded(self._finish(body, released)))
+        answer = await self._guarded(self._finish(body, released))
+        return None if answer is None else self._answered(answer)
 
     def failed(self, why: Exception | NotJudged) -> None:
         """Record a turn that couldn't be judged, because of an error, or for the reason given."""
@@ -1281,6 +1292,9 @@ class EarlyTurn:
         for call in message.tool_calls or []:
             if call.id in self._judged:
                 continue
+            if self._stopped():
+                # a call being judged is decided, and no other is asked about
+                return None
             self._judged[call.id] = call
             if BeforeToolCall not in handler._watched:  # pyright: ignore[reportPrivateUsage]
                 continue
@@ -1298,7 +1312,7 @@ class EarlyTurn:
                 return ended
         return None
 
-    async def _finish(self, body: bytes, released: bytes) -> Answer:
+    async def _finish(self, body: bytes, released: bytes) -> Answer | None:
         handler, held, start = self._handler, self._held, self._start
         run, conversation = await self._run()
         begun = conversation.noted
@@ -1348,6 +1362,8 @@ class EarlyTurn:
             for call in calls:
                 if call.id in self._judged:
                     continue
+                if self._stopped():
+                    return None
                 ended = await handler._judge_call(  # pyright: ignore[reportPrivateUsage]
                     held,
                     run,
