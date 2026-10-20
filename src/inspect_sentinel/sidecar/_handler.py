@@ -446,8 +446,15 @@ class Handler:
         """
         return "ended" if await self._state.end_run(_run_key(True, run)) else "unknown"
 
-    async def _within_limit(self, judging: Awaitable[T], what: str, id: str) -> T:
-        with anyio.move_on_after(self._time_limit):
+    async def _within_limit(
+        self,
+        judging: Awaitable[T],
+        what: str,
+        id: str,
+        left: float | None = None,
+    ) -> T:
+        # `left` is what remains of the limit, where judging is done in parts
+        with anyio.move_on_after(self._time_limit if left is None else left):
             return await judging
         raise self._out_of_time(what, id)
 
@@ -1207,6 +1214,9 @@ class EarlyTurn:
         self._ended: Refuse | None = None
         # the turn's answer, once it has one
         self._answer: Answer | None = None
+        # how long judging has taken so far, which the handler's time limit
+        # bounds for the reply as a whole, as when it is held whole
+        self._spent = 0.0
 
     @property
     def edits(self) -> Edits:
@@ -1291,14 +1301,21 @@ class EarlyTurn:
         return answer
 
     async def _guarded(self, judging: Awaitable[T]) -> T:
+        limit = self._handler._time_limit  # pyright: ignore[reportPrivateUsage]
+        began = anyio.current_time()
         try:
             return await self._handler._within_limit(  # pyright: ignore[reportPrivateUsage]
-                judging, "reply", self._start.id
+                judging,
+                "reply",
+                self._start.id,
+                None if limit is None else max(limit - self._spent, 0.0),
             )
         except Exception as ex:
             if self._held.attempt is not None:
                 self._held.attempt.not_judged(_not_judged(ex))
             raise
+        finally:
+            self._spent += anyio.current_time() - began
 
     async def _judge(self, prefix: bytes) -> Refuse | None:
         handler, held, start = self._handler, self._held, self._start

@@ -26,6 +26,7 @@ from inspect_sentinel.sidecar import (
     ReplyStart,
     ReplyStream,
 )
+from inspect_sentinel.sidecar._errors import TimeLimitError
 from inspect_sentinel.sidecar._handler import RequestResult
 from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
 from inspect_sentinel.sidecar._wire import UnreadableError
@@ -653,3 +654,24 @@ async def test_no_keepalive_goes_out_before_the_format_is_known() -> None:
 
     # nothing went out, so the proxy refuses the reply with a real status
     assert outputs == [] and raised
+
+
+@pytest.mark.anyio
+async def test_a_reply_released_early_has_one_time_limit_for_all_its_judging() -> None:
+    # each call alone is within the limit, and the three together are not, as
+    # when the reply is held whole
+    asked, reply = _exchange("anthropic", inspect=True)
+    whole = Handler(slowly(0.06, "proceed"), time_limit=0.1)
+    await whole.request(asked)
+    with pytest.raises(TimeLimitError):
+        await whole.reply(reply)
+    early = Handler(slowly(0.06, "proceed"), release="early", time_limit=0.1)
+    await early.request(asked)
+
+    outputs = await _streamed(early.reply_stream(_start(reply)), reply.body, 61)
+
+    # the text had gone out, so the turn fails in the stream
+    assert isinstance(outputs[-1], ErrorEvent)
+    result = await early.request_result("request_456")
+    assert not isinstance(result, str)
+    assert (result.latest.state, result.latest.reason) == ("not_judged", "time_limit")
