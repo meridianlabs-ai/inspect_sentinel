@@ -1,6 +1,6 @@
 # Implementation plan: the sidecar
 
-How [sidecar.md](sidecar.md) becomes code. Each pull request can be reviewed on its own, has its own tests, and leaves `main` importable and passing. Proposed 2026-10-14; Envoy, incremental streaming and human review added 2026-10-17; the work after PR 7 reordered and renumbered, with streaming split into proxy and Inspect client phases, on 2026-10-19.
+How [sidecar.md](sidecar.md) becomes code. Each pull request can be reviewed on its own, has its own tests, and leaves `main` importable and passing. Proposed 2026-10-14; Envoy, incremental streaming and human review added 2026-10-17; the work after PR 7 reordered and renumbered, with streaming split into proxy and Inspect client phases, on 2026-10-19; TLS on the sidecar's listeners added as PR 16, before Middleman, on 2026-10-20.
 
 Earlier prototype code exists for much of this. It is reused where it fits the design in `sidecar.md`, and rewritten where it does not.
 
@@ -15,7 +15,7 @@ Earlier prototype code exists for much of this. It is reused where it fits the d
 
 ## Order
 
-After steps 1–7, the main delivery path is **8 model-facing history → 9 Envoy → 10 proxy streaming → 11 Inspect sidecar client → 12 Inspect streaming → 13 human review**. This builds and validates Envoy and incremental streaming in `inspect_sentinel` before implementing the client in `inspect_ai`. Discuss the Inspect client contract with Meridian while the proxy work proceeds. Smaller upstream asks (14) can proceed independently. Trusted run identity (15) comes before Middleman (16), whose implementation waits on Hawk/METR accepting the gateway change; identity work can proceed through Envoy and LiteLLM while that approval is pending.
+After steps 1–7, the main delivery path is **8 model-facing history → 9 Envoy → 10 proxy streaming → 11 Inspect sidecar client → 12 Inspect streaming → 13 human review**. This builds and validates Envoy and incremental streaming in `inspect_sentinel` before implementing the client in `inspect_ai`. Discuss the Inspect client contract with Meridian while the proxy work proceeds. Smaller upstream asks (14) can proceed independently. Trusted run identity (15) and TLS on the sidecar's listeners (16) come before Middleman (17), whose implementation waits on Hawk/METR accepting the gateway change; identity work can proceed through Envoy and LiteLLM while that approval is pending.
 
 ```text
 inspect_sentinel
@@ -57,9 +57,10 @@ inspect_sentinel
 
 14 smaller asks: inspect_ai, independently, after accepting each issue
 15 trusted run identity: after 6 and 11, before Middleman; no Hawk dependency
-16 Middleman: inspect_sentinel and hawk, after 3 and 5; scheduled after 15
+16 TLS on the sidecar's listeners: after 4, 6 and 9; before Middleman
+17 Middleman: inspect_sentinel and hawk, after 3 and 5; scheduled after 15 and 16
    Implementation also needs Hawk/METR accepting the passthrough hook
-   Middleman streaming follows 10 and 16 and METR accepting chunk delivery
+   Middleman streaming follows 10 and 17 and METR accepting chunk delivery
 shared state: inspect_sentinel, before more than one sidecar worker or restart continuity
 ```
 
@@ -69,7 +70,7 @@ PR 8 comes next: the sidecar fills `step.history` from the traffic it keeps, so 
 
 PR 11's technical prerequisites remain 5, 6 and 7; placing it after 10 is a delivery choice, so the proxy behavior and recovery contract are exercised before a client depends on them. From 7 it needs per-call rejection and `modify`, and also that a rejection Inspect puts back into its conversation is not judged as a tool result: before 7, the sidecar would judge each such rejection as a call that ran, and could end the run for a call that never ran. PR 11 establishes the Inspect client with whole-response holding. PR 12 then connects that client to incremental replies and interrupted streams, including transcript and sample-outcome conformance. PR 13 follows both streaming phases and adds human review through the sidecar's host, Inspect's approval UI and external review consumers.
 
-[Shared and durable state](#follow-up-shared-and-durable-state) is delivered before the sidecar runs as more than one worker or promises that a run outlasts a restart; until then a deployment is one process. PR 14 needs nothing and can start at any time, with each upstream issue accepted first. PR 15 implements trusted run identity after registration and the Inspect client, using Envoy and LiteLLM first, without waiting for a Hawk change. PR 16 is scheduled after PR 15 and waits on Hawk/METR accepting Middleman's passthrough hook. Extending Middleman to hand over chunks also needs PR 10 and METR accepting that change; it does not block Envoy, LiteLLM, identity or the Inspect client work.
+[Shared and durable state](#follow-up-shared-and-durable-state) is delivered before the sidecar runs as more than one worker or promises that a run outlasts a restart; until then a deployment is one process. PR 14 needs nothing and can start at any time, with each upstream issue accepted first. PR 15 implements trusted run identity after registration and the Inspect client, using Envoy and LiteLLM first, without waiting for a Hawk change. PR 16 adds TLS, and client certificates, on every port the sidecar listens on, for Envoy and LiteLLM first. PR 17 is scheduled after PRs 15 and 16 and waits on Hawk/METR accepting Middleman's passthrough hook. Extending Middleman to hand over chunks also needs PR 10 and METR accepting that change; it does not block Envoy, LiteLLM, identity or the Inspect client work.
 
 ## PR 1: reading provider traffic
 
@@ -177,7 +178,7 @@ Repository: `inspect_sentinel`. Depends on: PRs 4 and 9. Does not depend on PR 1
 - Preserve PR 7's rejection and modification semantics, the original calls restored in later model requests, and termination remembered for the run. Define what happens when every call is rejected after preceding text has gone out, or when a later decision terminates a turn whose earlier calls have been released. Released content cannot be recalled. After the response status is committed, refusals and failures use an error event the client SDK recognises, with no successful stream ending in its place.
 - Keep the `sentinel` field and request and run results correct on incremental replies and failures, including when results are trimmed. A small test client exercises the recovery contract: when a cut stream cannot carry the field, `request_result` must still expose the available decisions and original turns, or explicitly report a pending judgment, a failure to judge, dropped records or an unknown request. This validates the protocol; writing Inspect's transcript and acting on the recovered outcome belong to PR 12.
 - Keep connections alive while tool calls wait, with provider-compatible keepalives. Bound queues and held bytes, apply backpressure and hold deadlines, and define cancellation and record retention when the client disconnects or a proxy stops waiting.
-- Deliver and test the incremental path through both Envoy and LiteLLM. A proxy or provider format without a validated incremental path continues to use whole-response holding. Middleman's streaming extension is a separate follow-up in `inspect_sentinel` and `hawk`, after PRs 10 and 16 and METR accepting chunk delivery. It uses the same interface and does not block this phase or PR 12; until it lands, Middleman holds replies whole.
+- Deliver and test the incremental path through both Envoy and LiteLLM. A proxy or provider format without a validated incremental path continues to use whole-response holding. Middleman's streaming extension is a separate follow-up in `inspect_sentinel` and `hawk`, after PRs 10 and 17 and METR accepting chunk delivery. It uses the same interface and does not block this phase or PR 12; until it lands, Middleman holds replies whole.
 
 Acceptance tests use a provider and a sentinel whose progress is controlled: preceding text must reach the client before the provider finishes or the sentinel answers, and no part of a tool call may reach it before approval. Cover multiple calls, mixed decisions, modification, rejection of every call, termination after earlier release, split and combined chunks, malformed or interrupted streams, keepalives, backpressure and disconnects. Each provider SDK must read successful edited streams and raise on refused ones. Eligible fixtures must retain the model-facing history of the whole-response path, including the original calls and rejection results on later requests; a whole-response policy must demonstrably keep the reply held. Check field delivery and endpoint recovery with the test client. Actual Inspect transcript conformance is a PR 12 acceptance criterion.
 
@@ -243,7 +244,7 @@ Repository: `inspect_ai`. Depends on: nothing. Each can be its own pull request,
 
 ## PR 15: trusted run identity and termination scopes
 
-Repositories: `inspect_sentinel`, `inspect_ai`, and the deployment's proxy or gateway where needed. Depends on: PRs 6 and 11. Review the identity and lifecycle contract with Meridian before PR 11, so the initial client's trusted-host scope and interfaces are explicit. Implement the stronger enforcement once registration and the Inspect client are available, before the Middleman work in PR 16. Design and test it through Envoy and LiteLLM first, without depending on Hawk/METR accepting the Middleman change. Tracked in [#117](https://github.com/meridianlabs-ai/inspect_sentinel/issues/117), following the run-identity review on PR #116; it does not block the proxy work in PRs 9 and 10.
+Repositories: `inspect_sentinel`, `inspect_ai`, and the deployment's proxy or gateway where needed. Depends on: PRs 6 and 11. Review the identity and lifecycle contract with Meridian before PR 11, so the initial client's trusted-host scope and interfaces are explicit. Implement the stronger enforcement once registration and the Inspect client are available, before the Middleman work in PR 17. Design and test it through Envoy and LiteLLM first, without depending on Hawk/METR accepting the Middleman change. Tracked in [#117](https://github.com/meridianlabs-ai/inspect_sentinel/issues/117), following the run-identity review on PR #116; it does not block the proxy work in PRs 9 and 10.
 
 In ordinary Inspect evals, the trusted host sets the run identity. A caller that can make its own authenticated proxy requests can instead supply a fresh `sample_uuid` and escape a prior run's termination, or claim another run's identity. Registration replay and re-registration need an explicit lifecycle contract too; the reproduced UUID-switch case does not establish that the current registration implementation clears an existing run.
 
@@ -256,11 +257,23 @@ In ordinary Inspect evals, the trusted host sets the run identity. A caller that
 
 Malformed Inspect context failing closed remains a separate fix for PR #116 and is not deferred by this follow-up.
 
-## PR 16: Middleman
+## PR 16: TLS on the sidecar's listeners
 
-Repositories: `inspect_sentinel` and `hawk`. Technical prerequisites: PRs 3 and 5, and Hawk/METR accepting Middleman's passthrough hook. Scheduled after PR 15; it does not hold up trusted run identity or the other proxy integrations.
+Repository: `inspect_sentinel`. Depends on: PRs 3, 4, 6 and 9. Scheduled before PR 17, so that `MiddlemanHook` supports it from its first version. It does not depend on PR 15 or on Hawk.
 
-- In `inspect_sentinel`: `MiddlemanHook`, a package under `src/proxies/middleman`, calling `judge_request` and `judge_reply`, passing on and removing Inspect's two headers, and putting the `sentinel` field into Middleman's errors.
+A proxy reaches the sidecar over plain HTTP, and Envoy reaches the Envoy shim over plain gRPC. Each is protected by where the sidecar listens: an operator makes it reachable by the proxy alone. This PR lets the sidecar serve TLS on every port it listens on, and require a client certificate from the proxies that call it. Plain listeners stay the default, for a sidecar that runs beside its proxy.
+
+- The sidecar: a `tls` stanza inside `server`, with `cert`, `key` and `client_ca`, and the options `--tls-cert`, `--tls-key` and `--tls-client-ca`. The certificate is served on every port: the endpoints' port, the Envoy shim's port, and the endpoint for evals' own port where it has one. `client_ca` requires a client certificate signed by that CA on the ports proxies call. The endpoint for evals' own port keeps its token, since Inspect presents no client certificate.
+- Envoy: the configuration generator takes the CA that signed the sidecar's certificate, and Envoy's client certificate and key, as files in Envoy's file system. It puts TLS on both of Envoy's clusters for the sidecar, checking the sidecar's host name, with `h2` for the shim's gRPC.
+- LiteLLM's guardrail: an `https` URL for the sidecar, the CA to trust, and a client certificate and key.
+- Certificates are read at startup, so a new certificate needs a restart. Reloading them without one, such as through Envoy's SDS, is not planned.
+- Tests: a CA and certificates the tests make; Envoy and the LiteLLM guardrail calling the sidecar with mutual TLS; a client with no certificate, or one signed by another CA, refused; the endpoint for evals reached with its token over TLS.
+
+## PR 17: Middleman
+
+Repositories: `inspect_sentinel` and `hawk`. Technical prerequisites: PRs 3 and 5, and Hawk/METR accepting Middleman's passthrough hook. Scheduled after PRs 15 and 16; it does not hold up trusted run identity or the other proxy integrations.
+
+- In `inspect_sentinel`: `MiddlemanHook`, a package under `src/proxies/middleman`, calling `judge_request` and `judge_reply`, over TLS with a client certificate where PR 16's settings are given, passing on and removing Inspect's two headers, and putting the `sentinel` field into Middleman's errors.
 - In `hawk`: the passthrough hook in Middleman, which is METR's to accept; Middleman letting the `sentinel` field through on its errors; and routing `/sentinel/*` to the sidecar at the load balancer in front of Middleman.
 - A README for the hook, including the load balancer's routing.
 
