@@ -554,7 +554,11 @@ class Handler:
             return self._with_field(refusal, proxy, held.exchange, "terminate")
         # the request goes on to the model, as the client sent it with what
         # this sidecar added
-        record_sent(conversation, messages)
+        record_sent(
+            conversation,
+            messages,
+            amended.body if amended.body is not None else request.body,
+        )
         await self._state.hold(request.id, held)
         # an Inspect client is told of the request's steps with the reply
         return answer

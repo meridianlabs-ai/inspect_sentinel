@@ -17,10 +17,10 @@ def _read(*texts: str) -> list[ChatMessage]:
     return [roles[text[0]](content=text[2:]) for text in texts]
 
 
-def _sent(*requests: list[ChatMessage]) -> list[str]:
+def _sent(*requests: list[ChatMessage], body: bytes = b"") -> list[str]:
     conversation = Conversation()
     for input in requests:
-        record_sent(conversation, input)
+        record_sent(conversation, input, body)
     return [f"{message.role[0]}:{message.text}" for message in conversation.sent]
 
 
@@ -81,3 +81,17 @@ def test_a_call_whose_arguments_are_written_in_another_order_is_the_same() -> No
         calling({"city": "Oslo", "units": "metric"}),
         calling({"units": "metric", "city": "Oslo"}),
     ) == ["u:Weather?", "a:"]
+
+
+def test_a_call_is_told_apart_by_an_id_the_request_carries() -> None:
+    # two calls alike but for their ids, which the request carries, are two
+    def calling(id: str) -> list[ChatMessage]:
+        call = ToolCall(id=id, function="get_weather", arguments={"city": "Oslo"})
+        return [
+            *_read("u:Weather?"),
+            ChatMessageAssistant(content="", tool_calls=[call]),
+        ]
+
+    assert _sent(
+        calling("call_1"), calling("call_2"), body=b'["call_1", "call_2"]'
+    ) == ["u:Weather?", "a:", "a:"]

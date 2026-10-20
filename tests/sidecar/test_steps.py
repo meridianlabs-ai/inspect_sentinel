@@ -318,6 +318,25 @@ _SEARCHED: list[dict[str, Any]] = [
 ]
 
 
+# a provider's own search for a tool, sent back without its id, which a
+# reader makes up a new one for at each read, as a call's
+_TOOL_SEARCHED: list[dict[str, Any]] = [
+    {"role": "user", "content": "Find a tool."},
+    {
+        "type": "tool_search_call",
+        "execution": "server",
+        "status": "completed",
+        "arguments": {"query": "weather"},
+    },
+    {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Found.", "annotations": []}],
+    },
+    {"role": "user", "content": "Thanks"},
+]
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("body", "again"),
@@ -325,8 +344,21 @@ _SEARCHED: list[dict[str, Any]] = [
         ({"model": "gpt-a", "messages": _SAID}, {"model": "gpt-b"}),
         ({"model": "gpt-a", "input": _SAID}, {"model": "gpt-b"}),
         ({"model": "gpt-a", "input": _SEARCHED, "tools": [{"type": "web_search"}]}, {}),
+        (
+            {
+                "model": "gpt-a",
+                "input": _TOOL_SEARCHED,
+                "tools": [{"type": "tool_search"}],
+            },
+            {},
+        ),
     ],
-    ids=["chat, another model", "responses, another model", "responses, a search"],
+    ids=[
+        "chat, another model",
+        "responses, another model",
+        "responses, a search",
+        "responses, a search for a tool",
+    ],
 )
 async def test_a_conversation_sent_again_unchanged_adds_nothing_to_its_history(
     body: dict[str, Any], again: dict[str, Any]
