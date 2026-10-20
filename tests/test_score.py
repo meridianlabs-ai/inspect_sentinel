@@ -688,25 +688,95 @@ async def test_scope_turn_asks_once_per_message_and_scores_each_call() -> None:
     )
 
 
+class GatedHost(FakeHost):
+    # holds every model call until `open` is set, so concurrent steps overlap
+    def __init__(self, *, fail_first: bool = False, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.open = anyio.Event()
+        self.fail_first = fail_first
+
+    async def generate(self, input: Any, **kwargs: Any) -> ModelOutput:
+        await self.open.wait()
+        if self.fail_first:
+            self.fail_first = False
+            raise RuntimeError("provider down")
+        return await super().generate(input, **kwargs)
+
+
+@pytest.mark.parametrize("fail_first", [False, True])
 @pytest.mark.anyio
-async def test_scope_turn_waits_for_a_judgment_in_flight() -> None:
+async def test_scope_turn_steps_of_one_message_share_the_judgment_in_flight(
+    fail_first: bool,
+) -> None:
     _, steps = turn_of_three()
-    host = FakeHost(
+    host = GatedHost(
+        fail_first=fail_first,
         eval=EVAL,
         outputs=[answer(explanation="fine", call_1=0.0, call_2=0.2, call_3=0.4)],
     )
     found: dict[str, float] = {}
+    failed: list[str] = []
     with in_step(host=host) as context:
 
         async def one(s: BeforeToolCall) -> None:
-            o = await context.host.score(s, "Safe?", scope="turn")
+            try:
+                o = await context.host.score(s, "Safe?")
+            except RuntimeError:
+                failed.append(s.call.id)
+                return
             found[s.call.id] = float(o.suspicion)  # pyright: ignore[reportArgumentType]
 
         async with anyio.create_task_group() as tg:
             for s in steps:
                 tg.start_soon(one, s)
-    assert found == {"call_1": 0.0, "call_2": 0.2, "call_3": 0.4}
+            await anyio.sleep(0.01)
+            # every step is waiting on the one judgment
+            assert len(host.inputs) == 0
+            host.open.set()
+    # an owner that fails hands the judgment to a waiting step
+    assert len(failed) == (1 if fail_first else 0)
+    assert found == {
+        k: v
+        for k, v in {"call_1": 0.0, "call_2": 0.2, "call_3": 0.4}.items()
+        if k not in failed
+    }
     assert len(host.inputs) == 1
+
+
+@pytest.mark.anyio
+async def test_scope_turn_judges_again_a_call_an_earlier_link_changed() -> None:
+    _, steps = turn_of_three()
+    changed = replace(
+        steps[1],
+        call=ToolCall(id="call_2", function="bash", arguments={"cmd": "edit other"}),
+    )
+    host = FakeHost(
+        eval=EVAL,
+        outputs=[
+            answer(explanation="a", call_1=0.0, call_2=0.1, call_3=0.2),
+            answer(explanation="b", call_1=0.0, call_2=0.7, call_3=0.2),
+        ],
+    )
+    with in_step(host=host) as context:
+        first = await context.host.score(steps[0], "Safe?")
+        second = await context.host.score(changed, "Safe?")
+    assert (first.suspicion, second.suspicion) == (0.0, 0.7)
+    assert "edit other" in prompt(host, 1)
+
+
+@pytest.mark.anyio
+async def test_scope_turn_falls_back_to_one_call_when_a_field_name_is_too_long() -> (
+    None
+):
+    _, steps = turn_of_three()
+    long = "d" * 60
+    host = FakeHost(
+        eval=EVAL, outputs=[answer(explanation="ok", **{long: 0.3, "short": 0.1})]
+    )
+    with in_step(host=host) as context:
+        o = await context.host.score(steps[0], {long: "Safe?", "short": "Short?"})
+    assert o.suspicion == {long: 0.3, "short": 0.1}
+    assert "[UNDER REVIEW" in prompt(host)
 
 
 @pytest.mark.anyio
@@ -776,3 +846,22 @@ async def test_a_generate_is_judged_as_the_latest_step_by_default() -> None:
     host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
     await score(host, before_generate_step(), "Safe?")
     assert "Score the agent's latest step (the AGENT STEP block above)" in prompt(host)
+
+
+@pytest.mark.anyio
+async def test_explain_text_takes_an_earlier_attempts_text_when_the_last_has_none() -> (
+    None
+):
+    first = ModelOutput.for_tool_call(
+        model="fake",
+        tool_name="answer",
+        tool_arguments={"suspicion": 1.5},
+        content="Deletes /etc [M1].",
+    )
+    second = answer(suspicion=0.9)
+    second.choices[0].message.content = ""
+    host = FakeHost(eval=EVAL, outputs=[first, second])
+    observation = await score(
+        host, before_tool_call("bash", cmd="rm -rf /etc"), "Safe?", explain="text"
+    )
+    assert observation.explanation == "Deletes /etc [M1]."
