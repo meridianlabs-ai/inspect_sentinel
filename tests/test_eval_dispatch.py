@@ -40,6 +40,7 @@ from inspect_sentinel import (
     BeforeToolCall,
     Context,
     Decision,
+    Escalations,
     Monitor,
     MonitorGroup,
     Observation,
@@ -72,7 +73,11 @@ def addition() -> Tool:
 
 @protocol
 def d3_terminate() -> Protocol:
-    async def stop(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def stop(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return Decision.terminate("too risky")
 
     return stop
@@ -80,7 +85,11 @@ def d3_terminate() -> Protocol:
 
 @protocol
 def d3_escalate() -> Protocol:
-    async def unsure(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def unsure(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return Decision.escalate("not sure")
 
     return unsure
@@ -88,7 +97,11 @@ def d3_escalate() -> Protocol:
 
 @protocol
 def d3_escalate_after() -> Protocol:
-    async def unsure(context: Context, step: AfterToolCall) -> Decision | None:
+    async def unsure(
+        context: Context,
+        step: AfterToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return Decision.escalate(f"unsure about {step.result.text}")
 
     return unsure
@@ -96,7 +109,11 @@ def d3_escalate_after() -> Protocol:
 
 @protocol
 def d3_continue() -> Protocol:
-    async def fine(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def fine(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return Decision.proceed()
 
     return fine
@@ -104,7 +121,11 @@ def d3_continue() -> Protocol:
 
 @protocol
 def d3_final() -> Protocol:
-    async def veto(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def veto(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         decide_final(Decision.reject(message="vetoed"))
         return None
 
@@ -113,7 +134,11 @@ def d3_final() -> Protocol:
 
 @protocol
 def d3_final_escalate() -> Protocol:
-    async def unsure(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def unsure(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         decide_final(Decision.escalate("not sure"))
         return None
 
@@ -141,7 +166,11 @@ def d3_cites() -> Monitor:
 
 @protocol
 def d3_cites_reject() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return Decision.reject("see [M2]", references=[_CITE])
 
     return decide
@@ -543,11 +572,17 @@ def d3_generate_decides(
     action: Any, after: bool, any_output: bool = False
 ) -> ProtocolGroup:
     async def before_generate(
-        context: Context, step: BeforeGenerate
+        context: Context,
+        step: BeforeGenerate,
+        escalations: Escalations,
     ) -> Decision | None:
         return None if after else Decision(action=action, explanation="no generate")
 
-    async def after_generate(context: Context, step: AfterGenerate) -> Decision | None:
+    async def after_generate(
+        context: Context,
+        step: AfterGenerate,
+        escalations: Escalations,
+    ) -> Decision | None:
         if after and (any_output or step.output.message.tool_calls):
             return Decision(action=action, explanation="no tools")
         return None

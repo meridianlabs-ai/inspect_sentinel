@@ -18,6 +18,7 @@ from inspect_sentinel import (
     BeforeToolCall,
     Context,
     Decision,
+    Escalations,
     Monitor,
     Observation,
     Protocol,
@@ -38,7 +39,11 @@ def d2_suspicion(score: float = 0.5) -> Monitor:
 
 @protocol
 def d2_rule(reason: str = "no") -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return Decision.reject(reason)
 
     return decide
