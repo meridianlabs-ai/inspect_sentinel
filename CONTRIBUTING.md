@@ -4,7 +4,7 @@ Thanks for your interest in contributing. Bug reports, doc fixes, and core chang
 
 ## Development setup
 
-Inspect Sentinel uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, and requires Python 3.11+.
+Inspect Sentinel uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, and requires Python 3.11+. Use uv 0.9.15 or later. Scout keeps its viewer files in Git LFS, and sentinel doesn't use them. From 0.9.15, uv leaves them out of a git install, but an older uv on a machine with Git LFS installed downloads them, and a failed download fails the whole install. With an older uv, set `GIT_LFS_SKIP_SMUDGE=1` for the install.
 
 The development environment pins 3.13 (`.python-version`). CI covers both ends of the supported range: 3.11 proves the floor still works, and 3.14 exercises the newest interpreter. `make check` only ever sees the 3.13 environment, so a construct that is new in 3.12 or later passes locally and fails in CI on 3.11. To reproduce the floor locally:
 
