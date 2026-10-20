@@ -1,5 +1,6 @@
 """What a sentinel in the sidecar is given at each step, found in the traffic."""
 
+import json
 from dataclasses import replace
 from typing import Any, cast
 
@@ -23,6 +24,7 @@ from inspect_sentinel.sidecar import (
     Pass,
     Record,
     Refuse,
+    Request,
     UnreadableError,
 )
 from inspect_sentinel.sidecar._registration import FileTask
@@ -290,6 +292,67 @@ async def test_a_reply_is_given_what_its_conversation_sent_while_it_waited() -> 
     assert after == str(
         ["You are helpful.", "What is the weather?", "Looking.", "rain"]
     )
+
+
+_SAID: list[dict[str, Any]] = [
+    {"role": "user", "content": "Hi"},
+    {"role": "assistant", "content": "Hello."},
+    {"role": "user", "content": "Bye"},
+]
+
+# a turn with a provider's own search, as a client may send it back: without
+# the item's id, for which a reader makes up a new one at each read
+_SEARCHED: list[dict[str, Any]] = [
+    {"role": "user", "content": "Search."},
+    {
+        "type": "web_search_call",
+        "status": "completed",
+        "action": {"type": "search", "query": "weather"},
+    },
+    {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Sunny.", "annotations": []}],
+    },
+    {"role": "user", "content": "Thanks"},
+]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("body", "again"),
+    [
+        ({"model": "gpt-a", "messages": _SAID}, {"model": "gpt-b"}),
+        ({"model": "gpt-a", "input": _SAID}, {"model": "gpt-b"}),
+        ({"model": "gpt-a", "input": _SEARCHED, "tools": [{"type": "web_search"}]}, {}),
+    ],
+    ids=["chat, another model", "responses, another model", "responses, a search"],
+)
+async def test_a_conversation_sent_again_unchanged_adds_nothing_to_its_history(
+    body: dict[str, Any], again: dict[str, Any]
+) -> None:
+    # what a reader fills in from the request, or makes up, is not what the
+    # model was sent
+    handler = Handler(reports_histories())
+
+    for id, sent in [("a", body), ("b", body | again), ("c", body | again)]:
+        await handler.request(
+            Request(
+                id=id,
+                provider="openai",
+                model=sent["model"],
+                user=None,
+                body=json.dumps(sent).encode(),
+            )
+        )
+
+    # the third is given what the first sent, the second having added nothing
+    first, third = [
+        _explanations(await handler.records(id))[-1].split("|", 3)[3]
+        for id in ["b", "c"]
+    ]
+    assert first != "[]"
+    assert third == first
 
 
 @pytest.mark.anyio
