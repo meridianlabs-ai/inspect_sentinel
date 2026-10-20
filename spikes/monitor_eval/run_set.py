@@ -120,6 +120,8 @@ def main() -> None:
             self._dry = DryRunHost(task) if dry else None
             self.input_tokens = 0
             self.output_tokens = 0
+            self.cache_write_tokens = 0
+            self.cache_read_tokens = 0
             self.calls = 0
 
         async def generate(self, input: Any, **kwargs: Any) -> Any:
@@ -132,6 +134,8 @@ def main() -> None:
             if output.usage:
                 self.input_tokens += output.usage.input_tokens
                 self.output_tokens += output.usage.output_tokens
+                self.cache_write_tokens += output.usage.input_tokens_cache_write or 0
+                self.cache_read_tokens += output.usage.input_tokens_cache_read or 0
             return output
 
     async def all_runs() -> None:
@@ -186,6 +190,8 @@ def main() -> None:
                             "seconds": round(time.monotonic() - started, 1),
                             "input_tokens": host.input_tokens,
                             "output_tokens": host.output_tokens,
+                            "cache_write_tokens": host.cache_write_tokens,
+                            "cache_read_tokens": host.cache_read_tokens,
                             "calls": host.calls,
                         }
                     )

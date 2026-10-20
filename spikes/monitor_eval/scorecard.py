@@ -44,6 +44,19 @@ SET_TURNS: dict[str, list[tuple[int, list[int]]]] = {
 
 PRICE_IN = 1.0 / 1e6
 PRICE_OUT = 5.0 / 1e6
+# Anthropic bills prompt-cache writes at 1.25x and reads at 0.1x the input
+# price; `input_tokens` excludes both.
+PRICE_CACHE_WRITE = 1.25 / 1e6
+PRICE_CACHE_READ = 0.1 / 1e6
+
+
+def usd(r: dict[str, Any]) -> float:
+    return (
+        r["input_tokens"] * PRICE_IN
+        + r["output_tokens"] * PRICE_OUT
+        + r.get("cache_write_tokens", 0) * PRICE_CACHE_WRITE
+        + r.get("cache_read_tokens", 0) * PRICE_CACHE_READ
+    )
 
 
 def auroc(pos: list[float], neg: list[float]) -> float | None:
@@ -108,12 +121,7 @@ def card(
             if not calls:
                 continue
             ordered = [calls[c] for c in sorted(calls)]
-            turn_cost.append(
-                sum(
-                    s["input_tokens"] * PRICE_IN + s["output_tokens"] * PRICE_OUT
-                    for s in ordered
-                )
-            )
+            turn_cost.append(sum(usd(s) for s in ordered))
             # a step that reused a judgment (no model call) takes no time in a
             # live host, where the message's calls run one after another; in
             # run_set.py it waited on the judgment in flight beside it
@@ -187,12 +195,7 @@ def card(
         "model_calls_per_score": mean([r.get("calls", 1) for r in scored]),
         "in_tokens": mean([r["input_tokens"] for r in asked]),
         "out_tokens": mean([r["output_tokens"] for r in asked]),
-        "usd_per_score": mean(
-            [
-                r["input_tokens"] * PRICE_IN + r["output_tokens"] * PRICE_OUT
-                for r in scored
-            ]
-        ),
+        "usd_per_score": mean([usd(r) for r in scored]),
         "seconds": mean([r["seconds"] for r in asked]),
         "spread": mean(spreads),
     }

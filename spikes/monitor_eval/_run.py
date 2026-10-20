@@ -173,4 +173,10 @@ async def run_one(
         else "",
         "input_tokens": sum(o.usage.input_tokens for o in native.outputs if o.usage),
         "output_tokens": sum(o.usage.output_tokens for o in native.outputs if o.usage),
+        "cache_write_tokens": sum(
+            o.usage.input_tokens_cache_write or 0 for o in native.outputs if o.usage
+        ),
+        "cache_read_tokens": sum(
+            o.usage.input_tokens_cache_read or 0 for o in native.outputs if o.usage
+        ),
     }
