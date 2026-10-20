@@ -4,9 +4,9 @@ name: Release dependency guard
 # `inspect_ai @ git+...@main`). `main` names inspect_ai and inspect_scout by
 # PyPI floors, and development tracks their `main` by installing them rather
 # than naming them (CONTRIBUTING.md), so nothing should trip this; it is the
-# backstop should a git ref come back. It only gates the Release Please release PR — a package
-# must be pinned to a *released* version before it ships (PyPI rejects
-# direct-reference deps, and a git ref is not reproducible).
+# backstop should a git ref come back. It only gates the Release Please release
+# PR — a package must be pinned to a *released* version before it ships (PyPI
+# rejects direct-reference deps, and a git ref is not reproducible).
 
 on:
   pull_request:
