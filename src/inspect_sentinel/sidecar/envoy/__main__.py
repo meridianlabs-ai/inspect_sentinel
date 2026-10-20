@@ -4,7 +4,7 @@ import argparse
 import sys
 
 from .._http import MAX_BODY_BYTES
-from ._config import ENVOY_VERSION, MESSAGE_TIMEOUT, envoy_yaml
+from ._config import CA_FILE, ENVOY_VERSION, MESSAGE_TIMEOUT, envoy_yaml
 
 
 def main() -> None:
@@ -57,6 +57,12 @@ def main() -> None:
         metavar="SECONDS",
         help="How long Envoy waits for a request to be judged, at most an hour, the default.",
     )
+    parser.add_argument(
+        "--ca-file",
+        default=CA_FILE,
+        metavar="PATH",
+        help="The certificates Envoy trusts a provider's to be signed by, in Envoy's file system.",
+    )
     arguments = parser.parse_args()
     try:
         sys.stdout.write(
@@ -69,6 +75,7 @@ def main() -> None:
                 openai=None if arguments.no_openai else arguments.openai,
                 max_body_bytes=arguments.max_body_bytes,
                 message_timeout=arguments.message_timeout,
+                ca_file=arguments.ca_file,
             )
         )
     except ValueError as ex:

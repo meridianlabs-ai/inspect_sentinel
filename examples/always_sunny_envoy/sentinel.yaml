@@ -1,0 +1,14 @@
+# What the sidecar runs, and how it serves. Envoy's side is envoy.yaml.
+sentinel:
+  # the always_sunny rule: `weather_rules` is the package in rule/, which
+  # Dockerfile.sidecar installs, and inspect_ai finds by its entry point
+  name: weather_rules/always_sunny
+server:
+  # inside the stack, where only Envoy reaches the sidecar
+  host: 0.0.0.0
+  # the endpoints for proxies and for evals; Envoy sends /sentinel/ here
+  port: 8900
+  # the Envoy shim, which Envoy's ext_proc filter calls over gRPC
+  envoy_port: 8901
+  # a status Inspect retries by itself, so the model is told of a rejection
+  reject_status: 503

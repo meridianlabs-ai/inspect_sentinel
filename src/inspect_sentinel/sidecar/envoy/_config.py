@@ -14,6 +14,9 @@ ENVOY_VERSION = "1.39.4"
 MESSAGE_TIMEOUT = 3600.0
 """How long Envoy waits for the shim to judge a request, in seconds, unless set otherwise: the longest Envoy allows."""
 
+CA_FILE = "/etc/ssl/certs/ca-certificates.crt"
+"""Where Envoy's image keeps the certificates it trusts."""
+
 MAX_CONNECTIONS = 16384
 """The most connections from clients Envoy keeps open at once."""
 
@@ -44,6 +47,7 @@ def envoy_config(
     openai: str | None = "https://api.openai.com",
     max_body_bytes: int = MAX_BODY_BYTES,
     message_timeout: float = MESSAGE_TIMEOUT,
+    ca_file: str = CA_FILE,
 ) -> dict[str, Any]:
     """Envoy's configuration for a model proxy with the sidecar behind it.
 
@@ -59,6 +63,7 @@ def envoy_config(
     - The provider is asked for an uncompressed reply, which the shim can read. A reply that comes compressed anyway is refused.
     - Inspect's own headers, which name the eval's sample, are taken out of every request to a provider.
     - A sidecar that can't be reached refuses the request, rather than letting it through unjudged.
+    - A provider reached over TLS has its certificate checked, against `ca_file`, for the provider's host name. Envoy checks none by default.
 
     Nothing controls who can reach Envoy: put it where only the agents it serves can, or add Envoy's own authentication.
 
@@ -71,6 +76,7 @@ def envoy_config(
         openai: OpenAI's API, or None to leave its routes out.
         max_body_bytes: The largest request Envoy holds while the shim judges it, the sidecar's `--max-body-bytes`.
         message_timeout: How long Envoy waits for the shim to judge a request, in seconds, at most an hour. A request that takes longer is answered with a 504, and the sentinel still decides.
+        ca_file: The certificates Envoy trusts a provider's to be signed by, in Envoy's file system. Envoy's image keeps the system's at the default.
 
     Raises:
         ValueError: If a provider's URL has a path, or no host, or `message_timeout` is more than an hour.
@@ -186,7 +192,7 @@ def envoy_config(
             "name": _SIDECAR_CLUSTER,
             **_endpoint(_SIDECAR_CLUSTER, sidecar_host, sidecar_port),
         },
-        *(provider.cluster(max_body_bytes) for provider in providers.values()),
+        *(provider.cluster(max_body_bytes, ca_file) for provider in providers.values()),
     ]
     return {
         # Envoy warns at startup when nothing limits its connections
@@ -250,7 +256,7 @@ class _Provider:
         self.tls = parts.scheme == "https"
         self.port = parts.port or (443 if self.tls else 80)
 
-    def cluster(self, max_body_bytes: int) -> dict[str, Any]:
+    def cluster(self, max_body_bytes: int, ca_file: str) -> dict[str, Any]:
         cluster: dict[str, Any] = {
             "name": self.name,
             **_endpoint(self.name, self.host, self.port),
@@ -273,6 +279,16 @@ class _Provider:
                 "typed_config": {
                     "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
                     "sni": self.host,
+                    # Envoy checks a provider's certificate only when told
+                    # what to trust and which name it must carry
+                    "common_tls_context": {
+                        "validation_context": {
+                            "trusted_ca": {"filename": ca_file},
+                            "match_typed_subject_alt_names": [
+                                {"san_type": "DNS", "matcher": {"exact": self.host}}
+                            ],
+                        }
+                    },
                 },
             }
         return cluster
