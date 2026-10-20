@@ -15,8 +15,14 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 
+import anyio
 import pytest
 
+from inspect_sentinel._context import Context
+from inspect_sentinel._decorators import protocol
+from inspect_sentinel._report import Decision, Escalations
+from inspect_sentinel._step import BeforeToolCall
+from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, Pass, Replace, Reply, Request
 from inspect_sentinel.sidecar._handler import RequestResult
 from inspect_sentinel.sidecar._serve import (
@@ -84,9 +90,12 @@ async def _process(
             yield each
 
     shim = EnvoyShim(handler or Handler(weather_rule()), max_body_bytes=max_body_bytes)
-    return [
-        answer async for answer in shim.Process(sent(), cast(Any, _Context(metadata)))
-    ]
+    # an exchange that is never answered would leave the test waiting
+    with anyio.fail_after(10):
+        return [
+            answer
+            async for answer in shim.Process(sent(), cast(Any, _Context(metadata)))
+        ]
 
 
 _REQUEST = [
@@ -128,7 +137,9 @@ async def test_empty_chunk_that_is_not_the_end_doesnt_end_the_reply() -> None:
         for answer in answers
         if answer.WhichOneof("response") == "response_body"
     ]
-    assert [(each.body, each.end_of_stream) for each in released] == [(body, True)]
+    # the reply whole, and then the end of the body
+    assert b"".join(each.body for each in released) == body
+    assert [each.end_of_stream for each in released] == [False, True]
 
 
 @pytest.mark.anyio
@@ -416,34 +427,34 @@ async def test_shim_listens_on_an_ipv6_address_as_the_endpoints_do() -> None:
     await server.stop(None)
 
 
-class _FailsOnceEnvoyStopsWaiting:
-    def __init__(self) -> None:
-        self.judging = asyncio.Event()
-        self.release = asyncio.Event()
-        self.failed = asyncio.Event()
+@protocol
+def fails_once_released(judging: asyncio.Event, release: asyncio.Event) -> Protocol:
+    """Fail at the first call, once `release` is set, setting `judging` when asked."""
 
-    async def request(self, request: Request) -> Pass:
-        return Pass()
-
-    async def reply(self, reply: Reply) -> Pass:
-        self.judging.set()
-        await self.release.wait()
-        self.failed.set()
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        judging.set()
+        await release.wait()
         raise RuntimeError("the rule broke")
+
+    return decide
 
 
 @pytest.mark.anyio
 async def test_judgment_that_fails_after_envoy_stopped_waiting_is_logged_by_the_shim(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    handler = _FailsOnceEnvoyStopsWaiting()
-    shim = EnvoyShim(cast(Any, handler), max_body_bytes=1024 * 1024)
+    judging, release = asyncio.Event(), asyncio.Event()
+    shim = EnvoyShim(
+        Handler(fails_once_released(judging, release)), max_body_bytes=1024 * 1024
+    )
     reported: list[dict[str, Any]] = []
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(lambda _, context: reported.append(context))
 
     async def sent() -> AsyncIterator[pb.ProcessingRequest]:
-        for each in [*_REQUEST, *_reply(message(stop_reason="end_turn"))]:
+        for each in [*_REQUEST, *_reply(message(weather("Paris")))]:
             yield each
         await asyncio.Event().wait()
 
@@ -452,14 +463,13 @@ async def test_judgment_that_fails_after_envoy_stopped_waiting_is_logged_by_the_
             pass
 
     waiting = asyncio.ensure_future(envoy())
-    await handler.judging.wait()
+    await judging.wait()
     waiting.cancel()
     with suppress(asyncio.CancelledError):
         await waiting
     with caplog.at_level(logging.ERROR):
-        handler.release.set()
-        await handler.failed.wait()
-        for _ in range(3):
+        release.set()
+        for _ in range(20):
             await asyncio.sleep(0)
         gc.collect()
     loop.set_exception_handler(None)
@@ -469,7 +479,8 @@ async def test_judgment_that_fails_after_envoy_stopped_waiting_is_logged_by_the_
     # logged as a failure Envoy waited for is
     [logged] = caplog.records
     assert re.fullmatch(
-        r"The reply '[0-9a-f]{32}' was not judged\.", logged.getMessage()
+        r"The reply '[0-9a-f]{32}' was not judged after its client had gone\.",
+        logged.getMessage(),
     )
     assert logged.exc_info is not None
 

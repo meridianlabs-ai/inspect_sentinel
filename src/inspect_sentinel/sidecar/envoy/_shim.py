@@ -12,6 +12,7 @@ import grpc
 from .._errors import bounded, error_body, refusal_for
 from .._exchange import Answer, Pass, Refuse, Replace, Reply, Request, succeeded
 from .._handler import Handler
+from .._reply_stream import ErrorEvent, Release, ReplyStart, ReplyStream
 from .._wire import Format
 from ._metadata import FORMAT_METADATA, INSPECT_HEADERS, PROVIDER_METADATA
 from ._proto.envoy.config.core.v3 import base_pb2 as core
@@ -31,7 +32,7 @@ T = TypeVar("T")
 class EnvoyShim(rpc.ExternalProcessorServicer):
     """Envoy's external processor: the sidecar's handler, behind Envoy's `ext_proc` filter.
 
-    Envoy opens one stream for each HTTP request on a route that has the filter, and sends the request's headers and body, then the reply's headers, body and trailers. The shim reads the request whole, puts it to the handler, and sends it on as it was, as the handler replaced it, or not at all, answering the client in the provider's own error format. It holds every chunk of the reply, saying nothing to Envoy until it has the whole reply, as Envoy then has sent the client nothing, the status included. It then puts the reply to the handler and sends it on, replaced, or refuses it with a real status. Envoy's route says which API the request is written in and which provider it is for, in the gRPC metadata `sentinel-format` and `sentinel-provider`.
+    Envoy opens one stream for each HTTP request on a route that has the filter, and sends the request's headers and body, then the reply's headers, body and trailers. The shim reads the request whole, puts it to the handler, and sends it on as it was, as the handler replaced it, or not at all, answering the client in the provider's own error format. It hands the reply to the handler's reply stream as it arrives, and sends Envoy what the stream gives: the whole reply once it is judged, or, with the handler's `release` set to `early`, text as it arrives and each call once it is judged. While nothing has gone out, Envoy has sent the client nothing, the status included, so a refusal has a real status; after that, a refusal is an error event in the stream. Envoy's route says which API the request is written in and which provider it is for, in the gRPC metadata `sentinel-format` and `sentinel-provider`.
 
     A request or reply that can't be judged is refused: one that can't be read, one larger than the shim holds, one the sentinel fails on or doesn't finish within the handler's time limit, and one with a content encoding other than `identity`. A judgment goes on when Envoy stops waiting for it, as when the client disconnects, so that the sidecar's records and the run's state hold what was decided.
 
@@ -65,15 +66,27 @@ class EnvoyShim(rpc.ExternalProcessorServicer):
         exchange = _Exchange(
             self._handler,
             judged=self._judged,
+            spawn=self._spawn,
             max_body_bytes=self._max_body_bytes,
             shown=self._shown,
             metadata=context.invocation_metadata() or (),
         )
-        async for message in request_iterator:
-            for response in await exchange.on(message):
+        # Envoy's messages are read beside the answers, which a reply released
+        # as it arrives has ready whenever its sentinel decides
+        pump = asyncio.ensure_future(exchange.read(request_iterator))
+        try:
+            while (response := await exchange.next()) is not None:
                 yield response
-            if exchange.finished:
-                return
+        finally:
+            pump.cancel()
+            await asyncio.wait({pump})
+            await exchange.close()
+
+    def _spawn(self, work: Awaitable[None]) -> None:
+        # work that outlives the stream that started it, as a judgment does
+        task = asyncio.ensure_future(work)
+        self._judging.add(task)
+        task.add_done_callback(self._judging.discard)
 
     async def _judged(
         self, judging: Awaitable[T], orphaned: Callable[[Exception], object]
@@ -125,12 +138,14 @@ class _Exchange:
         judged: Callable[
             [Awaitable[Answer], Callable[[Exception], object]], Awaitable[Answer]
         ],
+        spawn: Callable[[Awaitable[None]], None],
         max_body_bytes: int,
         shown: Collection[str],
         metadata: Collection[tuple[str, str | bytes]],
     ) -> None:
         self._handler = handler
         self._judged = judged
+        self._spawn = spawn
         self._max_body_bytes = max_body_bytes
         self._shown = shown
         given = {
@@ -149,13 +164,62 @@ class _Exchange:
         self._content_type = ""
         self._declared_length = False
         self._request_encoding = "identity"
-        self._held = bytearray()
         self._replied = False
         self._passing = False
+        # the reply, judged as it arrives, and whether its body ends at trailers
+        self._stream: ReplyStream | None = None
+        self._body_ended = False
+        self._trailers = False
+        # the answers for Envoy, in order, which end with None
+        self._answers: asyncio.Queue[pb.ProcessingResponse | None] = asyncio.Queue(1)
         self.finished = False
+
+    async def read(self, messages: AsyncIterator[pb.ProcessingRequest]) -> None:
+        """Read Envoy's messages, answering each, until the exchange has finished."""
+        try:
+            await self._read(messages)
+        except Exception:
+            # a stream that can't go on ends, rather than leave Envoy waiting
+            logger.error("The exchange %r failed.", self._id, exc_info=True)
+            await self.close()
+            await self._answers.put(None)
+
+    async def _read(self, messages: AsyncIterator[pb.ProcessingRequest]) -> None:
+        async for message in messages:
+            for answer in await self.on(message):
+                await self._answers.put(answer)
+            if self.finished:
+                await self._answers.put(None)
+                break
+        if self.finished:
+            return
+        # Envoy has nothing more to send. A reply whose body has ended is
+        # still being answered; otherwise there is nothing left to answer,
+        # and a reply cut short is aborted, as when Envoy stops waiting.
+        if self._stream is not None and self._body_ended:
+            return
+        await self.close()
+        await self._answers.put(None)
+
+    async def next(self) -> pb.ProcessingResponse | None:
+        """The next answer for Envoy, or None once the exchange has finished."""
+        return await self._answers.get()
+
+    async def close(self) -> None:
+        """Stop the reply's stream if it hasn't ended, as when Envoy has stopped waiting."""
+        if self._stream is not None:
+            await self._stream.abort()
+
+    async def _answer(self, answer: pb.ProcessingResponse) -> None:
+        await self._answers.put(answer)
+        if self.finished:
+            await self._answers.put(None)
 
     async def on(self, message: pb.ProcessingRequest) -> list[pb.ProcessingResponse]:
         """The answers to one message from Envoy, which are none while a reply is held."""
+        if self.finished:
+            # Envoy may send more after the end it was answered at
+            return []
         kind = message.WhichOneof("request")
         if kind == "request_headers":
             return await self._request_headers(message.request_headers)
@@ -166,14 +230,14 @@ class _Exchange:
         if kind == "response_body":
             return await self._response_body(message.response_body)
         if kind == "response_trailers":
-            # with trailers, their arrival is the only sign the body has ended
-            answers = [] if self._replied else await self._reply(end_of_stream=False)
-            if not self.finished:
-                answers.append(
-                    pb.ProcessingResponse(response_trailers=pb.TrailersResponse())
-                )
-                self.finished = True
-            return answers
+            # with trailers, their arrival is the only sign the body has ended,
+            # and they are answered after the body
+            if self._stream is not None:
+                self._trailers = self._body_ended = True
+                await self._stream.end()
+                return []
+            self.finished = True
+            return [pb.ProcessingResponse(response_trailers=pb.TrailersResponse())]
         # request trailers are not asked for, and nothing else needs an answer
         return []
 
@@ -286,7 +350,22 @@ class _Exchange:
             ]
         if not headers.end_of_stream:
             # Answering the headers sends the client nothing: the status goes
-            # out with the first answer about the body, which the shim holds.
+            # out with the first answer about the body.
+            self._stream = self._handler.reply_stream(
+                ReplyStart(
+                    id=self._id,
+                    provider=self._provider,
+                    format=self._format,
+                    model=self._model,
+                    user=None,
+                    status=self._status,
+                    content_type=self._content_type,
+                ),
+                max_held_bytes=self._max_body_bytes,
+            )
+            # the stream's judging outlives Envoy's stream, as a judgment does
+            self._spawn(self._stream.run())
+            self._spawn(self._deliver(self._stream))
             return [
                 pb.ProcessingResponse(
                     response_headers=pb.HeadersResponse(response=pb.CommonResponse())
@@ -336,42 +415,43 @@ class _Exchange:
         if self._passing:
             self.finished = body.end_of_stream
             return [_streamed(body.body, end_of_stream=body.end_of_stream)]
-        if self._replied:
-            # Envoy may send more after the end it was answered at
+        if self._stream is None:
             return []
-        self._held += body.body
-        if len(self._held) > self._max_body_bytes:
-            self._replied = True
-            self.finished = True
-            # the reply isn't read, as the endpoint for proxies doesn't read a
-            # call larger than it takes
-            await self._handler.reply_not_judged(self._id, "unreadable")
-            return [
-                self._refuse(
-                    502,
-                    f"The provider's reply is larger than the {self._max_body_bytes} bytes the sidecar holds, so it was not judged.",
-                )
-            ]
+        await self._stream.feed(body.body)
         # Envoy 1.39 sends an empty chunk now and then that isn't the end: only
         # `end_of_stream`, or the trailers, says the body has ended
-        if not body.end_of_stream:
-            return []
-        answers = await self._reply(end_of_stream=True)
-        self.finished = True
-        return answers
+        if body.end_of_stream:
+            self._body_ended = True
+            await self._stream.end()
+        return []
 
-    async def _reply(self, *, end_of_stream: bool) -> list[pb.ProcessingResponse]:
-        self._replied = True
-        answer = await self._judge(
-            self._handler.reply(self._reply_of(bytes(self._held))),
-            "reply",
-            reply=True,
-        )
-        if isinstance(answer, Refuse):
-            self.finished = True
-            return [self._refusal(answer)]
-        body = answer.body if isinstance(answer, Replace) else bytes(self._held)
-        return [_streamed(body, end_of_stream=end_of_stream)]
+    async def _deliver(self, stream: ReplyStream) -> None:
+        # what the reply stream gives, as Envoy's answers about the body
+        try:
+            async for output in stream:
+                if isinstance(output, Release):
+                    await self._answers.put(_streamed(output.data, end_of_stream=False))
+                elif isinstance(output, Refuse):
+                    await self._answer(self._refusal(output))
+                    return
+                else:
+                    # the end of the body, or an error event in place of the
+                    # rest of it; trailers are answered after the body
+                    data = output.data if isinstance(output, ErrorEvent) else b""
+                    answers = [_streamed(data, end_of_stream=not self._trailers)]
+                    if self._trailers:
+                        answers.append(
+                            pb.ProcessingResponse(
+                                response_trailers=pb.TrailersResponse()
+                            )
+                        )
+                    self.finished = True
+                    for answer in answers[:-1]:
+                        await self._answers.put(answer)
+                    await self._answer(answers[-1])
+                    return
+        except Exception as ex:
+            await self._answer(self._refusal(self._not_judged(ex, "reply", reply=True)))
 
     def _reply_of(self, body: bytes) -> Reply:
         return Reply(
