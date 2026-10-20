@@ -47,29 +47,39 @@ def record_sent(
     conversation.last_sent_keys = keys
 
 
-# the fields that name a message's calls and items
-_IDS = frozenset({"id", "tool_call_id", "call_id"})
-
-
 def _key(message: ChatMessage, said: str) -> str:
     # What the model is sent of the message, with each object's keys in one
     # order, as Inspect compares messages by value and a client may write a
-    # call's arguments in another. An id the request doesn't carry is left
-    # out: a reader makes one up for a provider's tool item or call that came
-    # without one, a new one at each read. A call's own id is kept.
-    dumped = message.model_copy(update=_NOT_SENT).model_dump(mode="json")
-    return json.dumps(_carried(dumped, said), sort_keys=True)
+    # call's arguments in another. A reader makes up an id for a provider's
+    # tool item or call that came without one, a new one at each read, so an
+    # id the request doesn't carry is left out where a reader puts one: a
+    # call's, a content item's, and the call a tool message answers. A call's
+    # arguments and all else are kept whole.
+    dumped: dict[str, Any] = message.model_copy(update=_NOT_SENT).model_dump(
+        mode="json"
+    )
+    if dumped.get("tool_call_id") is not None and not _carried(
+        dumped["tool_call_id"], said
+    ):
+        dumped["tool_call_id"] = None
+    for field in ("tool_calls", "content"):
+        items: object = dumped.get(field)
+        if isinstance(items, list):
+            dumped[field] = [
+                _without_made_up_id(item, said) for item in cast("list[object]", items)
+            ]
+    return json.dumps(dumped, sort_keys=True)
 
 
-def _carried(value: object, said: str) -> object:
-    if isinstance(value, dict):
-        return {
-            key: _carried(kept, said)
-            for key, kept in cast("dict[str, Any]", value).items()
-            if not (
-                key in _IDS and isinstance(kept, str) and json.dumps(kept) not in said
-            )
-        }
-    if isinstance(value, list):
-        return [_carried(item, said) for item in cast("list[object]", value)]
-    return value
+def _without_made_up_id(item: object, said: str) -> object:
+    if not isinstance(item, dict):
+        return item
+    entry = cast("dict[str, Any]", item)
+    if "id" in entry and not _carried(entry["id"], said):
+        return {key: value for key, value in entry.items() if key != "id"}
+    return entry
+
+
+def _carried(id: object, said: str) -> bool:
+    # whether the request carries the id, as JSON writes a string
+    return isinstance(id, str) and json.dumps(id) in said

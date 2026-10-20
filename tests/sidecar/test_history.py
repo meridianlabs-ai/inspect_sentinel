@@ -95,3 +95,21 @@ def test_a_call_is_told_apart_by_an_id_the_request_carries() -> None:
     assert _sent(
         calling("call_1"), calling("call_2"), body=b'["call_1", "call_2"]'
     ) == ["u:Weather?", "a:", "a:"]
+
+
+def test_an_argument_named_id_is_kept_whole() -> None:
+    # A call's arguments are what the model asked for, whatever their names.
+    # OpenAI's requests carry them as a JSON string, in which an argument's
+    # value is not written as the body writes an id.
+    def calling(record: str) -> list[ChatMessage]:
+        call = ToolCall(id="call_1", function="read_record", arguments={"id": record})
+        return [
+            *_read("u:Read it."),
+            ChatMessageAssistant(content="", tool_calls=[call]),
+        ]
+
+    assert _sent(calling("record_A"), calling("record_B"), body=b'["call_1"]') == [
+        "u:Read it.",
+        "a:",
+        "a:",
+    ]
