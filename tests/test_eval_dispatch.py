@@ -1,4 +1,5 @@
 import logging
+import re
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import Any
@@ -424,7 +425,8 @@ def test_host_score_asks_the_monitor_role_with_the_task() -> None:
     assert isinstance(corrected.input[-1], ChatMessageTool)
     assert corrected.input[-1].error is not None
     prompt = asked.input[0].text
-    assert "Tool Call: addition" in prompt
+    # Scout 0.6.0 and earlier write no nonce on the tool call line
+    assert re.search(r"^Tool Call( \([0-9a-f]{8}\))?: addition$", prompt, re.MULTILINE)
 
 
 def sentinel_span_ids(events: Sequence[Event]) -> list[str]:
