@@ -188,10 +188,12 @@ def before_tool_call(function: str, /, **arguments: Any) -> BeforeToolCall:
     return BeforeToolCall(
         conversation="conversation",
         message="",
+        message_id="msg_1",
         call=ToolCall(id="call_1", function=function, arguments=arguments),
         view=ToolCallView(),
         input=[],
         agent_messages=[],
+        history=[],
     )
 
 
@@ -207,6 +209,7 @@ def after_tool_call(
     return AfterToolCall(
         conversation=before.conversation,
         message=before.message,
+        message_id=before.message_id,
         call=before.call,
         result=ChatMessageTool(
             content=result,
@@ -218,6 +221,7 @@ def after_tool_call(
         view=before.view,
         input=before.input,
         agent_messages=before.agent_messages,
+        history=before.history,
     )
 
 
@@ -227,6 +231,7 @@ def before_generate_step() -> BeforeGenerate:
         conversation="c",
         input=[ChatMessageUser(content="go")],
         agent_messages=[ChatMessageUser(content="go")],
+        history=[],
         tools=[],
         tool_choice="auto",
         config=GenerateConfig(),
@@ -239,6 +244,7 @@ def after_generate_step() -> AfterGenerate:
         conversation="c",
         input=[ChatMessageUser(content="go")],
         agent_messages=[ChatMessageUser(content="go")],
+        history=[],
         tools=[],
         tool_choice="auto",
         config=GenerateConfig(),

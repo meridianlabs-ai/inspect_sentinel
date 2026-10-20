@@ -211,8 +211,8 @@ def step(
     view = view or ToolCallView()
     if after:
         result = ChatMessageTool(content="2", tool_call_id="c1", function="addition")
-        return AfterToolCall("", "Adding.", call, result, "2", view, [], [])
-    return BeforeToolCall("", "Adding.", call, view, [], [])
+        return AfterToolCall("", "Adding.", "m1", call, result, "2", view, [], [])
+    return BeforeToolCall("", "Adding.", "m1", call, view, [], [])
 
 
 def escalation(explanation: str) -> Escalations:

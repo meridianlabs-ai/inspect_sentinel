@@ -628,9 +628,14 @@ class Handler:
             if digest in conversation.judged or entry.tool_call_id in restored:
                 continue
             sent = conversation.made.get(occurrence(call.id, index))
+            # a call this sidecar did not hand out has only the id its
+            # reading of the request gave it
+            message_id = sent.message_id if sent is not None else assistant.id
+            assert message_id is not None
             step = AfterToolCall(
                 conversation=held.conversation,
                 message=assistant.text,
+                message_id=message_id,
                 call=call,
                 result=entry,
                 # left empty: only what the model is sent crosses the wire, and
@@ -642,6 +647,7 @@ class Handler:
                 # as before the next generate: without what this request sends
                 history=list(conversation.sent),
                 tools=sent.tools if sent is not None else None,
+                tool_choice=sent.tool_choice if sent is not None else None,
             )
             judging = self._judging[key] = anyio.Event()
             try:
@@ -730,15 +736,18 @@ class Handler:
         rejected: list[tuple[ToolCall, Decision]] = []
         modified: dict[str, ToolCall] = {}
         for call in calls:
+            assert message.id is not None
             step = BeforeToolCall(
                 conversation=held.conversation,
                 message=message.text,
+                message_id=message.id,
                 call=call,
                 view=self._view(call, run),
                 input=held.input,
                 agent_messages=None,
                 history=list(conversation.sent),
                 tools=held.offered.tools,
+                tool_choice=held.offered.tool_choice,
             )
             decision = await self._judge(held, run, step)
             if decision is None or decision.action == "proceed":
@@ -787,7 +796,13 @@ class Handler:
             for call in message.tool_calls or []:
                 index = seen.get(call.id, 0)
                 seen[call.id] = index + 1
-                made = Made(held.input, held.offered.tools)
+                assert message.id is not None
+                made = Made(
+                    held.input,
+                    held.offered.tools,
+                    held.offered.tool_choice,
+                    message.id,
+                )
                 conversation.made[occurrence(call.id, index)] = made
                 # its place, not one more each time: a retry or another
                 # reply to the same request hands out a call in the same

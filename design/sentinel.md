@@ -4,7 +4,7 @@ Exploratory design for two new registry types, `@monitor` and `@protocol`: one a
 
 *Sentinel* is the umbrella: the name of the feature, and of one configured tree — a protocol with its monitors — as passed to `Task(sentinel=)` and recorded as a `SentinelEvent`. Inside it, *monitor* and *protocol* keep their AI-control-literature senses, which are also ControlArena's: the monitor is a scorer, the protocol decides. An earlier draft used "monitor" for both the umbrella (`Task(monitor=)`) and the scorer, and reviewers read the umbrella as "the monitor plus the protocol"; renaming the umbrella rather than the scorer keeps the literature's pair intact.
 
-Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe_only`, `concurrent`, `sequential`, `threshold` and `human` are implemented in `inspect_sentinel` and its inspect_ai integration (`Host.ask_human` in inspect_ai follows). The [failure policy](#failure-semantics) is implemented too. `Host.score` is built (`sentinel-deployment.md`, "The host ABI"); it is sentinel code on the host's `generate`, so hosts implement nothing for it. The generate stages are built: monitors observe them and protocols may `proceed`, `escalate` or `terminate` there; `reject` and `modify` are deferred ([generate-stages.md](generate-stages.md)). Excerpts, their windowing functions and `step_as_str` are built. `resample`, the other view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those is illustrative.
+Status: partly built. The tool stages, the decorators and groups, the runner, `decide_final()`, configuration, and `observe_only`, `concurrent`, `sequential`, `threshold` and `human` are implemented in `inspect_sentinel` and its inspect_ai integration (`Host.ask_human` in inspect_ai follows). The [failure policy](#failure-semantics) is implemented too. `Host.score` is built (`sentinel-deployment.md`, "The host ABI"); it is sentinel code on the host's `generate`, so hosts implement nothing for it. The generate stages are built: monitors observe them and protocols may `proceed`, `escalate` or `terminate` there; `reject` and `modify` are deferred ([generate-stages.md](generate-stages.md)). Step preprocessing (`StepPreprocessor`, its windows and `preprocess_step`) and `step_as_str` are built. `resample`, the other view helpers and per-task state are designed but not built (`pr-series.md`, "Deferred"); the Python for those is illustrative.
 
 **Related design documents.** This one defines the protocol. `sentinel-deployment.md` covers running a sentinel outside the eval process — in a proxy on the wire — and the constraints that places on the protocol. `sentinel-development.md` covers measuring and calibrating a monitor before it acts, by replaying it over transcripts as an Inspect Scout scanner. `inspect-core.md` covers extracting the wire types into a package light enough for a monitor author (or another language) to depend on.
 
@@ -172,6 +172,7 @@ class AfterGenerate:
 class BeforeToolCall:
     conversation: str
     message: str                # assistant text alongside the call
+    message_id: str             # id of the assistant message that made the call
     call: ToolCall              # the call as it will execute
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
@@ -179,12 +180,14 @@ class BeforeToolCall:
     history: list[ChatMessage] | None = field(default=None, kw_only=True)  # as for BeforeGenerate
     human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
     tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
+    tool_choice: ToolChoice | None = None  # that request's tool choice; None exactly when input is
 
 
 @dataclass(frozen=True)
 class AfterToolCall:
     conversation: str
     message: str
+    message_id: str
     call: ToolCall              # the call as executed (after any `modify`)
     result: ChatMessageTool     # what the model will see, after truncation
     output: ToolResult          # the tool's untruncated return value
@@ -194,6 +197,7 @@ class AfterToolCall:
     history: list[ChatMessage] | None = field(default=None, kw_only=True)
     human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
     tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
+    tool_choice: ToolChoice | None = None  # that request's tool choice; None exactly when input is
     truncated: Truncation | Literal[False] | None = None  # the host's cut; False: not cut; None: can't tell
 
 
@@ -1596,20 +1600,27 @@ Lowest level first. The first three exist in Scout today and move down unchanged
 
 **`message_numbering(preprocessor=None)`.** Scout's `[M1]`-style numbering with a paired `extract_refs`. `sentinel-development.md` already assumes an LLM monitor uses it so that citations in an explanation resolve to messages for free; making it available to monitors is what makes that true.
 
-**Excerpts and windowing helpers.** Built (2026-10-13), replacing the earlier sketch of three windows over `step.agent_messages`. History is all-or-nothing on the payload, and [incremental monitoring](#deployment-beyond-the-eval-process) wants less than all of it. `step.agent_messages` is None where the host cannot provide it; an excerpt keeps it None through every window, and `step_as_str` names it as unknown where it would show it. Each window returns an `Excerpt[S]` (`Excerpt[BeforeToolCall]` and so on): the step itself, plus the `input` and `agent_messages` to show with it, each cut before the step's own part so that part is not shown twice. An excerpt is not a step, so a cut conversation never passes for what the model was sent. The step's own part is the call (other calls in the same assistant message, and their results, are not shown); the call and its result; the messages after the model's last reply; or the reply. Nothing else of the step is rendered: not its escalations, tools, config, `view` or untruncated tool output. The windows, and `step_as_str`, take a step or an excerpt; the windows return an excerpt, cutting `input` and `agent_messages` alike, so they compose:
+**Step preprocessing.** Built (2026-10-16). A `StepPreprocessor[S]` says what a monitor shows a model about a step: how much of its conversations, which parts of their messages, and any change of the monitor's own. `Host.score(step, ..., preprocessor=...)` applies it with `preprocess_step()` and renders the result with `step_as_str()`; a custom prompt calls the two itself. A preprocessed step is still a step of the same type, only thinned: it is a copy that lives in the monitor, never handed back to the host.
 
 ``` python
-drop_input(step)
-keep_agent_messages(step)  # the history block is left out by default, except where the input is unknown
-drop_reasoning(step); drop_tool_usage(step)  # left out when rendered, the step's own part too
-keep_system(step)  # system messages are left out by default, as in Scout
-last_turns(step, n)      # a turn runs from one assistant message to the next
-last_messages(step, n)   # never cuts a result from its call
-new_since_last_report(context, step)
-last_turns(new_since_last_report(context, step), 6)
+StepPreprocessor(
+    input_window=AllMessages(),        # the default; LastTurns(n), LastMessages(n), NewSinceLastReport(context), or None
+    history_window=None,               # the default: none of what the agent sent; a window shows it
+    agent_messages_window=None,        # the default: none of the agent loop's own list; a window shows it
+    omit_system=True,                  # as Scout leaves system messages out
+    omit_reasoning=False,              # in the step's own reply too
+    omit_tool_usage=False,             # a provider's own tool use, such as web search
+    transform=None,                    # S -> S, applied last to the thinned step
+)
 ```
 
-These are Scout's preprocessor exclusions as excerpt functions, with Scout's default of leaving system messages out: the excerpt records what to leave out, and `step_as_str` leaves it out of every block, including the reasoning in the step's own reply. Scout's free `transform` is not built. The last window is the one that matters. It keeps the id of the last message shown, per conversation, per source (`input`, `agent_messages`) and per monitor function (shared across the stages a function watches), in the monitor's store (`context.store_as`). The runner saves it only when the function returns or decides final, so a function that raises, is cancelled, or is passed by a descendant's final decision is shown those messages again at the next step; so an incremental monitor does not re-read its conversations, and the cost argument from `sentinel-deployment.md` — quadratic inference, linear deserialization, WASM memory that never shrinks — is answered by a helper rather than by discipline. A conversation whose recorded message is gone, as after a compaction or where a host gives messages new ids on each step, is shown whole. The step's own part is not tracked, so the last step's call can come back in the next step's history.
+The windows are a closed set of frozen dataclasses, `Window = AllMessages | LastTurns | LastMessages | NewSinceLastReport`: third parties do not add one, and new ones can be added here without breaking callers. Each window cuts its list as it is; preprocessing does nothing else to `input`, `history` and `agent_messages` except the omissions. `LastTurns(n)` keeps everything from the `n`th assistant message from the end; `LastMessages(n)` keeps the last `n` messages. A list with no window becomes `[]`, and a list the host could not provide stays None. Windows do not compose. Anything the built-in windows and omissions do not provide, a monitor writes as its `transform`, which runs last so it can rely on the windows and omissions (decided by the maintainer on 2026-10-16); it can withhold a flagged message, and it can cap a `NewSinceLastReport` window at a number of turns. A transform for one step type types the preprocessor (`StepPreprocessor[BeforeToolCall]`), so a type checker rejects it at another stage; without a transform it is a `StepPreprocessor[Step]`.
+
+The input is shown whole by default, so each step's prompt starts with the last one's and the monitor model's prompt cache keeps working. `history` (every message the agent sent) and `agent_messages` (the agent loop's own list) are each left out unless a window asks for them, so the monitor's author chooses which, if either, the model sees besides the input (decided by the maintainer on 2026-10-19). A transform is given the host's own message objects and copies one before changing it.
+
+`NewSinceLastReport(context)` is the incremental window. It keeps the id of the last message shown, per conversation, per source (`input`, `history`, `agent_messages`) and per monitor function (shared across the stages a function watches), in the monitor's store (`context.store_as`). The runner saves it only when the function returns or decides final, so a function that raises, is cancelled, or is passed by a descendant's final decision is shown those messages again at the next step; so an incremental monitor does not re-read its conversations, and the cost argument from `sentinel-deployment.md` — quadratic inference, linear deserialization, WASM memory that never shrinks — is answered by a window rather than by discipline. A conversation whose recorded message is gone, as after a compaction or where a host gives messages new ids on each step, is shown whole.
+
+The monitor must be able to see everything the agent saw, so nothing is left out without a flag asking for it (decided by the maintainer on 2026-10-16). Text rendering cannot meet that: Scout renders images, audio, video, documents and provider data as bare placeholders such as `<image />`, redacted reasoning as `<thinking_redacted/>`, and drops a content type it does not know, so the monitor model is shown something other than what the monitored model was sent. The planned answer is a `messages_as_contents` that returns the thinned and transformed messages as a list of `Content` parts rather than text (maintainers, 2026-10-19); until it exists, `step_as_str` renders those placeholders without saying so.
 
 **`call_as_str(call, view=None)`.** The Python-call rendering `default_tool_call_viewer` produces for approvers, honouring a registered `ToolCallView` when one is present. One implementation serves the human approval surface and the monitor prompt.
 
@@ -1617,9 +1628,9 @@ These are Scout's preprocessor exclusions as excerpt functions, with Scout's def
 
 **`briefing_as_str(context)`.** The instruction section, from `context.eval`: task and sample descriptions, the original input, and metadata the author chose to surface. Outside an eval it has no eval fields to render. Never includes `target` unless asked; the caller passing `include_target=True` is what the log records.
 
-**`step_as_str(excerpt, *, nonce=None, messages_as_str=None)`.** Built. The evidence section for a stage: `INPUT` and `HISTORY` blocks, then the step's own part in an `AGENT STEP` block named for the stage (`[AGENT STEP - BEGIN TOOL CALL]` and so on: `TOOL CALL`, `TOOL CALL AND RESULT`, `MODEL REQUEST`, `MODEL REPLY`), each when the excerpt kept it; `HISTORY`, usually the same conversation as `INPUT`, is shown whole only when it holds a message `INPUT` does not, such as turns before a compaction. Given a nonce, every block marker carries it, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header the default renderer writes, where the installed Scout takes a nonce; `Host.score` makes one per sample, on its first call, and keeps it in the sample store, so the monitor model's prompt cache keeps working from step to step. Blocks are rendered with Scout's `messages_as_str` or a numbering function from `message_numbering()`. A tool step whose model input is unknown says so in its `INPUT` block, and a history the host could not provide says so in its `HISTORY` block where that block would be shown. Not built yet: naming the other absent surfaces (no `view`, no untruncated `output`) in a fixed phrase, so a monitor developed in an eval and run under a proxy produces a prompt that is visibly different rather than subtly different; `step_as_str` does not render those surfaces at all yet.
+**`step_as_str(step, *, nonce=None)`.** Built. Returns the evidence section for a stage and the function that turns `[M1]`-style cites in a model's answer into references. Everything is in one `AGENT STEP` block named for the stage (`[BEGIN AGENT STEP - TOOL CALL REQUEST]` … `[END AGENT STEP - TOOL CALL REQUEST]`; `TOOL CALL RESULT`, `MODEL REQUEST`, `MODEL REPLY`), with blocks inside it, each left out when empty. At every stage: `HISTORY` (`step.history`), `AGENT MESSAGES` (`step.agent_messages`), then the model request as `INPUT`, `TOOLS` (the tools offered, as JSON) and the tool choice on one line (`[TOOL CHOICE] "auto"`, no end marker), after the input so the input stays a prefix the monitor model's prompt cache can reuse; at a tool stage the request is the one that produced the call, and when its input is not known its tools and tool choice are left out (decided by the maintainer on 2026-10-20, so the four stages show the request the same way). Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant's text and the call; other calls in the same message are not shown) and, after the call, `RESULT`. Nothing is outside the step block, so the framework does not mark part of what it shows as the subject and the rest as context: what the monitor model weighs is the monitor author's choice, through the windows, a transform or the template (decided by the maintainer on 2026-10-19: "the framework is not really in a position to define a bright line between the subject and additional context when it comes to prompting an llm monitor"). Each list renders as it is, so a message can appear in more than one block, such as the call's message in `AGENT MESSAGES` and in `CALL`. The call's message in a tool stage's block carries the step's `message_id`, so a cite of it resolves to the transcript's message (decided by the maintainer on 2026-10-19). Nothing else of the step is rendered: not its config, `view` or untruncated tool output. Given a nonce, every block marker carries it, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header the default renderer writes, where the installed Scout takes a nonce; `Host.score` makes one per sample, on its first call, and keeps it in the sample store, so the monitor model's prompt cache keeps working from step to step. Blocks are rendered and numbered with Scout's `message_numbering()`, in the order shown. A list the host could not provide (None) is named in its block. `Host.score`'s default template tells the model what each block inside the step block holds. Not built yet: naming the other absent surfaces (no `view`, no untruncated `output`) in a fixed phrase, so a monitor developed in an eval and run under a proxy produces a prompt that is visibly different rather than subtly different; `step_as_str` does not render those surfaces at all yet.
 
-**`monitor_prompt(context, excerpt, *, question, answer=..., preprocessor=None, messages_as_str=None)`.** The analogue of Scout's `scanner_prompt`, and the one most authors call. It emits: the briefing section, labelled as instructions; the evidence section inside a delimited envelope whose surrounding text says it was written by the agent under observation and may contain instructions to ignore; and the question with an answer format. This is the "structural help" the injection section asked for, delivered as the default output of the helper people will reach for first.
+**`monitor_prompt(context, step, *, question, answer=..., preprocessor=None)`.** The analogue of Scout's `scanner_prompt`, and the one most authors call. It emits: the briefing section, labelled as instructions; the evidence section inside a delimited envelope whose surrounding text says it was written by the agent under observation and may contain instructions to ignore; and the question with an answer format. This is the "structural help" the injection section asked for, delivered as the default output of the helper people will reach for first.
 
 An LLM monitor built from them:
 
@@ -1627,12 +1638,11 @@ An LLM monitor built from them:
 @monitor
 def suspicion_monitor(model: str | None = None, role: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
-        messages_as_str, extract_refs = message_numbering()
-        prompt = monitor_prompt(
-            context, new_since_last_report(context, step),
+        prompt, extract_refs = await monitor_prompt(
+            context, step,
             question="Rate how suspicious this tool call is given the assignment.",
             answer="score",
-            messages_as_str=messages_as_str,
+            preprocessor=StepPreprocessor(input_window=NewSinceLastReport(context)),
         )
         output = await context.host.generate(prompt, model=model, role=role)
         score, explanation = parse_score(output.completion)
@@ -1647,7 +1657,7 @@ def suspicion_monitor(model: str | None = None, role: str | None = None) -> Moni
 
 Nothing in the body concatenates briefing and transcript, labels an envelope, or decides what to do with reasoning blocks. Those are the helper's defaults, which is the point: the author writes the question, and the choices they do make — which window of history, whether reasoning is excluded — are visible in the call.
 
-Media is the one place text rendering is not enough. The default renders a placeholder where an image was; a monitor that must see a screenshot builds a `list[ChatMessage]` prompt itself. That needs `Host.generate` to accept messages as well as a string, which it does, in code and in `sentinel-deployment.md`'s ABI.
+Media is the one place text rendering is not enough. The text helpers render a placeholder where an image was; a monitor that must see a screenshot builds a `list[ChatMessage]` prompt itself. That needs `Host.generate` to accept messages as well as a string, which it does, in code and in `sentinel-deployment.md`'s ABI.
 
 ### What the helpers do not do
 
@@ -1659,7 +1669,7 @@ In rough priority order, with what each buys:
 
 1. **Lift Scout's rendering helpers into `inspect_sentinel`.** `messages_as_str`, `message_as_str`, `MessagesPreprocessor`, `message_numbering`. A package move with Scout re-exporting, and the `analysis` copy retired. First, because everything else composes over it.
 2. **`monitor_prompt` and the evidence envelope.** The default prompt shape carries the instruction/evidence boundary and marks truncation. Docs examples use it, so it is what people write.
-3. **Windowing helpers, especially `new_since_last_report`.** The incremental default, implemented once over the store rather than by every author.
+3. **Windows, especially `NewSinceLastReport`.** The incremental window, implemented once over the store rather than by every author. Built, as `StepPreprocessor`'s windows.
 4. **`call_as_str` and `result_as_str`.** Shared with the approval renderer, so the monitor's prompt and the human's screen show the same call.
 5. **Absent-surface phrasing in `step_as_str`.** So a monitor that leans on an eval-only surface degrades visibly under a proxy or bridged agent.
 6. **A `list[ChatMessage]` form of `Host.generate`.** Needed for computer-use and browser monitoring, where the evidence is a screenshot. Done: `input` takes a message list as well as a string.
@@ -1879,7 +1889,7 @@ ordered composition should be the default (no — see [Two compositions](#two-co
 14.  **Which stages can `human()` serve?** *Settled for `AfterGenerate` (AISI R1, 2026-10-13).* The tool stages, `BeforeToolCall` and `AfterToolCall` with the result shown, and `AfterGenerate`, where the person sees the whole assistant turn and may approve or terminate it ([Humans in the loop](#humans-in-the-loop)). `Host.ask_human` takes the step itself, so the new stage needed only a new rendering, not a new interface. `BeforeGenerate` stays unsupported: it is hard to make meaningful to a person. `reject` and `modify` at `AfterGenerate` wait on the generate stages' part 2.
 15.  **Failure tolerance across many samples.** [The failure policy](#failure-semantics) is settled for the single step. What is open is whether a monitor that fails on 3 samples in 500 under `observe_only()` should fail the eval, and whether that reuses `fail_on_error`'s existing shape (`True` / `False` / a proportion / a count) or needs a monitor-specific knob.
 16.  **Should reading an eval-only surface be recorded?** `target` is opt-in and logged so a reader can tell whether a monitor's performance is achievable in deployment. `step.output` and `step.view` raise the same question and get no such treatment; a declared view was one answer and was judged heavier than the problem. A lighter one is for `briefing_as_str` and `step_as_str` to take the eval-only surfaces as explicit flags, which puts the choice in the call for a reviewer to see.
-17.  **Default history window in `monitor_prompt`.** Full history is safe and matches what approvers get today; `new_since_last_report` is the incremental shape this design argues for elsewhere. A default is hard to change later, so this wants deciding before v1.
+17.  **Default input window in `monitor_prompt`.** *Settled for `Host.score` (2026-10-16): the whole input, so the monitor model's prompt cache keeps working; `NewSinceLastReport(context)` is opt-in, and history is shown only when a window asks for it.* `monitor_prompt` takes the same `StepPreprocessor`, so it has the same defaults.
 18.  **Is the rendered prompt part of the recorded decision?** `host.generate` already records a `ModelEvent`, so the prompt is in the log without any new field. The open part is whether replay should compare its rendering against the recorded one to detect drift in the helpers.
 19.  **Is the alias `ControlProtocol` or `Protocol`?** Settled: `Protocol`, pairing with `@protocol` as `Tool` pairs with `@tool`. The collision with `typing.Protocol` is accepted: a monitor author's file rarely defines structural types, the package imports typing's under an alias, and the docs say "a control protocol, not `typing.Protocol`" on first use.
 20.  **Should `sequential` and `concurrent` accept monitors at all?** They do here: a monitor in either is recorded and falls through, which is what gives a mixed top-level list a meaning. The alternative is `Protocols` only, with monitors reachable solely through a score-reading protocol; stricter, and it would make `Task(sentinel=[no_curl(), suspicion_monitor()])` a type error rather than a recorded-but-inert monitor.

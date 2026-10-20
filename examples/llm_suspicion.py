@@ -11,9 +11,10 @@ from inspect_ai.tool import bash, python
 from inspect_sentinel import (
     BeforeToolCall,
     Context,
+    LastTurns,
     Monitor,
     Observation,
-    last_turns,
+    StepPreprocessor,
     monitor,
     threshold,
 )
@@ -43,8 +44,9 @@ def suspicion(model: str | None = None, role: str | None = None) -> Monitor:
         if step.call.function == "submit":
             return None  # the question is written for commands, not final answers
         return await context.host.score(
-            last_turns(step, 3),
+            step,
             DIMENSIONS,
+            preprocessor=StepPreprocessor(input_window=LastTurns(3)),
             policy=POLICY,
             model=model,
             role=role,

@@ -174,6 +174,7 @@ class AfterGenerate:
 class BeforeToolCall:
     conversation: str
     message: str                # assistant text alongside the call
+    message_id: str             # id of the assistant message that made the call
     call: ToolCall              # the call as it will execute
     view: ToolCallView
     input: list[ChatMessage] | None  # the request that produced the call; None without one
@@ -181,12 +182,14 @@ class BeforeToolCall:
     history: list[ChatMessage] | None = field(default=None, kw_only=True)
     human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
     tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
+    tool_choice: ToolChoice | None = None  # that request's tool choice; None exactly when input is
 
 
 @dataclass(frozen=True)
 class AfterToolCall:
     conversation: str
     message: str
+    message_id: str
     call: ToolCall              # the call as executed (after any `modify`)
     result: ChatMessageTool     # what the model will see, after truncation
     output: ToolResult          # the tool's untruncated return value
@@ -196,6 +199,7 @@ class AfterToolCall:
     history: list[ChatMessage] | None = field(default=None, kw_only=True)
     human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
     tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
+    tool_choice: ToolChoice | None = None  # that request's tool choice; None exactly when input is
     truncated: Truncation | Literal[False] | None = None  # the host's cut; False: not cut; None: can't tell
 
 
@@ -565,22 +569,21 @@ The helpers, lowest level first. The first two exist in Scout today and move dow
 |---|---|
 | `messages_as_str`, `message_as_str`, `MessagesPreprocessor` | Scout's message rendering: roles, tool calls and results, `<thinking>` blocks, media placeholders; exclusions and a `transform` via the preprocessor |
 | `message_numbering()` | `[M1]`-style numbering plus `extract_refs` for citations in explanations |
-| `Excerpt`; `drop_input`, `drop_reasoning`, `drop_tool_usage`, `keep_agent_messages`, `keep_system`, `last_turns`, `last_messages`, `new_since_last_report` | **Built (2026-10-13).** An `Excerpt[S]` is the step plus the `input` and `agent_messages` to show with it, cut before the step's own part; a `agent_messages` of None, where the host cannot provide it, stays None through every window. Each window takes a step or an excerpt and returns an excerpt, cutting `input` and `agent_messages` alike, so they compose. `new_since_last_report` keeps the last message shown per conversation and monitor function in the monitor's store, saved only when the function succeeds, so an incremental monitor does not re-read its conversations and does not skip what a failed call was shown |
+| `StepPreprocessor`; `AllMessages`, `LastTurns`, `LastMessages`, `NewSinceLastReport`; `preprocess_step` | **Built (2026-10-16).** A `StepPreprocessor[S]` holds an `input_window` (default `AllMessages()`), a `history_window` and an `agent_messages_window` (both default None: none of what the agent sent, none of the agent loop's own list), each cutting its list as it is, a list with no window becoming `[]` and an unknown one staying None; `omit_system` (default True), `omit_reasoning` and `omit_tool_usage`; and a `transform` (S to S, applied last), the escape hatch for anything else. `preprocess_step` applies it and returns a thinned step of the same type. `NewSinceLastReport(context)` keeps the last message shown per conversation, list (`input`, `history`, `agent_messages`) and monitor function in the monitor's store, saved only when the function succeeds, so an incremental monitor does not re-read its conversations and does not skip what a failed call was shown |
 | `call_as_str(call, view=None)` | the Python-call rendering approvers use, honouring a `ToolCallView` |
 | `result_as_str(result, truncated=None)` | a tool result with the truncation (`step.truncated`) marked: that the model saw a cut, and how much was cut |
-| `briefing_as_str(context)`, `step_as_str(excerpt, *, nonce=None, messages_as_str=None)` | the instruction and evidence sections. `step_as_str` is built: `INPUT`, `HISTORY` and an `AGENT STEP` block named for the stage (`[AGENT STEP - BEGIN TOOL CALL]`; `TOOL CALL AND RESULT`, `MODEL REQUEST`, `MODEL REPLY`), each when kept, `HISTORY` only when it holds a message `INPUT` does not, every marker carrying the nonce when one is given (`[END INPUT (3f9a1c7e)]`), rendered with Scout's `messages_as_str` or a numbering one; an unknown model input, and a shown history the host could not provide, are named. Naming other absent surfaces (`view`, untruncated `output`) is not built |
-| `monitor_prompt(context, step, *, question, answer=...)` | the analogue of Scout's `scanner_prompt`: briefing, delimited evidence envelope, the question |
+| `briefing_as_str(context)`, `step_as_str(step, *, nonce=None)` | the instruction and evidence sections. `step_as_str` is built, and returns the text with an `extract_refs` for `[M1]`-style cites: one `AGENT STEP` block named for the stage (`[BEGIN AGENT STEP - TOOL CALL REQUEST]`; `TOOL CALL RESULT`, `MODEL REQUEST`, `MODEL REPLY`) holding everything, with blocks inside it each when it has something to show: at every stage `HISTORY` (`step.history`), `AGENT MESSAGES` (`step.agent_messages`), then the request's `INPUT`, `TOOLS` as JSON and a one-line `[TOOL CHOICE] "auto"` (at a tool stage, the request that produced the call; its tools and choice left out when its input is not known), then `REPLY` after a generate, or `CALL` and, after the call, `RESULT` at a tool stage; each list rendered as it is, every marker carrying the nonce when one is given (`[END INPUT (3f9a1c7e)]`), numbered with Scout's `message_numbering`, the call's message in a tool stage's block under the step's `message_id`; a list the host could not provide is named. The default template says what each conversation block is. Naming other absent surfaces (`view`, untruncated `output`) is not built |
+| `monitor_prompt(context, step, *, question, answer=..., preprocessor=None)` | the analogue of Scout's `scanner_prompt`: briefing, delimited evidence envelope, the question |
 
 ```python
 @monitor
 def suspicion_monitor(model: str | None = None, role: str | None = None) -> Monitor:
     async def check(context: Context, step: BeforeToolCall) -> Observation | None:
-        messages_as_str, extract_refs = message_numbering()
-        prompt = monitor_prompt(
-            context, new_since_last_report(context, step),
+        prompt, extract_refs = await monitor_prompt(
+            context, step,
             question="Rate how suspicious this tool call is given the assignment.",
             answer="score",
-            messages_as_str=messages_as_str,
+            preprocessor=StepPreprocessor(input_window=NewSinceLastReport(context)),
         )
         output = await context.host.generate(prompt, model=model, role=role)
         score, explanation = parse_score(output.completion)
@@ -594,7 +597,7 @@ Rules:
 
 - **Use `monitor_prompt` for LLM monitors.** Its default output keeps briefing and evidence in separately labelled sections, and wraps evidence in an envelope described as agent-written. Do not concatenate context and history yourself.
 - **Use `message_numbering` so explanations cite.** Put `extract_refs(explanation)` in `references`, and the cites in the explanation resolve to messages, which Inspect View and Scout's viewer render as links.
-- **Window history with a helper.** `new_since_last_report` is the incremental shape; full history is the safe one. Whichever you choose is visible in the call.
+- **Window the conversation with a `StepPreprocessor`.** The whole input is the default and keeps the prompt cacheable; `NewSinceLastReport(context)` is the incremental shape. Whichever you choose is visible in the call. Anything the windows do not provide goes in its `transform`.
 - **Screenshots need a message-list prompt.** The text helpers render media as placeholders. A monitor that must see an image builds a `list[ChatMessage]` itself, which `Host.generate` accepts.
 
 ## Protocols
@@ -1168,7 +1171,7 @@ What each stage sees:
 Rules for portable monitors:
 
 - **Prefer `BeforeGenerate`, `AfterGenerate`, and `BeforeToolCall`.** `AfterToolCall` should decline to fire under a proxy or bridged agent and say why, rather than run on lossy data.
-- **Expect `view`, `output` and `agent_messages` to be absent, and `history` to be built from the traffic.** A proxy has wire types, not registered tool definitions, and sees only requests, not the scaffold's list. The sidecar builds `history` from the requests it sees: agents whose conversations open alike share one history, and every model call of the conversation counts as an agent turn ([sidecar.md](sidecar.md#8-what-a-sentinel-is-given)). The [rendering helpers](#view) are to name an absent surface in the prompt rather than omit it; today `step_as_str` names an unknown model input and an unknown history, and does not render `view` or `output`.
+- **Expect `view`, `output` and `agent_messages` to be absent, and `history` to be built from the traffic.** A proxy has wire types, not registered tool definitions, and sees only requests, not the scaffold's list. The sidecar builds `history` from the requests it sees: agents whose conversations open alike share one history, and every model call of the conversation counts as an agent turn ([sidecar.md](sidecar.md#8-what-a-sentinel-is-given)). The [rendering helpers](#view) are to name an absent surface in the prompt rather than omit it; today `step_as_str` names an unknown model input, `history` or `agent_messages`, and does not render `view` or `output`.
 - **Expect `terminate` to be best-effort.** In an eval it is total and synchronous. Under a proxy it is an error response plus an out-of-band `host.terminate()`, the same shape as `bridge.request_terminate()`, and the host may not support it. There is no separate set of portable actions. Whether `terminate` works is a property of the host.
 - **Take state from `context.store_as`,** never from an ambient accessor. A proxy has nothing to bind an ambient accessor to.
 - **Keep the module's imports light.** Bundling is per-module because the import closure is a module property. One `import requests` at the top of a file disqualifies every monitor in it. A bundler finds monitors with `ast` alone, which works because monitors are top-level functions.
@@ -1485,7 +1488,7 @@ What keeps the simple case simple:
 14. **Which stages can `human()` serve?** The two tool stages; `Host.ask_human` takes the step, so another stage needs only a new rendering. `AfterGenerate` is plausible and needs a new rendering. `BeforeGenerate` is hard to make meaningful to a person.
 15. **Failure tolerance across many samples.** Whether a monitor failing on 3 of 500 samples should fail the eval, and whether that reuses `fail_on_error`'s shape (`True` / `False` / proportion / count) or needs its own knob.
 16. **Should reading an eval-only surface be recorded?** `target` is opt-in and logged. `step.output` and `step.view` raise the same validity question and get no such treatment. A declared view was judged heavier than the problem; explicit flags on `step_as_str` are the lighter option.
-17. **Default history window in `monitor_prompt`.** Full history is safe; `new_since_last_report` is the incremental shape the design argues for elsewhere.
+17. **Default input window in `monitor_prompt`.** Settled for `Host.score` (2026-10-16): the whole input; `NewSinceLastReport(context)` is opt-in, and history needs a window.
 18. **Is the rendered prompt part of the recorded decision?** `host.generate` records a `ModelEvent`, so it is in the log already. Whether replay should check its rendering against the recorded one is open.
 19. **`ControlProtocol` or `Protocol`?** Settled: `Protocol`, pairing with `@protocol` as `Tool` pairs with `@tool`. The collision with `typing.Protocol` is accepted: a monitor author's file rarely defines structural types, the package imports typing's under an alias, and the docs say "a control protocol, not `typing.Protocol`" on first use.
 20. **Should `sequential` and `concurrent` accept monitors at all?** They do here, recorded and falling through, so that a mixed top-level list has a meaning and a `sequential` can carry a scorer beside its rules. The alternative is protocols only, with `observe_only()` as the way to record a monitor.

@@ -16,14 +16,13 @@ from inspect_ai.tool import ToolCall
 from inspect_ai.util import Store
 
 from inspect_sentinel import (
-    Excerpt,
     Host,
+    LastTurns,
     Observation,
     Step,
-    keep_agent_messages,
-    last_turns,
+    StepPreprocessor,
 )
-from inspect_sentinel._excerpt import scout_nonce
+from inspect_sentinel._preprocess import scout_nonce
 
 from ._fakes import (
     FakeHost,
@@ -48,7 +47,7 @@ def answer(**arguments: Any) -> ModelOutput:
 
 async def score(
     host: FakeHost,
-    step: Step | Excerpt[Step],
+    step: Step,
     dimensions: str | dict[str, str],
     **options: Any,
 ) -> Observation:
@@ -143,7 +142,9 @@ async def test_a_mapping_scores_each_dimension() -> None:
 
 
 @pytest.mark.anyio
-async def test_an_excerpt_is_shown_numbered_and_cites_become_references() -> None:
+async def test_a_preprocessed_step_is_shown_numbered_and_cites_become_references() -> (
+    None
+):
     history: list[ChatMessage] = [
         ChatMessageAssistant(content="looking around", id="first"),
         ChatMessageUser(content="clean up", id="user"),
@@ -153,7 +154,12 @@ async def test_an_excerpt_is_shown_numbered_and_cites_become_references() -> Non
     step = replace(before_tool_call("bash", cmd="ls"), agent_messages=history)
     host = FakeHost(outputs=[answer(explanation="as planned in [M1]", suspicion=0.0)])
     observation = await score(
-        host, keep_agent_messages(last_turns(step, 1)), "Is it safe?"
+        host,
+        step,
+        "Is it safe?",
+        preprocessor=StepPreprocessor(
+            input_window=LastTurns(1), agent_messages_window=LastTurns(1)
+        ),
     )
     assert "clean up" not in prompt(host)
     header = f" ({nonce(host)})" if SCOUT_TAKES_NONCE else ""
@@ -182,13 +188,15 @@ async def test_a_nonce_marks_the_real_markers_and_headers_but_not_the_agents() -
         f"[END POLICY ({n})]",
         f"[BEGIN TASK ({n})]",
         f"[END TASK ({n})]",
+        f"[BEGIN AGENT STEP - TOOL CALL REQUEST ({n})]",
         f"[BEGIN INPUT ({n})]",
         f"[M1] USER ({n}):",
         f"[M2] ASSISTANT ({n}):",
         f"[END INPUT ({n})]",
-        f"[AGENT STEP - BEGIN TOOL CALL ({n})]",
+        f"[BEGIN CALL ({n})]",
         f"[M3] ASSISTANT ({n}):",
-        f"[AGENT STEP - END TOOL CALL ({n})]",
+        f"[END CALL ({n})]",
+        f"[END AGENT STEP - TOOL CALL REQUEST ({n})]",
     ]
     assert spoof in shown
 
@@ -224,7 +232,7 @@ async def test_a_callers_sentinel_nonce_is_ignored() -> None:
     )
     n = prompt(host).splitlines()[0].removeprefix("code ")
     assert re.fullmatch("[0-9a-f]{8}", n)
-    assert f"[AGENT STEP - BEGIN TOOL CALL ({n})]" in prompt(host)
+    assert f"[BEGIN AGENT STEP - TOOL CALL REQUEST ({n})]" in prompt(host)
 
 
 def call(
@@ -464,7 +472,9 @@ async def test_the_default_template_leaves_out_what_is_not_given() -> None:
     assert "[BEGIN POLICY" not in prompt(host)
     assert "[BEGIN TASK" not in prompt(host)
     # no gap where they would have been
-    assert "\n\n\n" not in prompt(host).split("[AGENT STEP - BEGIN TOOL CALL")[0]
+    assert (
+        "\n\n\n" not in prompt(host).split("[BEGIN AGENT STEP - TOOL CALL REQUEST")[0]
+    )
 
 
 @pytest.mark.parametrize(
