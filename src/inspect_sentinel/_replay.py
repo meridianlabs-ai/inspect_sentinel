@@ -100,7 +100,7 @@ async def replay_eval(
 
     Temporary, until the replay `design/sentinel-development.md` describes replaces it.
 
-    Steps are rebuilt from the sample's events, as inspect_ai builds them live. Each agent turn gives a `BeforeGenerate` from its first `ModelEvent`, so attempts a provider error made inspect_ai retry are one step, and an `AfterGenerate` from the attempt that returned output. Each `ToolEvent` gives a `BeforeToolCall` of the call as the sentinel would have seen it, after an approver's modification, unless the call never reached the sentinel (it did not parse, named no tool the model was offered, or an approver rejected it), and an `AfterToolCall` if the call ran to a result. Only model and tool calls made while the solvers ran count, and none inside a sentinel's own span or a tool's. Only the stages the sentinel watches are run, in the order of the events they come from, with one store per sample.
+    Steps are rebuilt from the sample's events, as inspect_ai builds them live. Each agent turn gives a `BeforeGenerate` from its first `ModelEvent`, so attempts a provider error made inspect_ai retry are one step, and an `AfterGenerate` from the attempt that returned output. Each `ToolEvent` gives a `BeforeToolCall` of the call as the sentinel would have seen it, after an approver's modification, unless the call never reached the sentinel (it did not parse, named no tool the model was offered, or an approver rejected it), and an `AfterToolCall` if the call ran to a result. Only model and tool calls made while the solvers ran count, none inside a sentinel's own span, and no model call inside a tool's. Only the stages the sentinel watches are run, in the order of the events they come from, with one store per sample.
 
     What the log does not hold is missing or approximate. `agent_messages`, `history` and `human_decisions` are None. `AfterToolCall.output` is the result as the model saw it, after truncation, not what the tool returned. A model call that inspect_ai keeps out of the sentinel without a span, such as a compaction summary or a model-based approver, is taken for an agent turn. `context.eval.metadata` holds the eval's metadata as well as the task's, since the log records them merged. A `BeforeGenerate` that made no model call, because the sentinel ended the sample there or a limit stopped the call, has no `ModelEvent` and is not replayed. A tool call's two steps come out together where its `ToolEvent` is, so its `AfterToolCall` comes before any steps of a sub-agent the call ran, and parallel calls' steps do not interleave. A parallel call cancelled because a sibling raised is taken to have reached the sentinel.
 
@@ -361,8 +361,8 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
                     tools=tools,
                 ),
             )
-            # a call the sentinel rejected or ended the sample at, or that was
-            # cancelled, has no result, and neither has one that raised, which
+            # a call the sentinel rejected or ended the sample at, that was
+            # cancelled, or that a time limit cut off, has no result, and neither has one that raised, which
             # failed the call and errored the sample; a call the sentinel ended
             # the sample at once it ran failed too, but it had a result
             if (
@@ -371,6 +371,7 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
                     and event.error.type in ("approval", "parsing", "cancelled")
                 )
                 or event.id in terminated
+                or event.pending
                 or (event.failed and sample.error is not None)
             ):
                 continue

@@ -56,6 +56,16 @@ def forbidden() -> Tool:
     return execute
 
 
+@tool
+def slow() -> Tool:
+    async def execute() -> str:
+        """Take longer than the sample may."""
+        await anyio.sleep(10)
+        return "done"
+
+    return execute
+
+
 @monitor
 def counts() -> MonitorGroup:
     async def before_generate(context: Context, step: BeforeGenerate) -> Observation:
@@ -214,6 +224,37 @@ def test_a_call_ended_at_its_tool_call_has_no_tool_result(
     replayed = replayed_lines(capsys)
     assert replayed == recorded(log, {("a", 1)})
     assert replayed[-1][2:4] == ("tool_call", "call-2")
+
+
+def test_a_call_a_time_limit_cut_off_has_no_tool_result(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def call_slow(
+        input: list[ChatMessage],
+        tools: list[ToolInfo],
+        tool_choice: ToolChoice,
+        config: GenerateConfig,
+    ) -> ModelOutput:
+        return ModelOutput.for_tool_call(
+            "mockllm/model", "slow", {}, tool_call_id="slow"
+        )
+
+    [result] = eval(
+        Task(
+            dataset=[Sample(id="a", input="go")],
+            solver=react(tools=[slow()]),
+            sentinel=no_forbidden(counts(), "reject"),
+            time_limit=1,
+        ),
+        model=get_model("mockllm/model", custom_outputs=call_slow),
+        log_dir=str(tmp_path),
+        display="none",
+    )
+    assert result.location
+    main([result.location])
+    replayed = replayed_lines(capsys)
+    assert replayed == recorded(result.location, {("a", 1)})
+    assert replayed[-1][2:4] == ("tool_call", "slow")
 
 
 def test_a_sample_the_log_lacks_is_an_error(log: str) -> None:
