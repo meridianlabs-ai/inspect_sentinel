@@ -175,7 +175,10 @@ def log(tmp_path_factory: pytest.TempPathFactory) -> str:
     return run_eval(no_forbidden(counts(), "reject"), tmp_path_factory.mktemp("logs"))
 
 
-def replayed_lines(capsys: pytest.CaptureFixture[str]) -> list[tuple[Any, ...]]:
+def replay(capsys: pytest.CaptureFixture[str], *argv: str) -> list[tuple[Any, ...]]:
+    # an eval prints a notice once per process, so drop what came before
+    capsys.readouterr()
+    main(list(argv))
     return [
         (
             str(line["sample_id"]),
@@ -226,8 +229,9 @@ def test_replay_reports_what_the_live_run_recorded(
     selected: set[tuple[str, int]],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    main([log, *(arg for sample in given for arg in ("--sample", sample))])
-    replayed = replayed_lines(capsys)
+    replayed = replay(
+        capsys, log, *(arg for sample in given for arg in ("--sample", sample))
+    )
     assert replayed == recorded(log, selected)
     assert {stage for _, _, stage, *_ in replayed} == {
         "model_input",
@@ -258,8 +262,7 @@ def test_a_call_the_sample_ended_at_has_a_tool_result_only_if_it_ran(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     log = run_eval(sentinel(), tmp_path)
-    main([log, "--sample", "a:1"])
-    replayed = replayed_lines(capsys)
+    replayed = replay(capsys, log, "--sample", "a:1")
     assert replayed == recorded(log, {("a", 1)})
     assert replayed[-1][2:4] == last
 
@@ -279,8 +282,7 @@ def test_a_turn_a_limit_ended_has_no_model_output(
         display="none",
     )
     assert result.location
-    main([result.location])
-    replayed = replayed_lines(capsys)
+    replayed = replay(capsys, result.location)
     assert replayed == recorded(result.location, {("a", 1)})
     assert replayed[-1][2] == "model_input"
 
@@ -310,8 +312,7 @@ def test_a_call_a_time_limit_cut_off_has_no_tool_result(
         display="none",
     )
     assert result.location
-    main([result.location])
-    replayed = replayed_lines(capsys)
+    replayed = replay(capsys, result.location)
     assert replayed == recorded(result.location, {("a", 1)})
     assert replayed[-1][2:4] == ("tool_call", "slow")
 
