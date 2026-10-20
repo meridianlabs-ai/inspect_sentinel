@@ -8,7 +8,8 @@ server:
   host: 0.0.0.0
   # the endpoints for proxies and for evals; Envoy sends /sentinel/ here
   port: 8900
-  # the Envoy shim, which Envoy's ext_proc filter calls over gRPC
-  envoy_port: 8901
+  envoy:
+    # the Envoy shim, which Envoy's ext_proc filter calls over gRPC
+    port: 8901
   # a status Inspect retries by itself, so the model is told of a rejection
   reject_status: 503

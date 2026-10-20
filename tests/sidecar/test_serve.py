@@ -228,8 +228,9 @@ server:
   runtime_task_registration: false
   task_expiry: 60
   max_task_registrations: 5
-  envoy_port: 9001
-  envoy_headers: [x-team]
+  envoy:
+    port: 9001
+    headers: [x-team]
 tasks_folder: tasks
 """
 
@@ -308,6 +309,10 @@ def test_a_registered_name_is_found_as_an_eval_finds_it() -> None:
     [
         ("sentinel:\n  name: no_tokyo\nserver:\n  colour: blue\n", "doesn't fit"),
         (
+            "sentinel:\n  name: no_tokyo\nserver:\n  envoy:\n    colour: blue\n",
+            "doesn't fit",
+        ),
+        (
             "sentinel:\n  name: no_tokyo\nserver: {}\nother: 1\n",
             "and nothing else",
         ),
@@ -321,6 +326,7 @@ def test_a_registered_name_is_found_as_an_eval_finds_it() -> None:
     ],
     ids=[
         "a setting the server doesn't have",
+        "a setting the Envoy shim doesn't have",
         "another key",
         "no sentinel",
         "a tasks folder that isn't a path",

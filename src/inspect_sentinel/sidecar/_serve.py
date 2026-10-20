@@ -4,7 +4,7 @@ import argparse
 import logging
 import os
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -132,10 +132,22 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+class EnvoySettings(BaseModel):
+    """The `envoy` stanza inside `server`: the Envoy shim's settings, which the options that start `--envoy-` set too."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    port: int | None = None
+    """The port the Envoy shim serves on, `--envoy-port`."""
+
+    headers: list[str] | None = None
+    """The request headers the shim shows the sentinel besides Inspect's own, `--envoy-header`."""
+
+
 class ServerSettings(BaseModel):
     """The `server` stanza of a configuration file: the server's own settings, beside the sentinel.
 
-    Each key is one of the command-line options, with underscores, and a `--no-` option is the setting turned off. Model roles are `model_roles`, as inspect_ai names them.
+    Each key is one of the command-line options, with underscores, and a `--no-` option is the setting turned off. Model roles are `model_roles`, as inspect_ai names them. The Envoy shim's settings are in a stanza of their own, `envoy`.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -144,8 +156,7 @@ class ServerSettings(BaseModel):
     host: str | None = None
     port: int | None = None
     eval_port: int | None = None
-    envoy_port: int | None = None
-    envoy_headers: list[str] | None = None
+    envoy: EnvoySettings | None = None
     reject_status: int | None = None
     time_limit: float | None = None
     eval_results: bool | None = None
@@ -219,11 +230,22 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if tasks_folder is not None and not overridden("--tasks-folder"):
         arguments.tasks_folder = str(base / tasks_folder)
     if settings is not None:
-        for name, value in settings.model_dump(exclude_none=True).items():
+        for name, value in _flat(settings.model_dump(exclude_none=True)):
             option, dest, convert = _OPTIONS[name]
             if not overridden(option):
                 setattr(arguments, dest, convert(value, base))
     return arguments
+
+
+def _flat(settings: dict[str, Any]) -> Iterator[tuple[str, Any]]:
+    # each setting by the name of its option, a stanza's inside it by the
+    # stanza's name and its own: `envoy`'s `port` is `envoy_port`
+    for name, value in settings.items():
+        if name == "envoy":
+            for inner, set_to in cast("dict[str, Any]", value).items():
+                yield f"{name}_{inner}", set_to
+        else:
+            yield name, value
 
 
 def read_configuration(config: str) -> tuple[Any, ServerSettings | None, str | None]:

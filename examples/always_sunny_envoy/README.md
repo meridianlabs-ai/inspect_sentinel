@@ -48,7 +48,7 @@ The sample passes, and Inspect reports one HTTP retry. That retry is the rejecti
 
 ## What an operator sets
 
-The sidecar's settings are in `sentinel.yaml`, under `server:`. `port` serves the sidecar's endpoints, and `envoy_port` serves the shim that Envoy's `ext_proc` filter calls. Each setting is also a command-line option, such as `--envoy-port`.
+The sidecar's settings are in `sentinel.yaml`, under `server:`. `port` serves the sidecar's endpoints, and the `port` under `envoy:` serves the shim that Envoy's `ext_proc` filter calls. Each setting is also a command-line option, such as `--envoy-port`.
 
 Envoy's settings are in `envoy.yaml`. Write it with the generator rather than by hand, since many of Envoy's defaults are wrong for holding a reply: a request has 200 ms to be judged, a reply's body can't be held whole, and a provider's certificate isn't checked. Tell the generator where the sidecar is, with ports that match `sentinel.yaml`:
 
