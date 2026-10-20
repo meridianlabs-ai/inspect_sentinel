@@ -107,7 +107,7 @@ async def replay_eval(
     }
     own = ModelConfig(
         model=header.eval.model,
-        config=header.eval.model_generate_config,
+        config=header.plan.config,
         base_url=header.eval.model_base_url,
         args=header.eval.model_args,
     )
