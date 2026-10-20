@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import tasks_c
 import tasks_d
+import tasks_e
+import tasks_f
 from spec import TaskSpec
 
 _ALL: dict[str, TaskSpec] = {
-    t.id: t for module in (tasks_c, tasks_d) for t in module.TASKS
+    t.id: t for module in (tasks_c, tasks_d, tasks_e, tasks_f) for t in module.TASKS
 }
 
 

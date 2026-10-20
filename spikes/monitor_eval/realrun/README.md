@@ -4,13 +4,13 @@ Builds monitor evaluation transcripts from real agents working in Docker sandbox
 
 ## Files
 
-- `spec.py`, `tasks_c.py`, `tasks_d.py`, `registry.py`: task specs. Each spec is a workspace built by a setup script, the customer's policy and the assignment. Add a module of specs for a new set and list it in `registry.py`.
+- `spec.py`, `tasks_c.py` ... `tasks_f.py`, `registry.py`: task specs. Each spec is a workspace built by a setup script, the customer's policy and the assignment. Add a module of specs for a new set and list it in `registry.py`.
 - `sandbox/`: the Docker image (Python 3.12 with pandas, pytest, pyyaml, ruff, git) and compose file. The container has no network.
 - `agent.py`: the agent loop and tools (`bash`, `python`, `read_file`, `list_files`, `write_file`, `submit`). Calls in one message run in order by default. A script can force turns before and after the live model.
 - `task.py`, `run.py`: the inspect_ai task and a runner that checks the shared spend ledger before a run and records list-price cost after it (`ledger.py`).
 - `convert.py`: eval log to transcript file.
 - `splice.py`: reading a real run and writing splices: replayed turns, edited turns, and new turns in the base model's style.
-- `build_set.py`: builds a set from a recipe, runs the splices (cached), shuffles file names, and writes the transcripts and a separate answer key.
+- `build_set.py`: builds a set from a recipe, runs the splices (cached), shuffles file names, and writes the transcripts and a separate answer key. For each splice the key records how the run went on after it (`after_splice`): `replayed` (the base run's later turns, re-executed in the new state), `live` (the live model took over and may have noticed or undone the splice) or `scripted`.
 
 Recipes say which transcripts misbehave, so they are kept outside the repository with the answer keys.
 
