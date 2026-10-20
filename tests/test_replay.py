@@ -97,9 +97,10 @@ def agent_turn(
         [
             ToolCall(id="call-1", function="lookup", arguments={"key": "a"}),
             ToolCall(id="call-2", function="forbidden", arguments={}),
+            ToolCall(id="call-3", function="missing", arguments={}),
         ]
         if turn == 0
-        else [ToolCall(id="call-3", function="submit", arguments={"answer": "a"})]
+        else [ToolCall(id="call-4", function="submit", arguments={"answer": "a"})]
     )
     return ModelOutput(
         model="mockllm/model",

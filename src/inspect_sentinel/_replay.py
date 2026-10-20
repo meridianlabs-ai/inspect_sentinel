@@ -7,12 +7,12 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import NamedTuple, cast
 
 import anyio
-from inspect_ai.event import ModelEvent, SpanBeginEvent, ToolEvent
+from inspect_ai.event import ApprovalEvent, ModelEvent, SpanBeginEvent, ToolEvent
 from inspect_ai.log import (
     EvalLog,
     EvalSample,
@@ -26,7 +26,9 @@ from inspect_ai.model import (
     ChatMessageTool,
     Content,
     GenerateConfig,
+    ModelConfig,
     ModelOutput,
+    get_model,
 )
 from inspect_ai.tool import (
     ToolCall,
@@ -53,7 +55,7 @@ from ._step import (
     Truncation,
 )
 from ._types import Sentinels
-from .sidecar._host import ListRecorder, Record, SidecarHost, Stage, stage
+from .sidecar._host import ListRecorder, Record, Stage, stage
 from .sidecar._inspect_client import record_json
 
 
@@ -86,20 +88,22 @@ async def replay_eval(
     *,
     samples: Sequence[tuple[str | int, int]] | None = None,
     model_roles: Mapping[str, str] | None = None,
-) -> list[ReplayedStep]:
-    """Run a sentinel over the steps of samples in an eval log, as if it had watched them live.
+) -> AsyncIterator[ReplayedStep]:
+    """Run a sentinel over the steps of samples in an eval log, as if it had watched them live, yielding each step as it is judged.
 
     Temporary, until the replay `design/sentinel-development.md` describes replaces it.
 
-    Steps are rebuilt from the sample's events: each agent turn's `ModelEvent` gives a `BeforeGenerate` and, if it returned output, an `AfterGenerate`; each `ToolEvent` gives a `BeforeToolCall` and, if the call ran, an `AfterToolCall`. Events inside a sentinel's own span are skipped. `agent_messages`, `history` and `human_decisions` are None. Only the stages the sentinel watches are run, in the order the log recorded them, with one store per sample.
+    Steps are rebuilt from the sample's events, as inspect_ai builds them live. Each agent turn gives a `BeforeGenerate` from its first `ModelEvent`, so attempts a provider error made inspect_ai retry are one step, and an `AfterGenerate` from the attempt that returned output. Each `ToolEvent` gives a `BeforeToolCall` of the call as the sentinel would have seen it, after an approver's modification, unless the call never reached the sentinel (it did not parse, named no tool the model was offered, or an approver rejected it), and an `AfterToolCall` if the call ran to a result. Only model and tool calls made while the solvers ran count, and none inside a sentinel's own span or a tool's. Only the stages the sentinel watches are run, in the order the log recorded them, with one store per sample.
 
-    A decision changes nothing: the replay goes on with what the agent did. Monitors' model calls are made for real. A protocol that asks a person raises, since nobody can be asked.
+    What the log does not hold is missing or approximate. `agent_messages`, `history` and `human_decisions` are None. `AfterToolCall.output` is the result as the model saw it, after truncation, not what the tool returned. A model call that inspect_ai keeps out of the sentinel without a span, such as a compaction summary or a model-based approver, is taken for an agent turn. `context.eval.metadata` holds the eval's metadata as well as the task's, since the log records them merged.
+
+    A decision changes nothing: the replay goes on with what the agent did. Monitors' model calls are made for real, with the model of their role (from `model_roles`, then the eval's model roles), or else the eval's own model. A protocol that asks a person raises, since nobody can be asked.
 
     Args:
         log: The eval log file.
         sentinel: The sentinel to run. Defaults to the one the eval ran with.
         samples: The `(id, epoch)` of each sample to replay. Defaults to every sample.
-        model_roles: The model each role generates with, e.g. `{"monitor": "anthropic/claude-haiku-4-5"}`.
+        model_roles: The model each role generates with, e.g. `{"monitor": "anthropic/claude-haiku-4-5"}`, over the eval's own model roles.
 
     Raises:
         ValueError: If `sentinel` is None and the eval ran without one.
@@ -111,7 +115,14 @@ async def replay_eval(
         sentinel = sentinel_from_config(header.eval.config.sentinel)
     root = resolve_sentinel(sentinel)
     watched = watched_stages(root)
-    models = SidecarHost(model_roles)
+    roles = {
+        **{
+            role: config.model
+            for role, config in (header.eval.model_roles or {}).items()
+            if isinstance(config, ModelConfig)
+        },
+        **(model_roles or {}),
+    }
     selected = (
         samples
         if samples is not None
@@ -120,10 +131,9 @@ async def replay_eval(
             for summary in read_eval_log_sample_summaries(log)
         ]
     )
-    replayed: list[ReplayedStep] = []
-    for id, epoch in selected:
-        sample = read_eval_log_sample(log, id, epoch)
-        host = _ReplayHost(models, _eval_context(header, sample))
+    for sample_id, epoch in selected:
+        sample = read_eval_log_sample(log, sample_id, epoch)
+        host = _ReplayHost(roles, header.eval.model, _eval_context(header, sample))
         store = Store()
         for step_id, step in _steps(sample):
             if type(step) not in watched:
@@ -132,22 +142,20 @@ async def replay_eval(
             decision = await run_sentinel(
                 root, HostContext(host=host, recorder=recorder, store=store), step
             )
-            replayed.append(
-                ReplayedStep(
-                    sample.id,
-                    sample.epoch,
-                    stage(step),
-                    step_id,
-                    decision,
-                    recorder.records,
-                )
+            yield ReplayedStep(
+                sample.id,
+                sample.epoch,
+                stage(step),
+                step_id,
+                decision,
+                recorder.records,
             )
-    return replayed
 
 
 class _ReplayHost:
-    def __init__(self, models: SidecarHost, eval: EvalContext) -> None:
-        self._models = models
+    def __init__(self, roles: Mapping[str, str], model: str, eval: EvalContext) -> None:
+        self._roles = roles
+        self._model = model
         self._eval = eval
 
     @property
@@ -164,13 +172,18 @@ class _ReplayHost:
         tool_choice: ToolChoice | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
-        return await self._models.generate(
+        # as inspect_ai's host: a model alone is that model; otherwise the
+        # role's model, then the model given, then the eval's own
+        name = (
+            model
+            if model is not None and role is None
+            else self._roles.get(role or "monitor", model or self._model)
+        )
+        return await get_model(name).generate(
             input,
-            model=model,
-            role=role,
-            tools=tools,
+            tools=tools or [],
             tool_choice=tool_choice,
-            config=config,
+            config=config or GenerateConfig(),
         )
 
     async def ask_human(
@@ -185,7 +198,7 @@ def _eval_context(header: EvalLog, sample: EvalSample) -> EvalContext:
         task_description=header.eval.task_description,
         sample_id=sample.id,
         epoch=sample.epoch,
-        sample_description=None,
+        sample_description=sample.description,
         sample_input=sample.input,
         metadata={**(header.eval.metadata or {}), **sample.metadata},
     )
@@ -211,14 +224,23 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
     def kind(span: SpanBeginEvent) -> str:
         return span.type or span.name
 
+    # an approver decides before the sentinel: a call it rejected or ended the
+    # sample at never reached the sentinel, and one it modified reached it
+    # modified
+    approvals = [e for e in sample.events if isinstance(e, ApprovalEvent)]
+    refused = {e.call.id for e in approvals if e.decision in ("reject", "terminate")}
+    modified = {e.call.id: e.modified for e in approvals if e.modified is not None}
     # the model call and assistant message that proposed each tool call
     producers: dict[str, _Producer] = {}
+    # each conversation's last turn whose attempt failed, by its last input
+    failed: dict[str, str] = {}
     inputs = Counter[str]()
     for event in sample.events:
         if not isinstance(event, ModelEvent | ToolEvent):
             continue
         spanned = ancestry(event.span_id)
-        if any(kind(span) == "sentinel" for span in spanned):
+        kinds = [kind(span) for span in spanned]
+        if "sentinel" in kinds or "solvers" not in kinds:
             continue
         agent = next((s.id for s in spanned if kind(s) == "agent"), None)
         conversation = agent if agent is not None else sample.uuid or ""
@@ -229,24 +251,27 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
                     (call.id, _Producer(event, message, call))
                     for call in message.tool_calls or []
                 )
-            # a turn is an agent's when it was made while solving, outside a tool
-            scope = next(
-                (kind(s) for s in spanned if kind(s) in ("agent", "tool")), None
-            )
-            if scope == "tool" or not any(kind(s) == "solvers" for s in spanned):
+            # a model call inside a tool is not an agent turn
+            if next((k for k in kinds if k in ("agent", "tool")), None) == "tool":
                 continue
             last = (event.input[-1].id if event.input else None) or ""
-            inputs[last] += 1
-            before = BeforeGenerate(
-                model=event.model,
-                conversation=conversation,
-                input=event.input,
-                agent_messages=None,
-                tools=event.tools,
-                tool_choice=event.tool_choice,
-                config=event.config,
-            )
-            yield (last if inputs[last] == 1 else f"{last}:{inputs[last]}"), before
+            retried = failed.pop(conversation, None) == last
+            if event.error is not None:
+                failed[conversation] = last
+            if not retried:
+                inputs[last] += 1
+                yield (
+                    last if inputs[last] == 1 else f"{last}:{inputs[last]}",
+                    BeforeGenerate(
+                        model=event.model,
+                        conversation=conversation,
+                        input=event.input,
+                        agent_messages=None,
+                        tools=event.tools,
+                        tool_choice=event.tool_choice,
+                        config=event.config,
+                    ),
+                )
             if message is not None and event.error is None:
                 yield (
                     message.id or "",
@@ -270,12 +295,19 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
                 (ran, "", None, None)
                 if producer is None
                 else (
-                    producer.call,
+                    modified.get(event.id, producer.call),
                     producer.message.text,
                     producer.event.input,
                     producer.event.tools,
                 )
             )
+            reached = (
+                proposed.parse_error is None
+                and event.id not in refused
+                and (tools is None or any(t.name == proposed.function for t in tools))
+            )
+            if not reached:
+                continue
             yield (
                 event.id,
                 BeforeToolCall(
@@ -288,8 +320,12 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
                     tools=tools,
                 ),
             )
-            # a call rejected or unparsed never ran, so it has no result
-            if event.error is not None and event.error.type in ("approval", "parsing"):
+            # a call the sentinel rejected, or that was cancelled or raised,
+            # has no result
+            if event.failed or (
+                event.error is not None
+                and event.error.type in ("approval", "parsing", "cancelled")
+            ):
                 continue
             yield (
                 event.id,
@@ -317,13 +353,17 @@ def _steps(sample: EvalSample) -> Iterator[tuple[str, Step]]:
 
 
 def _view(call: ToolCall, event: ToolEvent) -> ToolCallView:
+    # the event's view is of the call that ran, which an approver or the
+    # sentinel may have modified
     return (
-        ToolCallView(call=event.view) if event.view else default_tool_call_viewer(call)
+        ToolCallView(call=event.view)
+        if event.view and call.arguments == event.arguments
+        else default_tool_call_viewer(call)
     )
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Replay a sentinel over samples of an eval log, writing one JSON line per step.
+    """Replay a sentinel over samples of an eval log, writing one JSON line per step as it is judged.
 
     Args:
         argv: The arguments, without the program's name. The process's own if not given.
@@ -342,14 +382,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         action="append",
         default=[],
         metavar="ID[:EPOCH]",
-        help="A sample to replay, every epoch of it unless one is given. May be repeated. Defaults to every sample.",
+        help="A sample to replay: its id for every epoch of it, or its id and an epoch. May be repeated. Defaults to every sample.",
     )
     parser.add_argument(
         "--model-role",
         action="append",
         default=[],
         metavar="ROLE=MODEL",
-        help="The model a role generates with, e.g. monitor=anthropic/claude-haiku-4-5. May be repeated.",
+        help="The model a role generates with, e.g. monitor=anthropic/claude-haiku-4-5, over the eval's own model roles. May be repeated.",
     )
     arguments = parser.parse_args(argv)
     roles: dict[str, str] = {}
@@ -359,46 +399,50 @@ def main(argv: Sequence[str] | None = None) -> None:
             parser.error(f"--model-role takes ROLE=MODEL, not {role!r}.")
         roles[name] = model
     summaries = read_eval_log_sample_summaries(arguments.log)
+    missing = [
+        given
+        for given in arguments.sample
+        if not any(_selects(given, s.id, s.epoch) for s in summaries)
+    ]
+    if missing:
+        parser.error(f"{arguments.log} has no sample {', '.join(missing)}.")
     selected = [
         (summary.id, summary.epoch)
         for summary in summaries
         if not arguments.sample
         or any(_selects(given, summary.id, summary.epoch) for given in arguments.sample)
     ]
-    if arguments.sample and not selected:
-        parser.error(f"{arguments.log} has none of the samples {arguments.sample}.")
-    replayed = anyio.run(
-        lambda: replay_eval(
+
+    async def replay() -> None:
+        async for step in replay_eval(
             arguments.log,
             sentinel_from_config(arguments.sentinel) if arguments.sentinel else None,
             samples=selected,
             model_roles=roles,
-        )
-    )
-    for step in replayed:
-        print(
-            json.dumps(
-                {
-                    "sample_id": step.sample_id,
-                    "epoch": step.epoch,
-                    "stage": step.stage,
-                    "step_id": step.step_id,
-                    "decision": step.decision.model_dump(
-                        mode="json", exclude_defaults=True
-                    )
-                    if step.decision is not None
-                    else None,
-                    "records": [record_json(record) for record in step.records],
-                }
+        ):
+            print(
+                json.dumps(
+                    {
+                        "sample_id": step.sample_id,
+                        "epoch": step.epoch,
+                        "stage": step.stage,
+                        "step_id": step.step_id,
+                        "decision": step.decision.model_dump(
+                            mode="json", exclude_defaults=True
+                        )
+                        if step.decision is not None
+                        else None,
+                        "records": [record_json(record) for record in step.records],
+                    }
+                ),
+                flush=True,
             )
-        )
+
+    anyio.run(replay)
 
 
-def _selects(given: str, id: str | int, epoch: int) -> bool:
-    sample, sep, at = given.rpartition(":")
-    if not sep or not at.isdigit():
-        return given == str(id)
-    return sample == str(id) and int(at) == epoch
+def _selects(given: str, sample_id: str | int, epoch: int) -> bool:
+    return given in (str(sample_id), f"{sample_id}:{epoch}")
 
 
 if __name__ == "__main__":
