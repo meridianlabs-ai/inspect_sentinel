@@ -27,7 +27,13 @@ from inspect_sentinel._integration import (
     supersedes,
 )
 from inspect_sentinel._protocols import concurrent, handle_escalation, threshold
-from inspect_sentinel._report import Decision, Observation, Reported, origin
+from inspect_sentinel._report import (
+    Decision,
+    Escalations,
+    Observation,
+    Reported,
+    origin,
+)
 from inspect_sentinel._step import AfterGenerate, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol
 from inspect_sentinel._unhandled import Invocation
@@ -61,7 +67,9 @@ def loud_turn() -> Monitor:
 
 @protocol
 def escalates() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.escalate("unsure")
 
     return decide
@@ -131,7 +139,7 @@ async def test_no_monitor_score_reaches_the_kept_decision() -> None:
     spec = sequential([threshold(loud(), escalate_at=0.5), human(stages=["tool_call"])])
     host = FakeHost(HumanAnswer("approve", reason="fine"))
     await run_sentinel(resolve_sentinel(spec), host_context(host=host), before_step())
-    assert _REASONING in repr(host.asked[0].step.escalations)
+    assert _REASONING in repr(host.asked[0].escalations)
     [kept] = await _kept(spec, before_step(), HumanAnswer("approve", reason="fine"))
     report = kept.decided.report
     assert report.metadata is None
@@ -189,15 +197,19 @@ class Answering(FakeHost):
         super().__init__(*answers)
         self.answered = anyio.Event()
 
-    async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:
-        answer = await super().ask_human(step, choices)
+    async def ask_human(
+        self, step: Step, escalations: Escalations, choices: Sequence[str]
+    ) -> HumanAnswer:
+        answer = await super().ask_human(step, escalations, choices)
         self.answered.set()
         return answer
 
 
 @protocol
 def final_after(event: Any) -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         # outlives a sibling's terminate, which cancels it
         with anyio.CancelScope(shield=True):
             await event.wait()
@@ -209,7 +221,9 @@ def final_after(event: Any) -> Protocol:
 
 @protocol
 def forwards(child: Any, done: Any) -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         strongest = (await run_protocols(child, context, step)).strongest()
         done.set()
         return strongest.report if strongest is not None else None
@@ -219,7 +233,9 @@ def forwards(child: Any, done: Any) -> Protocol:
 
 @protocol
 def proceeds() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.proceed()
 
     return decide
@@ -227,7 +243,9 @@ def proceeds() -> Protocol:
 
 @protocol
 def terminates_after(event: Any) -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         await event.wait()
         return Decision.terminate("peer")
 
@@ -236,7 +254,9 @@ def terminates_after(event: Any) -> Protocol:
 
 @protocol
 def rejects() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.reject("peer")
 
     return decide

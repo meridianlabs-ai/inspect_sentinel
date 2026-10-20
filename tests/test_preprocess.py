@@ -38,7 +38,7 @@ from inspect_sentinel import (
 )
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._preprocess import scout_nonce
-from inspect_sentinel._report import Decision, Observation
+from inspect_sentinel._report import Decision, Escalations, Observation
 from inspect_sentinel._runner import run_monitors, run_protocols, run_sentinel
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
 
@@ -388,7 +388,9 @@ async def test_new_since_last_report_is_not_recorded_for_a_cancelled_function() 
 
     @protocol
     def stops() -> Protocol:
-        async def decide(context: Context, step: Step) -> Decision | None:
+        async def decide(
+            context: Context, step: Step, escalations: Escalations
+        ) -> Decision | None:
             await started.wait()
             return Decision.terminate()
 
@@ -417,7 +419,9 @@ async def test_new_since_last_report_is_recorded_for_a_final_decision(
 ) -> None:
     @protocol
     def decides() -> Protocol:
-        async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+        async def decide(
+            context: Context, step: BeforeToolCall, escalations: Escalations
+        ) -> Decision | None:
             thinned = await preprocess_step(step, new_since(context))
             final = Decision.proceed(json.dumps(shown(thinned)))
             if in_task:
@@ -447,7 +451,9 @@ async def _decide_final(decision: Decision) -> None:
 
 @protocol
 def ends_the_step() -> Protocol:
-    async def end(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def end(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         decide_final(Decision.proceed())
 
     return end
@@ -461,7 +467,9 @@ async def test_new_since_last_report_is_not_recorded_when_a_childs_final_passes_
 
     @protocol
     def passed_by() -> Protocol:
-        async def judge(context: Context, step: BeforeToolCall) -> Decision | None:
+        async def judge(
+            context: Context, step: BeforeToolCall, escalations: Escalations
+        ) -> Decision | None:
             thinned = await preprocess_step(step, new_since(context))
             seen.append(shown(thinned)[1] or [])
             await run_protocols(ends_the_step(), context, step)

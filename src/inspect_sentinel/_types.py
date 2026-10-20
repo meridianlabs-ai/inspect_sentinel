@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TypeAlias, cast, final
 
 from ._context import Context
-from ._report import Decision, Observation, Report
+from ._report import Decision, Escalations, Observation, Report
 from ._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 
 Monitor: TypeAlias = (
@@ -16,15 +16,28 @@ Monitor: TypeAlias = (
 """A monitor: observes a step at one stage and reports a suspicion score, or abstains."""
 
 Protocol: TypeAlias = (
-    Callable[[Context, Step], Awaitable[Decision | None]]
-    | Callable[[Context, BeforeGenerate], Awaitable[Decision | None]]
-    | Callable[[Context, AfterGenerate], Awaitable[Decision | None]]
-    | Callable[[Context, BeforeToolCall], Awaitable[Decision | None]]
-    | Callable[[Context, AfterToolCall], Awaitable[Decision | None]]
+    Callable[[Context, Step, Escalations], Awaitable[Decision | None]]
+    | Callable[
+        [Context, BeforeGenerate, Escalations],
+        Awaitable[Decision | None],
+    ]
+    | Callable[
+        [Context, AfterGenerate, Escalations],
+        Awaitable[Decision | None],
+    ]
+    | Callable[
+        [Context, BeforeToolCall, Escalations],
+        Awaitable[Decision | None],
+    ]
+    | Callable[
+        [Context, AfterToolCall, Escalations],
+        Awaitable[Decision | None],
+    ]
 )
-"""A control protocol, not `typing.Protocol`: decides what happens at a step, or abstains. Annotating `Step` runs it at every stage."""
+"""A control protocol, not `typing.Protocol`: decides what happens at a step, or abstains. Annotating `Step` runs it at every stage. Its third parameter is the escalations earlier links of a `sequential` handed it, empty anywhere else."""
 
-SentinelFunction: TypeAlias = Callable[[Context, Step], Awaitable[Report | None]]
+# a monitor takes (context, step) and a protocol (context, step, escalations)
+SentinelFunction: TypeAlias = Callable[..., Awaitable[Report | None]]
 
 
 class Group:

@@ -16,7 +16,12 @@ from inspect_sentinel._integration import (
     sentinel_from_config,
 )
 from inspect_sentinel._protocols import concurrent
-from inspect_sentinel._report import Action, Decision, Observation
+from inspect_sentinel._report import (
+    Action,
+    Decision,
+    Escalations,
+    Observation,
+)
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import AfterGenerate, AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup
@@ -40,7 +45,11 @@ def hum_score() -> Monitor:
 
 @protocol
 def hum_rule(action: Action = "escalate") -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return Decision(action=action, explanation=f"rule says {action}")
 
     return decide
@@ -48,7 +57,11 @@ def hum_rule(action: Action = "escalate") -> Protocol:
 
 @protocol
 def hum_turn_rule() -> Protocol:
-    async def decide(context: Context, step: AfterGenerate) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: AfterGenerate,
+        escalations: Escalations,
+    ) -> Decision | None:
         return Decision(action="escalate", explanation="turn deletes files")
 
     return decide
@@ -143,6 +156,11 @@ MODIFIED = ToolCall(id="call_1", function="bash", arguments={"cmd": "ls -a"})
     [
         (HumanAnswer("approve"), Decision.proceed()),
         (
+            HumanAnswer("approve", reason="the staging host is expected"),
+            Decision.proceed("the staging host is expected"),
+        ),
+        (HumanAnswer("approve", reason=""), Decision.proceed()),
+        (
             HumanAnswer("reject", reason="use the staging host"),
             Decision.reject("use the staging host", message="use the staging host"),
         ),
@@ -233,7 +251,7 @@ async def test_the_person_sees_who_escalated() -> None:
         sequential([hum_rule(), human(stages=["tool_call"])]), HumanAnswer("approve")
     )
     [asked] = host.asked
-    assert [(e.name, e.report.explanation) for e in asked.step.escalations] == [
+    assert [(e.name, e.report.explanation) for e in asked.escalations] == [
         ("hum_rule", "rule says escalate")
     ]
 
@@ -253,7 +271,7 @@ async def test_a_lone_human_asks_about_every_call() -> None:
     host = FakeHost(HumanAnswer("approve"), HumanAnswer("approve"))
     for _ in range(2):
         await run_sentinel(instance, host_context(host=host), before_step())
-    assert len(host.asked) == 2
+    assert [asked.escalations for asked in host.asked] == [(), ()]
 
 
 @pytest.mark.anyio
@@ -294,7 +312,7 @@ async def test_after_a_generate_the_person_decides_about_the_whole_turn(
     assert asked.choices == ("approve", "terminate")
     assert isinstance(asked.step, AfterGenerate)
     assert asked.step.output is step.output
-    assert [(e.name, e.report.explanation) for e in asked.step.escalations] == [
+    assert [(e.name, e.report.explanation) for e in asked.escalations] == [
         ("hum_turn_rule", "turn deletes files")
     ]
 

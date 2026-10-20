@@ -12,6 +12,7 @@ from inspect_sentinel import (
     BeforeToolCall,
     Context,
     Decision,
+    Escalations,
     Protocol,
     call_text,
     find_words,
@@ -25,7 +26,11 @@ NETWORK_COMMANDS = ["curl", "wget", "pip install"]
 def no_network() -> Protocol:
     """Reject `bash()` commands that use `curl`, `wget` or `pip install`."""
 
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         if step.call.function != "bash":
             return None
         used = find_words(call_text(step.call), NETWORK_COMMANDS)

@@ -8,7 +8,7 @@ from inspect_ai.scorer import Reference
 
 from .._context import Context
 from .._decorators import members, protocol
-from .._report import Action, Decision, Observation, Reported
+from .._report import Action, Decision, Escalations, Observation, Reported
 from .._results import Observations
 from .._runner import describe, run_monitors
 from .._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
@@ -32,7 +32,7 @@ def threshold(
 
     It runs at each stage its monitors watch, before and after tool calls and the agent's model calls, and combines monitors that watch different stages, each thresholded at its own: at a step, only the monitors watching that stage report. A `reject` is legal only before a tool call, so with `reject_at` every monitor function must watch only `BeforeToolCall`, and `threshold` runs only there.
 
-    A decision is explained for the log: it names the highest-scoring score that reached the decision's threshold (the first in configuration order on a tie) with its monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host` when the threshold came from `"*"` or the score is a single number, and `sabotage 0.72 ≥ 0.60 from audit: edits the tests` when it came from the dimension's own key. It carries every reporting monitor's references, and its `metadata["observations"]` lists every monitor that reported at the step, `{"monitor": name, "suspicion": score, "explanation": text}` in configuration order, so they reach a `human()` after it through `step.escalations`, where a host can show each score and where the monitors disagree; inspect_ai's approval card shows only the explanation until it renders them. None sets `message`, so on a reject the agent gets the host's default "not approved" text and learns nothing about what the monitors saw.
+    A decision is explained for the log: it names the highest-scoring score that reached the decision's threshold (the first in configuration order on a tie) with its monitor's explanation, e.g. `suspicion 0.95 from audit: posts credentials to an external host` when the threshold came from `"*"` or the score is a single number, and `sabotage 0.72 ≥ 0.60 from audit: edits the tests` when it came from the dimension's own key. It carries every reporting monitor's references, and its `metadata["observations"]` lists every monitor that reported at the step, `{"monitor": name, "suspicion": score, "explanation": text}` in configuration order, so they reach a `human()` after it in the escalations it is handed, where a host can show each score and where the monitors disagree; inspect_ai's approval card shows only the explanation until it renders them. None sets `message`, so on a reject the agent gets the host's default "not approved" text and learns nothing about what the monitors saw.
 
     The smallest protocol, and the one calibration feeds: the constants come from a benign score distribution, which is why they live here and not on a monitor.
 
@@ -95,16 +95,32 @@ def threshold(
                 )
         return Decision.proceed()
 
-    async def tool_call(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def tool_call(
+        context: Context,
+        step: BeforeToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return await decide(context, step)
 
-    async def tool_result(context: Context, step: AfterToolCall) -> Decision | None:
+    async def tool_result(
+        context: Context,
+        step: AfterToolCall,
+        escalations: Escalations,
+    ) -> Decision | None:
         return await decide(context, step)
 
-    async def model_input(context: Context, step: BeforeGenerate) -> Decision | None:
+    async def model_input(
+        context: Context,
+        step: BeforeGenerate,
+        escalations: Escalations,
+    ) -> Decision | None:
         return await decide(context, step)
 
-    async def model_output(context: Context, step: AfterGenerate) -> Decision | None:
+    async def model_output(
+        context: Context,
+        step: AfterGenerate,
+        escalations: Escalations,
+    ) -> Decision | None:
         return await decide(context, step)
 
     # one function per stage its monitors watch, so a stage is added by adding

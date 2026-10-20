@@ -9,7 +9,7 @@ from inspect_ai.util import StoreModel
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision
+from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import AfterToolCall, BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol, ProtocolGroup
 from inspect_sentinel.sidecar import (
@@ -28,11 +28,12 @@ from tests.sidecar._traffic import (
     JSON,
     OPENAI_RECORDED,
     STREAM,
+    every_call_rule,
+    inspect_headers,
     openai_ran,
     openai_recorded,
     openai_request,
     storm_rule,
-    weather_rule,
 )
 
 
@@ -213,6 +214,89 @@ async def test_thinking_written_loosely_by_a_proxy_is_read() -> None:
     ]
 
 
+def _chat_chunk(index: int, function: dict[str, str]) -> bytes:
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-5-mini",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"tool_calls": [{"index": index, "function": function}]},
+                "finish_reason": None,
+            }
+        ],
+    }
+    return f"data: {json.dumps(chunk)}".encode()
+
+
+_DONE = b"data: [DONE]\n\n"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "where",
+    ["after [DONE]", "unfinished at the end"],
+)
+async def test_a_chat_chunk_the_sdk_never_dispatches_is_not_read(where: str) -> None:
+    _, body = openai_recorded("chat stream")
+    late = _chat_chunk(0, {"name": "_safe"})
+    if where == "after [DONE]":
+        body += late + b"\n\n"
+    else:
+        # an event is dispatched at the blank line that ends it
+        body = body.replace(_DONE, b"") + late
+
+    output = await read_reply("openai", STREAM, body)
+
+    assert {call.function for call in output.message.tool_calls or []} == {
+        "get_weather"
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "where",
+    ["after the choice finished", "after the next call began"],
+)
+async def test_a_chat_stream_that_changes_a_call_the_sdk_gave_as_done_is_refused(
+    where: str,
+) -> None:
+    _, body = openai_recorded("chat stream")
+    late = _chat_chunk(0, {"name": "_safe"}) + b"\n\n"
+    if where == "after the choice finished":
+        body = body.replace(_DONE, late + _DONE)
+    else:
+        lines = body.split(b"\n\n")
+        second = next(
+            position for position, line in enumerate(lines) if b'"index":1,"id"' in line
+        )
+        lines.insert(second + 1, late.rstrip(b"\n"))
+        body = b"\n\n".join(lines)
+
+    with pytest.raises(UnreadableError, match="after the SDK gave it as done"):
+        await read_reply("openai", STREAM, body)
+
+
+def _responses_stream_going_on(kind: str) -> bytes:
+    # the recorded stream, then again an event of a kind it already has,
+    # giving a call other arguments
+    _, body = openai_recorded("responses stream")
+    again = json.loads(
+        next(
+            line[len("data: ") :]
+            for line in reversed(body.decode().splitlines())
+            if line.startswith("data: ") and f'"type":"{kind}"' in line
+        )
+    )
+    found = again.get("item") or next(
+        item for item in again["response"]["output"] if item["type"] == "function_call"
+    )
+    found["arguments"] = '{"location": "Atlantis"}'
+    return body + f"data: {json.dumps(again)}\n\n".encode()
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("content_type", "body", "match"),
@@ -228,6 +312,18 @@ async def test_thinking_written_loosely_by_a_proxy_is_read() -> None:
             _half(openai_recorded("responses stream")[1]),
             "not a complete response",
             id="responses stream cut short",
+        ),
+        pytest.param(
+            STREAM,
+            _responses_stream_going_on("response.completed"),
+            "goes on after its response ended",
+            id="responses stream with a second response",
+        ),
+        pytest.param(
+            STREAM,
+            _responses_stream_going_on("response.output_item.done"),
+            "goes on after its response ended",
+            id="responses stream with an event after its response",
         ),
         pytest.param(
             STREAM,
@@ -452,20 +548,24 @@ def _conversation(api: str, body: bytes) -> list[dict[str, Any]]:
             # says it in the text
             [
                 "Error: " + text
-                for text in ("not run", "Tokyo is not allowed.", "not run")
+                for text in (
+                    "Paris is not allowed.",
+                    "Tokyo is not allowed.",
+                    "Lima is not allowed.",
+                )
             ],
         ),
         (
             "responses",
             ["reasoning", *["function_call"] * 3, *["function_call_output"] * 3],
-            ["not run", "Tokyo is not allowed.", "not run"],
+            ["Paris is not allowed.", "Tokyo is not allowed.", "Lima is not allowed."],
         ),
     ],
 )
 async def test_rejection_is_added_in_the_format_of_the_request(
     api: str, kinds: list[str], told: list[str]
 ) -> None:
-    handler = Handler(weather_rule("reject", "Tokyo"), reject_status=503)
+    handler = Handler(every_call_rule(), reject_status=503)
     first = _request(api, "a")
     await handler.request(first)
 
@@ -473,7 +573,7 @@ async def test_rejection_is_added_in_the_format_of_the_request(
     again = await handler.request(_request(api, "b"))
 
     assert refused == Refuse(
-        503, "A sentinel rejected the call to get_weather: Tokyo is not allowed."
+        503, "A sentinel rejected the call to get_weather: Paris is not allowed."
     )
     assert isinstance(again, Replace)
     sent, added = _conversation(api, first.body), _conversation(api, again.body)
@@ -481,10 +581,7 @@ async def test_rejection_is_added_in_the_format_of_the_request(
     entries = added[len(sent) :]
     assert [entry.get("type") or entry["role"] for entry in entries] == kinds
     results = [entry.get("content") or entry.get("output") for entry in entries][-3:]
-    not_run = (
-        "This call was not run, because another call in the same turn was rejected."
-    )
-    assert results == [text.replace("not run", not_run) for text in told]
+    assert results == told
     # everything else in the request is as the client sent it
     field = "messages" if api == "chat" else "input"
     assert {k: v for k, v in json.loads(again.body).items() if k != field} == {
@@ -517,7 +614,9 @@ async def test_result_is_judged(api: str, result: str, expected: Pass | Refuse) 
 
 @protocol
 def reports_tools() -> Protocol:
-    async def decide(context: Context, step: BeforeGenerate) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
         return Decision.proceed(
             f"{[tool.name for tool in step.tools]}|{step.config.max_tokens}"
         )
@@ -670,13 +769,17 @@ async def test_a_chat_custom_tool_makes_the_request_unreadable() -> None:
 
 
 @protocol
-def rejects_tokyo_and_ends_at_any_result() -> ProtocolGroup:
-    async def before(context: Context, step: BeforeToolCall) -> Decision | None:
-        if step.call.arguments.get("location") == "Tokyo":
-            return Decision.reject("Tokyo", message="Tokyo is not allowed.")
-        return Decision.proceed()
+def rejects_every_call_and_ends_at_any_result() -> ProtocolGroup:
+    async def before(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        # every call, so that the turn is refused whole and added to the next
+        # request
+        return Decision.reject("any", message="Not allowed.")
 
-    async def after(context: Context, step: AfterToolCall) -> Decision | None:
+    async def after(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.terminate("a result")
 
     return ProtocolGroup(before, after)
@@ -687,7 +790,7 @@ def rejects_tokyo_and_ends_at_any_result() -> ProtocolGroup:
 async def test_what_the_model_is_told_of_a_rejection_is_not_judged_as_a_result(
     api: str,
 ) -> None:
-    handler = Handler(rejects_tokyo_and_ends_at_any_result())
+    handler = Handler(rejects_every_call_and_ends_at_any_result())
     await handler.request(_request(api, "a"))
     await handler.reply(_reply(api, "a"))
 
@@ -707,8 +810,12 @@ def _function_calls(body: bytes) -> list[tuple[str, str, str]]:
 
 @pytest.mark.anyio
 async def test_a_rejected_turn_is_put_back_as_its_own_run_was_handed_it() -> None:
-    handler = Handler(weather_rule("reject", "Tokyo"))
-    await handler.request(replace(_request("responses", "a"), run="run_a"))
+    handler = Handler(every_call_rule())
+    await handler.request(
+        replace(
+            _request("responses", "a"), headers=inspect_headers(sample_uuid="run_a")
+        )
+    )
     first = _reply("responses", "a")
     await handler.reply(first)
     # another run's model reuses the call ids, with arguments of its own
@@ -716,10 +823,18 @@ async def test_a_rejected_turn_is_put_back_as_its_own_run_was_handed_it() -> Non
     for item in other["output"]:
         if item["type"] == "function_call":
             item["arguments"] = json.dumps({"location": "Tokyo", "note": "run b's"})
-    await handler.request(replace(_request("responses", "b"), run="run_b"))
+    await handler.request(
+        replace(
+            _request("responses", "b"), headers=inspect_headers(sample_uuid="run_b")
+        )
+    )
     await handler.reply(replace(first, id="b", body=json.dumps(other).encode()))
 
-    again = await handler.request(replace(_request("responses", "c"), run="run_a"))
+    again = await handler.request(
+        replace(
+            _request("responses", "c"), headers=inspect_headers(sample_uuid="run_a")
+        )
+    )
 
     assert isinstance(again, Replace)
     handed = json.loads(first.body)["output"]
@@ -737,7 +852,9 @@ class _Asked(StoreModel):
 
 @protocol
 def one_request_a_run() -> Protocol:
-    async def decide(context: Context, step: BeforeGenerate) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
         asked = context.store_as(_Asked)
         asked.requests += 1
         if asked.requests > 1:
@@ -1034,7 +1151,9 @@ async def test_audio_from_the_user_is_read() -> None:
 
 @protocol
 def rejects_the_computer() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.reject("clicks", message="Clicking is not allowed.")
 
     return decide
@@ -1255,7 +1374,9 @@ async def test_a_refusal_that_is_not_merged_is_read() -> None:
 
 @protocol
 def ends_at_a_custom_result() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         if step.call.type == "custom":
             return Decision.terminate("a custom tool")
         return Decision.proceed()
@@ -1318,7 +1439,9 @@ class _Results(StoreModel):
 
 @protocol
 def ends_at_a_second_result() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         results = context.store_as(_Results)
         results.judged += 1
         if results.judged > 1:
@@ -1388,7 +1511,9 @@ async def test_a_result_beside_a_changed_refusal_is_new() -> None:
 
 @protocol
 def ends_at_a_storm_the_model_mentions() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         if "storm" in step.message:
             return Decision.terminate("a storm")
         return Decision.proceed()
@@ -1696,7 +1821,9 @@ async def test_two_calls_that_share_an_id_and_a_result_are_each_judged() -> None
 
 @protocol
 def notes_what_the_model_was_sent() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         sent = step.input
         return Decision.proceed("None" if sent is None else str(len(sent)))
 
@@ -1819,7 +1946,9 @@ async def test_a_conversation_that_lost_calls_with_a_shared_id_is_unreadable() -
 
 @protocol
 def notes_each_result() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.proceed(step.call.id)
 
     return decide
@@ -1866,7 +1995,9 @@ class _Calls(StoreModel):
 
 @protocol
 def ends_at_a_second_result_of_call_1() -> Protocol:
-    async def decide(context: Context, step: AfterToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
         calls = context.store_as(_Calls)
         judged = calls.judged | {step.call.id: calls.judged.get(step.call.id, 0) + 1}
         calls.judged = judged

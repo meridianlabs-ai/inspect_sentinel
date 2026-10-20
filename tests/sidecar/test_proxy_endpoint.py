@@ -11,7 +11,7 @@ import pytest
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision
+from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler
@@ -23,6 +23,7 @@ from inspect_sentinel.sidecar._json_rpc import (
     SENTINEL_FAILED,
     TIME_LIMIT,
     UNREADABLE,
+    UNREGISTERED,
 )
 from inspect_sentinel.sidecar._proxy_endpoint import (
     PATH,
@@ -30,6 +31,7 @@ from inspect_sentinel.sidecar._proxy_endpoint import (
     proxy_app,
     schema,
 )
+from inspect_sentinel.sidecar._registration import FileTask
 from tests.sidecar._traffic import (
     JSON,
     message,
@@ -48,7 +50,6 @@ _REQUEST: dict[str, Any] = {
     "provider": "anthropic",
     "model": "claude-test",
     "user": "user-1",
-    "run": None,
     "headers": {},
     "body": {"messages": [{"role": "user", "content": "What is the weather?"}]},
 }
@@ -121,6 +122,45 @@ async def test_request_and_reply_are_judged(
     assert _fits(_SCHEMA["methods"]["judge_reply"]["result"], answered["result"])
 
 
+_FROM_INSPECT = {
+    # a proxy may pass the headers on as the client wrote them
+    "X-Inspect-Context": json.dumps(
+        {
+            "version": 1,
+            "eval_id": "eval_789",
+            "task": "philadelphia",
+            "sample_id": 1,
+            "epoch": 1,
+            "sample_uuid": "sample_123",
+            "attempt": "attempt_1",
+        }
+    ),
+}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("city", ["Oslo", "Tokyo"])
+async def test_an_inspect_client_is_told_what_was_decided(city: str) -> None:
+    async with _client() as client:
+        asked = await _call(
+            client, "judge_request", _REQUEST | {"headers": _FROM_INSPECT}
+        )
+        answered = await _call(client, "judge_reply", _reply(message(weather(city))))
+
+    assert asked["result"] == {"action": "pass"}
+    result = answered["result"]
+    assert _fits(_SCHEMA["methods"]["judge_reply"]["result"], result)
+    if city == "Oslo":
+        assert result["action"] == "replace"
+        field = json.loads(base64.b64decode(result["body"]))["sentinel"]
+    else:
+        assert result["action"] == "refuse"
+        field = result["sentinel"]
+    assert [step["decision"]["action"] for step in field["steps"]] == [
+        "proceed" if city == "Oslo" else "reject",
+    ]
+
+
 @pytest.mark.anyio
 async def test_request_that_carries_on_from_a_rejected_turn_is_replaced() -> None:
     async with _client() as client:
@@ -157,19 +197,23 @@ async def test_body_is_read_in_the_format_the_proxy_names() -> None:
 
 @protocol
 def reports_the_conversation() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.reject("run", message=step.conversation)
 
     return decide
 
 
 @pytest.mark.anyio
-async def test_run_is_the_one_the_proxy_names() -> None:
+async def test_run_is_the_sample_the_eval_names() -> None:
     async with _client(Handler(reports_the_conversation())) as client:
-        await _call(client, "judge_request", _REQUEST | {"run": "sample-uuid"})
+        await _call(client, "judge_request", _REQUEST | {"headers": _FROM_INSPECT})
         answered = await _call(client, "judge_reply", _reply(message(weather("Oslo"))))
 
-    assert re.search(r": sample-uuid/[0-9a-f]{16}$", answered["result"]["message"])
+    assert re.search(
+        r": sample_123/attempt_1/[0-9a-f]{16}$", answered["result"]["message"]
+    )
 
 
 @pytest.mark.anyio
@@ -188,7 +232,7 @@ async def test_request_can_be_refused() -> None:
 
 @pytest.mark.anyio
 async def test_run_that_a_sentinel_ended_is_refused_from_then_on() -> None:
-    named = {"run": "sample-uuid"}
+    named = {"headers": _FROM_INSPECT}
     refused = {
         "action": "refuse",
         "status": 400,
@@ -201,7 +245,11 @@ async def test_run_that_a_sentinel_ended_is_refused_from_then_on() -> None:
         later = await _call(client, "judge_request", _REQUEST | named | {"id": "y"})
         other = await _call(client, "judge_request", _REQUEST | {"id": "z"})
 
-    assert (ended["result"], later["result"]) == (refused, refused)
+    assert [
+        {key: value for key, value in result.items() if key != "sentinel"}
+        for result in (ended["result"], later["result"])
+    ] == [refused, refused]
+    assert later["result"]["sentinel"]["outcome"] == "terminate"
     assert other["result"] == {"action": "pass"}
 
 
@@ -295,7 +343,9 @@ async def test_call_that_does_not_fit_is_an_error(
 
 @protocol
 def never_finishes() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         await anyio.sleep_forever()
         return None
 
@@ -372,10 +422,31 @@ def test_schema_file_is_what_the_models_say() -> None:
     assert _SCHEMA == schema()
 
 
+@pytest.mark.anyio
+async def test_a_sample_not_registered_beforehand_is_not_judged() -> None:
+    task = FileTask.model_validate(
+        {"task": "philadelphia", "samples": [{"sample_id": 7, "sample_input": "Hi."}]}
+    )
+    handler = Handler(weather_rule(), tasks={"philadelphia": task})
+
+    async with _client(handler) as client:
+        answered = await _call(
+            client, "judge_request", _REQUEST | {"headers": _FROM_INSPECT}
+        )
+
+    assert answered["error"]["code"] == UNREGISTERED
+    assert "sample 1" in answered["error"]["message"]
+
+
 def test_schema_file_says_a_call_not_judged_is_refused() -> None:
     errors = _SCHEMA["errors"]
 
-    assert set(errors) == {str(UNREADABLE), str(SENTINEL_FAILED), str(TIME_LIMIT)}
+    assert set(errors) == {
+        str(UNREADABLE),
+        str(SENTINEL_FAILED),
+        str(TIME_LIMIT),
+        str(UNREGISTERED),
+    }
     assert all("refuses the call" in error["description"] for error in errors.values())
 
 

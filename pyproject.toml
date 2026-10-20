@@ -25,7 +25,7 @@ dependencies = [
     # The git ref never reaches PyPI: release-pin-deps.yml rewrites it to a
     # `>=<latest>` floor on the Release Please release PR, and
     # release-dep-guard.yml blocks the release if it is still a git ref.
-    "inspect-ai>=0.3.281",
+    "inspect-ai>=0.3.282",
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.
     "pydantic>=2.0",
@@ -146,7 +146,10 @@ addopts = "-n auto"
 timeout = 120
 
 [tool.pyright]
-include = ["src", "tests", "examples"]
+# src/proxies is left out: a proxy hook imports its proxy, which is never in
+# this environment. `make check-litellm` checks the LiteLLM guardrail in one
+# of its own.
+include = ["src/inspect_sentinel", "tests", "examples"]
 typeCheckingMode = "strict"
 pythonPlatform = "All"
 pythonVersion = "3.11"

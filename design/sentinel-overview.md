@@ -21,13 +21,15 @@ There are two registerable types. A **monitor** observes: it returns an `Observa
 ``` python
 @protocol
 def no_curl() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(context: Context, step: BeforeToolCall, escalations: Escalations) -> Decision | None:
         if "curl" in str(step.call.arguments):
             return Decision.reject("uses curl", message="network access is not allowed")
         return None
 
     return decide
 ```
+
+A protocol's third parameter holds the escalations of the links before it in a `sequential()` (see Composition below); it is empty here. A monitor takes only `(context, step)`, so it never sees what another monitor or protocol decided.
 
 And here is a monitor that scores each tool call, wrapped in the `threshold()` protocol that decides what the score means:
 
@@ -140,8 +142,8 @@ Built-in protocols cover the common compositions and basic control scenarios. `c
 | `concurrent()` | Runs every child concurrently; the strongest decision wins (`terminate` \> `reject` \> `modify` \> `escalate` \> `proceed`). What a list containing a protocol resolves to. Use for independent guards that must all be satisfied. |
 | `sequential()` | Runs children in order until one decides; first non-`escalate` wins, and escalations are handed to the next link so a human at the end sees who asked and why. Use for a cheap rule ahead of an expensive judge. |
 | `observe_only()` | Records every observation and acts on none. How monitors run with nothing acting, since `Task(sentinel=)` takes no bare monitors, and how a benign score distribution gets collected. |
-| `threshold()` | Acts on scores: `escalate_at`, `reject_at` and `terminate_at` are floors, and the strongest action any score reaches decides; each is one number or a mapping per dimension (`{"audit.sabotage": 0.6, "*": 0.9}`). Escalations carry every monitor's score to `human()` through `step.escalations`. The smallest protocol, and the one calibration feeds. |
-| `human()` | Asks a person whenever it is reached, at the stages named in its required `stages` (`tool_call`, `tool_result`, `model_output`), through `Host.ask_human(step, choices)`. The answer is an ordinary decision: it ends a `sequential()`, and beside other protocols in a `concurrent()` it is one vote; a reject's typed reason is the `message` the agent reads. Put it at the end of a `sequential()` to ask when the links before it escalate, or abstain, as a `threshold()` does when none of its monitors reported. |
+| `threshold()` | Acts on scores: `escalate_at`, `reject_at` and `terminate_at` are floors, and the strongest action any score reaches decides; each is one number or a mapping per dimension (`{"audit.sabotage": 0.6, "*": 0.9}`). Escalations carry every monitor's score to a `human()` after it, in the `escalations` it is handed. The smallest protocol, and the one calibration feeds. |
+| `human()` | Asks a person whenever it is reached, at the stages named in its required `stages` (`tool_call`, `tool_result`, `model_output`), through `Host.ask_human(step, escalations, choices)`, passing on the escalations it was handed. The answer is an ordinary decision: it ends a `sequential()`, and beside other protocols in a `concurrent()` it is one vote; a reject's typed reason is the `message` the agent reads. Put it at the end of a `sequential()` to ask when the links before it escalate, or abstain, as a `threshold()` does when none of its monitors reported. |
 | `resample()` | Above a threshold, draws further completions, scores each, and executes the least suspicious; escalates if none clears. |
 
 ### Writing a Protocol
@@ -166,7 +168,7 @@ def threshold(
         ("escalate", thresholds(escalate_at)),
     ]
 
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(context: Context, step: Step, escalations: Escalations) -> Decision | None:
         observations = await run_monitors(monitors, context, step)
         if not observations:
             return None

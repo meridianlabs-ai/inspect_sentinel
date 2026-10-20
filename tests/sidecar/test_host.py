@@ -7,7 +7,7 @@ from inspect_ai.tool import ToolCall, ToolCallView
 from inspect_sentinel import human, sequential
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision
+from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, Refuse, SidecarHost
@@ -16,7 +16,9 @@ from tests.sidecar._traffic import message, reply, request, weather
 
 @protocol
 def escalates() -> Protocol:
-    async def decide(context: Context, step: BeforeToolCall) -> Decision | None:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
         return Decision.escalate("every call")
 
     return decide
@@ -46,7 +48,7 @@ async def test_a_person_who_cannot_be_asked_is_answered_for_with_caution(
     choices: list[str], expected: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING):
-        answer = await SidecarHost().ask_human(_CALL, choices)
+        answer = await SidecarHost().ask_human(_CALL, (), choices)
 
     assert answer.decision == expected
     assert answer.reason == "No person can be asked from the sidecar yet."
@@ -77,7 +79,7 @@ async def test_a_person_cannot_be_asked_at_a_generate_stage() -> None:
     )
 
     with pytest.raises(NotImplementedError, match="model_input stage"):
-        await SidecarHost().ask_human(step, ["approve"])
+        await SidecarHost().ask_human(step, (), ["approve"])
 
 
 @pytest.mark.anyio
