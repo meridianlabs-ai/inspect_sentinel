@@ -319,6 +319,10 @@ class ReplyStream:
             await self._release_ready(early)
             if ending:
                 break
+        if self._aborted:
+            # the client went while the last of the turn was delivered
+            early.cut_off()
+            return
         # the end of the turn: everything held goes out, once the turn is
         # judged, with the `sentinel` field for an Inspect client
         held = [event for event, _ in events.pending]
@@ -330,13 +334,15 @@ class ReplyStream:
         events.opening, events.pending = [], []
         if editor is not None:
             editor.finish(early.edits)
+        # checked before the turn is judged, so that a turn whose end can't go
+        # out is never recorded as one that went on
+        if events.check is not None:
+            events.check.check(tail)
         written = write_events(tail)
         answer = await early.finish(bytes(self._held), bytes(events.released) + written)
         if isinstance(answer, Refuse):
             await self._fail(answer)
             return
-        if events.check is not None:
-            events.check.check(tail)
         field = early.field
         if field is not None:
             try:
@@ -373,10 +379,11 @@ class ReplyStream:
     ) -> Refuse | None:
         events = self._events
         assert events.format is not None and events.turn is not None
+        # what can go out goes out before the sentinel is asked, and the
+        # client may go while it does
+        await self._release_ready(early)
         if self._aborted:
             return None
-        # what can go out goes out before the sentinel is asked
-        await self._release_ready(early)
         refused = await early.judge(
             closed_prefix(events.format, events.originals, events.turn.open)
         )

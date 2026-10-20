@@ -414,3 +414,49 @@ async def test_no_call_is_judged_after_the_client_has_gone() -> None:
 
     # the call being judged was decided, and no other was asked about
     assert len(seen) == 1
+
+
+@pytest.mark.anyio
+async def test_no_call_is_judged_once_the_client_goes_during_a_delivery() -> None:
+    asked, reply = _exchange("anthropic", inspect=False)
+    seen: list[tuple[str, bool, str]] = []
+    handler = Handler(noting(seen, "reject", "Cairo"), release="early")
+    await handler.request(asked)
+    stream = handler.reply_stream(_start(reply))
+    events = reply.body.split(b"\n\n")
+    first_text = next(i for i, e in enumerate(events) if b"text_delta" in e)
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(stream.run)
+            # the opening and the first text go out, and wait to be collected
+            await stream.feed(b"\n\n".join(events[: first_text + 1]) + b"\n\n")
+            await anyio.wait_all_tasks_blocked()
+            # the rest of the text waits to be delivered behind it, before the
+            # first call is judged
+            await stream.feed(b"\n\n".join(events[first_text + 1 :]))
+            await anyio.wait_all_tasks_blocked()
+            await stream.abort()
+
+    assert seen == []
+
+
+@pytest.mark.anyio
+async def test_a_turn_whose_end_fails_its_check_is_recorded_as_not_judged() -> None:
+    asked, reply = _exchange("responses", inspect=True)
+    # the response the stream ends with holds two calls in each other's place
+    lines = reply.body.decode().split("\n")
+    for at, line in enumerate(lines):
+        if line.startswith("data: {") and '"response.completed"' in line:
+            data = json.loads(line[6:])
+            output = data["response"]["output"]
+            output[1], output[2] = output[2], output[1]
+            lines[at] = "data: " + json.dumps(data)
+    body = "\n".join(lines).encode()
+    handler = Handler(noting([], "reject", "Cairo"), release="early")
+    await handler.request(asked)
+
+    outputs = await _streamed(handler.reply_stream(_start(reply)), body, 61)
+
+    assert isinstance(outputs[-1], ErrorEvent)
+    assert await _result(handler) == ("not_judged", "unreadable")
