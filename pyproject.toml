@@ -28,6 +28,12 @@ dependencies = [
     # it, so a release is tested against PyPI, after release-pin-deps.yml
     # raises this floor to the latest inspect_ai release.
     "inspect-ai>=0.3.282",
+    # step_as_str, and so Host.score, renders with Scout's messages_as_str and
+    # message_numbering, until message rendering moves from Scout into
+    # inspect_ai (design/pr-series.md). Development tracks Scout's `main` the
+    # same way as inspect_ai's, and release-pin-deps.yml raises this floor
+    # on the Release Please release PR too.
+    "inspect-scout>=0.6.0",
     # Report types are pydantic models and are imported directly; a
     # transitive dependency is not a promise.
     "pydantic>=2.0",
@@ -77,10 +83,6 @@ dev = [
     "pytest-timeout>=2.4.0",
     # async tests run on both anyio backends (tests/conftest.py)
     "trio",
-    # step_as_str renders with Scout's messages_as_str, imported when called;
-    # not a runtime dependency until message rendering settles (it is to move
-    # from Scout into inspect_ai, design/pr-series.md)
-    "inspect-scout",
     # the sidecar's tests read recorded Anthropic and OpenAI traffic, call its
     # server through httpx and its Envoy shim through grpcio, and hold its
     # answers to its schema file

@@ -10,25 +10,25 @@ The development environment pins 3.13 (`.python-version`). CI covers both ends o
 
 ```bash
 uv venv --python 3.11 /tmp/py311
-uv pip install --python /tmp/py311/bin/python git+https://github.com/UKGovernmentBEIS/inspect_ai.git
+uv pip install --python /tmp/py311/bin/python git+https://github.com/UKGovernmentBEIS/inspect_ai.git git+https://github.com/meridianlabs-ai/inspect_scout.git
 uv pip install --python /tmp/py311/bin/python -e ".[dev]"
 .venv/bin/pyright --pythonpath /tmp/py311/bin/python
 ```
 
-Development tracks `inspect_ai` from `main`, so install that first (this is what CI does), then the package in editable mode with the dev tools (ruff, pyright, pytest):
+Development tracks `inspect_ai` and `inspect_scout` from `main`, so install those first (this is what CI does), then the package in editable mode with the dev tools (ruff, pyright, pytest):
 
 ```bash
 git clone https://github.com/meridianlabs-ai/inspect_sentinel
 cd inspect_sentinel
 uv venv
 source .venv/bin/activate
-uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git
+uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git git+https://github.com/meridianlabs-ai/inspect_scout.git
 uv pip install -e ".[dev]"
 ```
 
-Tracking `main` is deliberate: sentinel and inspect_ai co-develop, and most sentinel changes need hooks that have not shipped yet. `pyproject.toml` names inspect_ai by a PyPI floor, which the git install satisfies, so the last line leaves it in place. To pick up new inspect_ai commits, run `uv pip install --upgrade git+https://github.com/UKGovernmentBEIS/inspect_ai.git`. To develop against a local inspect_ai checkout instead, install it editable: `uv pip install -e ../inspect_ai`.
+Tracking `main` is deliberate: sentinel and inspect_ai co-develop, and most sentinel changes need hooks that have not shipped yet. Scout is tracked the same way, so a Scout change that alters what a monitor's model is shown reaches CI at once. `pyproject.toml` names both by a PyPI floor, which the git install satisfies, so the last line leaves them in place. To pick up new commits, run `uv pip install --upgrade git+https://github.com/UKGovernmentBEIS/inspect_ai.git git+https://github.com/meridianlabs-ai/inspect_scout.git`. To develop against a local inspect_ai or inspect_scout checkout instead, install it editable: `uv pip install -e ../inspect_ai`.
 
-Run Python commands from the activated venv, or reference `.venv/bin/` directly; `make check` and `make test` call the tools directly. Do **not** use `uv sync` or `uv run`: there is no `uv.lock`, so they lock and sync the project, and silently replace inspect_ai's `main` (or your editable checkout) with a PyPI release.
+Run Python commands from the activated venv, or reference `.venv/bin/` directly; `make check` and `make test` call the tools directly. Do **not** use `uv sync` or `uv run`: there is no `uv.lock`, so they lock and sync the project, and silently replace inspect_ai's and inspect_scout's `main` (or your editable checkout) with a PyPI release.
 
 ## Checks and tests
 
@@ -114,15 +114,15 @@ Choose the type deliberately. `feat:` and `fix:` drive the version bump and head
 
 Anything that isn't a user-facing feature or fix should avoid `feat:`/`fix:` so it stays out of the headline sections.
 
-### The inspect_ai pin at release time
+### The inspect_ai and inspect_scout pins at release time
 
-`pyproject.toml` names inspect_ai by a PyPI floor, and every CI build installs inspect_ai's `main` over it, except on the Release Please release PR. That PR tests against PyPI, the way a published sentinel is installed, and two workflows keep its floor honest:
+`pyproject.toml` names inspect_ai and inspect_scout by PyPI floors, and every CI build installs their `main` over them, except on the Release Please release PR. That PR tests against PyPI, the way a published sentinel is installed, and two workflows keep its floors honest:
 
-- `release-pin-deps.yml` raises the `inspect-ai` floor to the latest PyPI version and pushes it to the release PR. It runs on release-PR events and every two hours, because an inspect_ai release produces no event in this repository. The raised floor lands on `main` with the release, which changes nothing for development.
+- `release-pin-deps.yml` raises the `inspect-ai` and `inspect-scout` floors to the latest PyPI versions and pushes them to the release PR. It runs on release-PR events and every two hours, because an inspect_ai or inspect_scout release produces no event in this repository. The raised floors land on `main` with the release, which changes nothing for development.
 - `release-dep-guard.yml` fails the release PR if any runtime dependency points at a git ref, as a backstop: a published package cannot depend on one (PyPI rejects it, and a moving ref is not reproducible).
 
-If the release PR then fails its build or tests, sentinel needs an inspect_ai change that has not shipped: cut an inspect_ai release first, and the scheduled run raises the floor once it is on PyPI.
+If the release PR then fails its build or tests, sentinel needs an inspect_ai or inspect_scout change that has not shipped: cut a release of that package first, and the scheduled run raises the floor once it is on PyPI.
 
 ## Reporting issues
 
-Use the [issue tracker](https://github.com/meridianlabs-ai/inspect_sentinel/issues). For bugs, include the `inspect_sentinel` and `inspect_ai` versions (`pip show inspect-sentinel inspect-ai`) and a minimal repro.
+Use the [issue tracker](https://github.com/meridianlabs-ai/inspect_sentinel/issues). For bugs, include the `inspect_sentinel`, `inspect_ai` and `inspect_scout` versions (`pip show inspect-sentinel inspect-ai inspect-scout`) and a minimal repro.

@@ -42,10 +42,14 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           uv venv
-          # Track inspect_ai main everywhere EXCEPT the release PR, where we
-          # validate against the shipped version pulled in via .[dev] below.
+          # Track inspect_ai and inspect_scout main everywhere EXCEPT the release
+          # PR, where we validate against the shipped versions pulled in via .[dev]
+          # below. One command, so scout's inspect-ai requirement resolves to
+          # the git inspect_ai rather than a release.
           if [ "$HEAD_REF" != "release-please--branches--main" ]; then
-            uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git
+            uv pip install \
+              git+https://github.com/UKGovernmentBEIS/inspect_ai.git \
+              git+https://github.com/meridianlabs-ai/inspect_scout.git
           fi
           uv pip install -e ".[dev]"
       - name: Run pyright
@@ -71,16 +75,20 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           uv venv
-          # Track inspect_ai main everywhere EXCEPT the release PR, where we
-          # validate against the shipped version pulled in via .[dev] below.
+          # Track inspect_ai and inspect_scout main everywhere EXCEPT the release
+          # PR, where we validate against the shipped versions pulled in via .[dev]
+          # below. One command, so scout's inspect-ai requirement resolves to
+          # the git inspect_ai rather than a release.
           if [ "$HEAD_REF" != "release-please--branches--main" ]; then
-            uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git
+            uv pip install \
+              git+https://github.com/UKGovernmentBEIS/inspect_ai.git \
+              git+https://github.com/meridianlabs-ai/inspect_scout.git
           fi
           uv pip install -e ".[dev]"
       - name: Run tests
         # .venv/bin directly, not `uv run`: there is no uv.lock, so `uv run`
         # would lock and sync, and could replace the git-installed inspect_ai
-        # above with a registry resolution.
+        # and inspect_scout above with a registry resolution.
         run: .venv/bin/pytest
 
   # The LiteLLM guardrail is a package of its own, which runs in LiteLLM's
@@ -105,10 +113,14 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           uv venv
-          # Track inspect_ai main everywhere EXCEPT the release PR, where we
-          # validate against the shipped version pulled in via .[dev] below.
+          # Track inspect_ai and inspect_scout main everywhere EXCEPT the release
+          # PR, where we validate against the shipped versions pulled in via .[dev]
+          # below. One command, so scout's inspect-ai requirement resolves to
+          # the git inspect_ai rather than a release.
           if [ "$HEAD_REF" != "release-please--branches--main" ]; then
-            uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git
+            uv pip install \
+              git+https://github.com/UKGovernmentBEIS/inspect_ai.git \
+              git+https://github.com/meridianlabs-ai/inspect_scout.git
           fi
           uv pip install -e ".[dev]"
       - name: Run the guardrail's tests
@@ -138,17 +150,21 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           uv venv
-          # Track inspect_ai main everywhere EXCEPT the release PR, where we
-          # validate against the shipped version the wheel pulls in below.
+          # Track inspect_ai and inspect_scout main everywhere EXCEPT the release
+          # PR, where we validate against the shipped versions the wheel pulls
+          # in below. One command, so scout's inspect-ai requirement resolves to
+          # the git inspect_ai rather than a release.
           if [ "$HEAD_REF" != "release-please--branches--main" ]; then
-            uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git
+            uv pip install \
+              git+https://github.com/UKGovernmentBEIS/inspect_ai.git \
+              git+https://github.com/meridianlabs-ai/inspect_scout.git
           fi
           uv pip install dist/*.whl
       - name: Verify package
         # -I so the import resolves to the installed wheel, not a module at the
         # checkout root.
         run: |
-          .venv/bin/python -I -c "import inspect_sentinel; print('Package imported successfully')"
+          .venv/bin/python -I -c "import inspect_sentinel, inspect_scout; print('Package imported successfully')"
       - name: Build the LiteLLM guardrail
         run: uv build src/proxies/litellm --out-dir dist-litellm
       - name: Verify the LiteLLM guardrail

@@ -91,8 +91,8 @@ ipython_config.py
 #Pipfile.lock
 
 # UV
-#   Not committed: development installs inspect_ai's main over the floor in pyproject.toml
-#   (CONTRIBUTING.md), which a lock would pin to a registry release.
+#   Not committed: development installs inspect_ai's and inspect_scout's main over the floors in
+#   pyproject.toml (CONTRIBUTING.md), which a lock would pin to registry releases.
 uv.lock
 
 # poetry

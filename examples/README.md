@@ -17,16 +17,16 @@ The checks are deliberately simple, to keep the examples readable. Rules are che
 
 ## Running
 
-The examples need Docker running, this package (which installs `inspect-ai` 0.3.278 or later), `inspect-scout` (which `llm_suspicion.py` and `nested.py` need to render the agent's step for the monitor's model), and the model provider SDKs:
+The examples need Docker running, this package (which installs `inspect-ai` 0.3.278 or later, and `inspect-scout`, which renders the agent's step for the monitor's model in `llm_suspicion.py` and `nested.py`), and the model provider SDKs:
 
 ```bash
-pip install inspect-sentinel inspect-scout
+pip install inspect-sentinel
 pip install openai anthropic
 export OPENAI_API_KEY=...     # the agent
 export ANTHROPIC_API_KEY=...  # the monitor role
 ```
 
-(From a clone of this repository, the development setup in [CONTRIBUTING.md](../CONTRIBUTING.md#development-setup) installs `inspect-sentinel` and `inspect-scout` into `.venv`.) Then run the commands above from the repository root. Any capable models work; these are cheap. Each sample is capped at 20 messages. `escalate_to_human.py` waits for a person to answer each escalated call, in the approval panel of the full-screen display (or the console with `--display plain`), so run it where you can answer.
+(From a clone of this repository, the development setup in [CONTRIBUTING.md](../CONTRIBUTING.md#development-setup) installs `inspect-sentinel` into `.venv`, with inspect_ai and inspect_scout from `main`.) Then run the commands above from the repository root. Any capable models work; these are cheap. Each sample is capped at 20 messages. `escalate_to_human.py` waits for a person to answer each escalated call, in the approval panel of the full-screen display (or the console with `--display plain`), so run it where you can answer.
 
 ## Reading the results
 
