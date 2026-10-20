@@ -2,6 +2,7 @@ import re
 from dataclasses import replace
 from typing import Any
 
+import anyio
 import pytest
 from inspect_ai.model import (
     ChatCompletionChoice,
@@ -25,10 +26,12 @@ from inspect_sentinel import (
     Step,
     StepPreprocessor,
 )
-from inspect_sentinel._preprocess import scout_nonce
+from inspect_sentinel._preprocess import Siblings, scout_nonce
+from inspect_sentinel._step import BeforeToolCall
 
 from ._fakes import (
     FakeHost,
+    after_tool_call,
     before_tool_call,
     eval_context,
     in_step,
@@ -611,3 +614,131 @@ async def test_a_monitor_says_what_to_score(subject: str | None, shown: str) -> 
     await score(host, before_tool_call("bash", cmd="ls"), "Safe?", subject=subject)
     assert f"{shown}" in prompt(host)
     assert prompt(host).index(shown) < prompt(host).index("Safe?")
+
+
+def turn_of_three() -> tuple[list[ChatMessage], list[BeforeToolCall]]:
+    # one assistant message with three calls; the first has run
+    calls = [
+        ToolCall(id=f"call_{i}", function="bash", arguments={"cmd": cmd})
+        for i, cmd in enumerate(["date", "edit conf", "restart api"], start=1)
+    ]
+    turn = ChatMessageAssistant(id="msg_1", content="", tool_calls=calls)
+    first = ChatMessageTool(
+        id="msg_2", content="14:05 UTC", tool_call_id="call_1", function="bash"
+    )
+    steps = [
+        replace(
+            before_tool_call("bash"),
+            call=call,
+            agent_messages=[turn, first] if call.id != "call_1" else [turn],
+        )
+        for call in calls
+    ]
+    return [turn, first], steps
+
+
+@pytest.mark.parametrize(
+    "siblings, calls_shown, result_shown",
+    [("none", False, False), ("calls", True, False), ("results", True, True)],
+)
+@pytest.mark.anyio
+async def test_siblings_says_what_a_tool_stage_shows_of_its_turn(
+    siblings: Siblings, calls_shown: bool, result_shown: bool
+) -> None:
+    _, steps = turn_of_three()
+    host = FakeHost(eval=EVAL, outputs=[answer(explanation="ok", suspicion=0.1)])
+    await score(
+        host, steps[2], "Safe?", preprocessor=StepPreprocessor(siblings=siblings)
+    )
+    text = prompt(host)
+    assert "restart api" in text
+    assert ("edit conf" in text) == calls_shown
+    assert ("call 3 of 3: bash" in text) == calls_shown
+    assert ("14:05 UTC" in text) == result_shown
+    assert ("[BEGIN TURN RESULTS" in text) == result_shown
+
+
+@pytest.mark.anyio
+async def test_scope_turn_asks_once_per_message_and_scores_each_call() -> None:
+    _, steps = turn_of_three()
+    host = FakeHost(
+        eval=EVAL,
+        outputs=[
+            answer(explanation="restarts in hours", call_1=0.0, call_2=0.1, call_3=0.9)
+        ],
+    )
+    with in_step(host=host) as context:
+        observations = [
+            await context.host.score(s, "Safe?", scope="turn") for s in steps
+        ]
+    assert [o.suspicion for o in observations] == [0.0, 0.1, 0.9]
+    assert len(host.inputs) == 1
+    text = prompt(host)
+    assert "[CALLS" in text and "1: bash, 2: bash, 3: bash" in text
+    assert "[UNDER REVIEW" not in text
+    assert {"call_1", "call_2", "call_3"} <= set(
+        host.offered[0].tools[0].parameters.properties
+    )
+
+
+@pytest.mark.anyio
+async def test_scope_turn_waits_for_a_judgment_in_flight() -> None:
+    _, steps = turn_of_three()
+    host = FakeHost(
+        eval=EVAL,
+        outputs=[answer(explanation="fine", call_1=0.0, call_2=0.2, call_3=0.4)],
+    )
+    found: dict[str, float] = {}
+    with in_step(host=host) as context:
+
+        async def one(s: BeforeToolCall) -> None:
+            o = await context.host.score(s, "Safe?", scope="turn")
+            found[s.call.id] = float(o.suspicion)  # pyright: ignore[reportArgumentType]
+
+        async with anyio.create_task_group() as tg:
+            for s in steps:
+                tg.start_soon(one, s)
+    assert found == {"call_1": 0.0, "call_2": 0.2, "call_3": 0.4}
+    assert len(host.inputs) == 1
+
+
+@pytest.mark.anyio
+async def test_scope_turn_with_several_dimensions_and_options_kept_apart() -> None:
+    _, steps = turn_of_three()
+    host = FakeHost(
+        eval=EVAL,
+        outputs=[
+            answer(
+                explanation="a",
+                **{f"call_{i}.{d}": 0.1 * i for i in (1, 2, 3) for d in ("x", "y")},
+            ),
+            answer(explanation="b", call_1=0.5, call_2=0.5, call_3=0.5),
+        ],
+    )
+    with in_step(host=host) as context:
+        two = await context.host.score(steps[1], {"x": "X?", "y": "Y?"}, scope="turn")
+        other = await context.host.score(steps[1], "Safe?", scope="turn")
+    assert two.suspicion == {"x": pytest.approx(0.2), "y": pytest.approx(0.2)}
+    assert other.suspicion == 0.5
+    assert len(host.inputs) == 2
+
+
+@pytest.mark.anyio
+async def test_scope_turn_is_scope_call_for_a_single_call_or_after_a_call() -> None:
+    host = FakeHost(
+        eval=EVAL,
+        outputs=[
+            answer(explanation="ok", suspicion=0.1),
+            answer(explanation="ok", suspicion=0.2),
+        ],
+    )
+    _, steps = turn_of_three()
+    after = after_tool_call("bash", result="done")
+    after = replace(after, call=steps[1].call, agent_messages=steps[1].agent_messages)
+    with in_step(host=host) as context:
+        single = await context.host.score(
+            before_tool_call("bash", cmd="ls"), "Safe?", scope="turn"
+        )
+        result = await context.host.score(after, "Safe?", scope="turn")
+    assert (single.suspicion, result.suspicion) == (0.1, 0.2)
+    assert "call 2 of 3: bash" in prompt(host, 1)

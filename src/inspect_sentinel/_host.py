@@ -12,7 +12,7 @@ from inspect_ai.tool import ToolCall, ToolChoice, ToolInfo
 from inspect_ai.util import Store
 
 from ._report import Decision, Failed, Observation, Report, Reported
-from ._score import score_step
+from ._score import Scope, score_step
 from ._step import Step
 
 S = TypeVar("S", bound=Step)
@@ -125,10 +125,12 @@ class Host(HostNative):
         template: str | None = None,
         template_variables: Mapping[str, Any] | None = None,
         subject: str | None = None,
+        scope: Scope = "call",
         model: str | None = None,
         role: str | None = None,
         config: GenerateConfig | None = None,
         retry_refusals: int = 3,
+        explanation: str | None = None,
     ) -> Observation:
         """Ask a model to score a step from 0.0 to 1.0, with an explanation.
 
@@ -161,10 +163,12 @@ class Host(HostNative):
             template: A replacement for the default prompt template, a Jinja template.
             template_variables: More variables for the template, by name; a name must not be one of the variables above.
             subject: The sentence that says what to score, in place of the default.
+            scope: What one judgment covers at a tool stage whose call shares its assistant message with other calls. `"call"` (the default) judges the step's call, shown beside the message's other calls as `preprocessor.siblings` says. `"turn"` judges every call of the message at once, before the first of them runs: the first `BeforeToolCall` of the message asks the model for a score per call, keeps the answer in the sample store, and the message's other `BeforeToolCall` steps take their own call's score from it without asking again, so a message of N calls costs one model call. It cannot see what any of the calls returned. Its prompt says to score each call, in place of `subject`. At other stages, and for a message with one call, it is the same as `"call"`.
             model: A model name, as for `generate`.
             role: A model role, as for `generate`.
             config: Generation configuration.
             retry_refusals: How many times to ask again when the provider refuses to answer.
+            explanation: What the answer's explanation should be, as the answer tool describes it to the model, in place of the default (an assessment citing messages by id).
         """
         return await score_step(
             self,
@@ -177,10 +181,12 @@ class Host(HostNative):
             template=template,
             template_variables=template_variables,
             subject=subject,
+            scope=scope,
             model=model,
             role=role,
             config=config,
             retry_refusals=retry_refusals,
+            explanation=explanation,
         )
 
     async def ask_human(self, step: Step, choices: Sequence[str]) -> HumanAnswer:

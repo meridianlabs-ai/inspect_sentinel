@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Generic, Literal, TypeAlias
 from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
+    ChatMessageTool,
     ContentReasoning,
     ContentToolUse,
 )
@@ -41,6 +42,9 @@ ExtractReferences: TypeAlias = Callable[[str], list[Reference]]
 
 # a list a window cuts, which keys the marks `NewSinceLastReport` keeps
 _Source: TypeAlias = Literal["input", "history", "agent_messages"]
+
+Siblings: TypeAlias = Literal["none", "calls", "results"]
+"""What a tool stage shows of the other tool calls in the assistant message that made its call: `"none"`, `"calls"` or `"results"` (see `StepPreprocessor.siblings`)."""
 
 
 @dataclass(frozen=True)
@@ -118,6 +122,9 @@ class StepPreprocessor(Generic[S]):
     omit_tool_usage: bool = False
     """Leave out a provider's own tool use (such as web search) recorded in a message."""
 
+    siblings: Siblings = "results"
+    """At a tool stage, what to show of the other tool calls in the assistant message that made the call. `"results"` (the default) shows every call of the message, with an `[UNDER REVIEW]` line naming the step's own, and the results of those that have already run (inspect_ai runs a message's calls one after another unless its tools are marked `parallel`); `"calls"` shows the calls without their results; `"none"` shows the step's call alone. The message and the results are found in the step's `agent_messages` or `history` before they are windowed, so a host that provides neither, such as a proxy, shows the call alone."""
+
     transform: Callable[[S], Awaitable[S]] | None = None
     """Any further change, applied last to the thinned step. It returns a step of the same type. The messages it is given are the host's own objects: copy one before changing it."""
 
@@ -176,16 +183,23 @@ async def preprocess_step(
 
 
 async def step_as_str(
-    step: Step, *, nonce: str | None = None, turn: ChatMessage | None = None
+    step: Step,
+    *,
+    nonce: str | None = None,
+    turn: ChatMessage | None = None,
+    turn_results: list[ChatMessage] | None = None,
+    whole_turn: bool = False,
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
-    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At a tool stage: `INPUT`, `TOOLS` (the tools the call's generate was offered, as JSON, when known), `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the agent loop's own list), `CALL` (the assistant's text and the call) and, after the call, `RESULT`. At a generate: `HISTORY`, `AGENT MESSAGES`, then the request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`, and after the generate, `REPLY`. A list the host could not provide (None) is named in its block. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header where the installed Scout takes a nonce. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
+    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At a tool stage: `INPUT`, `TOOLS` (the tools the call's generate was offered, as JSON, when known), `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the agent loop's own list), `CALL` (the assistant's text and the call), `TURN RESULTS` (given `turn_results`) and, after the call, `RESULT`. At a generate: `HISTORY`, `AGENT MESSAGES`, then the request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`, and after the generate, `REPLY`. A list the host could not provide (None) is named in its block. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header where the installed Scout takes a nonce. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it. Needs `inspect_scout` installed; it is not a dependency of this package yet.
 
     Args:
         step: The step to render, usually from `preprocess_step()`.
         nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker and message header; none by default. Scout needs at least 8 characters.
         turn: At a tool stage, the assistant message that made the call, with every call it makes, found in the step's `agent_messages` or `history` before they are windowed. The CALL block then shows the whole turn and names the call under review on an `[UNDER REVIEW]` line, so the monitor model sees the calls made beside it. None shows the step's call alone.
+        turn_results: At a tool stage given `turn`, the results of the turn's other calls that have already run, shown in a `TURN RESULTS` block after the CALL block.
+        whole_turn: At a tool stage given `turn`, judge the turn as a whole: the CALL block names no call under review and ends with a `[CALLS]` line listing the calls in order, numbered from 1, for an answer that scores each.
     """
     # Scout imports duckdb and pandas, so load it only when a monitor renders
     from inspect_scout import MessagesPreprocessor, message_numbering
@@ -256,12 +270,21 @@ async def step_as_str(
             parts.append(blocks(("REPLY", await text(_reply(step), ""))))
     else:
         called = _call(step, turn)
-        under_review = (
-            f"\n[UNDER REVIEW{mark}] call {called.tool_calls.index(step.call) + 1} of {len(called.tool_calls)}: {step.call.function}"
-            if called.tool_calls and len(called.tool_calls) > 1
-            else ""
+        calls = called.tool_calls or []
+        line = (
+            ""
+            if len(calls) < 2
+            else f"\n[CALLS{mark}] "
+            + ", ".join(f"{i}: {c.function}" for i, c in enumerate(calls, start=1))
+            if whole_turn
+            else f"\n[UNDER REVIEW{mark}] call {calls.index(step.call) + 1} of {len(calls)}: {step.call.function}"
         )
-        parts.append(blocks(("CALL", await text([called], "") + under_review)))
+        parts.append(
+            blocks(
+                ("CALL", await text([called], "") + line),
+                ("TURN RESULTS", await text(turn_results or [], "")),
+            )
+        )
         if isinstance(step, AfterToolCall):
             parts.append(blocks(("RESULT", await text([step.result], ""))))
     return (
@@ -419,6 +442,29 @@ def step_turn(step: Step) -> ChatMessage | None:
         if found is not None:
             return found
     return None
+
+
+def step_turn_results(step: Step, turn: ChatMessage | None) -> list[ChatMessage]:
+    # at a tool stage, the results of the turn's other calls that have run:
+    # the tool messages after the turn in the unthinned agent loop's list (or
+    # history), in the order they came back
+    if (
+        isinstance(step, BeforeGenerate | AfterGenerate)
+        or not isinstance(turn, ChatMessageAssistant)
+        or not turn.tool_calls
+    ):
+        return []
+    others = {c.id for c in turn.tool_calls} - {step.call.id}
+    for messages in (step.agent_messages, step.history):
+        ids = [m.id for m in messages or []]
+        if turn.id in ids:
+            after = (messages or [])[ids.index(turn.id) + 1 :]
+            return [
+                m
+                for m in after
+                if isinstance(m, ChatMessageTool) and m.tool_call_id in others
+            ]
+    return []
 
 
 def _reply(step: AfterGenerate) -> list[ChatMessage]:
