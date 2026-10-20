@@ -5,7 +5,7 @@
 # Protobuf Python Version: 6.31.1
 """Generated protocol buffer code."""
 from google.protobuf import descriptor as _descriptor
-from google.protobuf import descriptor_pool as _descriptor_pool
+from inspect_sentinel.sidecar.envoy._proto._pool import POOL
 from google.protobuf import runtime_version as _runtime_version
 from google.protobuf import symbol_database as _symbol_database
 from google.protobuf.internal import builder as _builder
@@ -27,7 +27,7 @@ from inspect_sentinel.sidecar.envoy._proto.udpa.annotations import status_pb2 as
 from inspect_sentinel.sidecar.envoy._proto.validate import validate_pb2 as validate_dot_validate__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n$envoy/config/core/v3/extension.proto\x12\x14\x65nvoy.config.core.v3\x1a\x19google/protobuf/any.proto\x1a\x1dudpa/annotations/status.proto\x1a\x17validate/validate.proto\"c\n\x14TypedExtensionConfig\x12\x15\n\x04name\x18\x01 \x01(\tB\x07\xfa\x42\x04r\x02\x10\x01\x12\x34\n\x0ctyped_config\x18\x02 \x01(\x0b\x32\x14.google.protobuf.AnyB\x08\xfa\x42\x05\xa2\x01\x02\x08\x01\x42\x82\x01\n\"io.envoyproxy.envoy.config.core.v3B\x0e\x45xtensionProtoP\x01ZBgithub.com/envoyproxy/go-control-plane/envoy/config/core/v3;corev3\xba\x80\xc8\xd1\x06\x02\x10\x02\x62\x06proto3')
+DESCRIPTOR = POOL.AddSerializedFile(b'\n$envoy/config/core/v3/extension.proto\x12\x14\x65nvoy.config.core.v3\x1a\x19google/protobuf/any.proto\x1a\x1dudpa/annotations/status.proto\x1a\x17validate/validate.proto\"c\n\x14TypedExtensionConfig\x12\x15\n\x04name\x18\x01 \x01(\tB\x07\xfa\x42\x04r\x02\x10\x01\x12\x34\n\x0ctyped_config\x18\x02 \x01(\x0b\x32\x14.google.protobuf.AnyB\x08\xfa\x42\x05\xa2\x01\x02\x08\x01\x42\x82\x01\n\"io.envoyproxy.envoy.config.core.v3B\x0e\x45xtensionProtoP\x01ZBgithub.com/envoyproxy/go-control-plane/envoy/config/core/v3;corev3\xba\x80\xc8\xd1\x06\x02\x10\x02\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)

@@ -6,7 +6,10 @@ import asyncio
 import gc
 import json
 import logging
+import os
 import re
+import subprocess
+import sys
 from collections.abc import AsyncIterator, Sequence
 from contextlib import suppress
 from pathlib import Path
@@ -469,3 +472,46 @@ async def test_judgment_that_fails_after_envoy_stopped_waiting_is_logged_by_the_
         r"The reply '[0-9a-f]{32}' was not judged\.", logged.getMessage()
     )
     assert logged.exc_info is not None
+
+
+_CLASH = """
+import sys
+
+from google.protobuf import descriptor_pb2, descriptor_pool
+
+
+def clash() -> None:
+    # another copy of one of Envoy's protos, as xds-protos registers it
+    descriptor_pool.Default().AddSerializedFile(
+        descriptor_pb2.FileDescriptorProto(
+            name="envoy/config/core/v3/socket_option.proto",
+            package="envoy.config.core.v3",
+            message_type=[descriptor_pb2.DescriptorProto(name="SocketOption")],
+        ).SerializeToString()
+    )
+
+
+if sys.argv[1] == "before":
+    clash()
+import inspect_sentinel.sidecar.envoy
+if sys.argv[1] == "after":
+    clash()
+"""
+
+
+@pytest.mark.parametrize("backend", ["upb", "python"])
+@pytest.mark.parametrize("when", ["before", "after"])
+def test_envoys_protos_load_beside_another_copy_of_them(
+    when: str, backend: str
+) -> None:
+    # protobuf's default pool is the process's, so each case has one of its
+    # own, on protobuf's compiled backend and on its pure-Python one, which
+    # builds message classes another way
+    loaded = subprocess.run(
+        [sys.executable, "-W", "error", "-c", _CLASH, when],
+        capture_output=True,
+        text=True,
+        env=os.environ | {"PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION": backend},
+    )
+
+    assert loaded.returncode == 0, loaded.stderr

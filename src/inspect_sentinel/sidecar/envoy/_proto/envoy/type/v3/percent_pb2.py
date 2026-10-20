@@ -5,7 +5,7 @@
 # Protobuf Python Version: 6.31.1
 """Generated protocol buffer code."""
 from google.protobuf import descriptor as _descriptor
-from google.protobuf import descriptor_pool as _descriptor_pool
+from inspect_sentinel.sidecar.envoy._proto._pool import POOL
 from google.protobuf import runtime_version as _runtime_version
 from google.protobuf import symbol_database as _symbol_database
 from google.protobuf.internal import builder as _builder
@@ -27,7 +27,7 @@ from inspect_sentinel.sidecar.envoy._proto.udpa.annotations import versioning_pb
 from inspect_sentinel.sidecar.envoy._proto.validate import validate_pb2 as validate_dot_validate__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1b\x65nvoy/type/v3/percent.proto\x12\renvoy.type.v3\x1a\x1dudpa/annotations/status.proto\x1a!udpa/annotations/versioning.proto\x1a\x17validate/validate.proto\"L\n\x07Percent\x12&\n\x05value\x18\x01 \x01(\x01\x42\x17\xfa\x42\x14\x12\x12\x19\x00\x00\x00\x00\x00\x00Y@)\x00\x00\x00\x00\x00\x00\x00\x00:\x19\x9a\xc5\x88\x1e\x14\n\x12\x65nvoy.type.Percent\"\xdb\x01\n\x11\x46ractionalPercent\x12\x11\n\tnumerator\x18\x01 \x01(\r\x12O\n\x0b\x64\x65nominator\x18\x02 \x01(\x0e\x32\x30.envoy.type.v3.FractionalPercent.DenominatorTypeB\x08\xfa\x42\x05\x82\x01\x02\x10\x01\"=\n\x0f\x44\x65nominatorType\x12\x0b\n\x07HUNDRED\x10\x00\x12\x10\n\x0cTEN_THOUSAND\x10\x01\x12\x0b\n\x07MILLION\x10\x02:#\x9a\xc5\x88\x1e\x1e\n\x1c\x65nvoy.type.FractionalPercentBr\n\x1bio.envoyproxy.envoy.type.v3B\x0cPercentProtoP\x01Z;github.com/envoyproxy/go-control-plane/envoy/type/v3;typev3\xba\x80\xc8\xd1\x06\x02\x10\x02\x62\x06proto3')
+DESCRIPTOR = POOL.AddSerializedFile(b'\n\x1b\x65nvoy/type/v3/percent.proto\x12\renvoy.type.v3\x1a\x1dudpa/annotations/status.proto\x1a!udpa/annotations/versioning.proto\x1a\x17validate/validate.proto\"L\n\x07Percent\x12&\n\x05value\x18\x01 \x01(\x01\x42\x17\xfa\x42\x14\x12\x12\x19\x00\x00\x00\x00\x00\x00Y@)\x00\x00\x00\x00\x00\x00\x00\x00:\x19\x9a\xc5\x88\x1e\x14\n\x12\x65nvoy.type.Percent\"\xdb\x01\n\x11\x46ractionalPercent\x12\x11\n\tnumerator\x18\x01 \x01(\r\x12O\n\x0b\x64\x65nominator\x18\x02 \x01(\x0e\x32\x30.envoy.type.v3.FractionalPercent.DenominatorTypeB\x08\xfa\x42\x05\x82\x01\x02\x10\x01\"=\n\x0f\x44\x65nominatorType\x12\x0b\n\x07HUNDRED\x10\x00\x12\x10\n\x0cTEN_THOUSAND\x10\x01\x12\x0b\n\x07MILLION\x10\x02:#\x9a\xc5\x88\x1e\x1e\n\x1c\x65nvoy.type.FractionalPercentBr\n\x1bio.envoyproxy.envoy.type.v3B\x0cPercentProtoP\x01Z;github.com/envoyproxy/go-control-plane/envoy/type/v3;typev3\xba\x80\xc8\xd1\x06\x02\x10\x02\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
