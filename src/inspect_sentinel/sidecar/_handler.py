@@ -29,7 +29,16 @@ from .._step import (
     Step,
 )
 from .._types import Sentinels
-from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request, succeeded
+from ._exchange import (
+    MAX_BODY_BYTES,
+    Answer,
+    Pass,
+    Refuse,
+    Replace,
+    Reply,
+    Request,
+    succeeded,
+)
 from ._history import record_sent
 from ._host import Record, RunHost, SidecarHost, stage
 from ._inspect_ai import VIEWED_TOOLS, tool_call_view
@@ -50,6 +59,7 @@ from ._registration import (
     TaskFacts,
     UnregisteredSampleError,
 )
+from ._reply_stream import ReplyStart, ReplyStream
 from ._state import (
     MADE_KEPT,
     Attempt,
@@ -290,6 +300,19 @@ class Handler:
             attempt.decide("reject", held.exchange.message)
             attempt.withheld = held.exchange.withheld
         return answer
+
+    def reply_stream(
+        self, start: ReplyStart, *, max_held_bytes: int = MAX_BODY_BYTES
+    ) -> ReplyStream:
+        """Judge a reply that the proxy hands over as it arrives, rather than whole.
+
+        The proxy runs the stream's `run`, feeds it the provider's bytes, and sends the client what iterating over it gives, all at once. The reply is judged as `reply` judges it.
+
+        Args:
+            start: The reply's status and headers, before any of its body.
+            max_held_bytes: The most of the reply the stream holds back to judge. A reply larger than it is refused with a 502, and not judged.
+        """
+        return ReplyStream(self, start, max_held_bytes=max_held_bytes)
 
     async def reply_not_judged(self, id: str, reason: NotJudged) -> None:
         """Let go of a request whose reply the proxy refused without handing it over, as one larger than it holds.

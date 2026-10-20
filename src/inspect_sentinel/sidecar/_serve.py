@@ -15,9 +15,10 @@ from starlette.applications import Starlette
 
 from .._config import parse_config_file, sentinel_from_config
 from ._eval_endpoint import TOKEN_VARIABLE, eval_routes
+from ._exchange import MAX_BODY_BYTES
 from ._handler import Handler
 from ._host import SidecarHost
-from ._http import HEALTH_PATH, MAX_BODY_BYTES, health_route
+from ._http import HEALTH_PATH, health_route
 from ._proxy_endpoint import proxy_app
 from ._registration import MAX_TASK_EXPIRY, MAX_TASK_REGISTRATIONS, read_tasks_folder
 from ._state import RUN_EXPIRY, MemoryState

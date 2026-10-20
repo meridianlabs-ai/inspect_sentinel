@@ -1261,7 +1261,8 @@
                 "unregistered",
                 "time_limit",
                 "error",
-                "provider_error"
+                "provider_error",
+                "cut_off"
               ],
               "type": "string"
             },

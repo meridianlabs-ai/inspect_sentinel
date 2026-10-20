@@ -6,6 +6,9 @@ from typing import Any, TypeAlias
 
 from ._wire import Format
 
+MAX_BODY_BYTES = 64 * 1024 * 1024
+"""The largest request or reply a proxy may hand over, unless set otherwise. A proxy's hook holds a reply of up to 32 MiB by default and sends it as base64, which is a third larger."""
+
 
 @dataclass(frozen=True, kw_only=True)
 class Request:

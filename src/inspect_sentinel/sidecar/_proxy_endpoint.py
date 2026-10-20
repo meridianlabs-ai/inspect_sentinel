@@ -13,9 +13,9 @@ from starlette.requests import Request as HttpRequest
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from ._exchange import Answer, Pass, Refuse, Reply, Request
+from ._exchange import MAX_BODY_BYTES, Answer, Pass, Refuse, Reply, Request
 from ._handler import Handler, TimeLimitError
-from ._http import MAX_BODY_BYTES, health_route, read_within
+from ._http import health_route, read_within
 from ._inspect_client import SentinelField
 from ._json_rpc import (
     INVALID_PARAMS,
