@@ -9,10 +9,10 @@ from typing import Any, TypeVar, cast, get_args
 
 import grpc
 
+from .._errors import bounded, error_body, refusal_for
 from .._exchange import Answer, Pass, Refuse, Replace, Reply, Request, succeeded
-from .._handler import Handler, TimeLimitError
-from .._registration import UnregisteredSampleError
-from .._wire import Format, UnreadableError
+from .._handler import Handler
+from .._wire import Format
 from ._metadata import FORMAT_METADATA, INSPECT_HEADERS, PROVIDER_METADATA
 from ._proto.envoy.config.core.v3 import base_pb2 as core
 from ._proto.envoy.service.ext_proc.v3 import external_processor_pb2 as pb
@@ -25,18 +25,6 @@ _FORMATS: frozenset[str] = frozenset(get_args(Format))
 
 # a provider's error type for a status, as each writes it; any other client
 # error is an invalid request, and any other server error the provider's own
-_ANTHROPIC_ERRORS = {
-    400: "invalid_request_error",
-    401: "authentication_error",
-    403: "permission_error",
-    404: "not_found_error",
-    413: "request_too_large",
-    429: "rate_limit_error",
-    500: "api_error",
-    529: "overloaded_error",
-}
-
-
 T = TypeVar("T")
 
 
@@ -409,32 +397,16 @@ class _Exchange:
             return not_judged(ex)
 
     def _not_judged(self, ex: Exception, what: str, *, reply: bool) -> Refuse:
-        # what couldn't be judged is refused, with the status a proxy hook's
-        # failure would bring, and a reason that never quotes the traffic
-        if isinstance(ex, TimeLimitError):
-            return Refuse(504, str(ex))
-        if isinstance(ex, UnregisteredSampleError):
-            return Refuse(400, str(ex))
-        if isinstance(ex, UnreadableError):
-            # why is kept here, since it may quote the request or the reply
-            logger.warning("The %s %r was not judged: %s", what, self._id, ex)
-            return Refuse(
-                502 if reply else 400,
-                f"The {what} couldn't be read, so it was not judged.",
-            )
-        logger.error("The %s %r was not judged.", what, self._id, exc_info=ex)
-        return Refuse(500, f"The sentinel failed, so the {what} was not judged.")
+        return refusal_for(ex, what, self._id, reply=reply)
 
     def _refuse(self, status: int, message: str) -> pb.ProcessingResponse:
         return self._refusal(Refuse(status, message))
 
     def _refusal(self, refused: Refuse) -> pb.ProcessingResponse:
         self.finished = True
-        status = refused.status
-        if not 400 <= status <= 599:
-            # a refusal is an error, as the endpoint for proxies bounds it
-            status = 500
-        error = _error(self._format, status, refused.message)
+        # a refusal is an error, as the endpoint for proxies bounds it
+        status = bounded(refused.status)
+        error = error_body(self._format, status, refused.message)
         if refused.sentinel is not None:
             error["sentinel"] = dict(refused.sentinel)
         return pb.ProcessingResponse(
@@ -463,24 +435,6 @@ def _streamed(body: bytes, *, end_of_stream: bool) -> pb.ProcessingResponse:
             )
         )
     )
-
-
-def _error(format: Format | None, status: int, message: str) -> dict[str, Any]:
-    # an error in the provider's own format, which its SDK raises as one of
-    # its own API errors
-    if format == "anthropic-messages":
-        kind = _ANTHROPIC_ERRORS.get(
-            status, "api_error" if status >= 500 else "invalid_request_error"
-        )
-        return {"type": "error", "error": {"type": kind, "message": message}}
-    return {
-        "error": {
-            "message": message,
-            "type": "server_error" if status >= 500 else "invalid_request_error",
-            "param": None,
-            "code": None,
-        }
-    }
 
 
 def _read(headers: core.HeaderMap) -> dict[str, str]:

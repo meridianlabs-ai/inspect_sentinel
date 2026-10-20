@@ -460,3 +460,104 @@ def _responses_completed(events: Sequence[StreamEvent]) -> dict[str, Any]:
             "output": [done[index] for index in sorted(done)],
         },
     }
+
+
+class ClientCheck:
+    """Gives each event that goes out to the provider SDK's own accumulator first, as a client's SDK will take it, so that an event it can't take is never sent."""
+
+    def __init__(self, format: Format) -> None:
+        self._format = format
+        self._state: Any = None
+        self._extra: dict[str, Any] = {}
+        if format == "openai-chat":
+            from openai.lib.streaming.chat import ChatCompletionStreamState
+
+            self._state = ChatCompletionStreamState()
+        elif format == "openai-responses":
+            from openai import omit
+            from openai.lib.streaming.responses._responses import (
+                ResponseStreamState,
+            )
+
+            self._state = ResponseStreamState(input_tools=omit, text_format=omit)
+        else:
+            import inspect
+
+            from anthropic.lib.streaming import (
+                _messages,  # pyright: ignore[reportPrivateUsage]
+            )
+
+            accumulate = cast(Any, _messages.accumulate_event)
+            if "json_bufs" in inspect.signature(accumulate).parameters:
+                self._extra = {"json_bufs": {}}
+
+    def check(self, events: Sequence[StreamEvent]) -> None:
+        """Take the next events.
+
+        Raises:
+            UnreadableError: If the SDK can't take one.
+        """
+        try:
+            for event in events:
+                if event.data is not None:
+                    self._take(copy.deepcopy(event.data))
+        except UnreadableError:
+            raise
+        except Exception as ex:
+            # the accumulators raise errors of many kinds on events out of order
+            raise UnreadableError(
+                "The reply stream as edited doesn't hold together."
+            ) from ex
+
+    def _take(self, data: dict[str, Any]) -> None:
+        if self._format == "openai-chat":
+            from openai._models import construct_type
+            from openai.types.chat import ChatCompletionChunk
+
+            if "choices" in data:
+                self._state.handle_chunk(
+                    construct_type(type_=ChatCompletionChunk, value=data)
+                )
+        elif self._format == "openai-responses":
+            from openai._models import construct_type
+            from openai.types.responses import ResponseStreamEvent
+
+            self._state.handle_event(
+                construct_type(type_=cast(Any, ResponseStreamEvent), value=data)
+            )
+        elif data.get("type") not in ("ping", "error"):
+            from anthropic._models import construct_type
+            from anthropic.lib.streaming import (
+                _messages,  # pyright: ignore[reportPrivateUsage]
+            )
+            from anthropic.types import RawMessageStreamEvent
+
+            self._state = cast(Any, _messages.accumulate_event)(
+                event=construct_type(type_=RawMessageStreamEvent, value=data),
+                current_snapshot=self._state,
+                **self._extra,
+            )
+
+
+def says_nothing(event: StreamEvent) -> bool:
+    """Whether an event, as edited, carries nothing a client acts on: blank lines, Anthropic's `ping`, or a Chat Completions chunk left with an empty delta once a call's fragments were taken out of it."""
+    if _blank(event):
+        return True
+    data = event.data
+    if data is None:
+        return False
+    if data.get("type") == "ping":
+        return True
+    choices = data.get("choices")
+    if data.get("object") != "chat.completion.chunk" or not isinstance(choices, list):
+        return False
+    if data.get("usage") or len(cast("list[object]", choices)) != 1:
+        return False
+    choice = cast("list[object]", choices)[0]
+    if not isinstance(choice, dict):
+        return False
+    entry = cast("dict[str, Any]", choice)
+    delta = cast("dict[str, Any]", entry.get("delta") or {})
+    return entry.get("finish_reason") is None and not any(
+        value not in (None, "", []) for value in delta.values()
+    )

@@ -85,7 +85,9 @@ def noting(seen: list[tuple[str, bool, str]], action: str, city: str) -> Protoco
         context: Context, step: BeforeToolCall, escalations: Escalations
     ) -> Decision | None:
         seen.append((step.call.id, step.turn_complete, step.message))
-        if city != "every" and step.call.arguments.get("location") != city:
+        # the Responses recording names a city with its country, "Tokyo, Japan"
+        location = str(step.call.arguments.get("location", ""))
+        if city != "every" and not location.startswith(city):
             return Decision.proceed()
         if action == "modify":
             changed = replace(step.call, arguments={"location": "Oslo"})

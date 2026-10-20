@@ -1,17 +1,31 @@
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import anyio
 
+from ._errors import error_event, refusal_for
 from ._exchange import Refuse, Replace, Reply, succeeded
-from ._wire import Format
+from ._inspect_client import with_sentinel
+from ._release import (
+    AnthropicTurn,
+    ChatTurn,
+    ClientCheck,
+    EventReader,
+    Placement,
+    ResponsesTurn,
+    Turn,
+    closed_prefix,
+    says_nothing,
+)
+from ._wire import Format, StreamEvent, UnreadableError, write_events
 
 if TYPE_CHECKING:
-    from ._handler import Handler
+    from ._handler import EarlyTurn, Handler
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +126,15 @@ class ReplyStream:
         # and through it the feeding
         self._send, self._receive = anyio.create_memory_object_stream[Output](1)
         self._raised: Exception | None = None
+        # under early release, how much of `_held` has been read into events,
+        # and whether anything has gone out, after which the status is sent
+        self._early = (
+            succeeded(start.status)
+            and handler.release == "early"
+            and start.content_type.startswith("text/event-stream")
+        )
+        self._consumed = 0
+        self._sent = False
 
     @property
     def start(self) -> ReplyStart:
@@ -128,16 +151,21 @@ class ReplyStream:
         """
         if self._ended:
             raise RuntimeError("The reply's input has already been ended.")
-        if not succeeded(self._start.status):
-            while True:
-                self._drained = anyio.Event()
-                if self._closed() or len(self._held) < self._max_pending_bytes:
-                    break
-                await self._drained.wait()
-        elif len(self._held) + len(data) > self._max_held_bytes:
+        if (
+            succeeded(self._start.status)
+            and len(self._held) + len(data) > self._max_held_bytes
+        ):
             self._over = True
             self._arrived.set()
             return
+        if self._early or not succeeded(self._start.status):
+            # output that goes out as it arrives drains, so feeding waits for it
+            while True:
+                self._drained = anyio.Event()
+                backlog = len(self._held) - self._consumed
+                if self._closed() or backlog < self._max_pending_bytes:
+                    break
+                await self._drained.wait()
         if self._closed():
             return
         self._held += data
@@ -187,6 +215,9 @@ class ReplyStream:
         if not succeeded(start.status):
             await self._provider_error()
             return
+        if self._early:
+            await self._run_early(await self._handler.early_turn(start))
+            return
         await self._until(lambda: self._ended or self._aborted or self._over)
         if self._over:
             # the reply isn't read, as the endpoint for proxies doesn't read a
@@ -230,6 +261,173 @@ class ReplyStream:
             if self._ended and not self._held:
                 await self._out(Finished())
                 return
+
+    async def _run_early(self, early: EarlyTurn) -> None:
+        # Text and reasoning go out as they arrive, each call once it is
+        # complete and judged, and the rest once the turn is judged. Before
+        # anything has gone out a failure is raised, for the proxy to refuse
+        # with a real status; after, it is an error event in the stream.
+        self._events = _Released(self._start)
+        try:
+            await self._release_early(early)
+        except Exception as ex:
+            early.failed(ex)
+            if not self._sent or self._aborted:
+                raise
+            refused = refusal_for(ex, "reply", self._start.id, reply=True)
+            await self._fail(refused)
+
+    async def _release_early(self, early: EarlyTurn) -> None:
+        events = self._events
+        while True:
+            await self._until(
+                lambda: (
+                    len(self._held) > self._consumed
+                    or self._ended
+                    or self._aborted
+                    or self._over
+                )
+            )
+            if self._aborted:
+                early.cut_off()
+                return
+            if self._over:
+                early.failed("unreadable")
+                await self._fail(
+                    Refuse(
+                        502,
+                        f"The provider's reply is larger than the {self._max_held_bytes} bytes the sidecar holds, so it was not judged.",
+                    )
+                )
+                return
+            data = bytes(self._held[self._consumed :])
+            self._consumed = len(self._held)
+            self._drained.set()
+            arrived = events.reader.push(data)
+            ending = self._ended and self._consumed == len(self._held)
+            if ending:
+                arrived += events.reader.finish()
+            for event in arrived:
+                refused = await self._take(early, event)
+                if refused is not None:
+                    await self._fail(refused)
+                    return
+            await self._release_ready(early)
+            if ending:
+                break
+        # the end of the turn: everything held goes out, once the turn is
+        # judged, with the `sentinel` field for an Inspect client
+        held = [event for event, _ in events.pending]
+        editor = events.editor
+        tail = [
+            *events.opening,
+            *(editor.edit(held, early.edits) if editor is not None else held),
+        ]
+        events.opening, events.pending = [], []
+        if editor is not None:
+            editor.finish(early.edits)
+        written = write_events(tail)
+        answer = await early.finish(bytes(self._held), bytes(events.released) + written)
+        if isinstance(answer, Refuse):
+            await self._fail(answer)
+            return
+        if events.check is not None:
+            events.check.check(tail)
+        field = early.field
+        if field is not None:
+            try:
+                written = with_sentinel(self._start.content_type, written, field)
+            except UnreadableError:
+                # a stream that never sends its last event goes out as judged,
+                # without the field, as when the reply is held whole
+                pass
+        if written:
+            self._sent = True
+            await self._out(Release(written))
+        await self._out(Finished())
+
+    async def _take(self, early: EarlyTurn, event: StreamEvent) -> Refuse | None:
+        # place an event in its turn, judging the calls it shows are complete
+        events = self._events
+        turn = events.turn_for(event)
+        if turn is None:
+            events.pending.append((event, Placement("filler")))
+            return None
+        placement = turn.place(event)
+        if placement.completed_before:
+            refused = await self._judge(early, placement.completed_before)
+            if refused is not None:
+                return refused
+        events.originals.append(copy.deepcopy(event))
+        events.pending.append((event, placement))
+        if placement.completes:
+            return await self._judge(early, placement.completes)
+        return None
+
+    async def _judge(
+        self, early: EarlyTurn, complete: tuple[object, ...]
+    ) -> Refuse | None:
+        events = self._events
+        assert events.format is not None and events.turn is not None
+        # what can go out goes out before the sentinel is asked
+        await self._release_ready(early)
+        refused = await early.judge(
+            closed_prefix(events.format, events.originals, events.turn.open)
+        )
+        if refused is None:
+            events.decided.update(complete)
+        return refused
+
+    async def _release_ready(self, early: EarlyTurn) -> None:
+        events = self._events
+        editor, check = events.editor, events.check
+        if editor is None or check is None:
+            return
+        ready: list[StreamEvent] = []
+        # what says nothing, which can't be the first thing to go out
+        silent: set[int] = set()
+        taken = 0
+        for event, placement in events.pending:
+            role = placement.role
+            if role in ("opening", "filler"):
+                silent.add(id(event))
+                ready.append(event)
+            elif role == "release" or (
+                role == "call" and placement.item in events.decided
+            ):
+                ready.append(event)
+            else:
+                break
+            taken += 1
+        del events.pending[:taken]
+        edited = editor.edit(ready, early.edits)
+        if not self._sent and all(
+            id(event) in silent or says_nothing(event) for event in edited
+        ):
+            # the opening waits for the first content that goes out, so that
+            # a turn can still be refused with a real status
+            events.opening += edited
+            return
+        out = [*events.opening, *edited]
+        events.opening = []
+        if not out:
+            return
+        check.check(out)
+        written = write_events(out)
+        events.released += written
+        self._sent = True
+        await self._out(Release(written))
+
+    async def _fail(self, refused: Refuse) -> None:
+        # a refusal: an HTTP error while nothing has gone out, and an error
+        # event in the stream once something has
+        events = self._events
+        if not self._sent or events.format is None:
+            await self._out(refused)
+            return
+        await self._out(
+            ErrorEvent(error_event(events.format, refused, events.originals))
+        )
 
     def _closed(self) -> bool:
         return self._aborted or self._finished or self._over
@@ -277,3 +475,48 @@ class ReplyStream:
             content_type=start.content_type,
             body=body,
         )
+
+
+class _Released:
+    """What a reply released early has read, holds and has sent."""
+
+    def __init__(self, start: ReplyStart) -> None:
+        self.start = start
+        self.reader = EventReader()
+        self.format: Format | None = start.format
+        self.turn: Turn | None = None
+        self.editor: Any = None
+        self.check: ClientCheck | None = None
+        # the events as the provider sent them, which calls are read from
+        self.originals: list[StreamEvent] = []
+        # the events not sent yet, in order, and the opening held for the
+        # first content that goes out
+        self.pending: list[tuple[StreamEvent, Placement]] = []
+        self.opening: list[StreamEvent] = []
+        # the calls complete and judged, by their place in the turn
+        self.decided: set[object] = set()
+        self.released = bytearray()
+
+    def turn_for(self, event: StreamEvent) -> Turn | None:
+        # the format, from the proxy, or from the provider and the stream's
+        # first event, once it has one
+        if self.turn is not None:
+            return self.turn
+        if self.format is None:
+            if self.start.provider == "anthropic":
+                self.format = "anthropic-messages"
+            elif event.data is None:
+                return None
+            else:
+                chat = event.data.get("object") == "chat.completion.chunk"
+                self.format = "openai-chat" if chat else "openai-responses"
+        from . import _anthropic, _openai
+
+        if self.format == "anthropic-messages":
+            self.turn, self.editor = AnthropicTurn(), _anthropic.StreamEditor()
+        elif self.format == "openai-chat":
+            self.turn, self.editor = ChatTurn(), _openai.ChunkEditor()
+        else:
+            self.turn, self.editor = ResponsesTurn(), _openai.ResponsesEditor()
+        self.check = ClientCheck(self.format)
+        return self.turn

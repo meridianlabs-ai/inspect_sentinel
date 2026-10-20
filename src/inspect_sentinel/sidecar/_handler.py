@@ -29,6 +29,7 @@ from .._step import (
     Step,
 )
 from .._types import Sentinels
+from ._errors import TimeLimitError
 from ._exchange import (
     MAX_BODY_BYTES,
     Answer,
@@ -158,10 +159,6 @@ def _settle(held: Held, status: int, answer: Answer) -> None:
 
 class ModifyError(Exception):
     """The sentinel decided to change a tool call that the sidecar can't change in the reply, such as one that is not a function call, so the reply was not judged."""
-
-
-class TimeLimitError(TimeoutError):
-    """The sentinel didn't finish judging a request or a reply within the handler's time limit, and was cancelled."""
 
 
 @dataclass
@@ -1229,6 +1226,12 @@ class EarlyTurn:
         if self._answer is not None:
             return self._answer
         return self._answered(await self._guarded(self._finish(body, released)))
+
+    def failed(self, why: Exception | NotJudged) -> None:
+        """Record a turn that couldn't be judged, because of an error, or for the reason given."""
+        attempt = self._held.attempt
+        if self._answer is None and attempt is not None and attempt.state == "judging":
+            attempt.not_judged(why if isinstance(why, str) else _not_judged(why))
 
     def cut_off(self) -> None:
         """Record a turn whose stream ended before the turn was answered, as when its client disconnected."""
