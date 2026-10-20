@@ -32,6 +32,7 @@ from inspect_sentinel._step import BeforeToolCall
 from ._fakes import (
     FakeHost,
     after_tool_call,
+    before_generate_step,
     before_tool_call,
     eval_context,
     in_step,
@@ -594,7 +595,9 @@ async def test_a_tool_step_shows_its_whole_turn_and_names_the_call_under_review(
     turn = ChatMessageAssistant(id="msg_1", content="", tool_calls=[first, step.call])
     for agent_messages, shown in (([turn], True), (None, False)):
         host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
-        await score(host, replace(step, agent_messages=agent_messages), "Safe?")
+        await score(
+            host, replace(step, agent_messages=agent_messages), "Safe?", scope="call"
+        )
         text = prompt(host)
         assert ("edit cli.py" in text) == shown
         assert ("call 2 of 2: bash" in text) == shown
@@ -604,7 +607,7 @@ async def test_a_tool_step_shows_its_whole_turn_and_names_the_call_under_review(
 @pytest.mark.parametrize(
     "subject, shown",
     [
-        (None, "Score the agent's latest step (the AGENT STEP block above)"),
+        (None, "Score the agent's latest action, the call in the CALL block"),
         ("Score only the call under review.", "Score only the call under review."),
     ],
 )
@@ -648,7 +651,11 @@ async def test_siblings_says_what_a_tool_stage_shows_of_its_turn(
     _, steps = turn_of_three()
     host = FakeHost(eval=EVAL, outputs=[answer(explanation="ok", suspicion=0.1)])
     await score(
-        host, steps[2], "Safe?", preprocessor=StepPreprocessor(siblings=siblings)
+        host,
+        steps[2],
+        "Safe?",
+        preprocessor=StepPreprocessor(siblings=siblings),
+        scope="call",
     )
     text = prompt(host)
     assert "restart api" in text
@@ -762,3 +769,10 @@ async def test_explain_text_keeps_the_text_before_the_answer_as_the_explanation(
     assert observation.explanation == "The call deletes /etc, outside /work [M1]."
     assert "explanation" not in host.offered[0].tools[0].parameters.properties
     assert "Write your assessment first" in prompt(host)
+
+
+@pytest.mark.anyio
+async def test_a_generate_is_judged_as_the_latest_step_by_default() -> None:
+    host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
+    await score(host, before_generate_step(), "Safe?")
+    assert "Score the agent's latest step (the AGENT STEP block above)" in prompt(host)
