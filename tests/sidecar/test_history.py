@@ -1,3 +1,6 @@
+import json
+
+import pytest
 from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
@@ -110,6 +113,73 @@ def test_an_argument_named_id_is_kept_whole() -> None:
 
     assert _sent(calling("record_A"), calling("record_B"), body=b'["call_1"]') == [
         "u:Read it.",
+        "a:",
+        "a:",
+    ]
+
+
+def test_a_request_that_opens_alike_between_two_of_an_agent_does_not_count_its_turns_again() -> (
+    None
+):
+    # a monitor's call, which opens as the agent's conversation does
+    assert _sent(
+        _read("s:Be brief.", "u:Weather?", "a:Sunny.", "u:Tomorrow?"),
+        _read("s:Be brief.", "u:Weather?", "u:Rate this."),
+        _read(
+            "s:Be brief.", "u:Weather?", "a:Sunny.", "u:Tomorrow?", "a:Rain.", "u:Ok."
+        ),
+    ) == [
+        "s:Be brief.",
+        "u:Weather?",
+        "a:Sunny.",
+        "u:Tomorrow?",
+        "u:Rate this.",
+        "a:Rain.",
+        "u:Ok.",
+    ]
+
+
+def test_two_agents_that_open_alike_and_take_turns_each_count_their_turns_once() -> (
+    None
+):
+    turns = [
+        _read("u:Task.", "a:Plan A.", "u:Go."),
+        _read("u:Task.", "a:Plan B.", "u:Go."),
+        _read("u:Task.", "a:Plan A.", "u:Go.", "a:Done A."),
+        _read("u:Task.", "a:Plan B.", "u:Go.", "a:Done B."),
+    ]
+    # Each agent's request is matched against its own last one. What the two
+    # say alike, as both are told to go, is one message: without an id, the
+    # second agent's can't be told from the first's.
+    once = ["u:Task.", "a:Plan A.", "u:Go.", "a:Plan B.", "a:Done A.", "a:Done B."]
+    assert _sent(*turns) == once
+    # taking turns again adds nothing more
+    assert _sent(*turns, *turns) == once
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '["call_é1", "call_é2"]'.encode(),
+        b'["call_\\u00E91", "call_\\u00E92"]',
+        b'["call\\/1", "call\\/2"]',
+    ],
+    ids=["raw UTF-8", "escaped in capitals", "an escaped slash"],
+)
+def test_an_id_the_request_carries_is_known_however_the_body_writes_it(
+    body: bytes,
+) -> None:
+    ids = [value for value in json.loads(body)]
+
+    def calling(id: str) -> list[ChatMessage]:
+        call = ToolCall(id=id, function="get_weather", arguments={"city": "Oslo"})
+        return [
+            *_read("u:Weather?"),
+            ChatMessageAssistant(content="", tool_calls=[call]),
+        ]
+
+    assert _sent(calling(ids[0]), calling(ids[1]), body=body) == [
+        "u:Weather?",
         "a:",
         "a:",
     ]

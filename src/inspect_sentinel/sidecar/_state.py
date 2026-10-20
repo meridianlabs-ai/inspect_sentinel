@@ -135,11 +135,8 @@ class Conversation:
     sent: list[ChatMessage] = field(default_factory=list[ChatMessage])
     """Every message the conversation's requests sent the model, in the order first sent, each once: a step's `history`. Messages a compaction dropped from later requests are kept."""
 
-    last_sent: list[ChatMessage] = field(default_factory=list[ChatMessage])
-    """What the latest request sent the model, each message as first sent, which the next request is matched against."""
-
-    last_sent_keys: list[str] = field(default_factory=list[str])
-    """What the model was sent of each message of `last_sent`, as they are compared."""
+    recent: list[list[str]] = field(default_factory=list[list[str]])
+    """For each of the conversation's latest requests, latest last, a digest of what the model was sent of each of its messages, which a later request is matched against."""
 
 
 @dataclass
