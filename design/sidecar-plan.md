@@ -128,7 +128,7 @@ Repository: `inspect_sentinel`, the sidecar and the core package. Depends on: PR
 
 Repository: `inspect_sentinel`. Depends on: PR 5.
 
-- `GET /sentinel/info`, and JSON-RPC 2.0 at `POST /sentinel/v1`: `register_task`, `request_result`, `run_result` and `end_run` (section 9).
+- `GET /sentinel/info`, and JSON-RPC 2.0 at `POST /sentinel/v1`: `register_task`, `request_result`, `sample_result` and `end_sample` (section 9).
 - Task registration: on unless `--no-runtime-task-registration`, replacing the last unless the task is in the tasks folder, where it is answered as already registered, with `fixed` true, and nothing is stored, `expiry` capped by `--task-expiry`, a run taking its sample's facts at its first request, and `context.eval` from them.
 - The tasks folder, of tasks files each with a `tasks` list, named by `tasks_folder` or `--tasks-folder` (section 9). Producing the files is asked of the workstream that builds Inspect's sidecar client.
 - `--run-expiry`, dropping registrations Inspect made once their `expiry` passes, and `request_result` answering `dropped` for a while after a request's records go.
@@ -191,13 +191,14 @@ Scheduled after PR 10. The initial client uses whole-response holding; support f
 Keep the integration transparent to eval authors and preserve the existing eval and task interfaces. "Inspect client for the sidecar" describes its responsibility, without prescribing a public type or a choice users must make between local and remote execution. Its internal names, structure and any necessary deployment configuration are for Meridian to agree.
 
 - The probe, `register_task` and the `required` or `optional` setting at task init (section 9). An answer with `fixed` true, for a task in the tasks folder, is a success.
+- Any subset of a registered task's samples is valid. An eval that runs only some of the samples in the tasks folder, chosen with `--sample-id`, `--limit` or any other selection, runs them as usual.
 - `x-inspect-context` and `x-irid` on each model request, only after the probe found a sentinel.
 - Reading the `sentinel` field in each provider: on a reply, in the last event of a stream, and on an error, including where LiteLLM nests it (section 1).
 - Acting on the field as Inspect does in process: a call taken out goes back into Inspect's conversation with an approval error, a changed call keeps the model's original, a `terminate` ends the sample, and every step is written into the transcript.
 - `request_result` when the field is missing, and recording a request as not judged when the sidecar cannot say.
-- `run_result` before scoring, and `end_run` after.
-- Prevent Inspect's completion-response cache from bypassing the sidecar while the client is active. Initially disable that cache, or arrange fresh sidecar judging of a cached completion before the agent can use it. A cached `sentinel` field is not a decision for the current run. This is separate from provider prompt caching, which still sends the model request through the proxy.
-- Tests: in inspect_ai's own suite, with a stand-in sidecar; and the conformance suite in `sidecar.md` section 11, comparing Inspect's transcript in process and through a sidecar with whole-response holding. Include a pre-populated completion cache: a cached tool call cannot execute without the current run's sentinel judging it, and an earlier run's cached decision cannot authorize it. Incremental transcript conformance belongs to PR 12.
+- `sample_result` before scoring each sample, and `end_sample` after.
+- Prevent Inspect's completion-response cache from bypassing the sidecar while the client is active. Initially disable that cache, or arrange fresh sidecar judging of a cached completion before the agent can use it. A cached `sentinel` field is not a decision for the current sample. This is separate from provider prompt caching, which still sends the model request through the proxy.
+- Tests: in inspect_ai's own suite, with a stand-in sidecar; and the conformance suite in `sidecar.md` section 11, comparing Inspect's transcript in process and through a sidecar with whole-response holding. Include a pre-populated completion cache: a cached tool call cannot execute without the sidecar judging it for the current sample, and a decision cached by an earlier eval cannot authorize it. Incremental transcript conformance belongs to PR 12.
 
 ## PR 12: Inspect incremental streaming
 
@@ -206,7 +207,7 @@ Repository: `inspect_ai`, with coordinated changes to `inspect_sentinel` only if
 - Connect Inspect's sidecar client to the incremental path, preserving PR 10's explicit `release` setting and its judging of whole turns.
 - Read the `sentinel` field on successful stream endings and refusals. Recover decisions through `request_result` when a stream is interrupted, ends with an error, or otherwise cannot carry the field, including trimmed results and explicit not-judged, dropped and unknown states. Define the recovery wait and retry behavior with Meridian; never infer a clean exchange from missing results.
 - Apply recovered rejection, modification and termination outcomes without executing a rejected call, executing an allowed call twice, losing the model's original call, or recording a step twice. Preserve call and record identity across provider SDK retries and Inspect's own retries.
-- Keep Inspect's model-facing conversation, transcript and sample outcome correct when some text or calls were released before a later refusal or termination. A later decision cannot undo a call already released. Coordinate stream errors, sample cancellation, state retrieval before scoring and `end_run` after scoring with the lifecycle established in PR 11.
+- Keep Inspect's model-facing conversation, transcript and sample outcome correct when some text or calls were released before a later refusal or termination. A later decision cannot undo a call already released. Coordinate stream errors, sample cancellation, state retrieval before scoring and `end_sample` after scoring with the lifecycle established in PR 11.
 - Test in inspect_ai's own suite with a controlled sidecar, then run the real chain through Envoy and LiteLLM. Cover successful endings, interrupted streams, refusal after text was released, later termination, missing fields, result recovery, retries and disconnects. Compare decisions, records, original calls and model-facing history with the corresponding whole-response cases, accounting explicitly for the different context of an early decision. Confirm that local sentinels and evals without a remote sentinel retain their existing behavior.
 
 Done when an Inspect eval can use the validated incremental path, recover an outcome when no terminal field arrives, and retain the expected transcript and sample outcome without duplicated decisions or tool execution. These are client guarantees that PR 10's SDK and protocol tests do not establish.

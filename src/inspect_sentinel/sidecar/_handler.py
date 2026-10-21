@@ -115,11 +115,11 @@ class RequestResult:
 
 
 @dataclass(frozen=True)
-class RunResult:
-    """What a run came to."""
+class SampleResult:
+    """What an eval's sample came to."""
 
     outcome: Literal["proceed", "terminate"]
-    """`terminate` if a sentinel ended the run."""
+    """`terminate` if a sentinel ended the sample."""
     store: dict[str, Any]
     """The sentinel's store, by the keys the sentinel wrote."""
 
@@ -361,33 +361,34 @@ class Handler:
             records.extend(kept)
         return RequestResult(attempts[-1], records)
 
-    async def run_result(self, run: str) -> RunResult | None:
-        """What a run came to, and the sentinel's store, for an eval to copy into its sample's store before scoring.
+    async def sample_result(self, sample_uuid: str) -> SampleResult | None:
+        """What an eval's sample came to, and the sentinel's store, for the eval to copy into the sample's store before scoring. The handler keeps one run for each sample in each epoch, across the sample's retries.
 
         Args:
-            run: The run, as the eval names it: its sample's uuid.
+            sample_uuid: The sample's uuid, as the eval names it.
 
         Returns:
-            The run's outcome and store, or None if nothing is kept for it.
+            The sample's outcome and store, or None if nothing is kept for it.
         """
-        kept = await self._state.existing_run(_run_key(True, run))
+        kept = await self._state.existing_run(_run_key(True, sample_uuid))
         if kept is None:
             return None
-        return RunResult(
+        return SampleResult(
             "terminate" if kept.refusal is not None else "proceed",
             dict(kept.store.items()),
         )
 
-    async def end_run(self, run: str) -> Literal["ended", "unknown"]:
-        """Drop a run's state, once its eval has scored the sample. A later request of the run is refused, as for a run a sentinel ended.
+    async def end_sample(self, sample_uuid: str) -> Literal["ended", "unknown"]:
+        """Drop the state kept for an eval's sample, once the eval has scored it. A later request of the sample is refused, as for a sample a sentinel ended.
 
         Args:
-            run: The run, as the eval names it: its sample's uuid.
+            sample_uuid: The sample's uuid, as the eval names it.
 
         Returns:
-            `ended`, or `unknown` for a run the handler never saw. Ending a run again has no effect.
+            `ended`, or `unknown` for a sample the handler never saw. Ending a sample again has no effect.
         """
-        return "ended" if await self._state.end_run(_run_key(True, run)) else "unknown"
+        ended = await self._state.end_run(_run_key(True, sample_uuid))
+        return "ended" if ended else "unknown"
 
     async def _within_limit(
         self, judging: Awaitable[Answer], what: str, id: str
