@@ -2,7 +2,7 @@ import json
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 import anyio
 import pytest
@@ -453,6 +453,59 @@ async def test_new_since_last_report_reads_only_what_is_new_in_a_list_that_grew(
     assert shown[1] == ["reply 499", "r499"]
     # a few reads at the end, not the whole conversation again
     assert views[1].reads < 4 * len(shown[1])
+
+
+@pytest.mark.parametrize("sequence", SEQUENCES)
+@pytest.mark.anyio
+async def test_new_since_last_report_shows_a_rewritten_list_whole_when_the_copy_shown_last_is_gone(
+    sequence: Callable[[list[ChatMessage]], Sequence[ChatMessage]],
+) -> None:
+    def said(id: str, text: str) -> ChatMessage:
+        return ChatMessageUser(id=id, content=text)
+
+    # the rewrite puts another version of the last message shown where that
+    # message was, but holds fewer copies of it: what was shown is gone
+    first = [said("edited", "v1"), said("middle", "middle"), said("edited", "v2")]
+    second = [
+        said("summary", "summary"),
+        said("next", "new request"),
+        said("edited", "v3"),
+        said("tail", "tail"),
+    ]
+    steps: list[Step] = [tool_step(None, sequence(m)) for m in (first, second)]
+    assert await seen_by(Store(), steps) == [
+        shared(None, ["v1", "middle", "v2"]),
+        shared(None, ["summary", "new request", "v3", "tail"]),
+    ]
+
+
+class CountingStore(Store):
+    # counts the entries each write puts in the store, a dict's as many
+    def __init__(self) -> None:
+        super().__init__()
+        self.written = 0
+
+    def set(self, key: str, value: Any) -> None:
+        self.written += (
+            len(cast("dict[str, Any]", value)) if isinstance(value, dict) else 1
+        )
+        super().set(key, value)
+
+
+@pytest.mark.anyio
+async def test_new_since_last_report_writes_each_conversation_alone() -> None:
+    async def written(conversations: int) -> int:
+        store = CountingStore()
+        for n in range(conversations):
+            step = replace(
+                tool_step(None, None), conversation=f"c{n}", history=[user(f"m{n}")]
+            )
+            with in_step(store=store) as context:
+                await run_monitors({"judge": sent_since()}, context, step)
+        return store.written
+
+    # twice the conversations, twice the writes, not four times
+    assert await written(200) <= 2 * await written(100)
 
 
 @pytest.mark.anyio

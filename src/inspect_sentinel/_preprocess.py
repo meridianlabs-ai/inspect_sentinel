@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Generic, Literal, TypeAlias
+from typing import TYPE_CHECKING, Generic, Literal, TypeAlias, cast
 
 from inspect_ai.model import (
     ChatMessage,
@@ -24,8 +24,6 @@ from inspect_ai.model import (
 )
 from inspect_ai.scorer import Reference
 from inspect_ai.tool import ToolChoice, ToolInfo
-from inspect_ai.util import StoreModel
-from pydantic import Field
 from typing_extensions import TypeVar
 
 from ._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
@@ -79,7 +77,7 @@ class LastMessages:
 class NewSinceLastReport:
     """Keep the messages after the last one this monitor reported on, so an incremental monitor does not re-read its conversations.
 
-    The last message shown is recorded by id and position in the monitor's store (by `context.path`), separately for each conversation, for each list it windows, and for each function of the monitor. It is recorded only when the function returns or decides final and the runner accepts what it returned, so a function that raises or is cancelled is shown those messages again at the next step. A list that only grew since, as `history` does, is resumed where it was without reading what was shown before. An edited version of a message, which `history` holds again under the same id, is new. A conversation whose recorded message is gone, as after a compaction, is kept whole. Preprocess with it from the monitor or protocol function the runner is running; elsewhere preprocessing raises `RuntimeError`.
+    The last message shown is recorded by id and position in the monitor's store (by `context.path`), separately for each conversation, for each list it windows, and for each function of the monitor. It is recorded only when the function returns or decides final and the runner accepts what it returned, so a function that raises or is cancelled is shown those messages again at the next step. `history`, which only grows, is resumed where it was without reading what was shown before; `input` and `agent_messages` can be rewritten, as by a compaction, so for them the whole list is read to find the message shown last, a cost linear in the list at each step. An edited version of a message, which `history` holds again under the same id, is new. A conversation whose recorded message is gone, as after a compaction, is kept whole. Preprocess with it from the monitor or protocol function the runner is running; elsewhere preprocessing raises `RuntimeError`.
     """
 
     context: Context
@@ -268,10 +266,11 @@ async def step_as_str(
     )
 
 
-class _Marks(StoreModel):
-    # "<conversation>/<source>/<function>" -> id of the last message shown,
-    # how many copies of that id the list held then, and its position + 1
-    marks: dict[str, tuple[str, int, int]] = Field(default_factory=dict)
+def _mark_key(context: Context, step: Step, source: _Source, function: str) -> str:
+    # one store entry per conversation, list and function, so a report reads
+    # and writes only its own: (id of the last message shown, how many copies
+    # of that id the list held then, its position + 1)
+    return f"NewSinceLastReport:{context.path}:{step.conversation}/{source}/{function}"
 
 
 def _cut(
@@ -282,8 +281,8 @@ def _cut(
 ) -> Sequence[ChatMessage]:
     # a window reads the list it is given as it is and slices off what it
     # keeps; `AllMessages` keeps it whole, and the others read from where
-    # what they keep starts, except for `NewSinceLastReport` over a list that
-    # changed other than by growing, which scans it for its mark
+    # what they keep starts, except for `NewSinceLastReport` over `input` or
+    # `agent_messages`, which a scaffold can rewrite, so it scans them
     match window:
         case AllMessages():
             return messages
@@ -321,41 +320,51 @@ def _after_mark(
         raise RuntimeError(
             "NewSinceLastReport works only in a monitor or protocol function the runner is running, since it records what the function reported on."
         )
-    store = context.store_as(_Marks)
-    key = f"{step.conversation}/{source}/{node.function}"
-    seen = store.marks.get(key)
-    start = _resumed(messages, seen)
+    # `_host` imports this module, through `Host.score`
+    from ._host import active_step
+
+    store = active_step("NewSinceLastReport").store
+    key = _mark_key(context, step, source, node.function)
+    seen = cast("tuple[str, int, int] | None", store.get(key))
+    start, grew = _resumed(source, messages, seen)
     last = _last_with_id(messages)
     if last is not None:
         index, id = last
-        if seen is not None and start == seen[2]:
-            # the list grew from what was shown: count the copies in what is
-            # new, missing only an earlier copy of a new last id, so a later
-            # scan resumes at an earlier copy and shows more, never less
+        if grew and seen is not None:
+            # count the copies in what is new, missing only an earlier copy of
+            # a new last id, which `history` resumes past by position anyway
             copies = (seen[1] if id == seen[0] else 0) + sum(
                 1 for i in range(start, index + 1) if messages[i].id == id
             )
         else:
             copies = sum(1 for m in messages if m.id == id)
         mark = (id, copies, index + 1)
-        node.on_success.append(
-            lambda: setattr(store, "marks", {**store.marks, key: mark})
-        )
+        node.on_success.append(lambda: store.set(key, mark))
     return messages[start:]
 
 
-def _resumed(messages: Sequence[ChatMessage], seen: tuple[str, int, int] | None) -> int:
+def _resumed(
+    source: _Source,
+    messages: Sequence[ChatMessage],
+    seen: tuple[str, int, int] | None,
+) -> tuple[int, bool]:
+    # where to show from, and whether the list only grew since
     if seen is None:
-        return 0
+        return 0, False
     id, copies, length = seen
-    # a list that only grew since, as `history` does, still holds the message
-    # shown last where it was
-    if 0 < length <= len(messages) and messages[length - 1].id == id:
-        return length
+    # only `history` is append-only, so only there does a list that holds the
+    # message shown last where it was hold everything shown before it
+    if (
+        source == "history"
+        and 0 < length <= len(messages)
+        and messages[length - 1].id == id
+    ):
+        return length, True
     # from the copy shown last: `history` holds each edited version of a
-    # message under its one id, so a later version is new
+    # message under its one id, so a later version is new; a list that no
+    # longer holds that copy, as after a compaction, is shown whole
     found = [i for i, m in enumerate(messages) if m.id == id]
-    return found[copies - 1] + 1 if len(found) >= copies else 0
+    return (found[copies - 1] + 1 if len(found) >= copies else 0), False
 
 
 def _last_with_id(messages: Sequence[ChatMessage]) -> tuple[int, str] | None:
