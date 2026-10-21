@@ -94,13 +94,13 @@ Window: TypeAlias = AllMessages | LastTurns | LastMessages | NewSinceLastReport
 class StepPreprocessor(Generic[S]):
     """What a monitor shows a model about a step.
 
-    `preprocess_step()` applies it, in this order: the windows to `input`, `history` and `agent_messages`, then the omissions to every message the step holds, then `transform`, which sees the result.
+    `preprocess_step()` applies it, in this order: the windows to `input`, `history` and `agent_messages`, then the omissions to every message the step holds, then `transform`, which sees the result. By default `input` is shown whole, while `history` and `agent_messages` are omitted. A scaffold may keep hidden instructions out of its own list but send them in `input` and `history`. To keep a monitor model blind to them, show only that list with `StepPreprocessor(input_window=None, history_window=None, agent_messages_window=AllMessages())`; this works only when the conversation-owning scaffold is the outermost `@agent` agent. At `BeforeGenerate`, omitting all three message lists still shows the tools offered.
     """
 
     input_window: Window | None = field(default_factory=AllMessages)
     """How much of `input` to show: all of it by default; None for none.
 
-    Before a generate, `input` is the request being judged, so a window that leaves none of it (None, `LastTurns(0)`, `LastMessages(0)`, or `NewSinceLastReport` when nothing is new) shows the model only the tools offered. At a tool stage the call is judged against only the tools of the request that produced it.
+    Before a generate, `input` is the request being judged, so a window that leaves none of it (None, `LastTurns(0)`, `LastMessages(0)`, or `NewSinceLastReport` when nothing is new) shows the model only the tools offered when the other message windows also leave none. At a tool stage the call is judged against only the tools of the request that produced it.
     """
 
     history_window: Window | None = None
