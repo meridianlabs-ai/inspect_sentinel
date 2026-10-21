@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1140" viewBox="0 0 1800 1140" role="img" aria-labelledby="title desc">
+<title id="title">The pieces: one proxy, two kinds of traffic</title>
+<desc id="desc">Inspect sends model traffic and eval-control traffic to the same proxy. The proxy sends model traffic to the model provider and consults the sentinel sidecar to judge requests and replies. It routes eval-control traffic under /sentinel/ to the sidecar, never to the provider. All connections carry requests and responses.</desc>
+<rect width="1800" height="1140" fill="#F7F9FC"/>
+<g font-family="Arial, sans-serif">
+<text x="900" y="82" text-anchor="middle" font-size="49" font-weight="700" fill="#17263C">One proxy, two kinds of traffic</text>
+<text x="900" y="127" text-anchor="middle" font-size="22" font-weight="400" fill="#617086">The pieces</text>
+<path d="M 606 184 H 654" fill="none" stroke="#3266DE" stroke-width="4" stroke-linecap="round"/>
+<polygon points="607,177 594,184 607,191" fill="#3266DE"/>
+<polygon points="653,177 666,184 653,191" fill="#3266DE"/>
+<text x="686" y="191" text-anchor="start" font-size="17" font-weight="700" fill="#3266DE" letter-spacing="1.3">MODEL TRAFFIC</text>
+<path d="M 954 184 H 1002" fill="none" stroke="#087E80" stroke-width="4" stroke-linecap="round" stroke-dasharray="10 8"/>
+<polygon points="955,177 942,184 955,191" fill="#087E80"/>
+<polygon points="1001,177 1014,184 1001,191" fill="#087E80"/>
+<text x="1034" y="191" text-anchor="start" font-size="17" font-weight="700" fill="#087E80" letter-spacing="1.3">EVAL CONTROL</text>
+<rect x="96" y="277" width="432" height="300" rx="28" fill="#EAF0F7" stroke="none" stroke-width="1.5"/>
+<rect x="96" y="270" width="432" height="300" rx="28" fill="#FFFFFF" stroke="#DCE4EF" stroke-width="1.5"/>
+<text x="312" y="309" text-anchor="middle" font-size="14" font-weight="700" fill="#617086" letter-spacing="2.3">EVAL RUNNER</text>
+<text x="312" y="364" text-anchor="middle" font-size="36" font-weight="700" fill="#17263C">Inspect</text>
+<text x="312" y="402" text-anchor="middle" font-size="21" font-weight="400" fill="#617086">Runs the eval and its tools</text>
+<rect x="684" y="277" width="432" height="300" rx="28" fill="#EAF0F7" stroke="none" stroke-width="1.5"/>
+<rect x="684" y="270" width="432" height="300" rx="28" fill="#FFFFFF" stroke="#DCE4EF" stroke-width="1.5"/>
+<text x="900" y="309" text-anchor="middle" font-size="14" font-weight="700" fill="#617086" letter-spacing="2.3">SHARED ENTRY POINT</text>
+<text x="900" y="364" text-anchor="middle" font-size="36" font-weight="700" fill="#17263C">Proxy</text>
+<text x="900" y="402" text-anchor="middle" font-size="21" font-weight="400" fill="#617086">One address for both routes</text>
+<rect x="1272" y="277" width="432" height="300" rx="28" fill="#EAF0F7" stroke="none" stroke-width="1.5"/>
+<rect x="1272" y="270" width="432" height="300" rx="28" fill="#FFFFFF" stroke="#DCE4EF" stroke-width="1.5"/>
+<text x="1488" y="309" text-anchor="middle" font-size="14" font-weight="700" fill="#617086" letter-spacing="2.3">MODEL SERVICE</text>
+<text x="1488" y="364" text-anchor="middle" font-size="36" font-weight="700" fill="#17263C">Provider</text>
+<text x="1488" y="402" text-anchor="middle" font-size="21" font-weight="400" fill="#617086">Generates model replies</text>
+<rect x="684" y="793" width="432" height="300" rx="28" fill="#EAF0F7" stroke="none" stroke-width="1.5"/>
+<rect x="684" y="786" width="432" height="300" rx="28" fill="#FFFFFF" stroke="#DCE4EF" stroke-width="1.5"/>
+<text x="900" y="825" text-anchor="middle" font-size="14" font-weight="700" fill="#617086" letter-spacing="2.3">POLICY SERVICE</text>
+<text x="900" y="880" text-anchor="middle" font-size="36" font-weight="700" fill="#17263C">Sentinel sidecar</text>
+<text x="900" y="918" text-anchor="middle" font-size="21" font-weight="400" fill="#617086">Runs the sentinel</text>
+<rect x="130" y="423" width="364" height="50" rx="12" fill="#EDF3FF" stroke="none" stroke-width="1.5"/>
+<circle cx="152" cy="448" r="4" fill="#3266DE"/>
+<text x="318" y="456" text-anchor="middle" font-size="23" font-weight="500" fill="#3266DE">Model calls</text>
+<rect x="130" y="483" width="364" height="50" rx="12" fill="#EAF7F6" stroke="none" stroke-width="1.5"/>
+<circle cx="152" cy="508" r="4" fill="#087E80"/>
+<text x="318" y="516" text-anchor="middle" font-size="23" font-weight="500" fill="#087E80">Eval control</text>
+<rect x="718" y="423" width="364" height="50" rx="12" fill="#EDF3FF" stroke="none" stroke-width="1.5"/>
+<circle cx="740" cy="448" r="4" fill="#3266DE"/>
+<text x="906" y="456" text-anchor="middle" font-size="23" font-weight="500" fill="#3266DE">Model API routes</text>
+<rect x="718" y="483" width="364" height="50" rx="12" fill="#EAF7F6" stroke="none" stroke-width="1.5"/>
+<circle cx="740" cy="508" r="4" fill="#087E80"/>
+<text x="906" y="516" text-anchor="middle" font-size="23" font-weight="500" fill="#087E80" font-family="Menlo, Consolas, monospace">/sentinel/*</text>
+<rect x="1306" y="423" width="364" height="50" rx="12" fill="#EDF3FF" stroke="none" stroke-width="1.5"/>
+<circle cx="1328" cy="448" r="4" fill="#3266DE"/>
+<text x="1494" y="456" text-anchor="middle" font-size="23" font-weight="500" fill="#3266DE">Model API</text>
+<text x="1488" y="516" text-anchor="middle" font-size="23" font-weight="400" fill="#617086">Anthropic · OpenAI</text>
+<rect x="718" y="939" width="364" height="50" rx="12" fill="#F0F3F8" stroke="none" stroke-width="1.5"/>
+<circle cx="740" cy="964" r="4" fill="#617086"/>
+<text x="906" y="972" text-anchor="middle" font-size="21" font-weight="500" fill="#617086">Judges requests and replies</text>
+<rect x="718" y="999" width="364" height="50" rx="12" fill="#EAF7F6" stroke="none" stroke-width="1.5"/>
+<circle cx="740" cy="1024" r="4" fill="#087E80"/>
+<text x="906" y="1032" text-anchor="middle" font-size="22" font-weight="500" fill="#087E80">Serves the eval API</text>
+<path d="M 554 448 H 658" fill="none" stroke="#3266DE" stroke-width="4" stroke-linecap="round"/>
+<polygon points="555,441 542,448 555,455" fill="#3266DE"/>
+<polygon points="657,441 670,448 657,455" fill="#3266DE"/>
+<path d="M 1142 448 H 1246" fill="none" stroke="#3266DE" stroke-width="4" stroke-linecap="round"/>
+<polygon points="1143,441 1130,448 1143,455" fill="#3266DE"/>
+<polygon points="1245,441 1258,448 1245,455" fill="#3266DE"/>
+<path d="M 554 508 H 658" fill="none" stroke="#087E80" stroke-width="4" stroke-linecap="round" stroke-dasharray="10 8"/>
+<polygon points="555,501 542,508 555,515" fill="#087E80"/>
+<polygon points="657,501 670,508 657,515" fill="#087E80"/>
+<path d="M 828 596 V 760" fill="none" stroke="#8A98AC" stroke-width="3" stroke-linecap="round"/>
+<polygon points="821,597 828,584 835,597" fill="#8A98AC"/>
+<polygon points="821,759 828,772 835,759" fill="#8A98AC"/>
+<path d="M 972 596 V 760" fill="none" stroke="#087E80" stroke-width="4" stroke-linecap="round" stroke-dasharray="10 8"/>
+<polygon points="965,597 972,584 979,597" fill="#087E80"/>
+<polygon points="965,759 972,772 979,759" fill="#087E80"/>
+<text x="798" y="663" text-anchor="end" font-size="21" font-weight="500" fill="#617086">Request + reply</text>
+<text x="798" y="693" text-anchor="end" font-size="21" font-weight="400" fill="#617086">checks</text>
+<text x="1002" y="663" text-anchor="start" font-size="21" font-weight="500" fill="#087E80">Eval-control</text>
+<text x="1002" y="693" text-anchor="start" font-size="21" font-weight="400" fill="#087E80">requests</text>
+<text x="606" y="404" text-anchor="middle" font-size="14" font-weight="700" fill="#3266DE" letter-spacing="1.2">MODEL</text>
+<text x="1194" y="404" text-anchor="middle" font-size="14" font-weight="700" fill="#3266DE" letter-spacing="1.2">MODEL</text>
+<text x="606" y="557" text-anchor="middle" font-size="14" font-weight="700" fill="#087E80" letter-spacing="1.2">CONTROL</text>
+<text x="900" y="1123" text-anchor="middle" font-size="17" font-weight="400" fill="#617086">Arrows carry requests and replies.</text>
+</g></svg>

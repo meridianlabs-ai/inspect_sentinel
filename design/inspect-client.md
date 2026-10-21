@@ -20,13 +20,7 @@ This PR teaches Inspect to notice the sidecar and work with it. An eval author c
 
 ## The pieces
 
-```mermaid
-flowchart LR
-    I[Inspect] -->|model calls| P[Proxy]
-    P -->|model calls| M[Provider]
-    P <-->|each request and reply| S[Sidecar]
-    I -.->|/sentinel/ calls, through the proxy| S
-```
+![Inspect sends model traffic and eval-control traffic through one proxy. Model traffic goes to the provider and is checked by the sentinel sidecar. Eval-control traffic under /sentinel/ goes to the sidecar's eval API.](images/inspect-proxy-traffic.png)
 
 - **Inspect** runs the eval: the task, the samples, the agent and its tools.
 - **The proxy** sits between Inspect and the model provider. Envoy, LiteLLM and Middleman are examples.
@@ -37,44 +31,6 @@ Inspect talks to the sidecar in two ways:
 
 1. **Inside its model calls.** Inspect adds two headers to each request. The sidecar adds a `sentinel` field to each reply.
 2. **Through a small endpoint.** Inspect calls the sidecar directly under `/sentinel/`, through the proxy's own address. It uses this at the start of a task, at the end of a sample, and when a reply arrives without the `sentinel` field.
-
-## The life of an eval
-
-```mermaid
-sequenceDiagram
-    participant I as Inspect
-    participant P as Proxy
-    participant S as Sidecar
-    participant M as Provider
-
-    Note over I,S: Task start
-    I->>P: Is there a sidecar? (probe)
-    P->>S: probe
-    S-->>I: yes, version 1
-    I->>P: Register the task
-    P->>S: register_task
-    S-->>I: registered
-
-    Note over I,M: Each model call
-    I->>P: Request, with Inspect's headers
-    P->>S: judge the request
-    P->>M: Request
-    M-->>P: Reply
-    P->>S: judge the reply
-    S-->>P: Reply, with the sentinel field
-    P-->>I: Reply, with the sentinel field
-    Note over I: Act on the field, as in process
-
-    Note over I,S: Sample end
-    I->>P: sample_result
-    P->>S: sample_result
-    S-->>I: the sentinel's store
-    Note over I: Score the sample
-    I->>P: end_sample
-    P->>S: end_sample
-```
-
-The sections below take each step in turn.
 
 ## 1. Finding the sidecar
 
@@ -211,16 +167,6 @@ The proxy removes both headers before the request reaches the provider.
 
 **Short version:** every reply Inspect gets falls into one of four cases. Inspect handles each as it would if the sentinel ran inside Inspect.
 
-```mermaid
-flowchart TD
-    R[Reply or error from the proxy] --> F{Has a sentinel field?}
-    F -->|no| N[Ask the sidecar: request_result]
-    F -->|yes| O{outcome}
-    O -->|proceed| A[Use the reply.<br/>Put back any call that was taken out,<br/>with an approval error]
-    O -->|reject| B[Turn the error into the model's turn.<br/>Every call gets an approval error.<br/>The sample goes on]
-    O -->|terminate| C[End the sample.<br/>Still score it]
-```
-
 **Case A: the reply goes on.** The reply carries `outcome: proceed`.
 
 Some calls may have been taken out or changed. The field's `proposed` holds the model's turn as the model wrote it. Inspect then:
@@ -262,18 +208,6 @@ Some ways the field goes missing:
 - the connection dropped before the reply ended
 
 **In the plan.** Inspect calls `request_result` with the request's `x-irid`.
-
-```mermaid
-sequenceDiagram
-    participant I as Inspect
-    participant P as Proxy
-    participant S as Sidecar
-    P-->>I: Reply or error, no sentinel field
-    I->>P: request_result for x-irid
-    P->>S: request_result
-    S-->>I: what happened
-    Note over I: decided: act on it, as in section 4<br/>not judged: record that it wasn't judged
-```
 
 The sidecar's answers:
 
