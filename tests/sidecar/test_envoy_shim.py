@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import socket
 import subprocess
 import sys
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
@@ -418,7 +419,18 @@ async def test_reply_without_a_body_that_the_sidecar_replaces_is_refused() -> No
     assert answers[-1].immediate_response.status.code == 500
 
 
+def _ipv6_loopback() -> bool:
+    # some sandboxes and containers have IPv6 turned off
+    try:
+        with socket.socket(socket.AF_INET6) as probe:
+            probe.bind(("::1", 0))
+    except OSError:
+        return False
+    return True
+
+
 @pytest.mark.anyio
+@pytest.mark.skipif(not _ipv6_loopback(), reason="IPv6 loopback is unavailable here")
 async def test_shim_listens_on_an_ipv6_address_as_the_endpoints_do() -> None:
     # uvicorn takes `::1` bare, and gRPC only in brackets
     server = envoy_server(
