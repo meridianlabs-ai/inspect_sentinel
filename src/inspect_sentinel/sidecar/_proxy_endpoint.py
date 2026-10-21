@@ -47,7 +47,7 @@ from ._proxy_streams import (
     TakenResult,
 )
 from ._registration import UnregisteredSampleError
-from ._wire import Format, UnreadableError
+from ._wire import Format, TooLargeError, UnreadableError
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +273,8 @@ def _not_judged(ex: Exception, what: str, id: str) -> RpcError:
         return RpcError(TIME_LIMIT, str(ex))
     if isinstance(ex, UnregisteredSampleError):
         return RpcError(UNREGISTERED, str(ex))
+    if isinstance(ex, TooLargeError):
+        return RpcError(UNREADABLE, str(ex))
     if isinstance(ex, UnreadableError):
         # why is kept here, since it may quote the request or the reply
         logger.warning("The %s %r was not judged: %s", what, id, ex)

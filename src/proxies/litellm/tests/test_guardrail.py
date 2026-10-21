@@ -247,8 +247,10 @@ def _make(monkeypatch: pytest.MonkeyPatch, url: str | None, **settings: Any) -> 
     return _load(monkeypatch).LiteLLMGuardrail(**(told | settings))
 
 
-async def _chunks(held: list[Any]) -> AsyncIterator[Any]:
+async def _chunks(held: list[Any], pace: float = 0.0) -> AsyncIterator[Any]:
     for chunk in held:
+        if pace:
+            await asyncio.sleep(pace)
         yield chunk
 
 
@@ -258,8 +260,9 @@ def _exchange(
     data: dict[str, Any],
     streamed: bool,
     out: list[Any] | None = None,
+    pace: float = 0.0,
 ) -> tuple[Any, Any]:
-    """Put a request and its reply through the guardrail as LiteLLM does. A streamed reply's chunks are also added to `out` as they are let go."""
+    """Put a request and its reply through the guardrail as LiteLLM does. A streamed reply's chunks are also added to `out` as they are let go, and arrive `pace` seconds apart."""
     let_go: list[Any] = [] if out is None else out
 
     async def run() -> tuple[Any, Any]:
@@ -270,7 +273,7 @@ def _exchange(
                     data, _USER, on.whole()
                 )
             async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-                _USER, _chunks(on.stream()), data
+                _USER, _chunks(on.stream(), pace), data
             ):
                 let_go.append(chunk)
             return sent, let_go
@@ -336,6 +339,7 @@ def _sidecar(
     *,
     release: str = "whole",
     action: str = "reject",
+    max_body_bytes: int | None = None,
 ) -> Generator[str]:
     """The address of a real sidecar, whose sentinel rejects a weather lookup of `city`, or every lookup for None, or ends the run there, releasing replies as `release` says."""
     rule = tmp_path / "weather_rule.py"
@@ -358,6 +362,11 @@ def _sidecar(
             str(port),
             "--release",
             release,
+            *(
+                ["--max-body-bytes", str(max_body_bytes)]
+                if max_body_bytes is not None
+                else []
+            ),
         ],
         cwd=tmp_path,
         stdout=subprocess.DEVNULL,
@@ -625,7 +634,7 @@ def test_a_reply_with_a_rejected_call_goes_on_without_it(
 
 
 def _refused(
-    guardrail: Any, on: _On, data: dict[str, Any], streamed: bool
+    guardrail: Any, on: _On, data: dict[str, Any], streamed: bool, pace: float = 0.0
 ) -> tuple[int, Any, Any, list[Any]]:
     """How the guardrail refused an exchange: the status and message the caller is given, the sentinel field, and what else went out.
 
@@ -633,7 +642,7 @@ def _refused(
     """
     let_go: list[Any] = []
     if streamed:
-        _exchange(guardrail, on, data, streamed, let_go)
+        _exchange(guardrail, on, data, streamed, let_go, pace)
         if on is _RESPONSES:
             event = _written(let_go.pop())
             assert event["type"] == "response.failed"
@@ -2288,6 +2297,38 @@ def test_a_reply_too_large_to_judge_is_let_through_whole_when_set_to(
     assert [_written(chunk) for chunk in reply] == [
         _written(chunk) for chunk in _CHAT.stream()
     ]
+
+
+@pytest.mark.parametrize("release", ["whole", "early"])
+@pytest.mark.parametrize(
+    ("fallback", "let_through"), [("fail_open", True), ("fail_closed", False)]
+)
+def test_a_reply_larger_than_the_sidecar_takes_goes_as_unjudged_replies_do(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    release: str,
+    fallback: str,
+    let_through: bool,
+) -> None:
+    with _sidecar("Oslo", tmp_path, release=release, max_body_bytes=4000) as url:
+        guardrail = _make(monkeypatch, url, unreachable_fallback=fallback)
+        if let_through:
+            # each chunk is uploaded on its own, so that only the whole reply
+            # is past the limit
+            _, reply = _within(
+                30,
+                lambda: _exchange(guardrail, _CHAT, _data(_CHAT), True, pace=0.02),
+            )
+            # nothing had gone out, so it isn't refused as if a sentinel had
+            assert [_written(chunk) for chunk in reply] == [
+                _written(chunk) for chunk in _CHAT.stream()
+            ]
+        else:
+            status, message, _, let_go = _refused(
+                guardrail, _CHAT, _data(_CHAT), True, pace=0.02
+            )
+            # as for any reply the sidecar couldn't judge
+            assert (status, message, let_go) == (*_UNANSWERED, [])
 
 
 def test_a_reply_stream_s_end_is_acknowledged(monkeypatch: pytest.MonkeyPatch) -> None:

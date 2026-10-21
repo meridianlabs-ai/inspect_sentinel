@@ -19,7 +19,7 @@ from ._release import (
     Turn,
 )
 from ._state import NotJudged
-from ._wire import Format, StreamEvent, write_events
+from ._wire import Format, StreamEvent, TooLargeError, write_events
 
 if TYPE_CHECKING:
     from ._handler import Handler
@@ -95,7 +95,7 @@ class ReplyStream:
 
     Made by `Handler.reply_stream`. The proxy runs three things at once: `run`, which judges the reply; feeding the provider's bytes in with `feed` and then `end`; and reading what to send the client by iterating over the stream. Feeding a chunk means only that the stream has taken it, and ending the input only that no more of the provider's bytes are coming: judging, and what is sent, go on after that.
 
-    The reply is held whole and judged as `Handler.reply` judges it, and what comes out is its answer: the provider's bytes, the replacement, or the refusal. A reply in a status outside 2xx is the provider's error, which the handler is told of and which goes out as it arrives, unread. A reply larger than `max_held_bytes` is refused with a 502 and not judged, as soon as it is fed past the limit.
+    The reply is held whole and judged as `Handler.reply` judges it, and what comes out is its answer: the provider's bytes, the replacement, or the refusal. A reply in a status outside 2xx is the provider's error, which the handler is told of and which goes out as it arrives, unread. A reply larger than `max_held_bytes` is not judged, as soon as it is fed past the limit: iterating raises `TooLargeError`, an `UnreadableError`, as `Handler.reply` would on a reply it couldn't read, or, once something has gone out, the output ends with an `ErrorEvent`.
 
     Feeding waits only for output that can drain: while more than `max_pending_bytes` of a reply that goes out as it arrives is waiting for the proxy to collect it. It never waits on what is held back to judge, which can only go out once more has been fed. Once the output has ended, bytes still fed are dropped.
 
@@ -267,15 +267,9 @@ class ReplyStream:
         await self._until(lambda: self._ended or self._aborted or self._over)
         if self._over:
             # the reply isn't read, as the endpoint for proxies doesn't read a
-            # call larger than it takes
+            # call larger than it takes, and isn't judged rather than refused
             await self._handler.reply_not_judged(start.id, "unreadable")
-            await self._out(
-                Refuse(
-                    502,
-                    f"The provider's reply is larger than the {self._max_held_bytes} bytes the sidecar holds, so it was not judged.",
-                )
-            )
-            return
+            raise self._too_large()
         if not self._ended:
             await self._handler.reply_not_judged(start.id, "cut_off")
             return
@@ -371,15 +365,7 @@ class ReplyStream:
                 await self._handler.reply_not_judged(self._start.id, "cut_off")
                 return False
             if self._over:
-                await self._handler.reply_not_judged(self._start.id, "unreadable")
-                await self._fail(
-                    Refuse(
-                        502,
-                        f"The provider's reply is larger than the {self._max_held_bytes} bytes the sidecar holds, so it was not judged.",
-                    ),
-                    "unreadable",
-                )
-                return False
+                raise self._too_large()
             data = bytes(self._held[self._consumed :])
             # held bytes can only go out once the turn has ended, so feeding
             # never waits on them
@@ -436,6 +422,11 @@ class ReplyStream:
             return
         await self._out(
             ErrorEvent(error_event(events.format, refused, events.originals), unjudged)
+        )
+
+    def _too_large(self) -> TooLargeError:
+        return TooLargeError(
+            f"The provider's reply is larger than the {self._max_held_bytes} bytes the sidecar holds, so it was not judged."
         )
 
     def _closed(self) -> bool:

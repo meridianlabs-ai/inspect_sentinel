@@ -454,6 +454,54 @@ async def test_a_stream_that_stops_short_after_content_went_out_fails_in_the_str
 
 
 @pytest.mark.anyio
+async def test_a_turn_too_large_to_hold_before_anything_went_out_is_raised() -> None:
+    # as when held whole: not judged, for a proxy to refuse with a real status
+    # or let through, rather than refused as if decided
+    asked, reply = _exchange("chat", inspect=True)
+    handler = Handler(noting([], "reject", "Cairo"), release="early")
+    await handler.request(asked)
+    stream = handler.reply_stream(_start(reply), max_held_bytes=len(reply.body) - 1)
+
+    with pytest.raises(ExceptionGroup) as raised:
+        await _streamed(stream, reply.body, 61)
+
+    assert raised.group_contains(UnreadableError)
+    assert await _result(handler) == ("not_judged", "unreadable")
+
+
+@pytest.mark.anyio
+async def test_a_turn_too_large_to_hold_after_content_went_out_says_so() -> None:
+    asked, reply = _exchange("anthropic", inspect=True)
+    handler = Handler(noting([], "reject", "Cairo"), release="early")
+    await handler.request(asked)
+    stream = handler.reply_stream(_start(reply), max_held_bytes=len(reply.body) - 1)
+    # up to the end of the first text block, which goes out before the rest
+    text = reply.body.index(b"event: content_block_stop")
+    outputs: list[Output] = []
+    released = anyio.Event()
+
+    async def read() -> None:
+        async for output in stream:
+            outputs.append(output)
+            released.set()
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(stream.run)
+            group.start_soon(read)
+            await stream.feed(reply.body[:text])
+            await released.wait()
+            await stream.feed(reply.body[text:])
+            await stream.end()
+
+    assert isinstance(outputs[0], Release)
+    last = outputs[-1]
+    assert isinstance(last, ErrorEvent) and last.not_judged == "unreadable"
+    assert b"larger than" in last.data
+    assert await _result(handler) == ("not_judged", "unreadable")
+
+
+@pytest.mark.anyio
 async def test_a_responses_call_whose_events_disagree_is_never_released() -> None:
     asked, reply = _exchange("responses", inspect=False)
     # the first call's deltas and arguments-done event name Tokyo, while its

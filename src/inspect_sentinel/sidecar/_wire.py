@@ -34,6 +34,10 @@ class UnreadableError(Exception):
     """A request or reply couldn't be read into Inspect's types, so it can't be judged."""
 
 
+class TooLargeError(UnreadableError):
+    """A reply was larger than the sidecar holds, so it wasn't read. Its message says so and quotes nothing of the reply, so the client may be told it."""
+
+
 async def read_request(
     provider: str,
     body: bytes,

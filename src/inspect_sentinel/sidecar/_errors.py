@@ -10,7 +10,7 @@ from typing import Any, cast
 from ._exchange import Refuse
 from ._registration import UnregisteredSampleError
 from ._state import NotJudged
-from ._wire import Format, StreamEvent, UnreadableError
+from ._wire import Format, StreamEvent, TooLargeError, UnreadableError
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,8 @@ def refusal_for(ex: Exception, what: str, id: str, *, reply: bool) -> Refuse:
         return Refuse(504, str(ex))
     if isinstance(ex, UnregisteredSampleError):
         return Refuse(400, str(ex))
+    if isinstance(ex, TooLargeError):
+        return Refuse(502, str(ex))
     if isinstance(ex, UnreadableError):
         # why is kept here, since it may quote the request or the reply
         logger.warning("The %s %r was not judged: %s", what, id, ex)

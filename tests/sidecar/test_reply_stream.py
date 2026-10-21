@@ -23,6 +23,7 @@ from inspect_sentinel.sidecar import (
     Request,
 )
 from inspect_sentinel.sidecar._handler import RequestResult
+from inspect_sentinel.sidecar._wire import UnreadableError
 from tests.sidecar._traffic import (
     STREAM,
     anthropic_recorded,
@@ -183,20 +184,18 @@ async def test_a_provider_error_is_not_held_to_the_limit() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_reply_larger_than_the_limit_is_refused_and_not_judged() -> None:
+async def test_a_reply_larger_than_the_limit_is_not_judged() -> None:
+    # raised, as for a reply that can't be read, so that a proxy that lets
+    # through what isn't judged can, rather than refused as if decided
     asked, answered = _exchange("anthropic stream", inspect=True)
     handler = Handler(weather_rule())
     await handler.request(asked)
     stream = handler.reply_stream(_start(answered), max_held_bytes=100)
 
-    outputs = await _streamed(stream, answered.body, 40)
+    with pytest.raises(ExceptionGroup) as raised:
+        await _streamed(stream, answered.body, 40)
 
-    assert outputs == [
-        Refuse(
-            502,
-            "The provider's reply is larger than the 100 bytes the sidecar holds, so it was not judged.",
-        )
-    ]
+    assert raised.group_contains(UnreadableError, match="larger than the 100 bytes")
     assert await _not_judged(handler) == ("not_judged", "unreadable")
 
 
@@ -267,7 +266,7 @@ async def test_an_abort_ends_a_stream_whose_output_no_one_is_collecting() -> Non
 
 
 @pytest.mark.anyio
-async def test_a_reply_is_refused_as_soon_as_it_is_fed_past_the_limit() -> None:
+async def test_a_reply_is_given_up_as_soon_as_it_is_fed_past_the_limit() -> None:
     asked, answered = _exchange("anthropic stream")
     handler = Handler(weather_rule())
     await handler.request(asked)
@@ -279,14 +278,12 @@ async def test_a_reply_is_refused_as_soon_as_it_is_fed_past_the_limit() -> None:
             outputs = stream.__aiter__()
             await stream.feed(answered.body[:60])
             await stream.feed(answered.body[60:120])
-            # refused before the reply has ended
-            refused = await outputs.__anext__()
-            assert isinstance(refused, Refuse) and refused.status == 502
+            # given up before the reply has ended
+            with pytest.raises(UnreadableError):
+                await outputs.__anext__()
             # what comes after is dropped, without waiting
             await stream.feed(answered.body[120:])
             await stream.end()
-            with pytest.raises(StopAsyncIteration):
-                await outputs.__anext__()
 
 
 @pytest.mark.anyio
