@@ -226,7 +226,7 @@ async def test_units_run_concurrently() -> None:
     all_started = anyio.Event()
 
     @monitor
-    def waits() -> Any:
+    def replay_waits() -> Any:
         async def before(context: Context, step: BeforeToolCall) -> Observation:
             nonlocal started
             started += 1
@@ -241,7 +241,7 @@ async def test_units_run_concurrently() -> None:
     # a sample with two compactions: three units, one tool call each
     steps = [s for s in segmented([1, 1, 1]) if s.stage == "tool_call"]
 
-    reports = await replay_monitor(waits(), steps, split="compaction")
+    reports = await replay_monitor(replay_waits(), steps, split="compaction")
 
     assert started == 3
     assert all(report.report is not None for report in reports)
@@ -280,7 +280,7 @@ async def test_a_step_at_a_stage_nothing_watches_reports_nothing() -> None:
 @pytest.mark.anyio
 async def test_a_failed_monitor_is_recorded_and_the_replay_goes_on() -> None:
     @monitor
-    def broken() -> Any:
+    def replay_broken() -> Any:
         async def before(context: Context, step: BeforeToolCall) -> Observation:
             raise RuntimeError("boom")
 
@@ -288,7 +288,7 @@ async def test_a_failed_monitor_is_recorded_and_the_replay_goes_on() -> None:
 
     steps = [s for s in segmented([2]) if s.stage == "tool_call"]
 
-    reports = await replay_monitor(broken(), steps)
+    reports = await replay_monitor(replay_broken(), steps)
 
     assert [len(r.failed) for r in reports] == [1, 1]
     assert all(r.report is None for r in reports)
@@ -298,7 +298,7 @@ async def test_a_failed_monitor_is_recorded_and_the_replay_goes_on() -> None:
 @pytest.mark.anyio
 async def test_a_protocol_error_fails_the_replay() -> None:
     @protocol
-    def raises() -> Any:
+    def replay_raises() -> Any:
         async def tool_call(
             context: Context, step: BeforeToolCall, escalations: Escalations
         ) -> Decision:
@@ -309,7 +309,7 @@ async def test_a_protocol_error_fails_the_replay() -> None:
     steps = [s for s in segmented([1]) if s.stage == "tool_call"]
 
     with pytest.raises(ValueError, match="bad protocol"):
-        await replay_monitor(raises(), steps)
+        await replay_monitor(replay_raises(), steps)
 
 
 def flag(threshold_value: float = 1.0) -> Any:
