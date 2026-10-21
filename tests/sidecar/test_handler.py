@@ -11,13 +11,7 @@ from inspect_ai.util import StoreModel
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
 from inspect_sentinel._report import Decision, Escalations
-from inspect_sentinel._step import (
-    AfterGenerate,
-    AfterToolCall,
-    BeforeGenerate,
-    BeforeToolCall,
-    Step,
-)
+from inspect_sentinel._step import AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 from inspect_sentinel._types import Protocol, ProtocolGroup
 from inspect_sentinel.sidecar import (
     Answer,
@@ -236,51 +230,9 @@ async def test_a_failing_protocol_is_not_swallowed() -> None:
         await handler.reply(reply(message(weather("Tokyo"))))
 
 
-@protocol
-def reads_finished_turns() -> Protocol:
-    """Look at each finished turn, as a protocol that needs the whole turn does."""
-
-    async def decide(
-        context: Context, step: AfterGenerate, escalations: Escalations
-    ) -> Decision | None:
-        return None
-
-    return decide
-
-
-@protocol
-def watches_every_stage() -> Protocol:
-    """Look at every step, which includes each finished turn."""
-
-    async def decide(
-        context: Context, step: Step, escalations: Escalations
-    ) -> Decision | None:
-        return None
-
-    return decide
-
-
 def test_replies_are_held_whole_unless_early_release_is_asked_for() -> None:
     assert Handler(weather_rule()).release == "whole"
     assert Handler(weather_rule(), release="early").release == "early"
-
-
-@pytest.mark.parametrize(
-    "sentinel",
-    [
-        lambda: reads_finished_turns(),
-        lambda: watches_every_stage(),
-        lambda: [weather_rule(), reads_finished_turns()],
-    ],
-    ids=["after generate", "every stage", "one of a group"],
-)
-def test_a_sentinel_given_the_finished_turn_keeps_replies_whole(
-    sentinel: Any, caplog: pytest.LogCaptureFixture
-) -> None:
-    handler = Handler(sentinel(), release="early")
-
-    assert handler.release == "whole"
-    assert "replies are held whole" in caplog.text
 
 
 @protocol

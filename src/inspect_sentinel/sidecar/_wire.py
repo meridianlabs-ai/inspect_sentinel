@@ -835,6 +835,8 @@ async def edit_reply(
     Raises:
         UnreadableError: If a call can't be changed as asked, or the edited reply doesn't read back as the reply with the edits made.
     """
+    from ._inspect_ai import noting
+
     if format == "anthropic-messages" or (format is None and provider == "anthropic"):
         from . import _anthropic
 
@@ -850,41 +852,10 @@ async def edit_reply(
         )
     else:
         raise UnreadableError(f"There is no reader for provider {provider!r}.")
-    await check_edited_reply(
-        provider, content_type, edited, format, edits, output, start=start
-    )
-    return edited
-
-
-async def check_edited_reply(
-    provider: str,
-    content_type: str,
-    edited: bytes,
-    format: Format | None,
-    edits: Edits,
-    output: ModelOutput,
-    *,
-    start: JsonValue | None = None,
-) -> None:
-    """Check that an edited reply reads as the reply did with only the edits made.
-
-    Args:
-        provider: Whose API the body is written in.
-        content_type: The reply's `content-type`, which says whether the body is a stream.
-        edited: The edited reply body.
-        format: Which API the body is written in, if the proxy said.
-        edits: The calls taken out, and the calls changed.
-        output: The reply as it was read before it was edited.
-        start: What was noted while reading the conversation's earlier replies, as the reply was read with.
-
-    Raises:
-        UnreadableError: If it doesn't.
-    """
-    from ._inspect_ai import noting
-
     with noting(start):
         read = await _read_reply(provider, content_type, edited, format)
     _check_edited(output, read, edits)
+    return edited
 
 
 def _check_edited(output: ModelOutput, edited: ModelOutput, edits: Edits) -> None:

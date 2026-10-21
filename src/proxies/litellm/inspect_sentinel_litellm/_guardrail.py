@@ -365,7 +365,7 @@ class LiteLLMGuardrail(CustomGuardrail):
     ) -> AsyncGenerator[Any, None]:
         """Hand a streamed reply to the sidecar as it arrives, and send on what the sidecar releases.
 
-        The reply goes to the sidecar's reply stream as LiteLLM yields it, and what the sidecar releases is yielded as it is released: the whole reply once judged, or, where the sidecar releases replies early, text as it arrives and each call once judged. LiteLLM sends the caller nothing, the status included, until this yields.
+        The reply goes to the sidecar's reply stream as LiteLLM yields it, and what the sidecar releases is yielded as it is released: the whole reply once judged, or, where the sidecar releases replies early, the text and reasoning before the turn's first call as they arrive, and the rest once the turn is judged. LiteLLM sends the caller nothing, the status included, until this yields.
 
         A reply refused while nothing has gone out is answered with an error event in place of the reply, which LiteLLM sends the caller as an error under the refusal's status. Once something has gone out, a refusal is an error event in the stream, which the provider's SDK raises on. Where the sidecar gives no usable answer, `unreachable_fallback` decides while nothing has gone out; after that, the reply ends with an error event, since what went out can't be matched to what LiteLLM yielded.
         """

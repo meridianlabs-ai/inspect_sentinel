@@ -169,87 +169,63 @@ def _tool_use(block: object) -> str | None:
 
 
 def _edit_stream(events: list[StreamEvent], edits: Edits) -> bytes:
-    editor = StreamEditor()
-    written = editor.edit(events, edits)
-    editor.finish(edits)
-    return write_events(written)
-
-
-class StreamEditor:
-    """Takes calls out of an Anthropic reply stream, and changes others, as its events go out in order.
-
-    Each block is told apart by its index, which the later blocks' events are moved down by for each block taken out before them. A changed call's input goes out whole, in one delta after its start. What is decided about a call must be in `edits` by the time its first event is edited.
-    """
-
-    def __init__(self) -> None:
-        self._removed: set[int] = set()
-        self._modified: dict[int, str] = {}
-        self._found: list[str] = []
-
-    def edit(self, events: list[StreamEvent], edits: Edits) -> list[StreamEvent]:
-        """The next events, edited.
-
-        Raises:
-            UnreadableError: If the stream holds content in its `message_start`, which can't be changed.
-        """
-        written: list[StreamEvent] = []
-        for event in events:
-            data = event.data or {}
-            kind = str(data.get("type", ""))
-            if kind == "message_start" and (
-                cast("dict[str, Any]", data.get("message") or {}).get("content")
-            ):
-                raise UnreadableError(
-                    "The reply stream holds content in its message_start, which this sidecar can't change."
-                )
-            index = data.get("index")
-            if kind == "content_block_start" and isinstance(index, int):
-                call = _tool_use(data.get("content_block"))
-                if call is not None and call in edits.targets:
-                    self._found.append(call)
-                    if call in edits.removed:
-                        self._removed.add(index)
-                    else:
-                        self._modified[index] = call
-            if not kind.startswith("content_block_") or not isinstance(index, int):
-                written.append(event)
-                continue
-            if index in self._removed:
-                continue
-            if index in self._modified and kind == "content_block_delta":
-                # its input goes out whole, in one delta after its start
-                continue
-            moved = index - sum(1 for taken in self._removed if taken < index)
-            if moved != index:
-                data["index"] = moved
-                event.changed = True
-            if index in self._modified and kind == "content_block_start":
-                block = cast("dict[str, Any]", data["content_block"])
-                data["content_block"] = {**block, "input": {}}
-                event.changed = True
-                written.append(event)
-                arguments = edits.modified[self._modified[index]].arguments
-                delta = {
-                    "type": "input_json_delta",
-                    "partial_json": json.dumps(arguments),
-                }
-                written.append(
-                    made_event(
-                        event,
-                        {"type": "content_block_delta", "index": moved, "delta": delta},
-                    )
-                )
-                continue
+    # each block is told apart by its index, which the later blocks' events
+    # are moved down by for each block taken out before them
+    removed: set[int] = set()
+    modified: dict[int, str] = {}
+    found: list[str] = []
+    for event in events:
+        data = event.data or {}
+        if data.get("type") == "message_start" and (
+            cast("dict[str, Any]", data.get("message") or {}).get("content")
+        ):
+            raise UnreadableError(
+                "The reply stream holds content in its message_start, which this sidecar can't change."
+            )
+        if data.get("type") != "content_block_start":
+            continue
+        call = _tool_use(data.get("content_block"))
+        index: object = data.get("index")
+        if call is not None and call in edits.targets and isinstance(index, int):
+            found.append(call)
+            if call in edits.removed:
+                removed.add(index)
+            else:
+                modified[index] = call
+    check_found(found, edits)
+    written: list[StreamEvent] = []
+    for event in events:
+        data = event.data or {}
+        index = data.get("index")
+        kind = str(data.get("type", ""))
+        if not kind.startswith("content_block_") or not isinstance(index, int):
             written.append(event)
-        return written
-
-    def finish(self, edits: Edits) -> None:
-        """Check that the stream held every call of `edits`.
-
-        Raises:
-            UnreadableError: If it didn't.
-        """
-        check_found(self._found, edits)
+            continue
+        if index in removed:
+            continue
+        if index in modified and kind == "content_block_delta":
+            # its input goes out whole, in one delta after its start
+            continue
+        moved = index - sum(1 for taken in removed if taken < index)
+        if moved != index:
+            data["index"] = moved
+            event.changed = True
+        if index in modified and kind == "content_block_start":
+            block = cast("dict[str, Any]", data["content_block"])
+            data["content_block"] = {**block, "input": {}}
+            event.changed = True
+            written.append(event)
+            arguments = edits.modified[modified[index]].arguments
+            delta = {"type": "input_json_delta", "partial_json": json.dumps(arguments)}
+            written.append(
+                made_event(
+                    event,
+                    {"type": "content_block_delta", "index": moved, "delta": delta},
+                )
+            )
+            continue
+        written.append(event)
+    return write_events(written)
 
 
 def turn_at(entries: list[Any], sent: int) -> Spliced | None:

@@ -162,7 +162,7 @@ def waits_for(go: anyio.Event, asked: anyio.Event) -> Protocol:
 
 
 @pytest.mark.anyio
-async def test_text_is_released_to_the_proxy_hook_before_the_sentinel_answers() -> None:
+async def test_text_is_released_to_the_proxy_hook_before_the_turn_is_judged() -> None:
     go, asked = anyio.Event(), anyio.Event()
     handler = Handler(waits_for(go, asked), release="early")
     await handler.request(request())
@@ -171,23 +171,15 @@ async def test_text_is_released_to_the_proxy_hook_before_the_sentinel_answers() 
         async with _serving(handler) as client:
             await _call(client, "begin_reply", **_begun())
             await _call(client, "reply_chunk", id="x", seq=0, data=_b64(_BODY))
-            await asked.wait()
             answered = await _call(client, "next_release", id="x", after=0)
             released = _sent(answered["result"]["outputs"])
+            # the text is out, and nothing is judged before the turn has ended
             assert b"text_delta" in released and b"tool_use" not in released
-            go.set()
+            assert not asked.is_set()
             await _call(client, "end_reply", id="x")
-            outputs = (
-                answered["result"]["outputs"]
-                + (
-                    await _call(
-                        client,
-                        "next_release",
-                        id="x",
-                        after=answered["result"]["position"],
-                    )
-                )["result"]["outputs"]
-            )
+            await asked.wait()
+            go.set()
+            outputs = answered["result"]["outputs"]
             while outputs[-1]["kind"] != "finished":
                 outputs += (
                     await _call(client, "next_release", id="x", after=len(outputs))

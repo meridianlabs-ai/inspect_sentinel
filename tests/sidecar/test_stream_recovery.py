@@ -27,7 +27,7 @@ from inspect_sentinel.sidecar._proxy_endpoint import PATH as PROXY_PATH
 from inspect_sentinel.sidecar._proxy_endpoint import proxy_app
 from inspect_sentinel.sidecar._state import MemoryState
 from tests.sidecar._traffic import STREAM, anthropic_recorded, inspect_headers, request
-from tests.sidecar.test_early_turn import noting
+from tests.sidecar.test_early_release import noting
 from tests.sidecar.test_eval_endpoint import _Clock
 
 # text, then calls to get_weather for Paris, Tokyo and Lima
@@ -253,7 +253,7 @@ def waits_then(action: str, asked: anyio.Event, go: anyio.Event) -> Protocol:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("results", [True, False], ids=["results", "no results"])
-async def test_a_call_judged_when_the_client_went_is_pending_then_cut_off(
+async def test_a_turn_judged_when_the_client_went_is_pending_then_decided(
     results: bool,
 ) -> None:
     asked, go = anyio.Event(), anyio.Event()
@@ -265,7 +265,7 @@ async def test_a_call_judged_when_the_client_went_is_pending_then_cut_off(
             await proxy.begin()
             await proxy.feed(_BODY)
             await asked.wait()
-            # the client goes while the sentinel decides the first call
+            # the client goes while the sentinel judges the finished turn
             await proxy.call("abort_reply", id="x")
             pending = await eval.recover(_IRID)
             go.set()
@@ -273,10 +273,31 @@ async def test_a_call_judged_when_the_client_went_is_pending_then_cut_off(
                 await anyio.sleep(0.01)
 
     assert pending.state == "pending"
-    # the decision made is kept, and no other call was put to the sentinel
+    # the judgment went on to the end, and is kept, as when held whole
     assert recovered == Recovered(
-        "not_judged", reason="cut_off", decided=["reject"] if results else None
+        "decided",
+        outcome="proceed",
+        turn=_CALLS,
+        decided=["reject", "proceed", "proceed"] if results else None,
     )
+
+
+@pytest.mark.anyio
+async def test_a_turn_whose_client_went_before_it_ended_is_cut_off() -> None:
+    handler = Handler(noting([], "reject", "Tokyo"), release="early")
+
+    with anyio.fail_after(10):
+        async with _sidecar(handler) as (proxy, eval):
+            await proxy.ask()
+            await proxy.begin()
+            half = base64.b64encode(_BODY[: len(_BODY) // 2]).decode("ascii")
+            await proxy.call("reply_chunk", id="x", seq=0, data=half)
+            await proxy.call("abort_reply", id="x")
+            # the stream records it as it stops, which an eval may ask before
+            while (recovered := await eval.recover(_IRID)).state == "pending":
+                await anyio.sleep(0.01)
+
+    assert recovered == Recovered("not_judged", reason="cut_off", decided=[])
 
 
 @pytest.mark.anyio

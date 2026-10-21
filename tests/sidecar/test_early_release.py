@@ -25,23 +25,83 @@ from inspect_sentinel.sidecar import (
     Reply,
     ReplyStart,
     ReplyStream,
+    Request,
 )
 from inspect_sentinel.sidecar._errors import TimeLimitError
 from inspect_sentinel.sidecar._handler import RequestResult
 from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
-from inspect_sentinel.sidecar._wire import UnreadableError
+from inspect_sentinel.sidecar._wire import Format, UnreadableError
 from tests.sidecar._traffic import (
     JSON,
     STREAM,
+    anthropic_recorded,
+    inspect_headers,
     message,
+    openai_recorded,
+    openai_request,
     reply,
     request,
     weather,
     weather_rule,
 )
-from tests.sidecar.test_early_turn import _exchange, noting
 
 _FORMATS = ["anthropic", "chat", "responses"]
+
+
+_FORMAT_OF: dict[str, Format] = {
+    "anthropic": "anthropic-messages",
+    "chat": "openai-chat",
+    "responses": "openai-responses",
+}
+
+
+def _exchange(name: str, *, inspect: bool) -> tuple[Request, Reply]:
+    # a recorded reply calling get_weather for Paris, Tokyo and Lima at once
+    if name == "anthropic":
+        asked = request(sample="sample_123") if inspect else request()
+        provider, body = "anthropic", anthropic_recorded("parallel-tool-calls")
+    else:
+        provider, (_, body) = "openai", openai_recorded(f"{name} stream")
+        asked = Request(
+            id="x",
+            provider="openai",
+            model="gpt-test",
+            user="user-1",
+            body=json.dumps(openai_request(name)).encode(),
+            headers=inspect_headers() if inspect else {},
+        )
+    return asked, Reply(
+        id="x",
+        provider=provider,
+        model=asked.model,
+        user="user-1",
+        status=200,
+        content_type=STREAM,
+        body=body,
+        format=_FORMAT_OF[name],
+    )
+
+
+@protocol
+def noting(seen: list[tuple[str, str]], action: str, city: str) -> Protocol:
+    """Decide `action` for a weather lookup of `city`, or of every city, noting each call and the message it was given."""
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        seen.append((step.call.id, step.message))
+        # the Responses recording names a city with its country, "Tokyo, Japan"
+        location = str(step.call.arguments.get("location", ""))
+        if city != "every" and not location.startswith(city):
+            return Decision.proceed()
+        if action == "modify":
+            changed = replace(step.call, arguments={"location": "Oslo"})
+            return Decision(action="modify", modified=changed)
+        if action == "terminate":
+            return Decision.terminate("ended")
+        return Decision.reject(f"lookup of {city}", message=f"{city} is not allowed.")
+
+    return decide
 
 
 def _start(reply: Reply) -> ReplyStart:
@@ -140,7 +200,7 @@ def waits_for(go: anyio.Event, asked: anyio.Event) -> Protocol:
 
 
 @pytest.mark.anyio
-async def test_text_goes_out_before_the_sentinel_answers_and_a_call_only_after() -> (
+async def test_text_goes_out_as_it_arrives_and_a_call_only_once_the_turn_is_judged() -> (
     None
 ):
     asked, reply = _exchange("anthropic", inspect=False)
@@ -160,19 +220,20 @@ async def test_text_goes_out_before_the_sentinel_answers_and_a_call_only_after()
             group.start_soon(stream.run)
             outputs = stream.__aiter__()
             await stream.feed(b"\n\n".join(events[: call_stop + 1]) + b"\n\n")
-            await judging.wait()
-            # the text is out while the sentinel is still deciding the call
+            # the text is out before the turn has ended, and nothing is judged
             released = await outputs.__anext__()
             assert isinstance(released, Release)
             assert b"text_delta" in released.data
             assert b"tool_use" not in released.data
-            go.set()
-            call = await outputs.__anext__()
-            assert isinstance(call, Release) and b"tool_use" in call.data
+            assert not judging.is_set()
             await stream.feed(b"\n\n".join(events[call_stop + 1 :]))
             await stream.end()
+            # the turn has ended and is judged, and the calls wait for it
+            await judging.wait()
+            go.set()
             rest = [output async for output in outputs]
-            assert rest[-1] == Finished()
+            assert b"tool_use" in _sent(rest) and rest[-1] == Finished()
+            assert _sent([released, *rest]) == reply.body
 
 
 @pytest.mark.anyio
@@ -188,17 +249,18 @@ async def test_a_turn_of_calls_alone_all_rejected_is_refused_with_its_status() -
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("name", _FORMATS)
+@pytest.mark.parametrize("name", ["anthropic", "responses"])
 async def test_a_turn_ended_after_content_went_out_raises_in_the_sdk_with_the_field(
     name: str,
 ) -> None:
+    # these recordings open with text or reasoning, which goes out first
     asked, reply = _exchange(name, inspect=True)
     handler = Handler(noting([], "terminate", "Lima"), release="early")
     await handler.request(asked)
 
     outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
 
-    assert isinstance(outputs[-1], ErrorEvent)
+    assert isinstance(outputs[0], Release) and isinstance(outputs[-1], ErrorEvent)
     raised = _read_with_sdk(name, _sent(outputs))
     body: Any = raised.body
     field = (
@@ -207,6 +269,20 @@ async def test_a_turn_ended_after_content_went_out_raises_in_the_sdk_with_the_fi
         else body["provider_specific_fields"]["sentinel"]
     )
     assert field["outcome"] == "terminate"
+
+
+@pytest.mark.anyio
+async def test_a_turn_of_calls_alone_ended_is_refused_with_its_status() -> None:
+    # the Chat recording holds nothing but calls, so nothing has gone out
+    asked, reply = _exchange("chat", inspect=True)
+    handler = Handler(noting([], "terminate", "Lima"), release="early")
+    await handler.request(asked)
+
+    outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
+
+    [refused] = outputs
+    assert isinstance(refused, Refuse) and refused.sentinel is not None
+    assert refused.sentinel["outcome"] == "terminate"
 
 
 def _read_with_sdk(name: str, body: bytes) -> Any:
@@ -283,14 +359,36 @@ def finished_turns() -> Protocol:
 
 
 @pytest.mark.anyio
-async def test_a_sentinel_given_the_finished_turn_keeps_a_stream_held_whole() -> None:
+async def test_every_call_is_judged_with_the_whole_turn() -> None:
+    # as in Inspect's own process, whether or not the reply is released early
+    asked, reply = _exchange("anthropic", inspect=False)
+    whole: list[tuple[str, str]] = []
+    early: list[tuple[str, str]] = []
+    held = Handler(noting(whole, "reject", "Tokyo"))
+    await held.request(asked)
+    await held.reply(reply)
+    released = Handler(noting(early, "reject", "Tokyo"), release="early")
+    await released.request(asked)
+
+    await _streamed(released.reply_stream(_start(reply)), reply.body, 61)
+
+    assert [message for _, message in early] == [message for _, message in whole]
+    assert len(early) == 3
+
+
+@pytest.mark.anyio
+async def test_a_sentinel_given_the_finished_turn_still_has_text_released_early() -> (
+    None
+):
     asked, reply = _exchange("anthropic", inspect=False)
     handler = Handler(finished_turns(), release="early")
     await handler.request(asked)
 
     outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
 
-    assert outputs == [Release(reply.body), Finished()]
+    # the text went out on its own, before the turn was judged
+    assert len(outputs) > 2 and b"tool_use" not in _sent(outputs[:1])
+    assert _sent(outputs) == reply.body and outputs[-1] == Finished()
 
 
 async def _result(handler: Handler) -> tuple[str, str | None]:
@@ -300,9 +398,26 @@ async def _result(handler: Handler) -> tuple[str, str | None]:
 
 
 @pytest.mark.anyio
-async def test_a_call_being_judged_when_the_client_goes_is_decided_and_the_turn_cut_off() -> (
-    None
-):
+async def test_a_turn_whose_client_goes_before_it_ends_is_cut_off_unjudged() -> None:
+    asked, reply = _exchange("anthropic", inspect=True)
+    seen: list[tuple[str, str]] = []
+    handler = Handler(noting(seen, "reject", "Tokyo"), release="early")
+    await handler.request(asked)
+    stream = handler.reply_stream(_start(reply))
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(stream.run)
+            await stream.feed(reply.body[: len(reply.body) // 2])
+            await stream.abort()
+
+    assert seen == []
+    assert await _result(handler) == ("not_judged", "cut_off")
+
+
+@pytest.mark.anyio
+async def test_a_turn_whose_client_goes_while_it_is_judged_is_decided() -> None:
+    # as when the reply is held whole: the judgment goes on, and is kept
     asked, reply = _exchange("anthropic", inspect=True)
     go, judging = anyio.Event(), anyio.Event()
     handler = Handler(waits_for(go, judging), release="early")
@@ -313,14 +428,12 @@ async def test_a_call_being_judged_when_the_client_goes_is_decided_and_the_turn_
         async with anyio.create_task_group() as group:
             group.start_soon(stream.run)
             await stream.feed(reply.body)
+            await stream.end()
             await judging.wait()
             await stream.abort()
             go.set()
 
-    records = await handler.records("x")
-    # the call was decided, and kept, and the turn is recorded as cut off
-    assert records is not None and records
-    assert await _result(handler) == ("not_judged", "cut_off")
+    assert await _result(handler) == ("decided", None)
 
 
 @pytest.mark.anyio
@@ -338,28 +451,6 @@ async def test_a_stream_that_stops_short_after_content_went_out_fails_in_the_str
     assert isinstance(outputs[0], Release) and isinstance(outputs[-1], ErrorEvent)
     assert b"couldn't be read" in outputs[-1].data
     assert await _result(handler) == ("not_judged", "unreadable")
-
-
-@pytest.mark.anyio
-async def test_a_chat_call_changed_after_it_was_judged_fails_the_turn() -> None:
-    asked, reply = _exchange("chat", inspect=False)
-    handler = Handler(noting([], "reject", "Cairo"), release="early")
-    await handler.request(asked)
-    events = reply.body.split(b"\n\n")
-    late = json.loads(events[-4].removeprefix(b"data: "))
-    # a fragment for the first call, after the third has started
-    late["choices"][0]["delta"] = {
-        "tool_calls": [{"index": 0, "function": {"arguments": " "}}]
-    }
-    late["choices"][0]["finish_reason"] = None
-    body = b"\n\n".join(
-        [*events[:-4], b"data: " + json.dumps(late).encode(), *events[-4:]]
-    )
-
-    outputs = await _streamed(handler.reply_stream(_start(reply)), body, 61)
-
-    assert isinstance(outputs[-1], ErrorEvent)
-    assert b"couldn't be read" in outputs[-1].data
 
 
 @pytest.mark.anyio
@@ -391,89 +482,6 @@ async def test_a_responses_call_whose_events_disagree_is_never_released() -> Non
     )
 
 
-@pytest.mark.anyio
-async def test_no_call_is_judged_after_the_client_has_gone() -> None:
-    asked, reply = _exchange("anthropic", inspect=True)
-    go, judging = anyio.Event(), anyio.Event()
-    seen: list[str] = []
-
-    @protocol
-    def counts() -> Protocol:
-        """Note each call judged, and wait for `go` at the first."""
-
-        async def decide(
-            context: Context, step: BeforeToolCall, escalations: Escalations
-        ) -> Decision | None:
-            seen.append(step.call.id)
-            judging.set()
-            await go.wait()
-            return Decision.proceed()
-
-        return decide
-
-    handler = Handler(counts(), release="early")
-    await handler.request(asked)
-    stream = handler.reply_stream(_start(reply))
-
-    with anyio.fail_after(10):
-        async with anyio.create_task_group() as group:
-            group.start_soon(stream.run)
-            # every call arrives in one chunk
-            await stream.feed(reply.body)
-            await judging.wait()
-            await stream.abort()
-            go.set()
-
-    # the call being judged was decided, and no other was asked about
-    assert len(seen) == 1
-
-
-@pytest.mark.anyio
-async def test_no_call_is_judged_once_the_client_goes_during_a_delivery() -> None:
-    asked, reply = _exchange("anthropic", inspect=False)
-    seen: list[tuple[str, bool, str]] = []
-    handler = Handler(noting(seen, "reject", "Cairo"), release="early")
-    await handler.request(asked)
-    stream = handler.reply_stream(_start(reply))
-    events = reply.body.split(b"\n\n")
-    first_text = next(i for i, e in enumerate(events) if b"text_delta" in e)
-
-    with anyio.fail_after(10):
-        async with anyio.create_task_group() as group:
-            group.start_soon(stream.run)
-            # the opening and the first text go out, and wait to be collected
-            await stream.feed(b"\n\n".join(events[: first_text + 1]) + b"\n\n")
-            await anyio.wait_all_tasks_blocked()
-            # the rest of the text waits to be delivered behind it, before the
-            # first call is judged
-            await stream.feed(b"\n\n".join(events[first_text + 1 :]))
-            await anyio.wait_all_tasks_blocked()
-            await stream.abort()
-
-    assert seen == []
-
-
-@pytest.mark.anyio
-async def test_a_turn_whose_end_fails_its_check_is_recorded_as_not_judged() -> None:
-    asked, reply = _exchange("responses", inspect=True)
-    # the response the stream ends with holds two calls in each other's place
-    lines = reply.body.decode().split("\n")
-    for at, line in enumerate(lines):
-        if line.startswith("data: {") and '"response.completed"' in line:
-            data = json.loads(line[6:])
-            output = data["response"]["output"]
-            output[1], output[2] = output[2], output[1]
-            lines[at] = "data: " + json.dumps(data)
-    body = "\n".join(lines).encode()
-    handler = Handler(noting([], "reject", "Cairo"), release="early")
-    await handler.request(asked)
-
-    outputs = await _streamed(handler.reply_stream(_start(reply)), body, 61)
-
-    assert isinstance(outputs[-1], ErrorEvent)
-    assert await _result(handler) == ("not_judged", "unreadable")
-
-
 def _chat_chunk(delta: dict[str, Any], finish: str | None = None) -> bytes:
     chunk = {
         "id": "chatcmpl-1",
@@ -483,62 +491,6 @@ def _chat_chunk(delta: dict[str, Any], finish: str | None = None) -> bytes:
         "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
     }
     return b"data: " + json.dumps(chunk).encode() + b"\n\n"
-
-
-@pytest.mark.anyio
-async def test_no_call_is_judged_once_the_client_goes_among_calls_complete_together() -> (
-    None
-):
-    asked, reply = _exchange("chat", inspect=False)
-    calls = [
-        {
-            "index": index,
-            "id": f"call_{index}",
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "arguments": json.dumps({"location": city}),
-            },
-        }
-        for index, city in enumerate(["Paris", "Tokyo", "Lima"])
-    ]
-    # three calls in one chunk, all complete at the choice's finish
-    body = (
-        _chat_chunk({"role": "assistant", "content": None})
-        + _chat_chunk({"tool_calls": calls})
-        + _chat_chunk({}, "tool_calls")
-        + b"data: [DONE]\n\n"
-    )
-    go, judging = anyio.Event(), anyio.Event()
-    seen: list[str] = []
-
-    @protocol
-    def counts() -> Protocol:
-        """Note each call judged, and wait for `go` at the first."""
-
-        async def decide(
-            context: Context, step: BeforeToolCall, escalations: Escalations
-        ) -> Decision | None:
-            seen.append(step.call.id)
-            judging.set()
-            await go.wait()
-            return Decision.proceed()
-
-        return decide
-
-    handler = Handler(counts(), release="early")
-    await handler.request(asked)
-    stream = handler.reply_stream(_start(reply))
-
-    with anyio.fail_after(10):
-        async with anyio.create_task_group() as group:
-            group.start_soon(stream.run)
-            await stream.feed(body)
-            await judging.wait()
-            await stream.abort()
-            go.set()
-
-    assert seen == ["call_0"]
 
 
 @protocol

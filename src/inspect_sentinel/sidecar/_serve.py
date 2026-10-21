@@ -79,7 +79,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--release",
         choices=["whole", "early"],
         default="whole",
-        help="How a streamed reply is passed on. whole, the default, holds every reply until the sentinel has judged it. early passes on text and reasoning as they arrive and holds each call until it is judged, for a sentinel that can judge a complete call with only the part of the turn that has arrived. A sentinel that watches AfterGenerate keeps replies held whole.",
+        help="How a streamed reply is passed on. whole, the default, holds every reply until the sentinel has judged it. early passes on the text and reasoning before the turn's first tool call as they arrive, and holds the rest of the turn until it has ended and is judged. The sentinel is given the whole turn either way.",
     )
     parser.add_argument(
         "--keepalive",

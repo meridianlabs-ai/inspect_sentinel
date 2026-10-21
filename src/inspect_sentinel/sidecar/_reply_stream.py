@@ -1,31 +1,27 @@
 from __future__ import annotations
 
-import copy
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 import anyio
 
 from ._errors import error_event, refusal_for
 from ._exchange import Refuse, Replace, Reply, succeeded
-from ._inspect_client import with_sentinel
 from ._release import (
     AnthropicTurn,
     ChatTurn,
     ClientCheck,
     EventReader,
-    Placement,
     ResponsesTurn,
+    Role,
     Turn,
-    closed_prefix,
-    says_nothing,
 )
-from ._wire import Format, StreamEvent, UnreadableError, write_events
+from ._wire import Format, StreamEvent, write_events
 
 if TYPE_CHECKING:
-    from ._handler import EarlyTurn, Handler
+    from ._handler import Handler
 
 logger = logging.getLogger(__name__)
 
@@ -263,8 +259,7 @@ class ReplyStream:
             await self._provider_error()
             return
         if self._early:
-            early = await self._handler.early_turn(start, stopped=lambda: self._aborted)
-            await self._run_early(early)
+            await self._run_early()
             return
         await self._until(lambda: self._ended or self._aborted or self._over)
         if self._over:
@@ -310,21 +305,51 @@ class ReplyStream:
                 await self._out(Finished())
                 return
 
-    async def _run_early(self, early: EarlyTurn) -> None:
-        # Text and reasoning go out as they arrive, each call once it is
-        # complete and judged, and the rest once the turn is judged. Before
-        # anything has gone out a failure is raised, for the proxy to refuse
-        # with a real status; after, it is an error event in the stream.
+    async def _run_early(self) -> None:
+        # The text and reasoning before the turn's first call go out as they
+        # arrive. The rest is held, and the whole reply is judged once it has
+        # ended, as a reply held whole is, and only what follows what went
+        # out is sent. Before anything has gone out a failure is raised, for
+        # the proxy to refuse with a real status; after, it is an error event
+        # in the stream.
+        start, events = self._start, self._events
         try:
-            await self._release_early(early)
+            ended = await self._release_early()
         except Exception as ex:
-            early.failed(ex)
+            # the reply couldn't be read as it arrived, so it isn't judged
+            await self._handler.reply_not_judged(start.id, "unreadable")
             if not self._sent or self._aborted:
                 raise
-            refused = refusal_for(ex, "reply", self._start.id, reply=True)
-            await self._fail(refused)
+            await self._fail(refusal_for(ex, "reply", start.id, reply=True))
+            return
+        if not ended:
+            return
+        released = bytes(events.released)
+        try:
+            answer = await self._handler.reply(
+                self._reply(bytes(self._held)), released=released
+            )
+        except Exception as ex:
+            if not self._sent or self._aborted:
+                raise
+            await self._fail(refusal_for(ex, "reply", start.id, reply=True))
+            return
+        if isinstance(answer, Refuse):
+            await self._fail(answer)
+            return
+        body = answer.body if isinstance(answer, Replace) else bytes(self._held)
+        # the handler never changes what has gone out
+        assert body.startswith(released)
+        rest = body[len(released) :]
+        if rest:
+            self._sent = True
+            await self._out(Release(rest))
+        await self._out(Finished())
 
-    async def _release_early(self, early: EarlyTurn) -> None:
+    async def _release_early(self) -> bool:
+        # what goes out as it arrives, until the first event that is held;
+        # whether the reply's input ended, rather than being aborted or
+        # refused for its size
         events = self._events
         while True:
             await self._until(
@@ -336,147 +361,54 @@ class ReplyStream:
                 )
             )
             if self._aborted:
-                early.cut_off()
-                return
+                await self._handler.reply_not_judged(self._start.id, "cut_off")
+                return False
             if self._over:
-                early.failed("unreadable")
+                await self._handler.reply_not_judged(self._start.id, "unreadable")
                 await self._fail(
                     Refuse(
                         502,
                         f"The provider's reply is larger than the {self._max_held_bytes} bytes the sidecar holds, so it was not judged.",
                     )
                 )
-                return
+                return False
             data = bytes(self._held[self._consumed :])
+            # held bytes can only go out once the turn has ended, so feeding
+            # never waits on them
             self._consumed = len(self._held)
             self._drained.set()
-            arrived = events.reader.push(data)
             ending = self._ended and self._consumed == len(self._held)
+            if not events.holding:
+                arrived = events.reader.push(data)
+                if ending:
+                    arrived += events.reader.finish()
+                await self._release_ready(arrived)
             if ending:
-                arrived += events.reader.finish()
-            for event in arrived:
-                refused = await self._take(early, event)
-                if self._aborted:
-                    # no call is put to the sentinel once the client has gone
-                    early.cut_off()
-                    return
-                if refused is not None:
-                    await self._fail(refused)
-                    return
-            await self._release_ready(early)
-            if ending:
-                break
-        if self._aborted:
-            # the client went while the last of the turn was delivered
-            early.cut_off()
-            return
-        # the end of the turn: everything held goes out, once the turn is
-        # judged, with the `sentinel` field for an Inspect client
-        held = [event for event, _ in events.pending]
-        editor = events.editor
-        tail = [
-            *events.opening,
-            *(editor.edit(held, early.edits) if editor is not None else held),
-        ]
-        events.opening, events.pending = [], []
-        if editor is not None:
-            editor.finish(early.edits)
-        # checked before the turn is judged, so that a turn whose end can't go
-        # out is never recorded as one that went on
-        if events.check is not None:
-            events.check.check(tail)
-        written = write_events(tail)
-        answer = await early.finish(bytes(self._held), bytes(events.released) + written)
-        if answer is None:
-            # the client went before the turn could be answered
-            early.cut_off()
-            return
-        if isinstance(answer, Refuse):
-            await self._fail(answer)
-            return
-        field = early.field
-        if field is not None:
-            try:
-                written = with_sentinel(self._start.content_type, written, field)
-            except UnreadableError:
-                # a stream that never sends its last event goes out as judged,
-                # without the field, as when the reply is held whole
-                pass
-        if written:
-            self._sent = True
-            await self._out(Release(written))
-        await self._out(Finished())
+                return True
 
-    async def _take(self, early: EarlyTurn, event: StreamEvent) -> Refuse | None:
-        # place an event in its turn, judging the calls it shows are complete
+    async def _release_ready(self, arrived: list[StreamEvent]) -> None:
         events = self._events
-        turn = events.turn_for(event)
-        if turn is None:
-            events.pending.append((event, Placement("filler")))
-            return None
-        placement = turn.place(event)
-        if placement.completed_before:
-            refused = await self._judge(early, placement.completed_before)
-            if refused is not None:
-                return refused
-        events.originals.append(copy.deepcopy(event))
-        events.pending.append((event, placement))
-        if placement.completes:
-            return await self._judge(early, placement.completes)
-        return None
-
-    async def _judge(
-        self, early: EarlyTurn, complete: tuple[object, ...]
-    ) -> Refuse | None:
-        events = self._events
-        assert events.format is not None and events.turn is not None
-        # what can go out goes out before the sentinel is asked, and the
-        # client may go while it does
-        await self._release_ready(early)
-        if self._aborted:
-            return None
-        refused = await early.judge(
-            closed_prefix(events.format, events.originals, events.turn.open)
-        )
-        if refused is None:
-            events.decided.update(complete)
-        return refused
-
-    async def _release_ready(self, early: EarlyTurn) -> None:
-        events = self._events
-        editor, check = events.editor, events.check
-        if editor is None or check is None:
+        ready: list[tuple[StreamEvent, Role]] = []
+        for event in arrived:
+            events.originals.append(event)
+            if events.holding:
+                continue
+            role = events.role(event)
+            if role == "held":
+                events.holding = True
+                continue
+            ready.append((event, role))
+        if not ready:
             return
-        ready: list[StreamEvent] = []
-        # what says nothing, which can't be the first thing to go out
-        silent: set[int] = set()
-        taken = 0
-        for event, placement in events.pending:
-            role = placement.role
-            if role in ("opening", "filler"):
-                silent.add(id(event))
-                ready.append(event)
-            elif role == "release" or (
-                role == "call" and placement.item in events.decided
-            ):
-                ready.append(event)
-            else:
-                break
-            taken += 1
-        del events.pending[:taken]
-        edited = editor.edit(ready, early.edits)
-        if not self._sent and all(
-            id(event) in silent or says_nothing(event) for event in edited
-        ):
-            # the opening waits for the first content that goes out, so that
-            # a turn can still be refused with a real status
-            events.opening += edited
+        if not self._sent and all(role in ("opening", "filler") for _, role in ready):
+            # the opening waits for the first text or reasoning, so that a
+            # turn can still be refused with a real status
+            events.opening += [event for event, _ in ready]
             return
-        out = [*events.opening, *edited]
+        out = [*events.opening, *(event for event, _ in ready)]
         events.opening = []
-        if not out:
-            return
-        check.check(out)
+        if events.check is not None:
+            events.check.check(out)
         written = write_events(out)
         events.released += written
         self._sent = True
@@ -557,19 +489,21 @@ class _Released:
         self.reader = EventReader()
         self.format: Format | None = start.format
         self.turn: Turn | None = None
-        self.editor: Any = None
         self.check: ClientCheck | None = None
-        # the events as the provider sent them, which calls are read from
+        # the events read, as the provider sent them, which an error event is
+        # written from
         self.originals: list[StreamEvent] = []
-        # the events not sent yet, in order, and the opening held for the
-        # first content that goes out
-        self.pending: list[tuple[StreamEvent, Placement]] = []
+        # the opening, held for the first text or reasoning that goes out
         self.opening: list[StreamEvent] = []
-        # the calls complete and judged, by their place in the turn
-        self.decided: set[object] = set()
+        # once an event is held, so is everything after it
+        self.holding = False
         self.released = bytearray()
 
-    def turn_for(self, event: StreamEvent) -> Turn | None:
+    def role(self, event: StreamEvent) -> Role:
+        turn = self._turn_for(event)
+        return "filler" if turn is None else turn.place(event)
+
+    def _turn_for(self, event: StreamEvent) -> Turn | None:
         # the format, from the proxy, or from the provider and the stream's
         # first event, once it has one
         if self.turn is not None:
@@ -582,13 +516,11 @@ class _Released:
             else:
                 chat = event.data.get("object") == "chat.completion.chunk"
                 self.format = "openai-chat" if chat else "openai-responses"
-        from . import _anthropic, _openai
-
         if self.format == "anthropic-messages":
-            self.turn, self.editor = AnthropicTurn(), _anthropic.StreamEditor()
+            self.turn = AnthropicTurn()
         elif self.format == "openai-chat":
-            self.turn, self.editor = ChatTurn(), _openai.ChunkEditor()
+            self.turn = ChatTurn()
         else:
-            self.turn, self.editor = ResponsesTurn(), _openai.ResponsesEditor()
+            self.turn = ResponsesTurn()
         self.check = ClientCheck(self.format)
         return self.turn
