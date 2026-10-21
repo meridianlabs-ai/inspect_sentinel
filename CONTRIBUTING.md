@@ -4,7 +4,7 @@ Thanks for your interest in contributing. Bug reports, doc fixes, and core chang
 
 ## Start with an issue
 
-Open an issue before you write code, and wait for a maintainer to say on the issue that we want the change. Then open a PR that links the issue (`Fixes #NNN`). This applies whoever filed the issue: what matters is that a maintainer has accepted it. Maintainers may open PRs directly, and trivial documentation fixes, such as typos and broken links, are welcome without an issue.
+Open an issue before you write code, and wait for a maintainer to say on the issue that we want the change. Then open a PR that links the issue (`Fixes #NNN`). This applies whoever filed the issue. Maintainers may open PRs directly, and trivial documentation fixes, such as typos and broken links, are welcome without an issue.
 
 Reviewing a PR takes much longer than agreeing on a direction in an issue. Starting with an issue spends review time on work we have agreed we want, and spares you writing code we can't merge.
 
