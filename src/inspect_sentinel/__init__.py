@@ -27,6 +27,14 @@ from ._protocols import (
     sequential,
     threshold,
 )
+from ._replay import (
+    HumanPolicy,
+    HumanSource,
+    HumanStandIn,
+    ReplayReport,
+    Split,
+    replay_monitor,
+)
 from ._report import (
     Action,
     Decision,
@@ -37,7 +45,6 @@ from ._report import (
     Reported,
     Suspicion,
 )
-from ._replay import HumanStandIn, ReplayReport, replay_monitor
 from ._results import Decisions, MonitorFailedError, Observations, Reports
 from ._rules import (
     call_text,
@@ -89,6 +96,8 @@ __all__ = [
     "Host",
     "HumanAnswer",
     "HumanDecision",
+    "HumanPolicy",
+    "HumanSource",
     "HumanStandIn",
     "InspectSample",
     "Monitor",
@@ -109,6 +118,7 @@ __all__ = [
     "Reports",
     "Sentinel",
     "Sentinels",
+    "Split",
     "Step",
     "Suspicion",
     "Truncation",

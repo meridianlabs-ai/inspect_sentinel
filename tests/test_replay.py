@@ -426,3 +426,24 @@ async def test_steps_that_could_not_be_told_apart_are_refused(
 async def test_unit_limits_must_be_positive(kwargs: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match="at least 1"):
         await replay_monitor(counter(), [], **kwargs)
+
+
+@pytest.mark.anyio
+async def test_a_step_not_selected_is_not_run_and_its_state_is_not_kept() -> None:
+    steps = segmented([3])
+    chosen = {steps[2].id, steps[3].id}
+
+    reports = await replay_monitor(
+        counter(), steps, select=lambda step: step.id in chosen, split=None
+    )
+
+    assert [(r.step.stage, r.step.id) for r in reports] == [
+        (steps[2].stage, steps[2].id),
+        (steps[3].stage, steps[3].id),
+    ]
+    seen = [
+        r.report.report.metadata["seen"]
+        for r in reports
+        if r.report is not None and r.report.report.metadata is not None
+    ]
+    assert seen == [1, 2]

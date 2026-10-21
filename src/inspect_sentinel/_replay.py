@@ -98,6 +98,7 @@ async def replay_monitor(
     steps: Iterable[ReplayStep],
     *,
     context: EvalContext | None = None,
+    select: Callable[[ReplayStep], bool] | None = None,
     human: HumanPolicy = "recorded",
     split: Split = "compaction",
     max_unit_steps: int | None = None,
@@ -117,13 +118,14 @@ async def replay_monitor(
         sentinel: A protocol, or monitors and protocols as `Task(sentinel=)` takes them, which resolve to one root. Monitors alone run under `observe_only()`.
         steps: The steps, in the order they ran live.
         context: The sample the steps are from, as `Context.eval` gives it. None outside an eval.
+        select: Which steps to run the sentinel at; all when None. The others are skipped, not run, so a monitor's state does not see them, and have no report. Bind it to the transcript the steps are from.
         human: How to answer `human()`; see above.
         split: How to group steps into units: by compaction segment (`ReplayStep.segment`), by conversation, or `None` for the whole transcript in one unit, which is the scope a store has live.
         max_unit_steps: Split each unit further into runs of at most this many of the steps that run, each with a fresh store. A stateful monitor sees less at each cut.
         max_units: How many units run at once.
 
     Returns:
-        One report per step, in the order given.
+        One report per step `select` chose, in the order given.
 
     Raises:
         ValueError: If a step's `stage` does not match its step's type, two steps of one stage share an id, or `max_unit_steps` or `max_units` is less than 1.
@@ -138,8 +140,12 @@ async def replay_monitor(
     reports: list[ReplayReport | None] = [None] * len(replayed)
     units: dict[object, list[int]] = {}
     seen: set[tuple[str, str]] = set()
+    chosen: list[int] = []
     for index, replay_step in enumerate(replayed):
         _check(replay_step, seen)
+        if select is not None and not select(replay_step):
+            continue
+        chosen.append(index)
         if type(replay_step.step) not in watched:
             reports[index] = ReplayReport(
                 replay_step, name, path, (), (), (), None, None
@@ -179,7 +185,7 @@ async def replay_monitor(
                     tg.start_soon(run_unit, run)
     except BaseExceptionGroup as ex:
         raise _first(ex) from None
-    return [cast(ReplayReport, report) for report in reports]
+    return [cast(ReplayReport, reports[index]) for index in chosen]
 
 
 def _root(sentinel: Sentinels) -> tuple[Protocol, str, str]:
