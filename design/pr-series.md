@@ -572,6 +572,18 @@ Decided by the maintainer on 2026-10-15, for the 0.2.0 breaking release, bundled
 - The positional order of the payloads is unchanged: `agent_messages` takes the old field's place, and `history` stays keyword-only with a default of `None`.
 - Earlier records in this file and in [generate-stages.md](generate-stages.md) keep the names they were written with.
 
+## `agent_messages` is the conversation as the agent ran it
+
+Built in inspect_ai #5986 (2026-10-20), with this repository's docs and docstrings; no sentinel type changed. Before it, `agent_messages` was the list passed to `generate()` at the generate stages and the list passed to `execute_tools()` at the tool stages. A scaffold that rebuilds its input each turn (AISI's custom solvers fold earlier calls into one user message) passes the two different lists, so a monitor at `AfterGenerate` saw the fold rather than the outputs and results.
+
+- **One record per conversation**, kept by inspect_ai while a sentinel runs, from three things: the first agent-turn input as sent (after model hooks), each agent-turn output returned to the agent, and the tool messages `execute_tools()` returned, in call order. It holds references to the scaffold's message objects.
+- **Every stage reads it.** The generate stages get the record so far (at `AfterGenerate` the new output is `step.output`, not in it); the tool stages get it cut after the call's assistant message, or whole when that message is not in it.
+- **Not in it**: user messages added after the first turn (`react`'s continue nudge, a person's message), results of tools run outside `execute_tools()`, and compaction summaries. Those sent are in `history` and `input`.
+- **`None`** under a proxy, in a replay that cannot establish it, and in-process at a tool stage of a conversation no agent turn has opened (a scorer's tools, `execute_tools()` with no model call before it).
+- **Known behaviour, documented rather than retracted**: an output `react` discards after `generate()` returns it stays in the record (a refusal retried under `retry_refusals`, a `model_length` turn removed by overflow recovery). Replay rebuilds the record from events, which cannot see the discards either, so live and replay agree.
+- **Resolves** the Deferred item "`react` overflow recovery rewriting history": the record never drops a turn.
+- **Cost**: each step gets its own list cut from the record, O(n) per step over a long run, as `history` is; read-only views replace the copies with sentinel #133 (R7).
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands. Grouped by priority, decided by the maintainer on 2026-10-02, in the order to take them.
@@ -652,7 +664,6 @@ Waits on another workstream, or not urgent.
 - **Routing `human()` to a team's own review surface.** AISI R9 ([requirements-aisi-sync-monitor.md](requirements-aisi-sync-monitor.md)), their lowest: a task chooses where `Host.ask_human` sends a request instead of inspect_ai's `human_approver`, at the tool stages and `AfterGenerate`. Related to workstream 13.
 - **`compaction_summary(step)`**, a helper returning the latest compaction summary text. Waits on inspect_ai making the `"summary"` message metadata key a documented constant, and must handle a summary merged into the task prompt.
 - **An example compaction monitor.** Raised by the maintainer on 2026-10-02: a stateful generate-stage monitor that watches the messages, detects a compaction summary, and runs a check on the summary, keeping what it has seen in `store_as()`. Waits on the generate stages (inspect_sentinel PR #42), and uses `compaction_summary` once it exists.
-- **`react` overflow recovery rewriting history**: when a call overflows the context window, `react` replaces `state.messages` with the compacted list, so `step.agent_messages` loses the folded turns (`step.history`, the as-sent list, keeps them). To raise with inspect_ai.
 - **`resample`, and `fetch`/`terminate` on `Host`**: designed, not yet built. `defer_to_trusted` was removed from the plan by the maintainer on 2026-10-02: an eval has no trusted model to defer to.
 - **`human()` at `BeforeGenerate` (`model_input`)**: a person reviews a request before it is sent. Scoped out of AISI R1 (#89), which reviews the turn at `AfterGenerate`; left open by the maintainer on 2026-10-13. inspect_ai's `Host.ask_human` raises `NotImplementedError` there today. Waits on generate stages part 2, so the person can `modify` (edit or redact the input) and not only approve or terminate. Needs `model_input` in `human()` with the choices legal at that stage, and in inspect_ai a request view (messages new since the last turn, the full input collapsed, the offered tools) built with R1's `display_safe` markers and per-call fencing. Worth it for context that never passes a tool-result review (a compaction summary, scaffold-inserted text) and for gating a costly or sensitive call. The hook already runs once per call outside the connection slot, so a person deciding does not hold one.
 - **Bridged agents.** A sentinel does not yet run for a bridged agent's tool calls ([workstreams.md](workstreams.md), workstream 9). With that hook, verify that handoff and bridged agents open agent spans consistently, so conversation ids link as designed, with tests.

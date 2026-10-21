@@ -118,7 +118,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 | 8.8 | tool definitions | not met |
 | 8.9 | withheld messages | partly met |
 | R9 | `human()` routed to a team's review tool | not met |
-| R10 | the history as sent to the model, per agent instance | met live by `step.history` (built 2026-10-14 as `sent`, renamed for 0.2.0), with `step.agent_messages` for the scaffold's list; replay not built (R7) |
+| R10 | the history as sent to the model, per agent instance | met live by `step.history` (built 2026-10-14 as `sent`, renamed for 0.2.0), with `step.agent_messages` for the conversation as the agent ran it (inspect_ai #5986); replay not built (R7) |
 
 **R1.** Only the tool stages are wired ([pr-series.md](pr-series.md), Decisions, "Tool stages only, for now"). The generate-stages prototype, sentinel #42 (draft), allows only `continue` and `terminate` at `BeforeGenerate` and `AfterGenerate`; its decision 16 enables `escalate` next, with the tool stages' root behaviour. `human(stages=)` accepts only `tool_call` and `tool_result` (`_protocols/human.py`; [sentinel.md](sentinel.md), "Humans in the loop", open question 14). inspect_ai's `Host.ask_human` passes one `step.call` to `human_approver` (`_sentinel/_dispatch.py`), so there is no rendering of a whole turn. Gap: `escalate` at `AfterGenerate`, `human(stages=["model_output"])`, and a host rendering of a turn's tool calls with `step.escalations`.
 

@@ -107,7 +107,7 @@ class StepPreprocessor(Generic[S]):
     """How much of `history`, every message the agent has sent its model, to show: none by default."""
 
     agent_messages_window: Window | None = None
-    """How much of `agent_messages`, the agent loop's own list, to show: none by default."""
+    """How much of `agent_messages`, the conversation as the agent ran it, to show: none by default."""
 
     omit_system: bool = True
     """Leave system messages out."""
