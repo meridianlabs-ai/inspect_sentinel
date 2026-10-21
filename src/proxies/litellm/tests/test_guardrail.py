@@ -2765,7 +2765,10 @@ def test_a_caller_slow_to_read_a_released_reply_is_not_held_to_the_sidecar_s_tim
         # the sidecar loads what reads a reply on its first, which takes it
         # longer than the timeout on a busy machine
         asyncio.run(run(url, None, 0))
-        read = asyncio.run(run(url, 1, 2.5))
+        # every wait for the sidecar's output after the reply's end counts
+        # towards the timeout, so it leaves room for many polls on a slow
+        # machine, and the pause is well past it
+        read = asyncio.run(run(url, 3, 6))
 
     assert b"".join(read) == b"".join(sent)
 
