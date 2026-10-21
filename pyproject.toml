@@ -98,6 +98,8 @@ dev = [
     "types-protobuf",
     "httpx",
     "jsonschema",
+    # a portability test checks a monitor defined in a Jupyter cell
+    "ipython",
 ]
 doc = [
     "jupyter",
