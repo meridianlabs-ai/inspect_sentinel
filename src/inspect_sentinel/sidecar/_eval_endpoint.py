@@ -17,6 +17,7 @@ from ._inspect_client import WithheldTurn, record_json, withheld_turn
 from ._json_rpc import (
     METHOD_NOT_FOUND,
     REGISTRATION_REFUSED,
+    REGISTRATIONS_FULL,
     UNKNOWN_SAMPLE,
     RpcError,
     answered,
@@ -24,7 +25,7 @@ from ._json_rpc import (
     invalid_params,
     read_call,
 )
-from ._registration import RegistrationError, TaskFacts
+from ._registration import RegistrationError, RegistrationsFullError, TaskFacts
 from ._state import NotJudged, Outcome
 
 PATH = "/sentinel/v1"
@@ -156,6 +157,10 @@ _ERRORS: dict[int, tuple[str, str]] = {
         "registration_refused",
         "The sidecar takes no tasks registered by an eval, and this task was not registered beforehand.",
     ),
+    REGISTRATIONS_FULL: (
+        "registrations_full",
+        "The sidecar keeps as many task registrations as it takes, and takes another once a kept one expires. A failure, not a refusal: the deployment has not said that the task may not run.",
+    ),
     UNKNOWN_SAMPLE: (
         "unknown_sample",
         "The sidecar holds nothing for the sample, so an eval never mistakes a forgotten sample for a clean one.",
@@ -240,6 +245,8 @@ async def _answer(
         )
         try:
             granted = await handler.register_task(given.eval_id, facts, given.expiry)
+        except RegistrationsFullError as ex:
+            raise RpcError(REGISTRATIONS_FULL, str(ex)) from None
         except RegistrationError as ex:
             raise RpcError(REGISTRATION_REFUSED, str(ex)) from None
         return RegisterTaskResult(

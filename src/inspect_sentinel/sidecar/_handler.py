@@ -57,6 +57,7 @@ from ._registration import (
     TASK_EXPIRY,
     FileTask,
     RegistrationError,
+    RegistrationsFullError,
     TaskFacts,
     UnregisteredSampleError,
 )
@@ -426,7 +427,8 @@ class Handler:
             How long it is kept once no request has named the task: `expiry`, or less if that is longer than the handler keeps any. None for a task registered beforehand, which is never dropped.
 
         Raises:
-            RegistrationError: If the handler takes no registrations from evals and the task was not registered beforehand, or already keeps as many as it takes.
+            RegistrationError: If the handler takes no registrations from evals and the task was not registered beforehand.
+            RegistrationsFullError: If the handler already keeps as many registrations as it takes.
         """
         if facts.task in self._tasks:
             return None
@@ -438,7 +440,7 @@ class Handler:
         if not await self._state.register(
             eval_id, facts.task, facts, granted, self._max_task_registrations
         ):
-            raise RegistrationError(
+            raise RegistrationsFullError(
                 f"This sidecar already keeps the {self._max_task_registrations} tasks registered by evals that it takes. One is taken again once a kept task expires."
             )
         return granted

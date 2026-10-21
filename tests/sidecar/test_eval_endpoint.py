@@ -35,6 +35,7 @@ from inspect_sentinel.sidecar._json_rpc import (
     INVALID_PARAMS,
     METHOD_NOT_FOUND,
     REGISTRATION_REFUSED,
+    REGISTRATIONS_FULL,
     UNKNOWN_SAMPLE,
 )
 from inspect_sentinel.sidecar._registration import FileTask
@@ -176,7 +177,7 @@ async def test_a_sidecar_that_takes_no_registrations_refuses_another_task() -> N
 
 
 @pytest.mark.anyio
-async def test_a_registration_past_the_limit_is_refused() -> None:
+async def test_a_registration_past_the_limit_fails_with_its_own_error() -> None:
     # anything that can reach the endpoint can register, so what is kept is
     # bounded, and nothing kept is dropped to make room
     async with _client(Handler(weather_rule(), max_task_registrations=2)) as client:
@@ -192,7 +193,9 @@ async def test_a_registration_past_the_limit_is_refused() -> None:
         )
 
     assert all("result" in answered for answered in kept)
-    assert refused["error"]["code"] == REGISTRATION_REFUSED
+    # a failure, which Inspect's `optional` covers, and not the refusal of a
+    # sidecar that takes no registrations
+    assert refused["error"]["code"] == REGISTRATIONS_FULL
     assert "already keeps the 2 tasks" in refused["error"]["message"]
     # a registration of a task kept already replaces it
     assert "result" in again
