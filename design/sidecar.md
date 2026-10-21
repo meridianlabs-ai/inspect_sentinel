@@ -1053,7 +1053,7 @@ When the latest attempt's turn was refused because a call in it was rejected, th
 
 `records` says whether the sidecar has records for the request. It is one of three values: `held` means it has them, and they are in `recorded`; `dropped` means it had them and no longer keeps them; `unknown` means it never saw the request. `dropped` and `unknown` are normal results and not errors, because the eval writes them into its log. Once a request's records are dropped, the sidecar keeps the request's id alone, for as long again as it kept the records and up to a limit on how many ids it keeps, so that it can answer `dropped`. After that, it answers `unknown`. With either of them, the result has no `outcome`, `message`, `recorded`, `withheld` or `proposed`.
 
-**`sample_result`.** The eval asks once for each sample, in each epoch, before scoring it:
+**`sample_result`.** The eval asks before each time it scores a sample: during the sample, when an agent scores its own answers as it goes, and before the final scoring:
 
 ```json
 {

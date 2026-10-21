@@ -184,7 +184,7 @@ Acceptance tests use a provider and a sentinel whose progress is controlled: pre
 
 ## PR 11: Inspect client for the sidecar
 
-Repository: `inspect_ai`. Depends on: PRs 5, 6 and 7 (above).
+Repository: `inspect_ai`. Depends on: PRs 5, 6 and 7 (above). Design: [inspect-client.md](inspect-client.md).
 
 Scheduled after PR 10. The initial client uses whole-response holding; support for incremental replies follows in PR 12. While PRs 9 and 10 are built, agree the client contract with Meridian: activation and discovery failure, registration requirements, model-cache behavior, request and message identity, retries, missing results, scoring and cleanup. Review the trusted-host scope alongside #117 before implementing the client. Keep ordinary evals and in-process sentinels unchanged, and split the implementation into separately reviewable changes.
 
