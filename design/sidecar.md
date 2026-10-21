@@ -592,7 +592,6 @@ A client can still send `x-inspect-context` for samples that were never register
 
 Where a task is registered beforehand, its registration at task init fails only when the endpoint for evals cannot be reached or does not answer, and the task then stops. Whatever happens at registration, its sentinel is given the file's facts from the first request, and the sidecar refuses a request for a sample of that task that is not in the file.
 
-
 ### The flow, scenario by scenario
 
 Each diagram shows one scenario from start to finish. The proxy hook calls the sidecar's endpoint for proxies, at `/proxy/v1`, with `judge_request` for a request and `judge_reply` for a reply. Inspect calls the endpoint for evals, at `/sentinel/v1`, through the proxy.
@@ -1113,7 +1112,7 @@ A deployment can run only the tasks that an admin registered beforehand. This is
 
 - **Inspect registers every task at task init, as usual.** Inspect does not know beforehand that the sidecar runs only the tasks in its folder. It learns that from the sidecar's answer to `register_task`.
 - **A task in the folder is already registered.** The sidecar answers `register_task` with `fixed` true and stores nothing. Inspect starts the task. From the task's first model request, its sentinel is given the facts in the folder.
-- **Any other task is refused.** The sidecar answers `register_task` with the error `registration_refused`. Inspect does not start the task, whatever the mode of its sidecar setting, and records the refusal as the task's error. The setting is for an endpoint for evals that can't be reached or that fails. A refusal is the deployment saying that the task may not run there.
+- **Any other task is refused.** The sidecar answers `register_task` with the error `registration_refused`. Inspect does not start the task, in any mode, and records the refusal as the task's error. A refusal is the deployment saying that the task may not run there.
 - **A sample that is not in the folder is refused.** Its task is in the folder, so the sidecar refuses a model request that names another sample of that task, with a 400 ("The tasks folder" above).
 
 In this diagram, the tasks folder holds `data_exfiltration` and not `file_cleanup`. Each task's probe is as in scenario 1, and is left out.
