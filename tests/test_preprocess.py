@@ -206,7 +206,7 @@ UNKNOWN_INPUT = (
 UNKNOWN_HISTORY = (
     "[BEGIN HISTORY]\nThe messages the agent has sent are not available.\n[END HISTORY]"
 )
-UNKNOWN_AGENT_MESSAGES = "[BEGIN AGENT MESSAGES]\nThe agent's own message list is not available.\n[END AGENT MESSAGES]"
+UNKNOWN_AGENT_MESSAGES = "[BEGIN AGENT MESSAGES]\nThe conversation as the agent ran it is not available.\n[END AGENT MESSAGES]"
 
 
 @pytest.mark.anyio

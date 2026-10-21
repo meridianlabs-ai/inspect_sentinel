@@ -227,7 +227,7 @@ async def step_as_str(
                 "AGENT MESSAGES",
                 await text(
                     step.agent_messages,
-                    "The agent's own message list is not available.",
+                    "The conversation as the agent ran it is not available.",
                 ),
             ),
         ),
