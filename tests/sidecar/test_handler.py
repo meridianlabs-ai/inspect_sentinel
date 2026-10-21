@@ -1,5 +1,6 @@
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any, cast
 
@@ -879,7 +880,7 @@ async def test_a_failing_protocol_is_not_swallowed_at_a_result(
         await Handler(storm_rule(action)).request(request(then=ran("Oslo", "storm")))
 
 
-def _roles(messages: list[Any] | None) -> str:
+def _roles(messages: Sequence[Any] | None) -> str:
     return str(None if messages is None else [m.role for m in messages])
 
 
@@ -926,11 +927,11 @@ async def test_sentinel_is_given_the_call_its_result_and_what_led_to_it() -> Non
     )
 
     # The calls were never handed out through this sidecar, so what the model
-    # was sent for them is not known. Whether the client cut a result is not
-    # known either.
+    # was sent for them is not known. Neither is the tool's whole output, nor
+    # whether the client cut a result.
     assert _explanations(await handler.records("x")) == [
-        "Looking.|get_weather|{'location': 'Oslo'}|rain|False||None|None|None",
-        "Looking.|get_weather|{'location': 'Lima'}|no such city|True||None|None|None",
+        "Looking.|get_weather|{'location': 'Oslo'}|rain|False|None|None|None|None",
+        "Looking.|get_weather|{'location': 'Lima'}|no such city|True|None|None|None|None",
     ]
 
 

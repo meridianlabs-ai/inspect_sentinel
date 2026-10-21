@@ -32,6 +32,7 @@ from inspect_sentinel import (
     Observation,
     Protocol,
     Reported,
+    Step,
     concurrent,
     decide_final,
     human,
@@ -282,18 +283,19 @@ class Seen(NamedTuple):
     decisions: tuple[HumanDecision, ...] | None
 
 
+def _held(step: Step) -> tuple[HumanDecision, ...] | None:
+    # whatever sequence the host hands the step, as it was at the step
+    return None if step.human_decisions is None else tuple(step.human_decisions)
+
+
 @monitor
 def h_spy(seen: Any) -> MonitorGroup:
     async def tool_call(context: Context, step: BeforeToolCall) -> Observation | None:
-        seen.append(
-            Seen("tool_call", step.conversation, step.call.id, step.human_decisions)
-        )
+        seen.append(Seen("tool_call", step.conversation, step.call.id, _held(step)))
         return None
 
     async def tool_result(context: Context, step: AfterToolCall) -> Observation | None:
-        seen.append(
-            Seen("tool_result", step.conversation, step.call.id, step.human_decisions)
-        )
+        seen.append(Seen("tool_result", step.conversation, step.call.id, _held(step)))
         return None
 
     async def model_output(context: Context, step: AfterGenerate) -> Observation | None:
@@ -302,7 +304,7 @@ def h_spy(seen: Any) -> MonitorGroup:
                 "model_output",
                 step.conversation,
                 step.output.completion,
-                step.human_decisions,
+                _held(step),
             )
         )
         return None

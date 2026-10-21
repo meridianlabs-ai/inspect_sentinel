@@ -572,6 +572,14 @@ Decided by the maintainer on 2026-10-15, for the 0.2.0 breaking release, bundled
 - The positional order of the payloads is unchanged: `agent_messages` takes the old field's place, and `history` stays keyword-only with a default of `None`.
 - Earlier records in this file and in [generate-stages.md](generate-stages.md) keep the names they were written with.
 
+## The types replay needs (R7 PR 2)
+
+Built 2026-10-20 as the second PR of the replay series ([sentinel-development.md](sentinel-development.md), "Building replay: the PR series"); no compatibility kept (sentinel 0.x):
+
+- **`AfterToolCall.output: ToolResult | None`**, `None` where the host cannot see the tool's untruncated return value: beside a proxy, where the sidecar passed `""`, which a monitor read as an empty output, and in a replay from a log, which never holds it. It was on the Deferred list, "`AfterToolCall.output` is `None` where the host can't see it". `None` means "this host can't tell", as it does for `truncated`. inspect_ai's host always passes a `ToolResult`. Nothing shipped reads `output`: step preprocessing and `step_as_str` render `result`.
+- **Read-only sequences (R7-D6).** `history`, `agent_messages` and `human_decisions` at every stage, and `input` and `tools` at the tool stages, are typed `Sequence` rather than `list` or `tuple`, so a host can hand a step a view of the conversation's append-only list cut at the step instead of a copy, and building a conversation's steps is not quadratic in its length. The generate stages' `input` and `tools` stay `list`, the request being made. Step preprocessing, `step_as_str` and `human_decision_for()` read any sequence: a window takes only the messages it keeps, reading `LastTurns` and `LastMessages` from the end, and `step_as_str` hands Scout's renderer a list, which copies a view only where every message is rendered anyway.
+- **`ReplayStep(id, stage, step, segment)`**, exported from `inspect_sentinel`: a step rebuilt from a transcript, with its step id, its stage as `SentinelEvent.stage`, and its segment (the conversation, and how many of its compactions came before). Nothing builds one yet; inspect_ai's log driver (R7 PR 3) and `steps_from_messages()` will.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands. Grouped by priority, decided by the maintainer on 2026-10-02, in the order to take them.
@@ -640,7 +648,6 @@ From comparing inspect_ai's in-process dispatch with the sidecar handler in #102
 - **Say that a monitor's model calls must not go through the proxy.** The sidecar calls models directly, but an environment that points a provider's base URL at the proxy would have the monitor's own calls judged.
 - **A time limit for the sentinel in-process.** Sample limits are suspended while the sentinel runs, and nothing bounds it, so a hung monitor model call hangs the sample. The sidecar's `--time-limit` is the precedent.
 - **The runner refuses actions a stage can't carry out yet.** Until "Generate stages, part 2" (under Later) lands, a `reject` or `modify` at `BeforeGenerate` or `AfterGenerate` is dropped by both hosts without a word; refusing it in `run_sentinel` makes every host agree, and part 2 lifts the refusal.
-- **`AfterToolCall.output` is `None` where the host can't see it.** The sidecar passes `""`, which a monitor reads as an empty result. `ToolResult | None`, as `truncated` already has `None` for "this host can't tell".
 
 ### Later
 

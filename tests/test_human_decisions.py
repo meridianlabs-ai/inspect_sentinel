@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any, cast
 
@@ -38,6 +38,7 @@ from inspect_sentinel._step import AfterGenerate, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol
 from inspect_sentinel._unhandled import Invocation
 from tests._fakes import (
+    SEQUENCES,
     FakeHost,
     ListRecorder,
     after_generate_step,
@@ -367,15 +368,18 @@ def _decision(stage: str, step_id: str, *call_ids: str, action: str) -> HumanDec
         ("c", None),
     ],
 )
+@pytest.mark.parametrize("sequence", SEQUENCES)
 def test_the_latest_decision_covering_a_call_is_found(
-    call_id: str, found: tuple[str, str] | None
+    call_id: str,
+    found: tuple[str, str] | None,
+    sequence: Callable[[list[HumanDecision]], Sequence[HumanDecision]],
 ) -> None:
-    decisions = (
+    decisions = [
         _decision("model_output", "m1", "a", "b", action="proceed"),
         _decision("tool_call", "x", "x", action="reject"),
         _decision("tool_call", "a", "a", action="proceed"),
-    )
-    step = replace(after_step(), human_decisions=decisions)
+    ]
+    step = replace(after_step(), human_decisions=sequence(decisions))
     decision = human_decision_for(step, call_id)
     assert (
         None if decision is None else (decision.stage, decision.decided.report.action)

@@ -1,6 +1,8 @@
 import json
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import replace
+from typing import Any
 
 import anyio
 import pytest
@@ -42,7 +44,9 @@ from inspect_sentinel._runner import run_monitors, run_protocols, run_sentinel
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
 
 from ._fakes import (
+    SEQUENCES,
     ListRecorder,
+    View,
     after_generate_step,
     after_tool_call,
     before_generate_step,
@@ -96,19 +100,19 @@ ALL = StepPreprocessor(
 LISTS = ("input", "history", "agent_messages")
 
 
-def texts(messages: list[ChatMessage] | None) -> list[str] | None:
+def texts(messages: Sequence[ChatMessage] | None) -> list[str] | None:
     return None if messages is None else [m.text for m in messages]
 
 
 def tool_step(
-    input: list[ChatMessage] | None, agent_messages: list[ChatMessage] | None
+    input: Sequence[ChatMessage] | None, agent_messages: Sequence[ChatMessage] | None
 ) -> BeforeToolCall:
     return replace(
         before_tool_call("bash", cmd="ls"), input=input, agent_messages=agent_messages
     )
 
 
-def all_lists(messages: list[ChatMessage] | None) -> BeforeToolCall:
+def all_lists(messages: Sequence[ChatMessage] | None) -> BeforeToolCall:
     return replace(tool_step(messages, messages), history=messages)
 
 
@@ -153,11 +157,15 @@ async def render(
     ],
 )
 @pytest.mark.parametrize("name", LISTS)
+@pytest.mark.parametrize("sequence", SEQUENCES)
 @pytest.mark.anyio
 async def test_each_window_cuts_its_list_as_it_is(
-    window: Window, kept: list[str], name: str
+    window: Window,
+    kept: list[str],
+    name: str,
+    sequence: Callable[[list[ChatMessage]], Sequence[ChatMessage]],
 ) -> None:
-    step = all_lists(CONVERSATION)
+    step = all_lists(sequence(CONVERSATION))
     thinned = await preprocess_step(step, replace(ALL, **{f"{name}_window": window}))
     assert every(thinned) == {**every(step), name: kept}
 
@@ -166,6 +174,68 @@ async def test_each_window_cuts_its_list_as_it_is(
 def test_a_negative_window_raises(window: type[LastTurns | LastMessages]) -> None:
     with pytest.raises(ValueError, match="n >= 0"):
         window(-1)
+
+
+# a long conversation of turns: a task, then a reply and its result each turn
+LONG = [user("task")] + [
+    message
+    for turn in range(500)
+    for message in (
+        asks(f"reply {turn}", call(f"c{turn}")),
+        result(f"c{turn}", f"r{turn}"),
+    )
+]
+
+
+@pytest.mark.parametrize(
+    "window, kept",
+    [
+        (LastMessages(2), ["reply 499", "r499"]),
+        (LastTurns(2), ["reply 498", "r498", "reply 499", "r499"]),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_window_reads_only_the_end_of_a_list_it_keeps_the_end_of(
+    window: Window, kept: list[str]
+) -> None:
+    view = View(LONG)
+    thinned = await preprocess_step(
+        replace(tool_step(None, None), history=view),
+        StepPreprocessor(input_window=None, history_window=window),
+    )
+    assert texts(thinned.history) == kept
+    # a few reads at the end, not the whole conversation
+    assert view.reads < 4 * len(kept)
+
+
+@pytest.mark.parametrize("sequence", SEQUENCES)
+@pytest.mark.anyio
+async def test_any_sequence_renders_as_a_list_does(
+    sequence: Callable[[list[Any]], Sequence[Any]],
+) -> None:
+    def step(sequence: Callable[[list[Any]], Sequence[Any]]) -> AfterToolCall:
+        return replace(
+            after_tool_call("bash", "out", cmd="ls"),
+            input=sequence(CONVERSATION),
+            history=sequence(CONVERSATION),
+            agent_messages=sequence(CONVERSATION),
+            tools=sequence([BASH]),
+            tool_choice="auto",
+        )
+
+    assert await render(step(sequence), ALL) == await render(step(list), ALL)
+    # rendered without preprocessing too
+    assert (await step_as_str(step(sequence)))[0] == (await step_as_str(step(list)))[0]
+
+
+@pytest.mark.anyio
+async def test_a_result_whose_whole_output_is_unknown_is_shown_by_its_result() -> None:
+    known = after_tool_call("bash", "out", cmd="ls")
+    unknown = replace(known, output=None)
+    assert await preprocess_step(unknown) == replace(
+        await preprocess_step(known), output=None
+    )
+    assert await render(unknown, ALL) == await render(known, ALL)
 
 
 WHOLE = [m.text for m in CONVERSATION]
@@ -349,14 +419,17 @@ NEXT = user("next")
         ([[V1], [V1, NEXT, V2]], [["v1"], ["next", "v2"]]),
     ],
 )
+@pytest.mark.parametrize("sequence", SEQUENCES)
 @pytest.mark.anyio
 async def test_new_since_last_report_resumes_after_the_copy_shown_last(
-    histories: list[list[ChatMessage]], expected: list[list[str]]
+    histories: list[list[ChatMessage]],
+    expected: list[list[str]],
+    sequence: Callable[[list[ChatMessage]], Sequence[ChatMessage]],
 ) -> None:
     store = Store()
     seen: list[list[str]] = []
     for history in histories:
-        step = replace(tool_step(None, None), history=history)
+        step = replace(tool_step(None, None), history=sequence(history))
         with in_step(store=store) as context:
             observations = await run_monitors({"judge": sent_since()}, context, step)
         [observation] = observations.succeeded

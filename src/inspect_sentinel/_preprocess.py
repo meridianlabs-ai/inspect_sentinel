@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Generic, Literal, TypeAlias
 
@@ -140,7 +140,7 @@ async def preprocess_step(
 
     def thin(
         source: _Source,
-        messages: list[ChatMessage] | None,
+        messages: Sequence[ChatMessage] | None,
         window: Window | None,
     ) -> list[ChatMessage] | None:
         if messages is None:
@@ -195,10 +195,16 @@ async def step_as_str(
         nonce=nonce,
     )
 
-    async def text(messages: list[ChatMessage] | None, unknown: str) -> str:
+    async def text(messages: Sequence[ChatMessage] | None, unknown: str) -> str:
         if messages is None:
             return unknown
-        return await numbered(messages) if messages else ""
+        if not messages:
+            return ""
+        # Scout renders a list; a view becomes one only here, where every
+        # message is rendered anyway
+        return await numbered(
+            messages if isinstance(messages, list) else list(messages)
+        )
 
     mark = "" if nonce is None else f" ({nonce})"
 
@@ -271,33 +277,43 @@ class _Marks(StoreModel):
 def _cut(
     step: Step,
     source: _Source,
-    messages: list[ChatMessage],
+    messages: Sequence[ChatMessage],
     window: Window,
-) -> list[ChatMessage]:
+) -> Sequence[ChatMessage]:
+    # a window reads the list it is given as it is and slices off what it
+    # keeps, so a host's view is never copied whole to be cut
     match window:
         case AllMessages():
             return messages
         case LastTurns(n):
-            starts = [i for i, m in enumerate(messages) if m.role == "assistant"]
-            return (
-                []
-                if n == 0
-                else messages
-                if len(starts) <= n
-                else messages[starts[-n] :]
-            )
+            return messages[_turns_start(messages, n) :]
         case LastMessages(n):
             return messages[len(messages) - min(n, len(messages)) :]
         case NewSinceLastReport(context):
             return _after_mark(context, step, source, messages)
 
 
+def _turns_start(messages: Sequence[ChatMessage], n: int) -> int:
+    # from the end, so a short window reads little more than the turns it
+    # keeps; a list of no more than n turns is kept whole
+    if n == 0:
+        return len(messages)
+    start = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].role == "assistant":
+            if n == 0:
+                return start
+            n -= 1
+            start = i
+    return 0
+
+
 def _after_mark(
     context: Context,
     step: Step,
     source: _Source,
-    messages: list[ChatMessage],
-) -> list[ChatMessage]:
+    messages: Sequence[ChatMessage],
+) -> Sequence[ChatMessage]:
     node = current_invocation()
     if node is None:
         raise RuntimeError(
@@ -321,7 +337,9 @@ def _after_mark(
     return messages[copies[seen[1] - 1] + 1 :] if len(copies) >= seen[1] else messages
 
 
-def _omitted(messages: list[ChatMessage], p: StepPreprocessor[S]) -> list[ChatMessage]:
+def _omitted(
+    messages: Sequence[ChatMessage], p: StepPreprocessor[S]
+) -> list[ChatMessage]:
     removed = tuple(
         kind
         for omit, kind in (
@@ -354,7 +372,7 @@ def _step_block(step: Step) -> str:
     return "MODEL REPLY"
 
 
-def _tools(tools: list[ToolInfo] | None) -> str:
+def _tools(tools: Sequence[ToolInfo] | None) -> str:
     # none offered, or not known, leaves the block out
     return (
         json.dumps([t.model_dump(exclude_none=True) for t in tools], indent=2)
