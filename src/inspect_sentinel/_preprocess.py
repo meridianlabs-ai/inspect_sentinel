@@ -267,10 +267,13 @@ async def step_as_str(
 
 
 def _mark_key(context: Context, step: Step, source: _Source, function: str) -> str:
-    # one store entry per conversation, list and function, so a report reads
-    # and writes only its own: (id of the last message shown, how many copies
-    # of that id the list held then, its position + 1)
-    return f"NewSinceLastReport:{context.path}:{step.conversation}/{source}/{function}"
+    # one store entry per monitor, conversation, list and function, so a
+    # report reads and writes only its own: (id of the last message shown, how
+    # many copies of that id the list held then, its position + 1). The parts
+    # are JSON-encoded, since a path or a conversation can hold any delimiter.
+    return "NewSinceLastReport:" + json.dumps(
+        [context.path, step.conversation, source, function]
+    )
 
 
 def _cut(

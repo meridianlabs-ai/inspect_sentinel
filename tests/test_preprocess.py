@@ -509,6 +509,24 @@ async def test_new_since_last_report_writes_each_conversation_alone() -> None:
 
 
 @pytest.mark.anyio
+async def test_new_since_last_report_keeps_monitors_and_conversations_apart() -> None:
+    # names that would read the same joined with a delimiter
+    store = Store()
+    shown: list[list[str]] = []
+    for name, conversation in [("a", "b:c"), ("a:b", "c")]:
+        step = replace(
+            tool_step(None, None),
+            conversation=conversation,
+            history=[ChatMessageUser(id="shared", content=f"{name} history")],
+        )
+        with in_step(store=store) as context:
+            observations = await run_monitors({name: sent_since()}, context, step)
+        [observation] = observations.succeeded
+        shown.append(json.loads(observation.report.explanation or ""))
+    assert shown == [["a history"], ["a:b history"]]
+
+
+@pytest.mark.anyio
 async def test_new_since_last_report_records_per_function() -> None:
     generated = replace(
         after_generate_step(),
