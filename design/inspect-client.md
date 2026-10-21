@@ -29,7 +29,7 @@ This PR teaches Inspect to notice the sidecar and work with it. An eval author c
 
 Inspect talks to the sidecar in two ways:
 
-1. **Inside its model calls.** Inspect adds two headers to each request. The sidecar adds a `sentinel` field to each reply.
+1. **Inside its model calls.** Inspect adds a header to the agent's model calls, saying which sample each is for. The sidecar adds a `sentinel` field to each reply.
 2. **Through a small endpoint.** Inspect calls the sidecar directly under `/sentinel/`, through the proxy's own address. It uses this at the start of a task, at the end of a sample, and when a reply arrives without the `sentinel` field.
 
 ## 1. Finding the sidecar
@@ -44,14 +44,28 @@ Inspect talks to the sidecar in two ways:
 
 Inspect goes on only if `versions` holds a version it knows.
 
-Anything else means "no sidecar":
+**Proposed: one setting for the sidecar client.** It has three modes. Its name is for Meridian to choose.
 
-- no answer
-- an error
-- an answer from something that isn't a sidecar
-- no version Inspect knows
+| Mode | What Inspect does |
+| --- | --- |
+| `auto`, the default | Probes quietly, and uses a sidecar it finds. If the probe can't tell, Inspect carries on as today. |
+| `required` | Fails the task at the start unless a sidecar Inspect supports answers. |
+| `off` | Doesn't probe, and runs as today. |
 
-Inspect then runs the eval as it does today. It logs nothing louder than a debug line, because most proxies have no sidecar.
+What each probe answer means:
+
+| Probe answer | Under `auto` | Under `required` |
+| --- | --- | --- |
+| a sidecar, with a version Inspect knows | use it | use it |
+| a sidecar, with no version Inspect knows | fail the task | fail the task |
+| a 404, or an answer that isn't a sidecar | no sidecar: run as today | fail the task |
+| a 401 or 403, a 5xx, or a timeout | can't tell: run as today, with a debug line | fail the task |
+
+`auto` keeps an ordinary eval exactly as it is today, but it can't guarantee that the sidecar is used. A deployment that relies on its sidecar sets `required`.
+
+**Proposed: credentials.** The probe and every call under `/sentinel/` reuse the authentication configured for the model's endpoint, in whatever form Inspect uses for that model. The proxy checks them as it checks a model call.
+
+**Not in PR 11: a separate port for the endpoint.** A sidecar can serve its endpoint for evals on a port of its own, with its own token. Inspect can't find that from the model's address, so PR 11 doesn't support it.
 
 **Proposed: where the probe goes.** The probe goes to the root of the model's base URL, not on the end of it.
 
@@ -95,14 +109,14 @@ The sidecar gives one of four answers.
 | Registered, `fixed: false` | The sidecar stored the facts. | Starts the task. |
 | Registered, `fixed: true` | An admin registered this task beforehand, in the sidecar's tasks folder. | Starts the task. |
 | `registration_refused` | The sidecar runs only the tasks its admin registered, and this isn't one. | Fails the task before any sample starts, with an error that names the task and says the sidecar runs only the tasks its admin registered. The error is shown as the eval runs and written to the task's log. |
-| `registrations_full` | The sidecar already keeps as many registrations as it takes. | Treats it as a failure, like an endpoint that can't be reached: the `required` or `optional` setting below decides. |
+| `registrations_full` | The sidecar already keeps as many registrations as it takes. | Treats it as a failure, like an endpoint that can't be reached: the task fails, as below. |
 
-**When the endpoint is down.** Inspect has a setting for an endpoint that can't be reached or that fails:
+**When registration fails.** The endpoint may be down, may not answer, or may answer `registrations_full`.
 
-- `required`, the default: the task fails before any sample starts, with an error saying the sidecar couldn't register it, and why.
-- `optional`: Inspect warns, and runs the task without the sentinel knowing the samples' facts.
+- **Once a supported sidecar has answered the probe, registration is required, in both `auto` and `required`.** The task fails before any sample starts, with an error saying the sidecar couldn't register it, and why.
+- **A refusal fails the task too.** The deployment has said the task may not run there.
 
-A refusal is different. The deployment has said the task may not run there, so the setting doesn't apply.
+A policy that lets a task run without registering can be added later, if one is needed.
 
 ### Pre-registration
 
@@ -161,7 +175,7 @@ This is an advanced setup, described in sidecar.md section 9:
 
 The proxy removes both headers before the request reaches the provider.
 
-**In the plan: Inspect's completion cache is off.** While a sidecar is active, Inspect doesn't reuse cached model replies. A cached reply was judged for an earlier run, so it says nothing about this one. The provider's own prompt caching is unaffected.
+**Proposed: Inspect's completion cache is off.** While a sidecar is active, Inspect doesn't reuse cached model replies. A cached reply was judged for an earlier run, so it says nothing about this one. The plan also allows having the sidecar judge a cached reply afresh. Turning the cache off is simpler. The provider's own prompt caching is unaffected.
 
 ## 4. What comes back
 
@@ -189,9 +203,14 @@ This is a change. Today, Inspect only sees an HTTP error. It retries only when t
 
 | Format | Not streamed | Streamed | On an error |
 | --- | --- | --- | --- |
-| Anthropic Messages | top level of the reply | the last `message_delta` event | beside `error` |
-| OpenAI Chat | top level of the reply | the last chunk | `error.provider_specific_fields.sentinel` |
-| OpenAI Responses | top level of the reply | `response.completed`, or `response.incomplete` when the reply was cut short | `error.provider_specific_fields.sentinel` |
+| Anthropic Messages | top level of the reply | the last `message_delta` event | either place, below |
+| OpenAI Chat | top level of the reply | the last chunk | either place, below |
+| OpenAI Responses | top level of the reply | `response.completed`, or `response.incomplete` when the reply was cut short | either place, below |
+
+**On an error, Inspect checks two places**, because the proxy decides where the field goes:
+
+- the top level, beside `error`, as Envoy sends it;
+- `error.provider_specific_fields.sentinel`, as LiteLLM sends it.
 
 Inspect has to read the field while it reads the stream. The provider SDKs drop it when they put the stream together.
 
@@ -209,14 +228,19 @@ Some ways the field goes missing:
 
 **In the plan.** Inspect calls `request_result` with the request's `x-irid`.
 
-The sidecar's answers:
+**Proposed: what Inspect does with each answer.** The model call came back either as a reply or as an error.
 
-| Answer | What Inspect does |
-| --- | --- |
-| `decided`, with the outcome | Acts on it, as in section 4. |
-| `judging` or `awaiting_reply` | Waits a while, then asks again (question D). |
-| `not_judged`, with a reason | Records that the call wasn't judged, and why. |
-| `dropped` or `unknown` | Records that the judgment is unavailable. The sidecar no longer has the call's records (`dropped`), or never saw the call (`unknown`). The call may have been judged, so this is kept apart from a call the sidecar says it didn't judge. |
+| Answer | What it means | With a reply | With an error |
+| --- | --- | --- | --- |
+| `decided` | the sidecar judged the call | acts on the decision, as in section 4 | a rejection or a `terminate`: acts on it, as in section 4. A `proceed`: the reply itself was lost on the way, so the call stays a failed call, and Inspect retries it as it does today |
+| `judging` or `awaiting_reply` | it's still being judged | waits, then asks again (question D) | waits, then asks again (question D) |
+| `not_judged`, with a reason | the sidecar saw the call but couldn't judge it | uses the reply, since the proxy chose to let it through, and records why it wasn't judged | fails the sample with that reason |
+| `dropped` | the sidecar once held the call's records, and no longer keeps them. Judging may not have finished | `auto`: uses the reply, and records the judgment as unavailable. `required`: fails the sample | fails the sample |
+| `unknown` | the sidecar never saw the call | as for `dropped` | fails the sample |
+| no answer | `request_result` itself failed | as for `dropped` | fails the sample |
+
+- **Ordinary retries stay.** Inspect still retries the provider and network failures it retries today. Once `request_result` confirms that the sidecar couldn't judge a call that came back as an error, the sample fails, with no extra retry on top.
+- **None of these is permission to go on.** `dropped`, `unknown` and a failed lookup say nothing about what the sentinel decided. Under `auto`, the reply is used as it would be with no sidecar, and the transcript says the judgment is unavailable.
 
 **Proposed: a fuller answer.** Today `request_result` gives the outcome and the records, but not the field's step-by-step decisions. It should give the same information as the field, so Inspect can act exactly as it would on the field. This is a change on the sidecar's side.
 
@@ -324,11 +348,11 @@ Each question says what's going on, why it matters, and what we propose or still
 
 ### I. What if there's nothing to fetch?
 
-- *What's going on:* two cases are normal: a sample that never called the model, and a sidecar started with `--no-eval-results`, which shares no results.
+- *What's going on:* two cases get an error from `sample_result`, never an empty store. A sample the sidecar never saw gets `unknown_sample`. A sidecar started with `--no-eval-results` answers that it doesn't send results.
 
-- *Why it matters:* a scorer that reads the sentinel's store would find empty values and think the sample was clean.
+- *Why it matters:* a scorer that reads the sentinel's store has to know which happened, and must never be handed empty values as if the sample were clean.
 
-- *To settle:* how a scorer can tell "nothing was shared" from "nothing happened". A sample that never called the model can simply skip the fetch.
+- *To settle:* how Inspect shows each case to scorers. A sample that never called the model can skip the fetch.
 
 ### J. What if a task's models sit behind more than one sidecar?
 
