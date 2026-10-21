@@ -26,6 +26,7 @@ from ._protocols import (
     sequential,
     threshold,
 )
+from ._replay_step import ReplayStep
 from ._report import (
     Action,
     Decision,
@@ -50,7 +51,6 @@ from ._step import (
     BeforeGenerate,
     BeforeToolCall,
     HumanDecision,
-    ReplayStep,
     Step,
     Truncation,
     human_decision_for,

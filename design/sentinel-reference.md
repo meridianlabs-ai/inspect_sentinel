@@ -147,7 +147,7 @@ Every configured monitor or protocol has an instance name: the key when it was c
 class BeforeGenerate:
     model: str
     conversation: str           # links this agent's steps across compactions
-    input: list[ChatMessage]    # exactly what the model is sent
+    input: Sequence[ChatMessage]  # exactly what the model is sent
     agent_messages: Sequence[ChatMessage] | None  # the scaffold's full conversation, pre-compaction turns included; None when the host cannot know it
     history: Sequence[ChatMessage] | None = field(default=None, kw_only=True)  # every message this agent instance has sent, in order sent; None when the host cannot produce it
     human_decisions: Sequence[HumanDecision] | None = field(default=None, kw_only=True)  # human() decisions at earlier steps of this conversation
@@ -160,7 +160,7 @@ class BeforeGenerate:
 class AfterGenerate:
     model: str
     conversation: str
-    input: list[ChatMessage]    # exactly what the model was sent
+    input: Sequence[ChatMessage]  # exactly what the model was sent
     agent_messages: Sequence[ChatMessage] | None
     history: Sequence[ChatMessage] | None = field(default=None, kw_only=True)
     human_decisions: Sequence[HumanDecision] | None = field(default=None, kw_only=True)
@@ -231,9 +231,10 @@ class ReplayStep:               # a step rebuilt from a stored transcript (senti
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]  # as SentinelEvent.stage
     step: Step
     segment: tuple[str, int]    # the conversation, and how many of its compactions came before
+    recorded_answers: Mapping[str, HumanAnswer] = field(default_factory=dict)  # the step's own recorded human() answers, by instance path; never on the step (R7-D4)
 ```
 
-`history`, `agent_messages` and `human_decisions`, and at the tool stages `input` and `tools`, are read-only `Sequence`s, so a host can hand each step a view of the conversation's append-only lists cut at the step rather than a copy, which would make building the steps of a conversation quadratic in its length; a monitor that wants a list calls `list()` on one, at its own cost (R7-D6, decided 2026-10-19 in [sentinel-development.md](sentinel-development.md)). The generate stages' `input` and `tools` stay `list`s: they are the request being made. `AfterToolCall.output` is `None` where the host cannot see the tool's untruncated return value: beside a proxy, which sees only the result the model is sent, and in a replay from a log, which records only that result. Both were built with R7 PR 2, as was `ReplayStep`.
+`input`, `history`, `agent_messages` and `human_decisions` at every stage, and `tools` at the tool stages, are read-only `Sequence`s, so a host can hand each step a view of the conversation's lists cut at the step rather than a copy, which would make building the steps of a conversation quadratic in its length; a monitor that wants a list calls `list()` on one, at its own cost (R7-D6, decided 2026-10-19 in [sentinel-development.md](sentinel-development.md); the generate stages' `input` added 2026-10-20, since replay builds it as a view over the log's stored ranges). The generate stages' `tools` stay a `list`: they do not grow with the conversation. `AfterToolCall.output` is `None` where the host cannot see the tool's untruncated return value: beside a proxy, which sees only the result the model is sent, and in a replay from a log, which records only that result. Both were built with R7 PR 2, as was `ReplayStep`.
 
 Everything in `step` except `conversation`, `truncated` and `human_decisions` was written or shaped by the agent under observation and can carry prompt injection. Nothing in `context` came from the agent. Treat `step` as evidence and `context` as instructions.
 

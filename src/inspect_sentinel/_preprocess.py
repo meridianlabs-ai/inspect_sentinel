@@ -79,7 +79,7 @@ class LastMessages:
 class NewSinceLastReport:
     """Keep the messages after the last one this monitor reported on, so an incremental monitor does not re-read its conversations.
 
-    The last message shown is recorded by id in the monitor's store (by `context.path`), separately for each conversation, for each list it windows, and for each function of the monitor. It is recorded only when the function returns or decides final and the runner accepts what it returned, so a function that raises or is cancelled is shown those messages again at the next step. An edited version of a message, which `history` holds again under the same id, is new. A conversation whose recorded message is gone, as after a compaction, is kept whole. Preprocess with it from the monitor or protocol function the runner is running; elsewhere preprocessing raises `RuntimeError`.
+    The last message shown is recorded by id and position in the monitor's store (by `context.path`), separately for each conversation, for each list it windows, and for each function of the monitor. It is recorded only when the function returns or decides final and the runner accepts what it returned, so a function that raises or is cancelled is shown those messages again at the next step. A list that only grew since, as `history` does, is resumed where it was without reading what was shown before. An edited version of a message, which `history` holds again under the same id, is new. A conversation whose recorded message is gone, as after a compaction, is kept whole. Preprocess with it from the monitor or protocol function the runner is running; elsewhere preprocessing raises `RuntimeError`.
     """
 
     context: Context
@@ -270,8 +270,8 @@ async def step_as_str(
 
 class _Marks(StoreModel):
     # "<conversation>/<source>/<function>" -> id of the last message shown,
-    # and how many copies of that id the list held then
-    marks: dict[str, tuple[str, int]] = Field(default_factory=dict)
+    # how many copies of that id the list held then, and its position + 1
+    marks: dict[str, tuple[str, int, int]] = Field(default_factory=dict)
 
 
 def _cut(
@@ -281,7 +281,9 @@ def _cut(
     window: Window,
 ) -> Sequence[ChatMessage]:
     # a window reads the list it is given as it is and slices off what it
-    # keeps, so a host's view is never copied whole to be cut
+    # keeps; `AllMessages` keeps it whole, and the others read from where
+    # what they keep starts, except for `NewSinceLastReport` over a list that
+    # changed other than by growing, which scans it for its mark
     match window:
         case AllMessages():
             return messages
@@ -322,19 +324,46 @@ def _after_mark(
     store = context.store_as(_Marks)
     key = f"{step.conversation}/{source}/{node.function}"
     seen = store.marks.get(key)
-    ids = [m.id for m in messages]
-    last = next((m.id for m in reversed(messages) if m.id is not None), None)
+    start = _resumed(messages, seen)
+    last = _last_with_id(messages)
     if last is not None:
-        mark = (last, ids.count(last))
+        index, id = last
+        if seen is not None and start == seen[2]:
+            # the list grew from what was shown: count the copies in what is
+            # new, missing only an earlier copy of a new last id, so a later
+            # scan resumes at an earlier copy and shows more, never less
+            copies = (seen[1] if id == seen[0] else 0) + sum(
+                1 for i in range(start, index + 1) if messages[i].id == id
+            )
+        else:
+            copies = sum(1 for m in messages if m.id == id)
+        mark = (id, copies, index + 1)
         node.on_success.append(
             lambda: setattr(store, "marks", {**store.marks, key: mark})
         )
+    return messages[start:]
+
+
+def _resumed(messages: Sequence[ChatMessage], seen: tuple[str, int, int] | None) -> int:
     if seen is None:
-        return messages
+        return 0
+    id, copies, length = seen
+    # a list that only grew since, as `history` does, still holds the message
+    # shown last where it was
+    if 0 < length <= len(messages) and messages[length - 1].id == id:
+        return length
     # from the copy shown last: `history` holds each edited version of a
     # message under its one id, so a later version is new
-    copies = [i for i, id in enumerate(ids) if id == seen[0]]
-    return messages[copies[seen[1] - 1] + 1 :] if len(copies) >= seen[1] else messages
+    found = [i for i, m in enumerate(messages) if m.id == id]
+    return found[copies - 1] + 1 if len(found) >= copies else 0
+
+
+def _last_with_id(messages: Sequence[ChatMessage]) -> tuple[int, str] | None:
+    for i in range(len(messages) - 1, -1, -1):
+        id = messages[i].id
+        if id is not None:
+            return i, id
+    return None
 
 
 def _omitted(

@@ -438,6 +438,24 @@ async def test_new_since_last_report_resumes_after_the_copy_shown_last(
 
 
 @pytest.mark.anyio
+async def test_new_since_last_report_reads_only_what_is_new_in_a_list_that_grew() -> (
+    None
+):
+    store = Store()
+    shown: list[list[str]] = []
+    views = [View(LONG[:-2]), View(LONG)]
+    for view in views:
+        step = replace(tool_step(None, None), history=view)
+        with in_step(store=store) as context:
+            observations = await run_monitors({"judge": sent_since()}, context, step)
+        [observation] = observations.succeeded
+        shown.append(json.loads(observation.report.explanation or ""))
+    assert shown[1] == ["reply 499", "r499"]
+    # a few reads at the end, not the whole conversation again
+    assert views[1].reads < 4 * len(shown[1])
+
+
+@pytest.mark.anyio
 async def test_new_since_last_report_records_per_function() -> None:
     generated = replace(
         after_generate_step(),
