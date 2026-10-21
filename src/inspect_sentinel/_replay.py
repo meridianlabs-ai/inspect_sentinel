@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from copy import copy
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, cast
@@ -22,10 +22,11 @@ from ._context import Context, EvalContext
 from ._decorators import watched_stages
 from ._host import HostContext, HumanAnswer
 from ._protocols import observe_only
+from ._replay_step import ReplayStep
 from ._report import Decision, Escalations, Failed, Report, Reported
 from ._resolve import resolve_sentinel
 from ._runner import run_sentinel
-from ._step import AfterGenerate, AfterToolCall, BeforeGenerate, ReplayStep, Step
+from ._step import Step
 from ._types import Protocol, Sentinels
 from ._unhandled import current_invocation
 from ._validate import named_children
@@ -46,11 +47,6 @@ HumanPolicy: TypeAlias = Literal["recorded", "fail_closed"] | HumanStandIn
 HumanSource: TypeAlias = Literal["recorded", "unanswered", "simulated"]
 """Where a replayed `human()` answer came from: the answer recorded at the step, the fail-closed answer given when no one can be asked, or a `HumanStandIn`."""
 
-_STAGES: dict[type[Any], str] = {
-    BeforeGenerate: "model_input",
-    AfterGenerate: "model_output",
-    AfterToolCall: "tool_result",
-}
 # where a step asked more than one human(), the least real answer says how the
 # step was decided
 _WEAKEST: tuple[HumanSource, ...] = ("unanswered", "simulated", "recorded")
@@ -128,7 +124,7 @@ async def replay_monitor(
         One report per step `select` chose, in the order given.
 
     Raises:
-        ValueError: If a step's `stage` does not match its step's type, two steps of one stage share an id, or `max_unit_steps` or `max_units` is less than 1.
+        ValueError: If two steps of one stage share an id, or `max_unit_steps` or `max_units` is less than 1.
     """
     if max_unit_steps is not None and max_unit_steps < 1:
         raise ValueError(f"max_unit_steps must be at least 1; got {max_unit_steps}.")
@@ -201,11 +197,6 @@ def _root(sentinel: Sentinels) -> tuple[Protocol, str, str]:
 
 
 def _check(replay_step: ReplayStep, seen: set[tuple[str, str]]) -> None:
-    stage = _STAGES.get(type(replay_step.step), "tool_call")
-    if replay_step.stage != stage:
-        raise ValueError(
-            f"Step {replay_step.id!r} has stage {replay_step.stage!r} but holds a {type(replay_step.step).__name__}, which is a {stage!r} step."
-        )
     key = (replay_step.stage, replay_step.id)
     if key in seen:
         raise ValueError(
@@ -340,7 +331,7 @@ class _ReplayHost:
         node = current_invocation()
         path = node.path if node is not None else ""
         if self._human != "fail_closed":
-            recorded = _recorded_answers(replay_step).get(path)
+            recorded = replay_step.recorded_answers.get(path)
             if recorded is not None and (
                 recorded.decision in choices or recorded.decision == "terminate"
             ):
@@ -355,8 +346,3 @@ class _ReplayHost:
             decision="reject" if "reject" in choices else "terminate",
             reason="No person can be asked in a replay, and no answer was recorded here; failing closed.",
         )
-
-
-def _recorded_answers(step: ReplayStep) -> Mapping[str, HumanAnswer]:
-    # ReplayStep.recorded_answers lands with #133; until then a step has none
-    return cast(Mapping[str, HumanAnswer], getattr(step, "recorded_answers", {}))

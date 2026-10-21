@@ -13,12 +13,12 @@ from inspect_ai.model import (
 )
 from inspect_ai.tool import ToolCallView
 
+from ._replay_step import ReplayStep
 from ._step import (
     AfterGenerate,
     AfterToolCall,
     BeforeGenerate,
     BeforeToolCall,
-    ReplayStep,
 )
 
 T = TypeVar("T")

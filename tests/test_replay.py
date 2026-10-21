@@ -1,5 +1,5 @@
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
 import anyio
@@ -36,14 +36,6 @@ from inspect_sentinel import (
     threshold,
 )
 from tests._fakes import View
-
-
-@dataclass(frozen=True)
-class Answered(ReplayStep):
-    # ReplayStep.recorded_answers, until #133 adds the field
-    recorded_answers: Mapping[str, HumanAnswer] = field(
-        default_factory=dict[str, HumanAnswer]
-    )
 
 
 def call(call_id: str, cmd: str = "ls") -> ToolCall:
@@ -339,7 +331,7 @@ async def test_human_is_answered_by_the_recorded_answer_else_fails_closed(
     answers: dict[str, HumanAnswer], policy: Any, action: str, source: str
 ) -> None:
     step = next(s for s in segmented([1]) if s.stage == "tool_call")
-    answered = Answered(step.id, step.stage, step.step, step.segment, answers)
+    answered = ReplayStep(step.id, step.stage, step.step, step.segment, answers)
 
     [report] = await replay_monitor(escalated_to_human(), [answered], human=policy)
 
@@ -359,14 +351,14 @@ async def test_a_stand_in_is_asked_only_where_no_answer_is_recorded() -> None:
 
     first, second = [s for s in segmented([2]) if s.stage == "tool_call"]
     steps = [
-        Answered(
+        ReplayStep(
             first.id,
             first.stage,
             first.step,
             first.segment,
             {"human": HumanAnswer("reject", "no")},
         ),
-        Answered(second.id, second.stage, second.step, second.segment),
+        ReplayStep(second.id, second.stage, second.step, second.segment),
     ]
 
     reports = await replay_monitor(escalated_to_human(), steps, human=stand_in)
@@ -403,22 +395,12 @@ async def test_a_handled_escalation_needs_no_person() -> None:
     assert report.decision is not None and report.decision.action == "proceed"
 
 
-@pytest.mark.parametrize(
-    "case,error",
-    [
-        ("twice", "Two 'tool_call' steps have the id"),
-        ("wrong stage", "holds a BeforeToolCall"),
-    ],
-)
 @pytest.mark.anyio
-async def test_steps_that_could_not_be_told_apart_are_refused(
-    case: str, error: str
-) -> None:
+async def test_two_steps_of_one_stage_with_one_id_are_refused() -> None:
     step = next(s for s in segmented([1]) if s.stage == "tool_call")
-    steps = [step, step] if case == "twice" else [replace(step, stage="tool_result")]
 
-    with pytest.raises(ValueError, match=error):
-        await replay_monitor(counter(), steps)
+    with pytest.raises(ValueError, match="Two 'tool_call' steps have the id"):
+        await replay_monitor(counter(), [step, step])
 
 
 @pytest.mark.parametrize("kwargs", [{"max_units": 0}, {"max_unit_steps": 0}])
