@@ -30,9 +30,9 @@ from inspect_sentinel import (
     sequential,
     threshold,
 )
-from inspect_sentinel._integration import sentinel_from_config
 from inspect_sentinel._resolve import resolve_sentinel
 from inspect_sentinel._runner import run_sentinel
+from inspect_sentinel.config import sentinel_from_config
 from tests._fakes import FakeHost, before_tool_call, host_context
 
 Load = Callable[..., ModuleType]

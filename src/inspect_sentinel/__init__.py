@@ -6,6 +6,7 @@ A *monitor* observes a step of an agent's execution and reports a suspicion scor
 from ._context import Context, EvalContext, InspectSample, ProxyContext
 from ._decorators import monitor, protocol
 from ._final import decide_final
+from ._from_messages import steps_from_messages
 from ._host import Host, HumanAnswer
 from ._portable import PortabilityError
 from ._preprocess import (
@@ -25,6 +26,14 @@ from ._protocols import (
     observe_only,
     sequential,
     threshold,
+)
+from ._replay import (
+    HumanPolicy,
+    HumanSource,
+    HumanStandIn,
+    ReplayReport,
+    Split,
+    replay_monitor,
 )
 from ._replay_step import ReplayStep
 from ._report import (
@@ -87,6 +96,9 @@ __all__ = [
     "Host",
     "HumanAnswer",
     "HumanDecision",
+    "HumanPolicy",
+    "HumanSource",
+    "HumanStandIn",
     "InspectSample",
     "Monitor",
     "MonitorFailedError",
@@ -100,11 +112,13 @@ __all__ = [
     "ProxyContext",
     "Protocols",
     "Report",
+    "ReplayReport",
     "ReplayStep",
     "Reported",
     "Reports",
     "Sentinel",
     "Sentinels",
+    "Split",
     "Step",
     "Suspicion",
     "Truncation",
@@ -118,12 +132,14 @@ __all__ = [
     "monitor",
     "observe_only",
     "protocol",
+    "replay_monitor",
     "result_text",
     "run_children",
     "run_monitors",
     "run_protocols",
     "sequential",
     "step_as_str",
+    "steps_from_messages",
     "AllMessages",
     "LastMessages",
     "LastTurns",

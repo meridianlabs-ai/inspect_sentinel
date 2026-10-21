@@ -393,7 +393,7 @@ async def _run_member(
     report: Report | None = None
     finals: list[Final] = []
     failure: BaseException | None = None
-    node = invocation(function.__name__)
+    node = invocation(function.__name__, child_context.path)
     try:
         with running(node):
             # a monitor is never handed the escalations

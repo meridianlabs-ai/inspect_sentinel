@@ -46,7 +46,7 @@ def sentinel_from_config(
 ) -> Sentinels:
     """Build the monitors and protocols a configuration describes.
 
-    Each entry is constructed through the registry with its `params` and its nested entries, which are built first. An entry whose recorded `version` differs from the installed factory's is built anyway, with a warning naming both versions; its `meta` is ignored. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved; pass it to `resolve_sentinel`.
+    Each entry is constructed through the registry with its `params` and its nested entries, which are built first. An entry whose recorded `version` differs from the installed factory's is built anyway, with a warning naming both versions; its `meta` is ignored. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved into its root: it is what `Task(sentinel=)` takes.
 
     Args:
         config: A YAML or JSON file whose only key is `sentinel`, a registered monitor or protocol name, or the configuration itself: one entry, a list of entries, or a mapping of instance names to entries.
@@ -259,10 +259,10 @@ def _lookup(name: str) -> list[_Factory]:
     return found
 
 
-def config_from_sentinel(sentinels: Sentinels) -> SentinelConfig:
+def sentinel_config(sentinels: Sentinels) -> SentinelConfig:
     """Record constructed monitors and protocols as the configuration that rebuilds them.
 
-    The inverse of `sentinel_from_config`, for the eval log and retry: each instance becomes an entry with its registry name, the params it was created with, and its factory's version unless that is 0, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a lone entry, so it rebuilds as the root it was.
+    The inverse of `sentinel_from_config()`, for the eval log and retry: each instance becomes an entry with its registry name, the params it was created with, and its factory's version unless that is 0, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a lone entry, so it rebuilds as the root it was.
 
     Args:
         sentinels: One monitor or protocol, or a sequence or mapping of instance names to them, as `Task(sentinel=)` accepts.

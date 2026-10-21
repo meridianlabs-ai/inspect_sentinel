@@ -106,7 +106,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 | R4 | earlier decisions in the conversation | live: met by `step.human_decisions` (2026-10-14, `human()` decisions only); replay: designed, not built (R7) |
 | R5 | escalate or terminate on scores, without reject | not met |
 | R6 | a root escalate does not proceed | decided 2026-10-10 (terminates); not built |
-| R7 | replay over existing logs | not met; designed in part; the step types replay needs built 2026-10-20 (R7 PR 2: `ReplayStep`, read-only step sequences, `AfterToolCall.output` optional) |
+| R7 | replay over existing logs | not met; designed in part; the step types replay needs built 2026-10-20 (R7 PR 2: `ReplayStep`, read-only step sequences, `AfterToolCall.output` optional); the runner, replay host, `replay_monitor()` and the Scout adapter (`as_scanner()`, `as_reader()`, `fidelity_probe()`) built 2026-10-20 (R7 PR 5) on inspect_ai's log driver (R7 PR 3); logs without recorded origins replay from messages until R7 PR 6 |
 | R8 | monitor-safe message rendering | partly met, in Scout; the move to inspect_ai is not started |
 | 8.1 | agent text cannot forge structure | partly met |
 | 8.2 | actions-only view | not met |

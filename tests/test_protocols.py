@@ -16,11 +16,7 @@ from inspect_sentinel._decorators import (
 )
 from inspect_sentinel._final import decide_final
 from inspect_sentinel._host import HumanAnswer
-from inspect_sentinel._integration import (
-    config_from_sentinel,
-    resolve_sentinel,
-    sentinel_from_config,
-)
+from inspect_sentinel._integration import resolve_sentinel
 from inspect_sentinel._protocols import (
     concurrent,
     handle_escalation,
@@ -48,6 +44,7 @@ from inspect_sentinel._types import (
     ProtocolGroup,
     Protocols,
 )
+from inspect_sentinel.config import sentinel_config, sentinel_from_config
 from tests._fakes import (
     FakeHost,
     ListRecorder,
@@ -630,7 +627,7 @@ async def test_a_layer_records_and_runs_the_children_it_was_built_with(
     expected = await _ran(compose(_container(kind, first)))
     _add(children, late())
     config = SentinelConfig.model_validate_json(
-        config_from_sentinel(layer).model_dump_json()
+        sentinel_config(layer).model_dump_json()
     )
     rebuilt = resolve_sentinel(sentinel_from_config(config))
     assert await _ran(layer) == expected
