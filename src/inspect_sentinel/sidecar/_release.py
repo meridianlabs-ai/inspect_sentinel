@@ -97,10 +97,15 @@ def _skipped(event: StreamEvent) -> bool:
 class AnthropicTurn:
     """An Anthropic Messages reply stream: text, thinking and redacted thinking blocks go out as they arrive."""
 
-    _RELEASED = frozenset({"text", "thinking", "redacted_thinking"})
+    # each block that goes out as it arrives, and the deltas it is written in
+    _RELEASED: dict[str, frozenset[str]] = {
+        "text": frozenset({"text_delta", "citations_delta"}),
+        "thinking": frozenset({"thinking_delta", "signature_delta"}),
+        "redacted_thinking": frozenset(),
+    }
 
     def __init__(self) -> None:
-        self._released: set[int] = set()
+        self._released: dict[int, str] = {}
 
     def place(self, event: StreamEvent) -> Role:
         if _skipped(event):
@@ -115,13 +120,21 @@ class AnthropicTurn:
         if kind == "content_block_start":
             block = cast("dict[str, Any]", data.get("content_block") or {})
             if block.get("type") in self._RELEASED and type(index) is int:
-                self._released.add(index)
+                self._released[index] = block["type"]
                 return "release"
             return "held"
-        if (
-            kind in ("content_block_delta", "content_block_stop")
-            and index in self._released
-        ):
+        block_type = self._released.get(index) if type(index) is int else None
+        if block_type is None:
+            return "held"
+        if kind == "content_block_stop":
+            return "release"
+        delta = data.get("delta")
+        written = (
+            cast("dict[str, Any]", delta).get("type")
+            if isinstance(delta, dict)
+            else None
+        )
+        if kind == "content_block_delta" and written in self._RELEASED[block_type]:
             return "release"
         return "held"
 
@@ -157,8 +170,34 @@ class ChatTurn:
 class ResponsesTurn:
     """An OpenAI Responses reply stream: message and reasoning items go out as they arrive."""
 
+    # each item that goes out as it arrives, and the events it is written in
+    # between its `output_item.added` and its `output_item.done`
+    _RELEASED: dict[str, frozenset[str]] = {
+        "message": frozenset(
+            {
+                "response.content_part.added",
+                "response.content_part.done",
+                "response.output_text.delta",
+                "response.output_text.done",
+                "response.output_text.annotation.added",
+                "response.refusal.delta",
+                "response.refusal.done",
+            }
+        ),
+        "reasoning": frozenset(
+            {
+                "response.reasoning_summary_part.added",
+                "response.reasoning_summary_part.done",
+                "response.reasoning_summary_text.delta",
+                "response.reasoning_summary_text.done",
+                "response.reasoning_text.delta",
+                "response.reasoning_text.done",
+            }
+        ),
+    }
+
     def __init__(self) -> None:
-        self._released: set[int] = set()
+        self._released: dict[int, str] = {}
 
     def place(self, event: StreamEvent) -> Role:
         if _skipped(event):
@@ -168,14 +207,20 @@ class ResponsesTurn:
         if kind in ("response.created", "response.in_progress", "response.queued"):
             return "opening"
         index = data.get("output_index")
+        item = data.get("item")
+        entry = cast("dict[str, Any]", item) if isinstance(item, dict) else {}
         if kind == "response.output_item.added":
-            item = data.get("item")
-            entry = cast("dict[str, Any]", item) if isinstance(item, dict) else {}
-            if entry.get("type") in ("message", "reasoning") and type(index) is int:
-                self._released.add(index)
+            if entry.get("type") in self._RELEASED and type(index) is int:
+                self._released[index] = entry["type"]
                 return "release"
             return "held"
-        return "release" if index in self._released else "held"
+        item_type = self._released.get(index) if type(index) is int else None
+        if item_type is None:
+            return "held"
+        if kind == "response.output_item.done":
+            # the item done is the one that went out, not a call in its place
+            return "release" if entry.get("type") == item_type else "held"
+        return "release" if kind in self._RELEASED[item_type] else "held"
 
 
 class ClientCheck:

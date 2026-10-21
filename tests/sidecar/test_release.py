@@ -155,6 +155,97 @@ def test_an_anthropic_delta_for_a_block_not_released_is_held() -> None:
 
 
 @pytest.mark.parametrize(
+    ("block", "delta", "role"),
+    [
+        ("text", {"type": "text_delta", "text": "Hi"}, "release"),
+        ("text", {"type": "citations_delta", "citation": {}}, "release"),
+        ("thinking", {"type": "thinking_delta", "thinking": "Hm"}, "release"),
+        ("thinking", {"type": "signature_delta", "signature": "s"}, "release"),
+        ("text", {"type": "input_json_delta", "partial_json": "{"}, "held"),
+        ("thinking", {"type": "text_delta", "text": "Hi"}, "held"),
+        ("redacted_thinking", {"type": "text_delta", "text": "Hi"}, "held"),
+        ("text", {"type": "unknown_delta"}, "held"),
+    ],
+)
+def test_only_the_deltas_of_a_released_anthropic_block_go_out(
+    block: str, delta: dict[str, Any], role: str
+) -> None:
+    # a provider or a proxy that writes something else into a released block
+    # is not trusted to write only what the block holds
+    turn = AnthropicTurn()
+    _place(
+        turn,
+        {"type": "content_block_start", "index": 0, "content_block": {"type": block}},
+    )
+
+    assert (
+        _place(turn, {"type": "content_block_delta", "index": 0, "delta": delta})
+        == role
+    )
+    assert _place(turn, {"type": "content_block_stop", "index": 0}) == "release"
+
+
+@pytest.mark.parametrize(
+    ("item", "event", "role"),
+    [
+        ("message", {"type": "response.output_text.delta", "delta": "x"}, "release"),
+        ("message", {"type": "response.content_part.added"}, "release"),
+        ("message", {"type": "response.refusal.delta", "delta": "x"}, "release"),
+        (
+            "reasoning",
+            {"type": "response.reasoning_summary_text.delta", "delta": "x"},
+            "release",
+        ),
+        (
+            "reasoning",
+            {"type": "response.reasoning_text.delta", "delta": "x"},
+            "release",
+        ),
+        (
+            "message",
+            {"type": "response.output_item.done", "item": {"type": "message"}},
+            "release",
+        ),
+        (
+            "reasoning",
+            {"type": "response.output_item.done", "item": {"type": "reasoning"}},
+            "release",
+        ),
+        (
+            "message",
+            {"type": "response.function_call_arguments.delta", "delta": "{"},
+            "held",
+        ),
+        (
+            "message",
+            {
+                "type": "response.output_item.done",
+                "item": {"type": "function_call", "call_id": "call_1"},
+            },
+            "held",
+        ),
+        ("reasoning", {"type": "response.output_text.delta", "delta": "x"}, "held"),
+        ("message", {"type": "response.reasoning_text.delta", "delta": "x"}, "held"),
+        ("message", {"type": "response.unknown.delta"}, "held"),
+    ],
+)
+def test_only_the_events_of_a_released_responses_item_go_out(
+    item: str, event: dict[str, Any], role: str
+) -> None:
+    # a provider or a proxy that reuses a released item's index for anything
+    # else, a call above all, is not trusted to write only what the item holds
+    turn = ResponsesTurn()
+    added = {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {"type": item},
+    }
+    _place(turn, added)
+
+    assert _place(turn, event | {"output_index": 0}) == role
+
+
+@pytest.mark.parametrize(
     ("item", "role"),
     [
         ({"type": "message", "id": "msg_1"}, "release"),
