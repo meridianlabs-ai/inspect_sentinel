@@ -10,12 +10,21 @@ from typing import Any, cast
 import anyio
 import pytest
 from inspect_ai import Task, eval
+from inspect_ai._sentinel._integration import EvalInfo, steps_from_events
 from inspect_ai.dataset import Sample
-from inspect_ai.event import SentinelEvent
-from inspect_ai.log import EvalLog
+from inspect_ai.event import (
+    ModelEvent,
+    SentinelEvent,
+    SpanBeginEvent,
+    Timeline,
+    TimelineEvent,
+    TimelineSpan,
+)
+from inspect_ai.log import EvalLog, write_eval_log
 from inspect_ai.model import ChatMessageUser, ModelOutput, get_model
-from inspect_ai.solver import generate, use_tools
+from inspect_ai.solver import Generate, Solver, TaskState, generate, solver, use_tools
 from inspect_ai.tool import Tool, ToolError, tool
+from inspect_ai.util._span import span
 from inspect_scout import scan, scan_results_df, scan_resume, transcripts_from
 
 from inspect_sentinel import (
@@ -35,7 +44,6 @@ from inspect_sentinel import (
     protocol,
     replay_monitor,
     sequential,
-    steps_from_messages,
     threshold,
 )
 from inspect_sentinel.scout import (
@@ -54,17 +62,6 @@ Row = dict[str, Any]
 pandas: Any = importlib.import_module("pandas")
 
 SCOUT = Path(__file__).parents[2] / "src" / "inspect_sentinel" / "scout"
-# the fields the messages projection leaves absent, until inspect_ai's log
-# driver (R7 PR 3) rebuilds steps from a log's events
-ABSENT_FROM_MESSAGES = {
-    "human_decisions",
-    "input",
-    "output",
-    "tool_choice",
-    "tools",
-    "truncated",
-    "view",
-}
 
 
 @tool
@@ -181,7 +178,9 @@ def test_the_scout_adapter_imports_only_public_sentinel_modules() -> None:
                     assert node.module in allowed, (source.name, node.module)
 
 
-@pytest.mark.parametrize("stage", ["model_output", "tool_call", "tool_result"])
+@pytest.mark.parametrize(
+    "stage", ["model_input", "model_output", "tool_call", "tool_result"]
+)
 def test_replay_and_read_agree_through_scout(tmp_path: Path, stage: Stage) -> None:
     samples = [
         Sample(id=7, input="add, with an integer id", description="the first"),
@@ -207,7 +206,12 @@ def test_replay_and_read_agree_through_scout(tmp_path: Path, stage: Stage) -> No
     replayed = keyed(found["replay"], "metadata.metadata")
     read = keyed(found["read"], "metadata.metadata")
     assert replayed.keys() == read.keys()
-    assert len(read) == {"model_output": 7, "tool_call": 4, "tool_result": 4}[stage]
+    assert (
+        len(read)
+        == {"model_input": 7, "model_output": 7, "tool_call": 4, "tool_result": 4}[
+            stage
+        ]
+    )
     for key, recorded in read.items():
         assert replayed[key]["eval"] == recorded["eval"], key
         differ = {
@@ -215,14 +219,7 @@ def test_replay_and_read_agree_through_scout(tmp_path: Path, stage: Stage) -> No
             for name, digest in recorded["step"].items()
             if replayed[key]["step"].get(name) != digest
         }
-        assert differ <= ABSENT_FROM_MESSAGES, (key, differ)
-
-
-@pytest.mark.skip(
-    reason="waiting on inspect_ai R7 PR 3: generate step ids from the log (R7-D8) and steps from events, after which ABSENT_FROM_MESSAGES is empty and model_input joins this test"
-)
-def test_replay_and_read_agree_on_every_field_at_every_stage() -> None:
-    pass
+        assert not differ, (key, differ)
 
 
 @monitor
@@ -241,7 +238,14 @@ def test_replay_monitor_gives_the_reports_the_scanner_records(tmp_path: Path) ->
 
     found = scanned(tmp_path / "scans", tmp_path / "logs", s=as_scanner(by_argument()))
 
-    steps = list(steps_from_messages(sample.messages, conversation=sample.uuid or ""))
+    # the eval's own sample holds its events expanded, with no pool
+    steps = steps_from_events(
+        sample.messages,
+        sample.events,
+        [],
+        sample_uuid=sample.uuid or "",
+        eval_info=EvalInfo.from_eval(log.eval),
+    )
     reports = anyio.run(replay_monitor, by_argument(), steps)
     expected = {
         (sample.uuid, r.step.id): r.report.report.suspicion
@@ -386,7 +390,7 @@ def test_an_escalation_with_no_recorded_answer_fails_closed(tmp_path: Path) -> N
     [row] = found["s"]
     assert (row["answer"], row["value"]) == ("reject", True)
     assert row["metadata.human"] == "unanswered"
-    assert row["metadata.turns"] == "inferred"
+    assert row["metadata.turns"] == "recorded"
 
 
 def test_steps_are_selected_by_transcript_as_well_as_step(tmp_path: Path) -> None:
@@ -501,11 +505,130 @@ def test_a_selector_must_be_importable_to_register() -> None:
         step_selector(nested)
 
 
-@pytest.mark.skip(
-    reason="waiting on inspect_ai R7 PR 3: as_scanner(timeline=) passes a stored timeline to steps_from_events(); a Petri-shaped log needs its conversations from that timeline"
-)
-def test_a_petri_shaped_log_replays_one_conversation_per_branch() -> None:
-    pass
+@monitor
+def conversations() -> MonitorGroup:
+    # which conversation each generate is in
+    async def model_input(context: Context, step: BeforeGenerate) -> Observation:
+        return Observation(suspicion=0.0, metadata={"conversation": step.conversation})
+
+    return MonitorGroup(model_input)
+
+
+@solver
+def two_branches() -> Solver:
+    """Two attempts at the task in one conversation, each in a span of its own, as Petri's rollbacks are."""
+
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        for branch in ("first", "second"):
+            async with span(branch, type="trajectory"):
+                state.output = await get_model().generate(
+                    [ChatMessageUser(content=f"The {branch} attempt.")]
+                )
+        return state
+
+    return solve
+
+
+def test_a_petri_shaped_log_replays_one_conversation_per_branch(
+    tmp_path: Path,
+) -> None:
+    # Petri stores a "target" timeline whose branches are the rolled-back
+    # attempts, which the span tree alone puts in one conversation
+    [log] = eval(
+        Task(dataset=[Sample(input="go")], solver=two_branches()),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "run"),
+        display="none",
+    )
+    assert log.samples is not None
+    sample = log.samples[0]
+    spans = {e.name: e.id for e in sample.events if isinstance(e, SpanBeginEvent)}
+    first, second = [
+        [
+            TimelineEvent(event=e)
+            for e in sample.events
+            if isinstance(e, ModelEvent) and e.span_id == spans[branch]
+        ]
+        for branch in ("first", "second")
+    ]
+    sample.timelines = [
+        Timeline(
+            name="target",
+            description="",
+            root=TimelineSpan(
+                id="target",
+                name="target",
+                content=list(first),
+                branches=[
+                    TimelineSpan(id="rollback", name="rollback", content=list(second))
+                ],
+            ),
+        )
+    ]
+    write_eval_log(log, str(tmp_path / "logs" / "petri.eval"))
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        stored=as_scanner(conversations(), timeline="target"),
+        tree=as_scanner(conversations()),
+    )
+
+    def conversation(row: Row) -> str:
+        return row["metadata.metadata"]["conversation"]
+
+    assert [conversation(r) for r in found["stored"]] == ["target", "rollback"]
+    assert {r["metadata.turns"] for r in found["stored"]} == {"stored"}
+    assert {conversation(r) for r in found["tree"]} == {sample.uuid}
+
+
+@solver
+def nested_agents() -> Solver:
+    """A generate in an agent, and one in an agent inside it."""
+
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        async with span("outer", type="agent"):
+            await get_model().generate([ChatMessageUser(content="outer")])
+            async with span("inner", type="agent"):
+                state.output = await get_model().generate(
+                    [ChatMessageUser(content="inner")]
+                )
+        return state
+
+    return solve
+
+
+def test_depth_and_labels_choose_a_sub_agents_steps(tmp_path: Path) -> None:
+    [log] = eval(
+        Task(dataset=[Sample(input="go")], solver=nested_agents()),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "logs"),
+        display="none",
+    )
+    assert log.samples is not None
+    sample = log.samples[0]
+    spans = {e.name: e.id for e in sample.events if isinstance(e, SpanBeginEvent)}
+    inner = next(
+        e.uuid
+        for e in sample.events
+        if isinstance(e, ModelEvent) and e.span_id == spans["inner"]
+    )
+    labels = [(sample.uuid, inner)]
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        top=as_scanner(conversations(), depth=1),
+        all=as_scanner(conversations()),
+        labelled=as_scanner(conversations(), steps=steps_in(labels)),
+    )
+
+    def seen(rows: list[Row]) -> list[str]:
+        return [r["metadata.metadata"]["conversation"] for r in rows]
+
+    assert seen(found["top"]) == [spans["outer"]]
+    assert seen(found["all"]) == [spans["outer"], spans["inner"]]
+    assert seen(found["labelled"]) == [spans["inner"]]
 
 
 def test_the_probe_reads_only_the_tip_of_each_conversation_list() -> None:
@@ -558,7 +681,7 @@ def test_a_scanned_step_carries_its_stage_and_turns(tmp_path: Path) -> None:
     )
 
     [row] = found["s"]
-    assert (row["metadata.stage"], row["metadata.turns"]) == ("tool_result", "inferred")
+    assert (row["metadata.stage"], row["metadata.turns"]) == ("tool_result", "recorded")
     assert row["metadata.step_id"] in {e.step_id for e in recorded}
     assert row["value"] == 0.0
 

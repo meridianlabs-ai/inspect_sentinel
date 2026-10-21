@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from inspect_ai._sentinel._integration import EvalInfo
 from inspect_ai.analysis._dataframe.samples.extract import auto_sample_id
 from inspect_ai.log import (
     EvalLog,
@@ -29,11 +30,21 @@ class Contexts:
             return await self._from_log(transcript, transcript.source_uri)
         return _from_info(transcript)
 
-    async def _from_log(self, transcript: Transcript, log: str) -> EvalContext:
+    async def eval_info(self, transcript: Transcript) -> EvalInfo:
+        # what the log driver reads from the log's header
+        if transcript.source_type == "eval_log" and transcript.source_uri:
+            return EvalInfo.from_eval((await self._header(transcript.source_uri)).eval)
+        return EvalInfo(inspect_ai_version=None, sentinel=False)
+
+    async def _header(self, log: str) -> EvalLog:
         header = self._headers.get(log)
         if header is None:
             header = await read_eval_log_async(log, header_only=True)
             self._headers[log] = header
+        return header
+
+    async def _from_log(self, transcript: Transcript, log: str) -> EvalContext:
+        header = await self._header(log)
         # the sample record's own values: Scout's columns hold its id as a
         # string, which would replay an id of 7 as "7"
         sample_id, epoch = await self._identity(log, header, transcript.transcript_id)

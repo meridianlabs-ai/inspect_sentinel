@@ -6,6 +6,7 @@ from typing import Any, Literal, TypeAlias, cast
 from inspect_ai._util.registry import registry_info
 from inspect_ai.log import SentinelConfig
 from inspect_scout import Result, Scanner, Transcript, scanner
+from inspect_scout._scanner.scanner import SCANNER_TIMELINE_NEEDED_ATTR
 
 from inspect_sentinel import (
     AfterGenerate,
@@ -38,7 +39,7 @@ from ._select import (
     selector_from,
     stand_in_from,
 )
-from ._steps import transcript_steps
+from ._steps import conversation_depths, transcript_steps
 
 Stage: TypeAlias = Literal["model_input", "model_output", "tool_call", "tool_result"]
 
@@ -94,19 +95,16 @@ def as_scanner(
         max_units: How many units of one transcript run at once.
         steps: Which steps to run the sentinel at: a `steps_in()` label table, or a selector `(transcript_id, step) -> bool` registered with `@step_selector` (or its registered name). Every step is still rebuilt; only the chosen ones run, so a monitor's state does not see the others.
         human: How `human()` is answered where no answer was recorded at the step: `"recorded"`, the fail-closed answer; `"fail_closed"`, the fail-closed answer even where one was recorded; or a stand-in registered with `@human_stand_in` (or its registered name).
-        timeline: The stored timeline whose agents are the conversations, such as Petri's `"target"`.
-        depth: How deep in the timeline's agent tree to replay conversations, as `llm_scanner` takes it.
+        timeline: The stored timeline whose agent spans and branches are the conversations, such as Petri's `"target"`, in place of the log's span tree. Raises for a transcript with no timeline of that name.
+        depth: Run only conversations at most this deep, counting as `llm_scanner` does: 1 for the sample's own conversation and top-level agents, one more for each agent above. All conversations when None.
         compaction: Which compaction segments of each conversation to run: `"all"`, `"last"`, or that many of the latest.
 
     Raises:
-        ValueError: If `stage` is missing or not a stage the sentinel watches, or the sentinel is several monitors and no protocol.
+        ValueError: If `stage` is missing or not a stage the sentinel watches, the sentinel is several monitors and no protocol, or `depth` is less than 1.
         TypeError: If `steps` or `human` is a callable not registered for a scan.
-        NotImplementedError: For `timeline` and `depth`, which need inspect_ai's log driver.
     """
-    if timeline is not None or depth is not None:
-        raise NotImplementedError(
-            "as_scanner(timeline=, depth=) needs inspect_ai's log driver, steps_from_events() (R7 PR 3)."
-        )
+    if depth is not None and depth < 1:
+        raise ValueError(f"depth must be at least 1; got {depth}.")
     config = (
         sentinel
         if isinstance(sentinel, SentinelConfig)
@@ -135,6 +133,8 @@ def as_scanner(
         max_units=max_units,
         steps=selected,
         human=policy,
+        timeline=timeline,
+        depth=depth,
         compaction=compaction,
     )
 
@@ -151,6 +151,8 @@ def sentinel_replay(
     max_units: int,
     steps: Any,
     human: str,
+    timeline: str | None,
+    depth: int | None,
     compaction: Literal["all", "last"] | int,
 ) -> Scanner[Transcript]:
     # a process rebuilding the scanner, as a resumed scan does, has not
@@ -162,12 +164,16 @@ def sentinel_replay(
     contexts = Contexts()
 
     async def scan(transcript: Transcript) -> Result | list[Result]:
-        built, turns = transcript_steps(transcript)
+        eval_info = await contexts.eval_info(transcript)
+        built, turns = transcript_steps(transcript, eval_info, timeline)
         segments = _segments(built, compaction)
+        depths = conversation_depths(transcript, timeline) if depth is not None else {}
         transcript_id = transcript.transcript_id
 
         def select(step: ReplayStep) -> bool:
             if step.segment not in segments:
+                return False
+            if depth is not None and depths.get(step.step.conversation, 1) > depth:
                 return False
             return selector is None or selector(transcript_id, step)
 
@@ -195,6 +201,9 @@ def sentinel_replay(
             return transcript_result(results, label)
         return results
 
+    if timeline is not None:
+        # a stored timeline is read only when a scanner asks Scout for timelines
+        setattr(scan, SCANNER_TIMELINE_NEEDED_ATTR, True)
     return scan
 
 

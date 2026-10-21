@@ -9,7 +9,7 @@ A monitor is a classifier, and you want to measure it before anything acts on it
 
 ::: {.callout-note}
 ## In development
-Replay is being built. Today every transcript replays from its messages (see [What a replayed step holds](#what-a-replayed-step-holds)); replay from a log's events, with each step's exact model input, tools and earlier human decisions, comes with inspect_ai's log driver. `as_scanner(timeline=, depth=)` waits on it too.
+Replay is being built. A log written by an inspect_ai that records where each model call was made replays from its events, step for step as the sentinel saw it live. An older log, or a transcript from another source, replays from its messages for now (see [What a replayed step holds](#what-a-replayed-step-holds)).
 :::
 
 The Scout adapter is an extra:
@@ -153,6 +153,10 @@ Where a field's digest differs, replay handed the monitor something other than w
 
 ## What a replayed step holds
 
-A step replayed from a transcript's messages is the projection a proxy makes: each assistant message is a generate whose input is everything before it, and each tool call and its answering tool message are its tool steps. It does not hold the generate's tools and configuration, or a tool step's `input`, `tools`, `view` and `truncated`; `human_decisions` is `None`, and `AfterToolCall.output` is `None`, as for a proxy. A portable monitor, which already handles a proxy's steps, replays from messages unchanged.
+From an Inspect log that records where each model call was made, a step holds what the live step held, rebuilt by the same code inspect_ai uses live: the model's input and tools, `history`, `agent_messages`, the earlier `human()` decisions in `human_decisions`, and at a tool stage its view and whether its output was cut. The untruncated tool output is not in a log, so `AfterToolCall.output` is `None`. A row's `turns` is `"recorded"`, or `"stored"` when `timeline=` named a stored timeline, such as Petri's `"target"`, whose branches are then the conversations.
+
+From an older log, or a transcript from another source, a step is the projection a proxy makes from the messages, and `turns` is `"inferred"`: each assistant message is a generate whose input is everything before it, and each tool call and its answering tool message are its tool steps. It does not hold the generate's tools and configuration, or a tool step's `input`, `tools`, `view` and `truncated`; `human_decisions` is `None`. A portable monitor, which already handles a proxy's steps, replays from messages unchanged.
+
+`depth=` runs only conversations at most that deep: 1 for the sample's own conversation and top-level agents, one more for each agent above.
 
 What replay cannot do is show a decision's effect: a `reject` in replay does not change the transcript, since the agent already did what it did. Replay measures reports, not interventions.
