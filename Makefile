@@ -20,7 +20,7 @@ LITELLM ?= 1.105.0
 LITELLM_ENV = cd src/proxies/litellm && uv run --isolated --no-project \
 	--with "litellm[proxy]==$(LITELLM)" --with-editable . \
 	--with pytest --with pytest-timeout --with pytest-xdist --with jsonschema \
-	--with httpx --with "anthropic<2"
+	--with httpx --with "anthropic>=2"
 
 # in parallel, since many of the tests start a sidecar of their own
 .PHONY: test-litellm
