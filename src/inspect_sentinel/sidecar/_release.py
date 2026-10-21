@@ -121,8 +121,10 @@ class Turn(Protocol):
         ...
 
 
-def _blank(event: StreamEvent) -> bool:
-    return not any(line for line, _ in event.lines)
+def _skipped(event: StreamEvent) -> bool:
+    # what every SSE reader skips: blank lines, and comments, which a provider
+    # or a proxy may send as keepalives
+    return all(not line or line.startswith(":") for line, _ in event.lines)
 
 
 class AnthropicTurn:
@@ -143,7 +145,7 @@ class AnthropicTurn:
         )
 
     def place(self, event: StreamEvent) -> Placement:
-        if _blank(event):
+        if _skipped(event):
             return Placement("filler")
         data = event.data
         kind = (data or {}).get("type")
@@ -204,7 +206,7 @@ class ChatTurn:
         return frozenset(self._open)
 
     def place(self, event: StreamEvent) -> Placement:
-        if _blank(event):
+        if _skipped(event):
             return Placement("filler")
         data = event.data
         if data is None:
@@ -286,7 +288,7 @@ class ResponsesTurn:
         )
 
     def place(self, event: StreamEvent) -> Placement:
-        if _blank(event):
+        if _skipped(event):
             return Placement("filler")
         data = event.data
         kind = (data or {}).get("type")
@@ -576,8 +578,8 @@ class ClientCheck:
 
 
 def says_nothing(event: StreamEvent) -> bool:
-    """Whether an event, as edited, carries nothing a client acts on: blank lines, Anthropic's `ping`, or a Chat Completions chunk left with an empty delta once a call's fragments were taken out of it."""
-    if _blank(event):
+    """Whether an event, as edited, carries nothing a client acts on: blank lines and comments, Anthropic's `ping`, or a Chat Completions chunk left with an empty delta once a call's fragments were taken out of it."""
+    if _skipped(event):
         return True
     data = event.data
     if data is None:

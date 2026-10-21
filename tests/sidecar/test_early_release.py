@@ -30,7 +30,15 @@ from inspect_sentinel.sidecar._errors import TimeLimitError
 from inspect_sentinel.sidecar._handler import RequestResult
 from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
 from inspect_sentinel.sidecar._wire import UnreadableError
-from tests.sidecar._traffic import JSON, STREAM, message, request, weather
+from tests.sidecar._traffic import (
+    JSON,
+    STREAM,
+    message,
+    reply,
+    request,
+    weather,
+    weather_rule,
+)
 from tests.sidecar.test_early_turn import _exchange, noting
 
 _FORMATS = ["anthropic", "chat", "responses"]
@@ -675,3 +683,161 @@ async def test_a_reply_released_early_has_one_time_limit_for_all_its_judging() -
     result = await early.request_result("request_456")
     assert not isinstance(result, str)
     assert (result.latest.state, result.latest.reason) == ("not_judged", "time_limit")
+
+
+def _anthropic_stream(*blocks: dict[str, Any], stop_reason: str = "tool_use") -> bytes:
+    # an Anthropic stream of these blocks, each whole in its start but a call's
+    # arguments and a text's text, which arrive as deltas
+    opened = json.loads(message(stop_reason=stop_reason))
+    events: list[dict[str, Any]] = [
+        {
+            "type": "message_start",
+            "message": opened | {"content": [], "stop_reason": None},
+        }
+    ]
+    for index, block in enumerate(blocks):
+        if block["type"] == "tool_use":
+            events += [
+                {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": block | {"input": {}},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": json.dumps(block["input"]),
+                    },
+                },
+            ]
+        elif block["type"] == "text":
+            events += [
+                {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {"type": "text", "text": ""},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "text_delta", "text": block["text"]},
+                },
+            ]
+        else:
+            events.append(
+                {"type": "content_block_start", "index": index, "content_block": block}
+            )
+        events.append({"type": "content_block_stop", "index": index})
+    events += [
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+            "usage": {"output_tokens": 5},
+        },
+        {"type": "message_stop"},
+    ]
+    return "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events
+    ).encode()
+
+
+_SEARCH: dict[str, Any] = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_1",
+    "name": "web_search",
+    "input": {"query": "Paris weather"},
+}
+
+
+@pytest.mark.anyio
+async def test_a_server_tool_answered_in_a_reply_released_early_is_read() -> None:
+    # Anthropic can start a search in one reply and give its result in the
+    # next, which is read with what reading the first noted
+    handler = Handler(weather_rule(), release="early")
+    await handler.request(request("a"))
+    await handler.reply(reply(message(_SEARCH, weather("Paris")), id="a"))
+    then = [
+        {"role": "assistant", "content": [_SEARCH, weather("Paris")]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Rain."}
+            ],
+        },
+    ]
+    await handler.request(request("b", then=then))
+    result = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_1",
+        "content": [
+            {
+                "type": "web_search_result",
+                "url": "https://example.com/paris",
+                "title": "Paris weather",
+                "encrypted_content": "abc",
+                "page_age": None,
+            }
+        ],
+    }
+    body = _anthropic_stream(
+        result, {"type": "text", "text": "Rain."}, weather("Lima", "toolu_2")
+    )
+    second = reply(body, id="b", content_type=STREAM)
+
+    outputs = await _streamed(handler.reply_stream(_start(second)), body, 61)
+
+    assert outputs[-1] == Finished()
+    assert _sent(outputs) == body
+
+
+_TEXT_EVENT = {
+    "anthropic": b"text_delta",
+    "chat": b'"content": "Hello"',
+    # the Responses recording opens with a reasoning item, which goes out as
+    # it arrives
+    "responses": b'"type":"reasoning"',
+}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("name", _FORMATS)
+async def test_a_providers_comment_holds_nothing_back(name: str) -> None:
+    # a provider may send comments of its own as keepalives, which say nothing
+    asked, recorded = _exchange(name, inspect=False)
+    if name == "chat":
+        body = (
+            _chat_chunk({"role": "assistant", "content": ""})
+            + _chat_chunk({"content": "Hello"})
+            + _chat_chunk({"content": " there."})
+            + _chat_chunk({}, finish="stop")
+            + b"data: [DONE]\n\n"
+        )
+        recorded = replace(recorded, body=body)
+    events = recorded.body.split(b"\n\n")
+    events.insert(1, b": ping")
+    body = b"\n\n".join(events)
+    text = next(i for i, event in enumerate(events) if _TEXT_EVENT[name] in event)
+    handler = Handler(slowly(0, "proceed"), release="early")
+    await handler.request(asked)
+    stream = handler.reply_stream(_start(recorded))
+    first: Output | None = None
+    rest: list[Output] = []
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(stream.run)
+            outputs = stream.__aiter__()
+            await stream.feed(b"\n\n".join(events[: text + 1]) + b"\n\n")
+            # the text goes out while the rest of the stream is still to come
+            with anyio.move_on_after(2):
+                first = await outputs.__anext__()
+            assert first is not None, "nothing went out before the stream ended"
+            assert isinstance(first, Release) and _TEXT_EVENT[name] in first.data
+            await stream.feed(b"\n\n".join(events[text + 1 :]))
+            await stream.end()
+            rest = [output async for output in outputs]
+
+    assert first is not None and rest[-1] == Finished()
+    assert _sent([first, *rest]) == body
