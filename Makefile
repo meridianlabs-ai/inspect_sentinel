@@ -40,6 +40,10 @@ envoy-protos:
 		--with grpcio-tools==1.74.0 --with mypy-protobuf==5.1.0 \
 		python scripts/generate_envoy_protos.py
 
+# The docs tools are in the `doc` extra, which `dev` leaves out, so install it
+# first. `uv pip install` leaves the inspect_ai and inspect_scout installed from
+# git in place, as they satisfy the floors.
 .PHONY: docs
 docs:
+	uv pip install --python .venv/bin/python -e ".[doc]"
 	cd docs && PATH="$(CURDIR)/.venv/bin:$$PATH" ../.venv/bin/quarto render
