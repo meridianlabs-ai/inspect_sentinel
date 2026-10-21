@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.2.0](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.4...0.2.0) (2026-10-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* StepPreprocessor replaces excerpts for what a monitor shows a model ([#109](https://github.com/meridianlabs-ai/inspect_sentinel/issues/109))
+
+### Features
+
+* **sidecar:** give each step the history its conversation has sent the model ([#125](https://github.com/meridianlabs-ai/inspect_sentinel/issues/125)) ([6ad7998](https://github.com/meridianlabs-ai/inspect_sentinel/commit/6ad7998cc03c63e0649d592225c393f3276c6972))
+* **sidecar:** judge model traffic behind Envoy, through an ext_proc shim ([#128](https://github.com/meridianlabs-ai/inspect_sentinel/issues/128)) ([a0f4590](https://github.com/meridianlabs-ai/inspect_sentinel/commit/a0f4590e0122c8e8f9addfccb52a2d86f9df3d63))
+* **sidecar:** release a streamed reply as it arrives, behind Envoy and LiteLLM ([#132](https://github.com/meridianlabs-ai/inspect_sentinel/issues/132)) ([bfc6235](https://github.com/meridianlabs-ai/inspect_sentinel/commit/bfc62355e2cd9b9b262e4102c8c3a31a6d218fbb))
+* **sidecar:** serve the endpoint for evals, and reject or modify one call of a turn ([#120](https://github.com/meridianlabs-ai/inspect_sentinel/issues/120)) ([08d50f0](https://github.com/meridianlabs-ai/inspect_sentinel/commit/08d50f083945ccfe672562c506635849eddf9f6f))
+* StepPreprocessor replaces excerpts for what a monitor shows a model ([#109](https://github.com/meridianlabs-ai/inspect_sentinel/issues/109)) ([ffb264d](https://github.com/meridianlabs-ai/inspect_sentinel/commit/ffb264d3e2ed66f783cc53036607e70ef413a31b))
+
+
+### Bug Fixes
+
+* depend on inspect_scout at runtime, so Host.score works from a PyPI install ([#131](https://github.com/meridianlabs-ai/inspect_sentinel/issues/131)) ([b39bec4](https://github.com/meridianlabs-ai/inspect_sentinel/commit/b39bec4e9769ca627dcd00517f675f417656cfa0))
+
+
+### Miscellaneous
+
+* release 0.1.5 ([#144](https://github.com/meridianlabs-ai/inspect_sentinel/issues/144)) ([0c1513a](https://github.com/meridianlabs-ai/inspect_sentinel/commit/0c1513a12aea5fe022a35f898aa20be36cd7c540))
+* release 0.2.0 ([#146](https://github.com/meridianlabs-ai/inspect_sentinel/issues/146)) ([b755040](https://github.com/meridianlabs-ai/inspect_sentinel/commit/b755040c8e42e547d19ae70c51cee1ecfea21d45))
+
 ## [0.1.4](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.3...0.1.4) (2026-10-19)
 
 
