@@ -2,6 +2,12 @@
 
 Thanks for your interest in contributing. Bug reports, doc fixes, and core changes are all welcome.
 
+## Start with an issue
+
+Open an issue before you write code, and wait for a maintainer to say on the issue that we want the change. Then open a PR that links the issue (`Fixes #NNN`). This applies whoever filed the issue. Maintainers may open PRs directly, and trivial documentation fixes, such as typos and broken links, are welcome without an issue.
+
+Reviewing a PR takes much longer than agreeing on a direction in an issue. Starting with an issue spends review time on work we have agreed we want, and spares you writing code we can't merge.
+
 ## Development setup
 
 Inspect Sentinel uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, and requires Python 3.11+. Use uv 0.9.15 or later. Scout keeps its viewer files in Git LFS, and sentinel doesn't use them. From 0.9.15, uv leaves them out of a git install, but an older uv on a machine with Git LFS installed downloads them, and a failed download fails the whole install. With an older uv, set `GIT_LFS_SKIP_SMUDGE=1` for the install.

@@ -29,6 +29,7 @@
 
 ## Pull Requests
 
+- Unless the account you operate for is a maintainer, open a PR only for an issue where a maintainer has said they want the change, and link it (`Fixes #NNN`). Without an accepted issue, file your evidence on an issue and stop. Trivial documentation fixes (typos, broken links) are exempt
 - Title PRs as Conventional Commits (`<type>: <description>`)—we squash-merge, so the PR title becomes the commit message that drives releases; `pr-title-lint` enforces it
 - `feat:`/`fix:` are for user-facing changes only: they headline the release notes and bump the version. `perf:`/`revert:` also appear in the notes (no bump); `docs:`, `refactor:`, `chore:`, `build:`, `ci:`, `test:`, `style:` are hidden
 - Body lines starting with `<type>:` are parsed as extra changelog entries—don't begin description lines with a conventional-commit prefix unless that's intended
