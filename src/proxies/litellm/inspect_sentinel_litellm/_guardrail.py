@@ -83,6 +83,9 @@ _CREDENTIALS = frozenset(
 # in LiteLLM's own record of the request, which lasts as long as the request
 # and is never sent to a provider
 _KEPT = "inspect_sentinel"
+# where it is kept that the reply was handed over as a stream; the request's
+# own `stream` field is the caller's, and LiteLLM streams only for `True`
+_STREAMED = "inspect_sentinel_streamed"
 _MAX_REPLY_BYTES = 32 * 1024 * 1024
 # where the sidecar serves the methods this calls, and the version of them
 _PATH = "/proxy/v1"
@@ -344,7 +347,7 @@ class LiteLLMGuardrail(CustomGuardrail):
             HTTPException: The reply is refused, or the sidecar gave no usable answer and `unreachable_fallback` is `fail_closed`.
         """
         told = _told(data)
-        if told is None or data.get("stream"):
+        if told is None or _record(data).get(_STREAMED):
             # LiteLLM 1.83 shows a streamed reply here too, put together once
             # it has gone out, where it can't be stopped. The stream was judged
             # as it went, and the sidecar has let go of its request.
@@ -375,6 +378,9 @@ class LiteLLMGuardrail(CustomGuardrail):
             async for chunk in chunks:
                 yield chunk
             return
+        # before the stream is read, since LiteLLM 1.83 shows the reply to the
+        # success hook while its last chunk is read
+        _record(request_data)[_STREAMED] = True
         relay = _Relay(self, told, chunks)
         try:
             async for chunk in relay.released():

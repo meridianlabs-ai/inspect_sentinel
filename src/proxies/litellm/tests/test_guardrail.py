@@ -2643,6 +2643,26 @@ def test_a_streamed_reply_is_not_judged_again_once_whole(
     assert [call["method"] for call in calls] == ["judge_request", "judge_reply"]
 
 
+@pytest.mark.parametrize("stream", [1, "false", "true"])
+@pytest.mark.parametrize("on", [_CHAT, _RESPONSES], ids=["chat", "responses"])
+def test_a_reply_not_streamed_is_judged_whatever_the_caller_set_stream_to(
+    monkeypatch: pytest.MonkeyPatch, on: _On, stream: object
+) -> None:
+    # LiteLLM streams only for `"stream": true`, and answers any other value
+    # with a whole reply, which reaches only the success hook
+    calls: list[Any] = []
+    data = _data(on) | {"stream": stream}
+
+    with _serving(
+        _scripted(calls, _result({"action": "pass"}), _result(_REFUSAL))
+    ) as url:
+        with pytest.raises(HTTPException) as refused:
+            _exchange(_make(monkeypatch, url), on, data, False)
+
+    assert refused.value.status_code == 403
+    assert [call["method"] for call in calls] == ["judge_request", "judge_reply"]
+
+
 @pytest.mark.parametrize("fallback", ["fail_closed", "fail_open"])
 def test_a_streamed_reply_not_judged_within_the_timeout_is_a_reply_unanswered(
     monkeypatch: pytest.MonkeyPatch, fallback: str
@@ -2703,6 +2723,7 @@ def test_a_slow_provider_is_not_held_to_the_sidecar_s_timeout(
     assert [_written(chunk) for chunk in reply] == [
         _written(chunk) for chunk in _CHAT.stream()
     ]
+
 
 
 _SIDECAR_ERROR = b'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "Not judged."}}\n\n'
