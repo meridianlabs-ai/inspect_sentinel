@@ -190,12 +190,12 @@ Scheduled after PR 10. The initial client uses whole-response holding; support f
 
 Keep the integration transparent to eval authors and preserve the existing eval and task interfaces. "Inspect client for the sidecar" describes its responsibility, without prescribing a public type or a choice users must make between local and remote execution. Its internal names, structure and any necessary deployment configuration are for Meridian to agree.
 
-- The probe, `register_task` and the `required` or `optional` setting at task init (section 9). An answer with `fixed` true, for a task in the tasks folder, is a success.
+- The probe, `register_task` and the client's one setting, `auto`, `required` or `off`, at task init (section 9 and [inspect-client.md](inspect-client.md)). An answer with `fixed` true, for a task in the tasks folder, is a success.
 - Any subset of a registered task's samples is valid. An eval that runs only some of the samples in the tasks folder, chosen with `--sample-id`, `--limit` or any other selection, runs them as usual.
 - `x-inspect-context` and `x-irid` on each model request, only after the probe found a sentinel.
 - Reading the `sentinel` field in each provider: on a reply, in the last event of a stream, and on an error, including where LiteLLM nests it (section 1).
 - Acting on the field as Inspect does in process: a call taken out goes back into Inspect's conversation with an approval error, a changed call keeps the model's original, a `terminate` ends the sample, and every step is written into the transcript.
-- `request_result` when the field is missing, and recording a request as not judged when the sidecar cannot say.
+- `request_result` when the field is missing. A request the sidecar says it couldn't judge is recorded as not judged. One whose judgment is lost, unknown or can't be looked up is recorded as unavailable, and never as allowed.
 - `sample_result` before scoring each sample, and `end_sample` after.
 - Prevent Inspect's completion-response cache from bypassing the sidecar while the client is active. Initially disable that cache, or arrange fresh sidecar judging of a cached completion before the agent can use it. A cached `sentinel` field is not a decision for the current sample. This is separate from provider prompt caching, which still sends the model request through the proxy.
 - Tests: in inspect_ai's own suite, with a stand-in sidecar; and the conformance suite in `sidecar.md` section 11, comparing Inspect's transcript in process and through a sidecar with whole-response holding. Include a pre-populated completion cache: a cached tool call cannot execute without the sidecar judging it for the current sample, and a decision cached by an earlier eval cannot authorize it. Incremental transcript conformance belongs to PR 12.
