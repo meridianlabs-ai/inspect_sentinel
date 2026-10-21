@@ -19,6 +19,7 @@ from inspect_ai.event import (
     Timeline,
     TimelineEvent,
     TimelineSpan,
+    ToolEvent,
 )
 from inspect_ai.log import EvalLog, write_eval_log
 from inspect_ai.model import (
@@ -681,8 +682,7 @@ def test_the_probe_reads_only_the_tip_of_each_conversation_list() -> None:
     from inspect_ai.model import ChatMessageAssistant
     from inspect_ai.tool import ToolCall, ToolCallView
 
-    from inspect_sentinel import Host, HumanDecision, Reported
-    from tests._fakes import FakeHost
+    from inspect_sentinel import HumanDecision, Reported
 
     decisions = View(
         [
@@ -707,10 +707,9 @@ def test_the_probe_reads_only_the_tip_of_each_conversation_list() -> None:
         history=history,
         human_decisions=decisions,
     )
-    probe = fidelity_probe()
-    tool_call: Any = next(f for f in probe.functions if f.__name__ == "tool_call")
+    replayed = ReplayStep("c", "tool_call", step, ("c", 0))
 
-    anyio.run(tool_call, Context(path="", host=Host(FakeHost())), step)
+    anyio.run(replay_monitor, fidelity_probe(), [replayed])
 
     assert decisions.reads <= 2 and history.reads <= 4
 
@@ -1525,17 +1524,10 @@ def test_transcripts_from_one_log_share_its_reads(
     assert [found[s.uuid or ""].sample_id for s in log.samples] == [0, 1, 2, 3, 4]
 
 
-def test_the_probe_digests_each_live_context_once_and_keeps_none(
-    monkeypatch: pytest.MonkeyPatch,
+def test_the_probe_digests_a_samples_context_once_live_and_in_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import gc
-    import weakref
-
-    from inspect_ai.tool import ToolCall, ToolCallView
-
-    from inspect_sentinel import EvalContext, Host
     from inspect_sentinel.scout import _probe
-    from tests._fakes import FakeHost
 
     forms = 0
     form = _probe._eval_form
@@ -1546,44 +1538,127 @@ def test_the_probe_digests_each_live_context_once_and_keeps_none(
         return form(context)
 
     monkeypatch.setattr(_probe, "_eval_form", counted)
+    large: list[ChatMessage] = [
+        ChatMessageUser(content=f"part {i}") for i in range(2000)
+    ]
+    samples = [Sample(id=i, input=large) for i in range(2)]
 
-    def context(sample: int) -> Context:
-        large: list[ChatMessage] = [
-            ChatMessageUser(content=f"part {i}") for i in range(2000)
-        ]
-        evaluated = EvalContext(
-            task="t",
-            task_description=None,
-            sample_id=sample,
-            epoch=1,
-            sample_description=None,
-            sample_input=large,
-            metadata={},
+    # live: inspect_ai builds a new EvalContext at every step it checks
+    run(
+        tmp_path / "logs",
+        [[call(1), call(2), call(3)], [call(4)]],
+        observe_only(fidelity_probe()),
+        samples,
+    )
+    live = forms
+    forms = 0
+    # replayed: two transcripts at once, each one unit
+    status = scan(
+        scanners={"s": as_scanner(fidelity_probe(), stage="tool_call", split=None)},
+        transcripts=transcripts_from(str(tmp_path / "logs")),
+        scans=str(tmp_path / "scans"),
+        display="none",
+        max_processes=1,
+        max_transcripts=2,
+    )
+
+    assert status.complete
+    assert (live, forms) == (2, 2)
+
+
+def test_a_results_frame_selects_the_steps_it_holds(tmp_path: Path) -> None:
+    run(tmp_path / "logs", [[call(9, "a"), call(2, "b")], [call(7, "c")]], None)
+    first = scan(
+        scanners={"s": as_scanner(by_argument())},
+        transcripts=transcripts_from(str(tmp_path / "logs")),
+        scans=str(tmp_path / "first"),
+        display="none",
+        max_processes=1,
+    )
+    frame: Any = scan_results_df(first.location).scanners["s"]
+    # the documented flow: filter the results, then replay what it kept
+    flagged = frame[frame["value"] >= 0.5]
+
+    found = scanned(
+        tmp_path / "again",
+        tmp_path / "logs",
+        s=as_scanner(by_argument(), steps=steps_in(flagged)),
+    )
+
+    assert {step for _, step in keyed(found["s"], "value")} == {"a", "c"}
+
+
+def test_a_scan_resumes_after_an_eval_loaded_the_entry_points(
+    tmp_path: Path,
+) -> None:
+    run(tmp_path / "logs", [[call(9, "a")]], observe_only(fidelity_probe()))
+    marker = tmp_path / "marker"
+    marker.touch()
+    first = scan(
+        scanners={
+            "replay": as_scanner(breaks_while(str(marker))),
+            "read": as_reader("fidelity_probe", stage="tool_call"),
+        },
+        transcripts=transcripts_from(str(tmp_path / "logs")),
+        scans=str(tmp_path / "scans"),
+        display="none",
+        max_processes=1,
+    )
+    assert not first.complete
+    marker.unlink()
+
+    # inspect_ai loads sentinel's entry point, as an eval does, before the
+    # process imports Scout to resume
+    [loaded, complete] = drive(
+        tmp_path,
+        "-c",
+        "import sys; from inspect_ai._util.entrypoints import ensure_entry_points; "
+        "ensure_entry_points(); print('inspect_scout' in sys.modules); "
+        "from inspect_scout import scan_resume; "
+        "print(scan_resume(sys.argv[1], display='none').complete)",
+        first.location,
+        cwd=Path(__file__).parents[2],
+    )
+
+    assert (loaded, complete) == ("False", "True")
+    found = rows(first.location)
+    assert [r["value"] for r in found["replay"]] == [0.9]
+    assert [r["value"] for r in found["read"]] == [0.0]
+
+
+def test_a_stored_timeline_cites_a_sub_agents_tool_message(tmp_path: Path) -> None:
+    log = run(tmp_path / "run", [[call(1, "main")]], None, helpers=[call(5, "helper")])
+    assert log.samples is not None
+    sample = log.samples[0]
+    tools = {e.id: e for e in sample.events if isinstance(e, ToolEvent)}
+    # the helper's tool message is in none of the sample's messages
+    assert tools["helper"].message_id not in {m.id for m in sample.messages}
+    # a stored timeline whose one conversation is none of the span tree's
+    sample.timelines = [
+        Timeline(
+            name="target",
+            description="",
+            root=TimelineSpan(
+                id="target-branch",
+                name="target",
+                content=[
+                    TimelineEvent(event=e)
+                    for e in sample.events
+                    if isinstance(e, ModelEvent | ToolEvent)
+                ],
+            ),
         )
-        return Context(path="", host=Host(FakeHost(eval=evaluated)))
+    ]
+    write_eval_log(log, str(tmp_path / "logs" / "stored.eval"))
 
-    step = BeforeToolCall(
-        conversation="c",
-        message="",
-        message_id="m",
-        call=ToolCall(id="c", function="addition", arguments={"x": 1, "y": 1}),
-        view=ToolCallView(),
-        input=None,
-        agent_messages=[],
-        history=[],
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        s=as_scanner(by_argument(), timeline="target"),
     )
-    tool_call: Any = next(
-        f for f in fidelity_probe().functions if f.__name__ == "tool_call"
-    )
-    first, second = context(1), context(2)
 
-    # two transcripts' steps, interleaved
-    for _ in range(10):
-        for current in (first, second):
-            anyio.run(tool_call, current, step)
-
-    assert forms == 2
-    held = weakref.ref(cast(Any, first.eval))
-    del first
-    gc.collect()
-    assert held() is None
+    cited = {r["metadata.step_id"]: references(r, "message") for r in found["s"]}
+    assert cited == {
+        call_id: [{"type": "message", "id": tools[call_id].message_id}]
+        for call_id in ("helper", "main")
+    }

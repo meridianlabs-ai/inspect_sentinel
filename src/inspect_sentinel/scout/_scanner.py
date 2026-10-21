@@ -190,7 +190,7 @@ def sentinel_replay(
             max_unit_steps=max_unit_steps,
             max_units=max_units,
         )
-        citations = Citations(transcript)
+        citations = Citations(transcript, timeline)
         results: list[Result] = []
         label = ""
         for report in reports:

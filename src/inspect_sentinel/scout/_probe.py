@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import weakref
 from collections.abc import Sequence
 from dataclasses import fields
 from typing import Any, cast
 
+from inspect_ai.util import StoreModel
 from pydantic_core import to_jsonable_python
 
 from inspect_sentinel import (
@@ -37,27 +37,19 @@ def fidelity_probe() -> MonitorGroup:
 
     It watches all four stages and never abstains: each observation has suspicion `0.0` and metadata holding a digest of each field of the step (`step`) and of `context.eval` (`eval`). Attach it to an eval observe-only (`observe_only(fidelity_probe())`), then scan the logs with `as_scanner(fidelity_probe(), stage=...)` and with `as_reader("fidelity_probe", stage=...)` at each stage: the two report the same steps with the same metadata where replay is exact, and where they differ, the field says what replay got wrong.
 
-    A field's digest is a hash of its JSON form, with message ids left out, since a log stores a message once by its content. `history`, `agent_messages` and `human_decisions` are digested by their length and their last element, and `context.eval` once for each `EvalContext` it is handed while that context lives, so the probe does a constant amount of work per step beyond the step's own input. It cannot see an edit inside those lists, such as a message the agent changed after sending it. `AfterToolCall.output`, which replay does not hold, and the view's `context` are left out.
+    A field's digest is a hash of its JSON form, with message ids left out, since a log stores a message once by its content. `history`, `agent_messages` and `human_decisions` are digested by their length and their last element, and `context.eval` once for each store it runs with, which is the sample's live and a unit's in replay, so the probe does a constant amount of work per step beyond the step's own input. It keeps that digest in its store, so the sample's store in the log holds it. A change a solver makes to the sample's metadata after the probe's first step is not in later digests. It cannot see an edit inside those lists, such as a message the agent changed after sending it. `AfterToolCall.output`, which replay does not hold, and the view's `context` are left out.
     """
-    # each live context's digest, by identity, held only while the context
-    # lives: a replay holds one context for its transcript, so concurrent
-    # transcripts each digest theirs once
-    digests: dict[int, str] = {}
-
-    def eval_digest(current: EvalContext | None) -> str:
-        if current is None:
-            return _hash(None)
-        found = digests.get(id(current))
-        if found is None:
-            found = _hash(_eval_form(current))
-            digests[id(current)] = found
-            weakref.finalize(current, digests.pop, id(current), None)
-        return found
 
     def digest(context: Context, step: Step) -> Observation:
+        # the context is the sample's, constant for its store's life: the
+        # sample live, the unit in replay; a host may build a new EvalContext
+        # for every step, as inspect_ai does, so the digest is kept there
+        state = context.store_as(_ProbeState)
+        if state.eval_digest is None:
+            state.eval_digest = _hash(_eval_form(context.eval))
         return Observation(
             suspicion=0.0,
-            metadata={"step": _step_digest(step), "eval": eval_digest(context.eval)},
+            metadata={"step": _step_digest(step), "eval": state.eval_digest},
         )
 
     async def model_input(context: Context, step: BeforeGenerate) -> Observation:
@@ -73,6 +65,10 @@ def fidelity_probe() -> MonitorGroup:
         return digest(context, step)
 
     return MonitorGroup(model_input, model_output, tool_call, tool_result)
+
+
+class _ProbeState(StoreModel):
+    eval_digest: str | None = None
 
 
 def _step_digest(step: Step) -> dict[str, str]:

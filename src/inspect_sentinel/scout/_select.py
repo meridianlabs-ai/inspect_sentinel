@@ -40,23 +40,28 @@ def steps_in(labels: Any) -> StepsIn:
     """A step selector for `as_scanner(steps=...)` that runs the sentinel at the steps a label table lists.
 
     Args:
-        labels: The table: a pandas `DataFrame` with `transcript_id` and `step_id` columns, as a results dataframe has, or rows of `(transcript_id, step_id)` pairs or of mappings with those keys.
+        labels: The table: a pandas `DataFrame` with `transcript_id` and `step_id` columns, or a results dataframe from `scan_results_df()`, whose step ids are in `metadata.step_id`; or rows of `(transcript_id, step_id)` pairs or of mappings with those keys.
     """
     columns = getattr(labels, "columns", None)
     if columns is not None:
-        missing = {"transcript_id", "step_id"} - set(cast(Iterable[str], columns))
-        if missing:
+        names = set(cast(Iterable[str], columns))
+        step = next((c for c in ("step_id", _RESULT_STEP) if c in names), None)
+        if "transcript_id" not in names or step is None:
             raise ValueError(
-                f"A label table needs transcript_id and step_id columns; it has no {', '.join(sorted(missing))}."
+                f"A label table needs a transcript_id column and a step_id (or a results dataframe's {_RESULT_STEP}) column; it has {sorted(names)}."
             )
         pairs = zip(
             cast(Iterable[object], labels["transcript_id"]),
-            cast(Iterable[object], labels["step_id"]),
+            cast(Iterable[object], labels[step]),
             strict=True,
         )
     else:
         pairs = (_pair(row) for row in cast(Iterable[object], labels))
     return StepsIn(keys=sorted({(str(t), str(s)) for t, s in pairs}))
+
+
+# where a results dataframe from scan_results_df() keeps each step's id
+_RESULT_STEP = "metadata.step_id"
 
 
 def _pair(row: object) -> tuple[object, object]:

@@ -22,7 +22,7 @@ from inspect_sentinel import (
 )
 
 from ._positions import Positions
-from ._steps import Conversations
+from ._steps import Conversations, stored_conversations
 
 # the actions a step is flagged for; escalate declines to decide, so it is not
 FLAGGED = ("reject", "modify", "terminate")
@@ -88,20 +88,24 @@ def _suspicion(observation: Observation) -> JsonValue:
 class Citations:
     """What each replayed step cites in its transcript, from indexes built once."""
 
-    def __init__(self, transcript: Transcript) -> None:
+    def __init__(self, transcript: Transcript, timeline: str | None = None) -> None:
         self._events = {
             e.uuid
             for e in transcript.events
             if isinstance(e, ModelEvent) and e.uuid is not None
         }
-        # each tool call's tool events, by call id and conversation, as read
-        # mode finds them
+        # each tool call's tool events, by call id and conversation: the
+        # conversation the steps were built with, a stored timeline's where
+        # one was chosen, else the span tree's, as read mode finds them
         conversations = Conversations(transcript.events, transcript.transcript_id)
+        stored = (
+            stored_conversations(transcript, timeline) if timeline is not None else {}
+        )
         self._tools: dict[tuple[str, str], list[ToolEvent]] = {}
         for event in transcript.events:
             if isinstance(event, ToolEvent):
-                key = (event.id, conversations.of(event.span_id))
-                self._tools.setdefault(key, []).append(event)
+                conversation = stored.get(event.uuid) or conversations.of(event.span_id)
+                self._tools.setdefault((event.id, conversation), []).append(event)
         self._positions = {
             m.id: i for i, m in enumerate(transcript.messages) if m.id is not None
         }

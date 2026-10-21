@@ -85,7 +85,7 @@ def within_depth(transcript: Transcript, timeline: str | None, depth: int) -> se
         # the messages projection's steps are all in the transcript's own
         return {transcript.transcript_id} if reached else set()
     if timeline is not None:
-        conversations = _stored_conversations(tree)
+        conversations = _stored(tree)
     else:
         spans = Conversations(transcript.events, transcript.transcript_id)
         conversations = {
@@ -176,7 +176,12 @@ def _as_recorded(
     return keyed
 
 
-def _stored_conversations(timeline: Timeline) -> dict[str | None, str]:
+def stored_conversations(transcript: Transcript, name: str) -> dict[str | None, str]:
+    # each event's conversation in the stored timeline of that name, by uuid
+    return _stored(_timeline(transcript, name))
+
+
+def _stored(timeline: Timeline) -> dict[str | None, str]:
     # each model event's conversation in a stored timeline: its innermost
     # agent span or branch, else the root, as inspect_ai's driver reads it
     found: dict[str | None, str] = {}
