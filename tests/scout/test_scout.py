@@ -1719,3 +1719,59 @@ def test_the_probe_digests_the_context_each_step_is_handed(tmp_path: Path) -> No
 
     assert recorded == handed.read_text().split()
     assert len(set(recorded)) == 2
+
+
+@monitor
+def hands_over() -> MonitorGroup:
+    # the probe's digest of the context the host hands over, computed whole
+    from inspect_sentinel.scout._probe import context_digest
+
+    async def model_input(context: Context, step: BeforeGenerate) -> Observation:
+        return Observation(
+            suspicion=0.0, metadata={"eval": context_digest(context.eval)}
+        )
+
+    return MonitorGroup(model_input)
+
+
+@pytest.mark.anyio
+async def test_the_probe_digests_a_context_a_sidecar_learns_late() -> None:
+    from dataclasses import replace
+
+    from inspect_sentinel.sidecar import Handler
+    from inspect_sentinel.sidecar._registration import SampleFacts, TaskFacts
+    from tests.sidecar._traffic import inspect_headers, request
+
+    handler = Handler(observe_only([fidelity_probe(), hands_over()]))
+    task = TaskFacts(
+        task="philadelphia",
+        task_description="File the weather report.",
+        metadata={},
+        samples=[
+            SampleFacts(
+                sample_id=1,
+                sample_description=None,
+                sample_input="File today's report.",
+                metadata={},
+            )
+        ],
+    )
+
+    async def digests(id: str) -> dict[str, Any]:
+        await handler.request(replace(request(id), headers=inspect_headers()))
+        records = await handler.records(id)
+        assert records is not None
+        return {
+            r.path: cast(Any, r.detail).report.metadata["eval"]
+            for r in records
+            if r.kind == "record" and r.path in ("fidelity_probe", "hands_over")
+        }
+
+    # the run's first request comes before its task is registered
+    before = await digests("a")
+    await handler.register_task("eval_789", task)
+    after = await digests("b")
+
+    assert before["fidelity_probe"] == before["hands_over"]
+    assert after["fidelity_probe"] == after["hands_over"]
+    assert before["hands_over"] != after["hands_over"]

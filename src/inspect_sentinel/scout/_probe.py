@@ -37,7 +37,7 @@ def fidelity_probe() -> MonitorGroup:
 
     It watches all four stages and never abstains: each observation has suspicion `0.0` and metadata holding a digest of each field of the step (`step`) and of `context.eval` (`eval`). Attach it to an eval observe-only (`observe_only(fidelity_probe())`), then scan the logs with `as_scanner(fidelity_probe(), stage=...)` and with `as_reader("fidelity_probe", stage=...)` at each stage: the two report the same steps with the same metadata where replay is exact, and where they differ, the field says what replay got wrong.
 
-    A field's digest is a hash of its JSON form, with message ids left out, since a log stores a message once by its content. `history`, `agent_messages` and `human_decisions` are digested by their length and their last element, and `context.eval` once for each store it runs with, which is the sample's live and a unit's in replay, so the probe does a constant amount of work per step beyond the step's own input. It keeps that digest in its store, so the sample's store in the log holds it. A change a solver makes to the sample's metadata after the probe's first step is not in later digests. It cannot see an edit inside those lists, such as a message the agent changed after sending it. `AfterToolCall.output`, which replay does not hold, and the view's `context` are left out.
+    A field's digest is a hash of its JSON form, with message ids left out, since a log stores a message once by its content. `history`, `agent_messages` and `human_decisions` are digested by their length and their last element, and `context.eval` in two parts. The parts that cannot change within a sample (the task, ids, epoch, descriptions and the sample's input, usually the large part) are digested once per store, which is the sample's live and a unit's in replay, once the context is there, and kept in the probe's store, so the sample's store in the log holds that digest. The metadata, which a solver can change, is digested at every step. So the probe's work per step beyond the step's own input is in proportion to the metadata, and every digest is of the context the step was handed. It cannot see an edit inside those lists, such as a message the agent changed after sending it. `AfterToolCall.output`, which replay does not hold, and the view's `context` are left out.
     """
 
     def digest(context: Context, step: Step) -> Observation:
@@ -46,15 +46,20 @@ def fidelity_probe() -> MonitorGroup:
         # its input above all, is kept in the store, which is the sample's
         # live and the unit's in replay. The metadata, which a solver can
         # change, is digested at every step.
-        state = context.store_as(_ProbeState)
-        if state.fixed_digest is None:
-            state.fixed_digest = _hash(_eval_form(context.eval))
+        # An absent context is digested where it is found, never kept, since
+        # a host can learn the sample later in the same run, as a sidecar does
+        # when its task is registered late.
+        current = context.eval
+        if current is None:
+            fixed = _hash(None)
+        else:
+            state = context.store_as(_ProbeState)
+            if state.fixed_digest is None:
+                state.fixed_digest = _hash(_eval_form(current))
+            fixed = state.fixed_digest
         return Observation(
             suspicion=0.0,
-            metadata={
-                "step": _step_digest(step),
-                "eval": _combined(state.fixed_digest, context.eval),
-            },
+            metadata={"step": _step_digest(step), "eval": _combined(fixed, current)},
         )
 
     async def model_input(context: Context, step: BeforeGenerate) -> Observation:
