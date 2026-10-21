@@ -111,7 +111,19 @@ async def test_the_probe_says_which_versions_are_served() -> None:
     async with _client(Handler(weather_rule())) as client:
         answered = await client.get(INFO_PATH)
 
-    assert answered.json() == {"service": "inspect_sentinel", "versions": [1]}
+    assert answered.json() == {
+        "service": "inspect_sentinel",
+        "versions": [1],
+        "release": "whole",
+    }
+
+
+@pytest.mark.anyio
+async def test_the_probe_says_how_replies_are_released() -> None:
+    async with _client(Handler(weather_rule(), release="early")) as client:
+        answered = await client.get(INFO_PATH)
+
+    assert answered.json()["release"] == "early"
 
 
 @pytest.mark.anyio
