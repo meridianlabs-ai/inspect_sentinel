@@ -76,7 +76,7 @@ envoy = ["inspect_sentinel[sidecar]", "grpcio>=1.74.0", "protobuf>=6.31.1"]
 # The sidecar reads a provider's traffic with that provider's SDK, as
 # inspect-ai does, so each is installed only where it is wanted. The floors
 # are inspect-ai's own.
-anthropic = ["anthropic>=1.0.0,<2"]
+anthropic = ["anthropic>=2.0.0"]
 openai = ["openai>=3.4.0"]
 # The docs tools are in `doc`, which `dev` leaves out: CI installs `dev` and
 # never builds the docs, and quarto-cli has no wheel, so installing it builds it
