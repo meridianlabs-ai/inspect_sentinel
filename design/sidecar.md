@@ -34,7 +34,7 @@ When the sentinel runs in a sidecar, Inspect acts as its client. This integratio
 - **Decision.** What a sentinel says about a step: `proceed`, `reject`, `terminate`, `modify` or `escalate`.
 - **Turn.** One reply from the model: its text and every tool call in it.
 - **Conversation.** The list of messages that a model request carries.
-- **Run.** One sample in one epoch, identified by the uuid the eval log gives the sample, or one session of a naked agent. A run can hold more than one conversation. A sample that Inspect retries after an error keeps its uuid, so it is the same run. Whether its state starts again or carries on is not designed.
+- **Run.** The sidecar's word for the model calls it keeps together: one sample in one epoch, identified by the uuid the eval log gives the sample, or one session of a naked agent. It is not Inspect's run, which is one `inspect eval` command and its `run_id`. So the endpoint for evals says sample, as Inspect does, and names a sample by its uuid. A run can hold more than one conversation. A sample that Inspect retries after an error keeps its uuid, so it is the same run. Whether its state starts again or carries on is not designed.
 - **Proxy hook.** Code of ours that a proxy runs, which forwards the proxy's model traffic to the sidecar. `MiddlemanHook` is one. It is not the proxy's own mechanism for running such code, which Middleman calls its passthrough hook. It is not an Inspect hook either, which is code that an eval runs.
 - **Measured.** A claim marked **measured** was run and observed. Measurements are kept where they are the reason for a design choice.
 
@@ -454,7 +454,7 @@ The table lists what a sentinel is given when it runs inside an eval's process, 
 - **The sidecar counts the first request it sees as the conversation's start.** That is right for a conversation that starts while the sidecar runs, including one whose first request holds assistant turns, as a few-shot sample's does. A sidecar that joins a conversation midway, such as after a restart, starts the history at what that request carries ([shared and durable state](sidecar-plan.md#follow-up-shared-and-durable-state)).
 - **A message is as the provider format carries it.** Inspect holds a rejected call's result as an error with no content. The request carries the error as text, so the history holds it as text. Message ids differ, as each read gives new ones.
 - **The last result of a sample is not judged.** No request follows it, so neither its `AfterToolCall` nor its history reaches the sidecar.
-- **The history is kept for the run's life.** It grows with the conversation, as Inspect's own does, and keeps what a compaction dropped, as that is what it is for. It is dropped with the run: when the eval ends the run, or once no request has named the run for the run expiry. A run that goes on keeps it.
+- **The history is kept for the run's life.** It grows with the conversation, as Inspect's own does, and keeps what a compaction dropped, as that is what it is for. It is dropped with the run: when the eval ends the sample, with `end_sample`, or once no request has named the run for the run expiry. A run that goes on keeps it.
 
 **A person who answers.** In an eval, `human()` asks a person through Inspect's approval UI and waits for the answer. [PR 13](sidecar-plan.md#pr-13-human-review), after Envoy and incremental streaming, adds the corresponding sidecar host. It holds the step and publishes a question to a review queue. Inspect's sidecar client discovers the question while its model exchange is waiting and shows it in the same approval UI; an external review tool can consume the queue for an agent running without an eval. The person's answer goes back to the sidecar on a credential of the person's own, never on the agent's or eval's (section 9, "A client that can't be trusted"), and returns to the sentinel runner as a `HumanAnswer`. Queue discovery, answers, expiry, cancellation and records are part of PR 13. It starts with the tool stages: at the generate stages, Inspect still needs a way to show a person a whole request or reply, and asking one fails the step until that rendering is supported. Where no person can be asked, including for any client until review is built and configured, the step fails closed: the answer is `reject` where that is offered, and `terminate` otherwise, as Inspect's own host answers when nobody can. An escalation never lets a call through without someone deciding. A deployment that wants unattended escalations to go on says so in its sentinel, with `handle_escalation("proceed")` after `human()`. A long hold can still lose its connection (section 5).
 
@@ -493,7 +493,7 @@ When a sentinel runs in a sidecar, every step is judged on the traffic that pass
 1. At task init, it probes the proxy, to check that a live sentinel of a version it knows is behind it.
 2. Where the deployment allows it, it registers the task's facts with the sidecar.
 3. On each model request, it sends `x-inspect-context`, which says which sample the request belongs to (section 7).
-4. It reads what the sidecar decided from the `sentinel` field on each reply or refusal. It fetches the run's state before scoring, and ends the run once the sample is scored.
+4. It reads what the sidecar decided from the `sentinel` field on each reply or refusal. It fetches the sample's state before scoring, and ends the sample once it is scored.
 
 ### Finding the sidecar
 
@@ -543,7 +543,7 @@ A sentinel in the sidecar is given the sample's details as `context.eval` only w
 }
 ```
 
-`metadata` is the task's own metadata. A sentinel is given it merged with each sample's metadata, as it is in Inspect's own process. A registration is kept until no request has named its task for `expiry` seconds, a day unless it says otherwise. Each model request whose `x-inspect-context` names the task, and each registration of it again, starts that time again, so a registration is never dropped while its eval is still making requests. The sidecar keeps no registration longer than `--task-expiry` allows, 30 days unless set otherwise, and its answer says when it shortened what was asked. It keeps at most `--max-task-registrations` at once, 1000 unless set otherwise, since anything that can reach the endpoint for evals can register a task. A new registration past that is refused, with the same error as when the sidecar takes no registrations, rather than a registration still in use dropped to make room. The example asks for a week. A sample input that is a list of chat messages is sent in the JSON form inspect_ai writes messages in. A new registration for a task replaces the one the sidecar holds, unless that one is marked fixed. A replacement does not reach a run that has already started: a run takes its sample's facts at its first request and keeps them to its end. Sending the same registration again therefore has no effect, so Inspect can safely retry.
+`metadata` is the task's own metadata. A sentinel is given it merged with each sample's metadata, as it is in Inspect's own process. A registration is kept until no request has named its task for `expiry` seconds, a day unless it says otherwise. Each model request whose `x-inspect-context` names the task, and each registration of it again, starts that time again, so a registration is never dropped while its eval is still making requests. The sidecar keeps no registration longer than `--task-expiry` allows, 30 days unless set otherwise, and its answer says when it shortened what was asked. It keeps at most `--max-task-registrations` at once, 1000 unless set otherwise, since anything that can reach the endpoint for evals can register a task. A new registration past that fails with its own error, `registrations_full`, with the code `-32008`, rather than a registration still in use being dropped to make room. It is a failure, not a refusal: the task may run there once a kept registration expires. The example asks for a week. A sample input that is a list of chat messages is sent in the JSON form inspect_ai writes messages in. A new registration for a task replaces the one the sidecar holds, unless that one is marked fixed. A replacement does not reach a run that has already started: a run takes its sample's facts at its first request and keeps them to its end. Sending the same registration again therefore has no effect, so Inspect can safely retry.
 
 The sidecar stores the facts under the eval id, the task and the sample id. Each model request names those three in `x-inspect-context`, and the sidecar finds the sample's facts by them. The run is keyed by the header's `sample_uuid` (section 7), so each epoch of a sample is a run of its own, with the same registered facts.
 
@@ -579,10 +579,12 @@ An admin registers tasks beforehand in the tasks folder. It holds what Inspect i
 
 ### When registration fails
 
-Registration at task init can fail because the endpoint for evals is down, cannot be reached, or answers with an error. The sidecar answers with an error when runtime registration is off and the task is not in the tasks folder. Registering a task that is in the tasks folder is not a failure. Inspect has a setting for what it does when registration fails:
+Registration at task init can fail because the endpoint for evals is down, cannot be reached, or answers with an error, such as `registrations_full` when the sidecar keeps as many registrations as it takes. Registering a task that the tasks folder already holds, under the same name, is not a failure: the sidecar answers that the task is already registered. Inspect has a setting for what it does when registration fails:
 
 - **`required`, the default.** The task does not start. Inspect records the failure as the error. This is the setting for an eval whose sentinel needs the samples' inputs or metadata.
 - **`optional`.** Inspect logs a warning, writes into each sample's transcript that its sentinel runs without the sample's details, and starts the task. Inspect still sends `x-inspect-context` on every model request.
+
+A refusal is not a failure, and the setting doesn't apply to it. When runtime registration is off and the task is not in the tasks folder, the sidecar refuses the registration with `registration_refused`. The deployment runs only the tasks in its folder, so the task does not start, even under `optional`. `registration_refused` comes only from a sidecar with runtime registration off. A sidecar whose registrations are full answers with `registrations_full` instead, which is a failure the setting covers. "Advanced: a sidecar that runs only the tasks in its folder" below shows the flow.
 
 With `optional`, the sidecar sees requests for samples that were never registered. It treats them like this:
 
@@ -705,21 +707,21 @@ sequenceDiagram
     Note over I: On terminate, end the sample. If every call was rejected, add the rejections and call the model again
 ```
 
-**6. The end of a sample.** Inspect fetches the run's state, scores the sample, and ends the run.
+**6. The end of a sample.** Inspect fetches the sample's state, scores the sample, and ends it.
 
 ```mermaid
 sequenceDiagram
     participant I as Inspect
     participant P as Proxy
     participant S as Sidecar
-    I->>P: run_result
+    I->>P: sample_result
     P->>S: Forward
-    S-->>P: The store, and whether the run was ended
-    P-->>I: The store, and whether the run was ended
+    S-->>P: The store, and whether a sentinel ended the sample
+    P-->>I: The store, and whether a sentinel ended the sample
     Note over I: Copy the store into the sample's store, then score
-    I->>P: end_run
+    I->>P: end_sample
     P->>S: Forward
-    Note over S: Drop the run's state
+    Note over S: Drop the sample's state
     S-->>P: Ended
     P-->>I: Ended
 ```
@@ -940,10 +942,10 @@ A request names a tool only by the name the model sees. So a custom tool called 
 When a sentinel runs inside an eval, its records appear in the eval's log, its state is available to scorers, and a `terminate` is recorded as the end of the sample. A sidecar cannot write into the eval's log or store, so the eval is sent these things or asks for them.
 
 - **Records.** The `sentinel` field brings each exchange's records with the response, and Inspect writes them into its transcript at that point. Where the field did not reach Inspect, Inspect asks the sidecar with `request_result`, by the `x-irid` of the request. When an eval starts a naked agent, the eval asks once, when the sample ends.
-- **Three answers, never two.** When asked about a request, the sidecar gives one of three answers: here is what was recorded; records were held for this request but are no longer kept; or this request was never seen. The eval writes whichever answer it gets into its log. The log then shows a gap where records were lost. Without the distinction, lost records would look like a run in which the sentinel had nothing to say.
-- **State.** The sidecar holds a run's tally. Before scoring, the eval fetches it with `run_result` and copies it into the sample's own store, where scorers read it in the usual way. If the eval did not do this, a scorer would find the default values in the store and would read the run as clean, with no error to show that anything was missing.
-- **The end of a sample.** Once the sample is scored, the eval calls `end_run`, and the sidecar drops the run's state.
-- **New, or a resume.** A new run starts with an empty tally. A resumed run continues with the tally the sidecar remembers. An eval that has gone back to an earlier checkpoint can tell the sidecar which state it has returned to. Going back is rarely used today, so the design allows for it, but it is not among the first things to build. How the eval says that a run is new or resumed is not designed.
+- **Three answers, never two.** When asked about a request, the sidecar gives one of three answers: here is what was recorded; records were held for this request but are no longer kept; or this request was never seen. The eval writes whichever answer it gets into its log. The log then shows a gap where records were lost. Without the distinction, lost records would look like a sample in which the sentinel had nothing to say.
+- **State.** The sidecar holds each sample's tally. Before scoring, the eval fetches it with `sample_result` and copies it into the sample's own store, where scorers read it in the usual way. If the eval did not do this, a scorer would find the default values in the store and would read the sample as clean, with no error to show that anything was missing.
+- **The end of a sample.** Once the sample is scored, the eval calls `end_sample`, and the sidecar drops the sample's state.
+- **New, or a resume.** A new sample starts with an empty tally. A resumed sample continues with the tally the sidecar remembers. An eval that has gone back to an earlier checkpoint can tell the sidecar which state it has returned to. Going back is rarely used today, so the design allows for it, but it is not among the first things to build. How the eval says that a sample is new or resumed is not designed.
 
 ### The methods
 
@@ -956,7 +958,7 @@ The sidecar serves two endpoints:
 
 **As an advanced option, the endpoint for evals has a port of its own**, 8901 unless set otherwise, and a token of its own, read from the `INSPECT_SENTINEL_EVAL_TOKEN` environment variable. This is for a deployment where something other than the eval can make model calls through the proxy, such as an agent that makes its own model calls ("A client that can't be trusted" below). Inspect is then configured with that port's URL and the token, and sends the token as a bearer credential, in the `Authorization` header. A call without the right token is answered with HTTP 401.
 
-The endpoint for evals uses JSON-RPC 2.0. JSON-RPC was chosen to be consistent with inspect_ai, which already uses it to talk to the tools it runs in a sandbox and so already has the client code. Every call is a POST to one path, `/sentinel/v1`, and the body names the method. The `v1` in the path is the version of the methods. The methods are `register_task`, `request_result`, `run_result` and `end_run`. None of them is needed for the sidecar to make a decision. `run_result` and `end_run` reach only runs an eval names, by the sample's uuid. A run no eval names is keyed by how its conversation opens, which anyone who knows the opening could work out, so the sidecar keeps such runs apart and these methods never reach them. The methods are described by a JSON Schema file, `eval_endpoint.schema.json`, generated from the endpoint's models and kept beside them. A test fails if the file is out of date.
+The endpoint for evals uses JSON-RPC 2.0. JSON-RPC was chosen to be consistent with inspect_ai, which already uses it to talk to the tools it runs in a sandbox and so already has the client code. Every call is a POST to one path, `/sentinel/v1`, and the body names the method. The `v1` in the path is the version of the methods. The methods are `register_task`, `request_result`, `sample_result` and `end_sample`. None of them is needed for the sidecar to make a decision. `sample_result` and `end_sample` reach only the runs an eval names, by the sample's uuid. A run no eval names is keyed by how its conversation opens, which anyone who knows the opening could work out, so the sidecar keeps such runs apart and these methods never reach them. The methods are described by a JSON Schema file, `eval_endpoint.schema.json`, generated from the endpoint's models and kept beside them. A test fails if the file is out of date.
 
 A call that can be read is always answered with HTTP 200, and the body says whether it succeeded, as JSON-RPC defines. A call may be as large as `--max-body-bytes` allows, 64 MiB unless set otherwise, the same limit as for the endpoint for proxies. A larger call is answered with HTTP 413. A `register_task` for a large dataset may need the limit raised, and so may any limit of the proxy's, or of a load balancer in front of it, which is the operator's to set.
 
@@ -1051,14 +1053,14 @@ When the latest attempt's turn was refused because a call in it was rejected, th
 
 `records` says whether the sidecar has records for the request. It is one of three values: `held` means it has them, and they are in `recorded`; `dropped` means it had them and no longer keeps them; `unknown` means it never saw the request. `dropped` and `unknown` are normal results and not errors, because the eval writes them into its log. Once a request's records are dropped, the sidecar keeps the request's id alone, for as long again as it kept the records and up to a limit on how many ids it keeps, so that it can answer `dropped`. After that, it answers `unknown`. With either of them, the result has no `outcome`, `message`, `recorded`, `withheld` or `proposed`.
 
-**`run_result`.** The eval asks once, before scoring:
+**`sample_result`.** The eval asks once for each sample, in each epoch, before scoring it:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 3,
-  "method": "run_result",
-  "params": {"run": "smp-4Xk2"}
+  "method": "sample_result",
+  "params": {"sample_uuid": "smp-4Xk2"}
 }
 ```
 
@@ -1067,7 +1069,7 @@ When the latest attempt's turn was refused because a call in it was rejected, th
   "jsonrpc": "2.0",
   "id": 3,
   "result": {
-    "run": "smp-4Xk2",
+    "sample_uuid": "smp-4Xk2",
     "outcome": "proceed",
     "store": {
       "Tally:always_sunny:instance": "always_sunny",
@@ -1077,16 +1079,16 @@ When the latest attempt's turn was refused because a call in it was rejected, th
 }
 ```
 
-The eval copies `store` into the sample's own store, where scorers read it. The keys are the ones the sentinel wrote, which name the monitor or protocol that owns each value. `outcome` is `terminate` if a sentinel ended the run. A run the sidecar holds nothing for is an error, with the code `-32002`, so that an eval never mistakes a forgotten run for a clean one.
+The eval copies `store` into the sample's own store, where scorers read it. The keys are the ones the sentinel wrote, which name the monitor or protocol that owns each value. `outcome` is `terminate` if a sentinel ended the sample. A sample the sidecar holds nothing for is an error, `unknown_sample`, with the code `-32002`, so that an eval never mistakes a forgotten sample for a clean one.
 
-**`end_run`.** The eval tells the sidecar that a sample is over, once it has been scored, so after `run_result`:
+**`end_sample`.** The eval tells the sidecar that a sample is over, once it has been scored, so after `sample_result`:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 4,
-  "method": "end_run",
-  "params": {"run": "sample_123"}
+  "method": "end_sample",
+  "params": {"sample_uuid": "sample_123"}
 }
 ```
 
@@ -1094,15 +1096,48 @@ The eval copies `store` into the sample's own store, where scorers read it. The 
 {
   "jsonrpc": "2.0",
   "id": 4,
-  "result": {"run": "sample_123", "state": "ended"}
+  "result": {"sample_uuid": "sample_123", "state": "ended"}
 }
 ```
 
-The sidecar drops the run's state: its sample's facts, its store, the calls waiting to be put back, and any open question to a person. The records of the run's requests stay for as long as records are kept, so a late `request_result` is still answered. A request that names an ended run is refused, as for a run a sentinel ended. Ending a run that has already ended has no effect, so the eval can safely retry. A run the sidecar never saw is not an error, and `state` is then `unknown`. Such a run is left as it is, not refused from then on, so an early or mistaken `end_run` doesn't block a run that hasn't reached the sidecar yet.
+The sidecar drops the sample's state: its facts, its store, the calls waiting to be put back, and any open question to a person. The records of the sample's requests stay for as long as records are kept, so a late `request_result` is still answered. A request that names an ended sample is refused, as for a sample a sentinel ended. Ending a sample that has already ended has no effect, so the eval can safely retry. A sample the sidecar never saw is not an error, and `state` is then `unknown`. Such a sample is left as it is, not refused from then on, so an early or mistaken `end_sample` doesn't block a sample whose requests haven't reached the sidecar yet.
 
-Inspect does not end a run when a sample fails and Inspect will try it again, because that sample has not been scored, and the new attempt is the same run.
+Inspect does not end a sample that failed and that Inspect will try again, because that sample has not been scored, and the new attempt is the same sample.
 
-A run that is never ended, such as a naked agent's session or an eval that stopped before scoring, is dropped once no request has named it for a day. The time is set with `--run-expiry`, in seconds.
+A run that is never ended, such as a naked agent's session or a sample whose eval stopped before scoring it, is dropped once no request has named it for a day. The time is set with `--run-expiry`, in seconds.
+
+### Advanced: a sidecar that runs only the tasks in its folder
+
+A deployment can run only the tasks that an admin registered beforehand. This is for a secure environment, where the process that runs the eval can't be trusted to send a task's facts ("A client that can't be trusted" below). The admin puts the tasks in the tasks folder and starts the sidecar with runtime registration off: `runtime_task_registration: false` in the `server` stanza, or `--no-runtime-task-registration`.
+
+- **Inspect registers every task at task init, as usual.** Inspect does not know beforehand that the sidecar runs only the tasks in its folder. It learns that from the sidecar's answer to `register_task`.
+- **A task in the folder is already registered.** The sidecar answers `register_task` with `fixed` true and stores nothing. Inspect starts the task. From the task's first model request, its sentinel is given the facts in the folder.
+- **Any other task is refused.** The sidecar answers `register_task` with the error `registration_refused`. Inspect does not start the task, whatever the `required` or `optional` setting says, and records the refusal as the task's error. The setting is for an endpoint for evals that can't be reached or that fails. A refusal is the deployment saying that the task may not run there.
+- **A sample that is not in the folder is refused.** Its task is in the folder, so the sidecar refuses a model request that names another sample of that task, with a 400 ("The tasks folder" above).
+
+In this diagram, the tasks folder holds `data_exfiltration` and not `file_cleanup`. Each task's probe is as in scenario 1, and is left out.
+
+```mermaid
+sequenceDiagram
+    participant I as Inspect
+    participant P as Proxy
+    participant S as Sidecar
+    Note over S: Started with runtime registration off
+    I->>P: register_task: data_exfiltration
+    P->>S: Forward, under the proxy's usual access control
+    Note over S: In the tasks folder: store nothing
+    S-->>P: Registered, fixed true
+    P-->>I: Registered, fixed true
+    Note over I: Start data_exfiltration
+    I->>P: register_task: file_cleanup
+    P->>S: Forward, under the proxy's usual access control
+    Note over S: Not in the tasks folder
+    S-->>P: registration_refused
+    P-->>I: registration_refused
+    Note over I: Don't start file_cleanup, whatever the setting,<br/>and record the refusal as its error
+```
+
+The refusal stops a task in an Inspect client that follows this design. It does not stop a client that skips registration, because `x-inspect-context` is the caller's claim. Such a client's model requests are still judged, without the task's facts. Whether the sidecar also refuses a model request that names a task outside the folder, or that names no task, is not yet designed (below). Who can make model calls through the proxy at all is decided by the proxy's access control, which the operator sets.
 
 ### A client that can't be trusted
 
@@ -1115,15 +1150,16 @@ Four rules follow.
 - **No method can loosen a decision.** Every method either sends context in or reads results out. No method allows a call, clears a tally, or changes the sentinel or its configuration. Decisions are made only on the requests and replies a proxy sends. When a sentinel asks a person, that person's answer is never accepted on an eval's credential.
 - **What an eval registers is a claim, not a fact.** A compromised client could register a sample input or metadata that is false, to mislead a monitor that reads them. Section 8 says that nothing in `context.eval` came from the agent. When Inspect registers a task at task init, that is true only if the process that sent the facts can be trusted. Where it cannot be, tasks are registered beforehand, by an admin, in the tasks folder, so that nothing the eval sends can replace them ("The tasks folder" above), and the sidecar is started with `--no-runtime-task-registration`. A task that is not in the file can be registered, and replaced, by any caller that can reach the endpoint for evals.
 - **A credential works only for its own runs.** The sidecar checks that the caller is allowed to register the task, or read the run, that it names. One eval then cannot register or read another eval's. How a credential is tied to the evals it may name is not designed.
-- **Results can be withheld, and decisions still sent.** A record contains each monitor's explanation, and an explanation tells an agent what the monitor looks for. Where the client is not trusted, `--no-eval-results` turns off `run_result`, leaves `recorded` out of `request_result`, and trims the `sentinel` field to what Inspect acts on: each step's stage, call, original call, action, agent-facing message and modified call. `request_result` is still served, with the outcome, the message, and the withheld or proposed turn, because it is how an eval learns that a turn was refused or edited when its proxy didn't pass on the field. The field says that it was trimmed, so a trimmed field is never read as a run in which the sentinel had nothing to say.
+- **Results can be withheld, and decisions still sent.** A record contains each monitor's explanation, and an explanation tells an agent what the monitor looks for. Where the client is not trusted, `--no-eval-results` turns off `sample_result`, leaves `recorded` out of `request_result`, and trims the `sentinel` field to what Inspect acts on: each step's stage, call, original call, action, agent-facing message and modified call. `request_result` is still served, with the outcome, the message, and the withheld or proposed turn, because it is how an eval learns that a turn was refused or edited when its proxy didn't pass on the field. The field says that it was trimmed, so a trimmed field is never read as a run in which the sentinel had nothing to say.
 
 Not yet designed:
 
 - whether a sentinel in a sidecar may ever be given the sample's `target`
 - how a state is named when an eval has gone back to an earlier one
 - how Inspect's sidecar client learns of a question put to a person, and how the person's answer reaches the sidecar (section 8; scheduled in [PR 13](sidecar-plan.md#pr-13-human-review))
-- how the eval says that a run is new or resumed
+- how the eval says that a sample is new or resumed
 - how a credential is tied to its runs
+- whether a sidecar that runs only the tasks in its folder also refuses a model request that names a task outside the folder, or that names no task
 - how to catch a task in the tasks folder whose samples no longer match the eval that runs it, without telling a caller whether its guess at the file is right. Comparing Inspect's registration with the file does not work as it stands: inspect_ai rewrites a sample's media paths and gives each chat message a new id when it loads a dataset, so an unchanged eval would not match
 
 Considered and not taken:
@@ -1157,7 +1193,7 @@ Considered and not taken:
   | Conversation, within a run | the run, and how the conversation opens | the tool results already judged, each call told apart from others with its id by how many come before it; how many calls with each id the client's conversation has held, kept for the conversation's life: a request that holds fewer was compacted, and as its results can then no longer be told apart from those judged before, it is unreadable, which arises only where a provider uses one call id more than once. An exact retry of a request whose reply was lost is refused the same way when that reply used an id again, as it cannot be told apart from a compacted request without matching each call to the reply that made it; what the model was sent for the generate that made each of the latest calls, as a tool step's `input` and `tools`; the calls that were rejected, taken out or changed, to be put back into later requests, each with what inspect_ai's converters noted when its reply was read (section 4); what the converters noted reading the conversation's replies |
   | Request | Inspect's `x-irid`, and the proxy's exchange id | where judging stands, the outcome and the records, for `request_result` (section 9) |
 
-  A sidecar that runs as several processes needs those processes to share this state, because a run's requests, and the calls to the endpoint for evals, may each reach a different process. A run that outlasts a restart needs it kept. The state is kept behind one interface. Its default implementation keeps the state in memory, in one process, and implementations that share and keep it, possibly on Valkey or S3, can follow. The interface is not designed. A run's state is dropped when the eval calls `end_run`, or once no request has named the run for a day, which `--run-expiry` sets (section 9). Records are kept for a limited window. A task's registration made by Inspect is dropped a day after the last request that names the task, or later if the registration asked for longer; a task an admin registered is kept (section 9). Not designed: the tallies kept at the task level, shared by every sample of a task (section 7).
+  A sidecar that runs as several processes needs those processes to share this state, because a run's requests, and the calls to the endpoint for evals, may each reach a different process. A run that outlasts a restart needs it kept. The state is kept behind one interface. Its default implementation keeps the state in memory, in one process, and implementations that share and keep it, possibly on Valkey or S3, can follow. The interface is not designed. A run's state is dropped when the eval calls `end_sample`, or once no request has named the run for a day, which `--run-expiry` sets (section 9). Records are kept for a limited window. A task's registration made by Inspect is dropped a day after the last request that names the task, or later if the registration asked for longer; a task an admin registered is kept (section 9). Not designed: the tallies kept at the task level, shared by every sample of a task (section 7).
 - **A record log that can't be rewritten**, not yet designed. Records are to leave the sidecar as they are made, to somewhere neither the sidecar nor a client can change them afterwards. What the sidecar keeps is then a copy for the result methods of section 9, and not the record itself.
 - **A health check is answered at `GET /health`, on each port the sidecar listens on.** The answer is `ok` with status 200. The route asks for no credential, on the endpoint for evals as well, and it checks nothing. The sidecar loads its sentinel before it listens, so an answer means the sidecar is ready to judge, and a sidecar whose sentinel can't be loaded stops without ever listening. The route is for whatever runs the sidecar to probe, so that a sidecar that has stopped answering is restarted. A proxy does not call it, and it is not part of the messages a proxy and the sidecar exchange. Health checks are left out of the sidecar's access log, which would otherwise gain a line for every probe.
 - **Access is the operator's to control.** The port a proxy sends requests and replies to is protected by where the sidecar listens: an operator makes it reachable by the proxy alone, and uses `https` unless the two run side by side. By default, the endpoint for evals is reached only through the proxy, with the same access control as the proxy's model calls. As an advanced option, it has a port and a token of its own (section 9). The Envoy shim's port is plain gRPC, protected the same way, by where the sidecar listens: only Envoy reaches it. TLS on every port the sidecar listens on, with client certificates from the proxies, is planned in [PR 16](sidecar-plan.md#pr-16-tls-on-the-sidecars-listeners). Other forms of authentication, such as a credential on what a proxy sends, may be supported later.

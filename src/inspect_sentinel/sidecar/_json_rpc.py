@@ -16,12 +16,13 @@ INVALID_PARAMS = -32602
 # one list, so that a code means one thing whichever endpoint gave it, and a
 # code never changes, since the proxy hooks act on it
 REGISTRATION_REFUSED = -32001
-UNKNOWN_RUN = -32002
+UNKNOWN_SAMPLE = -32002
 UNREADABLE = -32003
 SENTINEL_FAILED = -32004
 TIME_LIMIT = -32005
 UNREGISTERED = -32006
 UNKNOWN_STREAM = -32007
+REGISTRATIONS_FULL = -32008
 
 
 class Call(BaseModel):

@@ -35,7 +35,8 @@ from inspect_sentinel.sidecar._json_rpc import (
     INVALID_PARAMS,
     METHOD_NOT_FOUND,
     REGISTRATION_REFUSED,
-    UNKNOWN_RUN,
+    REGISTRATIONS_FULL,
+    UNKNOWN_SAMPLE,
 )
 from inspect_sentinel.sidecar._registration import FileTask
 from inspect_sentinel.sidecar._serve import add_arguments, apps
@@ -176,7 +177,7 @@ async def test_a_sidecar_that_takes_no_registrations_refuses_another_task() -> N
 
 
 @pytest.mark.anyio
-async def test_a_registration_past_the_limit_is_refused() -> None:
+async def test_a_registration_past_the_limit_fails_with_its_own_error() -> None:
     # anything that can reach the endpoint can register, so what is kept is
     # bounded, and nothing kept is dropped to make room
     async with _client(Handler(weather_rule(), max_task_registrations=2)) as client:
@@ -192,7 +193,9 @@ async def test_a_registration_past_the_limit_is_refused() -> None:
         )
 
     assert all("result" in answered for answered in kept)
-    assert refused["error"]["code"] == REGISTRATION_REFUSED
+    # a failure, which Inspect's `optional` covers, and not the refusal of a
+    # sidecar that takes no registrations
+    assert refused["error"]["code"] == REGISTRATIONS_FULL
     assert "already keeps the 2 tasks" in refused["error"]["message"]
     # a registration of a task kept already replaces it
     assert "result" in again
@@ -396,9 +399,10 @@ async def test_a_run_says_what_it_came_to_and_its_store() -> None:
     await handler.reply(reply(_message("Oslo")))
 
     async with _client(handler) as client:
-        answered = await _call(client, "run_result", {"run": "sample_123"})
+        answered = await _call(client, "sample_result", {"sample_uuid": "sample_123"})
 
     result = answered["result"]
+    assert result["sample_uuid"] == "sample_123"
     assert result["outcome"] == "proceed"
     # keyed as the sentinel wrote it, by the store model and its field
     assert [
@@ -407,13 +411,13 @@ async def test_a_run_says_what_it_came_to_and_its_store() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_run_a_sentinel_ended_says_so() -> None:
+async def test_a_sample_a_sentinel_ended_says_so() -> None:
     handler = Handler(weather_rule("terminate", "Tokyo"))
     await handler.request(_asked("x"))
     await handler.reply(reply(_message("Tokyo")))
 
     async with _client(handler) as client:
-        answered = await _call(client, "run_result", {"run": "sample_123"})
+        answered = await _call(client, "sample_result", {"sample_uuid": "sample_123"})
 
     assert answered["result"]["outcome"] == "terminate"
 
@@ -431,41 +435,41 @@ async def test_a_run_no_eval_names_cant_be_reached_by_its_opening() -> None:
     )
 
     async with _client(handler) as client:
-        result = await _call(client, "run_result", {"run": opening})
-        ended = await _call(client, "end_run", {"run": opening})
+        result = await _call(client, "sample_result", {"sample_uuid": opening})
+        ended = await _call(client, "end_sample", {"sample_uuid": opening})
     later = await handler.request(request("y"))
 
-    assert result["error"]["code"] == UNKNOWN_RUN
+    assert result["error"]["code"] == UNKNOWN_SAMPLE
     assert ended["result"]["state"] == "unknown"
     assert not isinstance(later, Refuse)
 
 
 @pytest.mark.anyio
-async def test_a_run_never_seen_has_no_result() -> None:
+async def test_a_sample_never_seen_has_no_result() -> None:
     async with _client(Handler(weather_rule())) as client:
-        answered = await _call(client, "run_result", {"run": "sample_123"})
+        answered = await _call(client, "sample_result", {"sample_uuid": "sample_123"})
 
-    assert answered["error"]["code"] == UNKNOWN_RUN
+    assert answered["error"]["code"] == UNKNOWN_SAMPLE
 
 
 @pytest.mark.anyio
-async def test_a_run_its_eval_ended_is_dropped_and_refused_from_then_on() -> None:
+async def test_a_sample_its_eval_ended_is_dropped_and_refused_from_then_on() -> None:
     handler = Handler(counts_lookups())
     await handler.request(_asked("x"))
 
     async with _client(handler) as client:
-        ended = await _call(client, "end_run", {"run": "sample_123"})
-        again = await _call(client, "end_run", {"run": "sample_123"})
-        never = await _call(client, "end_run", {"run": "sample_999"})
-        never_again = await _call(client, "end_run", {"run": "sample_999"})
-        result = await _call(client, "run_result", {"run": "sample_123"})
+        ended = await _call(client, "end_sample", {"sample_uuid": "sample_123"})
+        again = await _call(client, "end_sample", {"sample_uuid": "sample_123"})
+        never = await _call(client, "end_sample", {"sample_uuid": "sample_999"})
+        never_again = await _call(client, "end_sample", {"sample_uuid": "sample_999"})
+        result = await _call(client, "sample_result", {"sample_uuid": "sample_123"})
     later = await handler.request(_asked("y", irid="irid-2"))
     unseen = await handler.request(_asked("z", irid="irid-3", sample_uuid="sample_999"))
 
     assert [
         answered["result"]["state"] for answered in (ended, again, never, never_again)
     ] == ["ended", "ended", "unknown", "unknown"]
-    assert result["error"]["code"] == UNKNOWN_RUN
+    assert result["error"]["code"] == UNKNOWN_SAMPLE
     assert isinstance(later, Refuse)
     assert later.sentinel is not None
     assert later.sentinel["outcome"] == "terminate"
@@ -476,7 +480,7 @@ async def test_a_run_its_eval_ended_is_dropped_and_refused_from_then_on() -> Non
 @pytest.mark.anyio
 async def test_results_can_be_withheld() -> None:
     async with _client(Handler(weather_rule()), results=False) as client:
-        withheld = await _call(client, "run_result", {"run": "sample_123"})
+        withheld = await _call(client, "sample_result", {"sample_uuid": "sample_123"})
         registered = await _call(client, "register_task", _REGISTRATION)
 
     assert withheld["error"]["code"] == METHOD_NOT_FOUND
@@ -509,8 +513,8 @@ async def test_a_port_of_its_own_needs_its_own_token() -> None:
         )
         right = await _call(
             client,
-            "end_run",
-            {"run": "sample_123"},
+            "end_sample",
+            {"sample_uuid": "sample_123"},
             authorization="Bearer s3cret",
         )
         probe = await client.get(INFO_PATH)
@@ -589,7 +593,7 @@ def test_calls_in_these_tests_fit_the_schema_file() -> None:
 async def test_a_reply_in_flight_when_its_eval_ended_the_run_is_refused() -> None:
     handler = Handler(counts_lookups())
     await handler.request(_asked("x"))
-    await handler.end_run("sample_123")
+    await handler.end_sample("sample_123")
 
     answer = await handler.reply(reply(_message("Oslo")))
 
@@ -597,7 +601,7 @@ async def test_a_reply_in_flight_when_its_eval_ended_the_run_is_refused() -> Non
     assert answer.sentinel is not None
     assert answer.sentinel["outcome"] == "terminate"
     # the run is not made again
-    assert await handler.run_result("sample_123") is None
+    assert await handler.sample_result("sample_123") is None
     result = await _request_result(handler)
     assert (result["state"], result["outcome"]) == ("decided", "terminate")
 
@@ -638,12 +642,12 @@ async def test_a_request_judged_while_its_eval_ended_the_run_is_refused() -> Non
     async with anyio.create_task_group() as group:
         group.start_soon(ask)
         await anyio.wait_all_tasks_blocked()
-        await handler.end_run("sample_123")
+        await handler.end_sample("sample_123")
         _gates[0].set()
 
     (answer,) = answers
     assert isinstance(answer, Refuse)
-    assert await handler.run_result("sample_123") is None
+    assert await handler.sample_result("sample_123") is None
 
 
 @pytest.mark.anyio

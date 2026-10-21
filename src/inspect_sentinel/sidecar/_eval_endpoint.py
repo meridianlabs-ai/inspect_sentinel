@@ -17,14 +17,15 @@ from ._inspect_client import WithheldTurn, record_json, withheld_turn
 from ._json_rpc import (
     METHOD_NOT_FOUND,
     REGISTRATION_REFUSED,
-    UNKNOWN_RUN,
+    REGISTRATIONS_FULL,
+    UNKNOWN_SAMPLE,
     RpcError,
     answered,
     failed,
     invalid_params,
     read_call,
 )
-from ._registration import RegistrationError, TaskFacts
+from ._registration import RegistrationError, RegistrationsFullError, TaskFacts
 from ._state import NotJudged, Outcome
 
 PATH = "/sentinel/v1"
@@ -105,56 +106,64 @@ class RequestResultResult(BaseModel):
     )
 
 
-class RunResultParams(BaseModel):
-    """Parameters of `run_result`: a run, before its sample is scored."""
+class SampleResultParams(BaseModel):
+    """Parameters of `sample_result`: one sample in one epoch, before it is scored."""
 
-    run: str = Field(description="The run: its sample's uuid.")
+    sample_uuid: str = Field(
+        description="The sample's uuid, as `x-inspect-context` gives it: one sample in one epoch, the same across the sample's retries."
+    )
 
 
-class RunResultResult(BaseModel):
-    """What the run came to, and the sentinel's store."""
+class SampleResultResult(BaseModel):
+    """What the sample came to, and the sentinel's store."""
 
-    run: str
+    sample_uuid: str
     outcome: Literal["proceed", "terminate"] = Field(
-        description="`terminate` if a sentinel ended the run."
+        description="`terminate` if a sentinel ended the sample."
     )
     store: dict[str, Any] = Field(
         description="The sentinel's store, by the keys the sentinel wrote, to copy into the sample's store."
     )
 
 
-class EndRunParams(BaseModel):
-    """Parameters of `end_run`: a run whose sample has been scored."""
+class EndSampleParams(BaseModel):
+    """Parameters of `end_sample`: one sample in one epoch, once it has been scored."""
 
-    run: str = Field(description="The run: its sample's uuid.")
+    sample_uuid: str = Field(
+        description="The sample's uuid, as `x-inspect-context` gives it."
+    )
 
 
-class EndRunResult(BaseModel):
-    """Whether the run was ended."""
+class EndSampleResult(BaseModel):
+    """Whether the sample's state was dropped."""
 
-    run: str
+    sample_uuid: str
     state: Literal["ended", "unknown"] = Field(
-        description="`ended`, or `unknown` for a run the sidecar never saw."
+        description="`ended`, or `unknown` for a sample the sidecar never saw."
     )
 
 
 _METHODS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "register_task": (RegisterTaskParams, RegisterTaskResult),
     "request_result": (RequestResultParams, RequestResultResult),
-    "run_result": (RunResultParams, RunResultResult),
-    "end_run": (EndRunParams, EndRunResult),
+    "sample_result": (SampleResultParams, SampleResultResult),
+    "end_sample": (EndSampleParams, EndSampleResult),
 }
 
-_RESULTS = frozenset({"run_result"})
+_RESULTS = frozenset({"sample_result"})
 
 _ERRORS: dict[int, tuple[str, str]] = {
     REGISTRATION_REFUSED: (
         "registration_refused",
         "The sidecar takes no tasks registered by an eval, and this task was not registered beforehand.",
     ),
-    UNKNOWN_RUN: (
-        "unknown_run",
-        "The sidecar holds nothing for the run, so an eval never mistakes a forgotten run for a clean one.",
+    REGISTRATIONS_FULL: (
+        "registrations_full",
+        "The sidecar keeps as many task registrations as it takes, and takes another once a kept one expires. A failure, not a refusal: the deployment has not said that the task may not run.",
+    ),
+    UNKNOWN_SAMPLE: (
+        "unknown_sample",
+        "The sidecar holds nothing for the sample, so an eval never mistakes a forgotten sample for a clean one.",
     ),
 }
 
@@ -168,13 +177,13 @@ def eval_routes(
 ) -> list[Route]:
     """The routes of the endpoint for evals: the probe at `/sentinel/info`, and the methods at `/sentinel/v1`.
 
-    An eval registers its tasks, asks what became of a request and of a run, and ends a run once its sample is scored. Every call is a JSON-RPC 2.0 request. No method allows a call, clears a tally or changes the sentinel. A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
+    An eval registers its tasks, asks what became of a request and of a sample, and ends a sample once it is scored. Every call is a JSON-RPC 2.0 request. No method allows a call, clears a tally or changes the sentinel. A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
 
     Args:
         handler: The handler the proxy's requests and replies are put to.
         max_body_bytes: The largest call that is read.
         token: A credential every call to the methods must present as a bearer token, when the endpoint has a port of its own. None where it shares the proxy's port and access control.
-        results: Whether the results are sent: `run_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited when its proxy didn't pass on the `sentinel` field.
+        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited when its proxy didn't pass on the `sentinel` field.
     """
 
     async def info(http: HttpRequest) -> Response:
@@ -236,6 +245,8 @@ async def _answer(
         )
         try:
             granted = await handler.register_task(given.eval_id, facts, given.expiry)
+        except RegistrationsFullError as ex:
+            raise RpcError(REGISTRATIONS_FULL, str(ex)) from None
         except RegistrationError as ex:
             raise RpcError(REGISTRATION_REFUSED, str(ex)) from None
         return RegisterTaskResult(
@@ -267,15 +278,21 @@ async def _answer(
                 withheld_turn(latest.proposed) if latest.proposed is not None else None
             ),
         )
-    if isinstance(given, RunResultParams):
-        run = await handler.run_result(given.run)
+    if isinstance(given, SampleResultParams):
+        run = await handler.sample_result(given.sample_uuid)
         if run is None:
             raise RpcError(
-                UNKNOWN_RUN, f"The sidecar holds nothing for run {given.run!r}."
+                UNKNOWN_SAMPLE,
+                f"The sidecar holds nothing for the sample {given.sample_uuid!r}.",
             )
-        return RunResultResult(run=given.run, outcome=run.outcome, store=run.store)
-    if isinstance(given, EndRunParams):
-        return EndRunResult(run=given.run, state=await handler.end_run(given.run))
+        return SampleResultResult(
+            sample_uuid=given.sample_uuid, outcome=run.outcome, store=run.store
+        )
+    if isinstance(given, EndSampleParams):
+        return EndSampleResult(
+            sample_uuid=given.sample_uuid,
+            state=await handler.end_sample(given.sample_uuid),
+        )
     raise TypeError(f"No method takes {type(given).__name__}.")
 
 

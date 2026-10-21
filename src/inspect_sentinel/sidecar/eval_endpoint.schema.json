@@ -1055,30 +1055,30 @@
       "title": "DocumentRange",
       "type": "object"
     },
-    "EndRunParams": {
-      "description": "Parameters of `end_run`: a run whose sample has been scored.",
+    "EndSampleParams": {
+      "description": "Parameters of `end_sample`: one sample in one epoch, once it has been scored.",
       "properties": {
-        "run": {
-          "description": "The run: its sample's uuid.",
-          "title": "Run",
+        "sample_uuid": {
+          "description": "The sample's uuid, as `x-inspect-context` gives it.",
+          "title": "Sample Uuid",
           "type": "string"
         }
       },
       "required": [
-        "run"
+        "sample_uuid"
       ],
-      "title": "EndRunParams",
+      "title": "EndSampleParams",
       "type": "object"
     },
-    "EndRunResult": {
-      "description": "Whether the run was ended.",
+    "EndSampleResult": {
+      "description": "Whether the sample's state was dropped.",
       "properties": {
-        "run": {
-          "title": "Run",
+        "sample_uuid": {
+          "title": "Sample Uuid",
           "type": "string"
         },
         "state": {
-          "description": "`ended`, or `unknown` for a run the sidecar never saw.",
+          "description": "`ended`, or `unknown` for a sample the sidecar never saw.",
           "enum": [
             "ended",
             "unknown"
@@ -1088,10 +1088,10 @@
         }
       },
       "required": [
-        "run",
+        "sample_uuid",
         "state"
       ],
-      "title": "EndRunResult",
+      "title": "EndSampleResult",
       "type": "object"
     },
     "JsonValue": {},
@@ -1354,52 +1354,6 @@
       "title": "RequestResultResult",
       "type": "object"
     },
-    "RunResultParams": {
-      "description": "Parameters of `run_result`: a run, before its sample is scored.",
-      "properties": {
-        "run": {
-          "description": "The run: its sample's uuid.",
-          "title": "Run",
-          "type": "string"
-        }
-      },
-      "required": [
-        "run"
-      ],
-      "title": "RunResultParams",
-      "type": "object"
-    },
-    "RunResultResult": {
-      "description": "What the run came to, and the sentinel's store.",
-      "properties": {
-        "run": {
-          "title": "Run",
-          "type": "string"
-        },
-        "outcome": {
-          "description": "`terminate` if a sentinel ended the run.",
-          "enum": [
-            "proceed",
-            "terminate"
-          ],
-          "title": "Outcome",
-          "type": "string"
-        },
-        "store": {
-          "additionalProperties": true,
-          "description": "The sentinel's store, by the keys the sentinel wrote, to copy into the sample's store.",
-          "title": "Store",
-          "type": "object"
-        }
-      },
-      "required": [
-        "run",
-        "outcome",
-        "store"
-      ],
-      "title": "RunResultResult",
-      "type": "object"
-    },
     "SampleFacts": {
       "description": "One sample of a registered task.",
       "properties": {
@@ -1468,6 +1422,52 @@
         "sample_input"
       ],
       "title": "SampleFacts",
+      "type": "object"
+    },
+    "SampleResultParams": {
+      "description": "Parameters of `sample_result`: one sample in one epoch, before it is scored.",
+      "properties": {
+        "sample_uuid": {
+          "description": "The sample's uuid, as `x-inspect-context` gives it: one sample in one epoch, the same across the sample's retries.",
+          "title": "Sample Uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sample_uuid"
+      ],
+      "title": "SampleResultParams",
+      "type": "object"
+    },
+    "SampleResultResult": {
+      "description": "What the sample came to, and the sentinel's store.",
+      "properties": {
+        "sample_uuid": {
+          "title": "Sample Uuid",
+          "type": "string"
+        },
+        "outcome": {
+          "description": "`terminate` if a sentinel ended the sample.",
+          "enum": [
+            "proceed",
+            "terminate"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "store": {
+          "additionalProperties": true,
+          "description": "The sentinel's store, by the keys the sentinel wrote, to copy into the sample's store.",
+          "title": "Store",
+          "type": "object"
+        }
+      },
+      "required": [
+        "sample_uuid",
+        "outcome",
+        "store"
+      ],
+      "title": "SampleResultResult",
       "type": "object"
     },
     "ToolCall": {
@@ -1705,20 +1705,20 @@
         "$ref": "#/$defs/RequestResultResult"
       }
     },
-    "run_result": {
+    "sample_result": {
       "params": {
-        "$ref": "#/$defs/RunResultParams"
+        "$ref": "#/$defs/SampleResultParams"
       },
       "result": {
-        "$ref": "#/$defs/RunResultResult"
+        "$ref": "#/$defs/SampleResultResult"
       }
     },
-    "end_run": {
+    "end_sample": {
       "params": {
-        "$ref": "#/$defs/EndRunParams"
+        "$ref": "#/$defs/EndSampleParams"
       },
       "result": {
-        "$ref": "#/$defs/EndRunResult"
+        "$ref": "#/$defs/EndSampleResult"
       }
     }
   },
@@ -1727,9 +1727,13 @@
       "name": "registration_refused",
       "description": "The sidecar takes no tasks registered by an eval, and this task was not registered beforehand."
     },
+    "-32008": {
+      "name": "registrations_full",
+      "description": "The sidecar keeps as many task registrations as it takes, and takes another once a kept one expires. A failure, not a refusal: the deployment has not said that the task may not run."
+    },
     "-32002": {
-      "name": "unknown_run",
-      "description": "The sidecar holds nothing for the run, so an eval never mistakes a forgotten run for a clean one."
+      "name": "unknown_sample",
+      "description": "The sidecar holds nothing for the sample, so an eval never mistakes a forgotten sample for a clean one."
     }
   }
 }

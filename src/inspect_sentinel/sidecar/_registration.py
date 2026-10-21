@@ -23,6 +23,10 @@ class RegistrationError(Exception):
     """A task registration the sidecar won't take."""
 
 
+class RegistrationsFullError(RegistrationError):
+    """A task registration the sidecar can't take now, because it keeps as many as it takes. A failure, not a refusal: one is taken again once a kept task expires."""
+
+
 class UnregisteredSampleError(Exception):
     """A request for a sample of a task registered beforehand that the registration doesn't hold."""
 
