@@ -86,7 +86,6 @@ from ._wire import (
     held_rejections,
     offered,
     read_opening,
-    read_reply,
     read_reply_noted,
     read_request,
     request_format,
@@ -1321,10 +1320,16 @@ class EarlyTurn:
         handler, held, start = self._handler, self._held, self._start
         if self._ended is not None:
             return self._ended
-        output = await read_reply(
-            start.provider, start.content_type, prefix, start.format
-        )
         run, conversation = await self._run()
+        # read from what the conversation's earlier replies noted, as the
+        # whole reply is, and nothing noted is kept until the turn has ended
+        output, _ = await read_reply_noted(
+            start.provider,
+            start.content_type,
+            prefix,
+            start.format,
+            start=conversation.noted,
+        )
         refusal = _ended(run, held.marks)
         if refusal is not None:
             # a sentinel ended the run while the model was answering
