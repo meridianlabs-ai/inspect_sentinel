@@ -561,3 +561,139 @@ def test_a_scanned_step_carries_its_stage_and_turns(tmp_path: Path) -> None:
     assert (row["metadata.stage"], row["metadata.turns"]) == ("tool_result", "inferred")
     assert row["metadata.step_id"] in {e.step_id for e in recorded}
     assert row["value"] == 0.0
+
+
+def test_a_sample_without_a_uuid_gets_its_context_by_its_typed_id(
+    tmp_path: Path,
+) -> None:
+    from inspect_ai.analysis._dataframe.samples.extract import auto_sample_id
+    from inspect_ai.log import write_eval_log
+    from inspect_scout import Transcript
+
+    from inspect_sentinel.scout._context import Contexts
+
+    log = run(tmp_path / "logs", [[call(1)], [call(2)]], None)
+    assert log.samples is not None
+    for sample in log.samples:
+        sample.uuid = None
+    path = str(tmp_path / "old.json")
+    write_eval_log(log, path, format="json")
+    second = log.samples[1]
+    transcript = Transcript(
+        transcript_id=auto_sample_id(log.eval.eval_id, second),
+        source_type="eval_log",
+        source_uri=path,
+    )
+
+    context = anyio.run(Contexts().eval_context, transcript)
+
+    assert context is not None
+    assert (context.sample_id, context.epoch) == (1, 1)
+    assert context.sample_input == second.input
+
+
+AUTHOR_MODULE = """
+from pathlib import Path
+
+from inspect_sentinel import BeforeToolCall, Context, MonitorGroup, Observation, monitor
+
+
+@monitor
+def authors_monitor(marker: str) -> MonitorGroup:
+    async def before(context: Context, step: BeforeToolCall) -> Observation:
+        if Path(marker).exists():
+            raise RuntimeError("interrupted")
+        return Observation.score(min(1.0, int(step.call.arguments["x"]) / 10))
+
+    return MonitorGroup(before)
+"""
+
+
+def test_a_scan_resumes_in_a_process_that_never_imported_the_monitor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = run(tmp_path / "logs", [[call(9, "a"), call(4, "b")]], None)
+    assert log.samples is not None
+    authors = tmp_path / "authors"
+    authors.mkdir()
+    (authors / "author_monitors.py").write_text(AUTHOR_MODULE)
+    monkeypatch.setattr(sys, "path", [str(authors), *sys.path])
+    module: Any = importlib.import_module("author_monitors")
+    marker = tmp_path / "marker"
+    marker.touch()
+    sentinel = sequential(
+        [
+            threshold(module.authors_monitor(str(marker)), escalate_at=0.5),
+            human(stages=["tool_call"]),
+        ]
+    )
+    first = scan(
+        scanners={"s": as_scanner(sentinel, human=approves)},
+        transcripts=transcripts_from(str(tmp_path / "logs")),
+        scans=str(tmp_path / "scans"),
+        display="none",
+        max_processes=1,
+    )
+    assert not first.complete
+    marker.unlink()
+
+    # a fresh interpreter, whose path holds neither the author's module nor
+    # anything this test imported
+    resumed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from importlib.util import find_spec; "
+            "from inspect_scout import scan_resume; "
+            "print(find_spec('author_monitors') is None); "
+            "print(scan_resume(sys.argv[1], display='none').complete)",
+            first.location,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).parents[2],
+    )
+
+    assert resumed.returncode == 0, resumed.stderr[-3000:]
+    # the module was not on the child's path; the scan imported it from its file
+    assert resumed.stdout.split()[-2:] == ["True", "True"]
+    uuid = log.samples[0].uuid
+    found = rows(first.location)["s"]
+    assert keyed(found, "value") == {(uuid, "a"): False, (uuid, "b"): False}
+    assert keyed(found, "answer") == {(uuid, "a"): "proceed", (uuid, "b"): "proceed"}
+
+
+@pytest.mark.parametrize(
+    "form,label",
+    [("bare", "breaks_while"), ("list", "breaks_while"), ("mapping", "risk")],
+)
+@pytest.mark.parametrize("fails", [False, True])
+def test_a_lone_monitor_reports_and_fails_alike_bare_or_in_a_container(
+    tmp_path: Path, form: str, label: str, fails: bool
+) -> None:
+    run(tmp_path / "logs", [[call(8)]], None)
+    marker = tmp_path / "marker"
+    if fails:
+        marker.touch()
+    instance = breaks_while(str(marker))
+    sentinel: Sentinels = {
+        "bare": instance,
+        "list": [instance],
+        "mapping": {"risk": instance},
+    }[form]
+
+    status = scan(
+        scanners={"s": as_scanner(sentinel)},
+        transcripts=transcripts_from(str(tmp_path / "logs")),
+        scans=str(tmp_path / "scans"),
+        display="none",
+        max_processes=1,
+    )
+
+    [row] = rows(status.location)["s"]
+    if fails:
+        assert not status.complete
+        assert "interrupted" in row["scan_error"]
+    else:
+        assert status.complete
+        assert (row["value"], row["label"]) == (0.8, label)

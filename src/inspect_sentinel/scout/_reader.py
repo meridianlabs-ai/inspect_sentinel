@@ -44,8 +44,8 @@ def as_reader(path: str, *, stage: Stage | None = None) -> Scanner[Transcript]:
         for index, event in enumerate(transcript.events):
             if not isinstance(event, SentinelEvent) or event.path != path:
                 continue
-            if stage is not None and event.stage != stage:
-                continue
+            # a failure at any stage fails the read, as in replay, which runs
+            # every stage the instance watches whichever it reports
             if event.status == "error":
                 raise MonitorFailedError(
                     [
@@ -57,6 +57,8 @@ def as_reader(path: str, *, stage: Stage | None = None) -> Scanner[Transcript]:
                         )
                     ]
                 )
+            if stage is not None and event.stage != stage:
+                continue
             superseded = event.status == "superseded" and event.kind == "decision"
             if event.status != "reported" and not superseded:
                 continue
@@ -136,6 +138,11 @@ class _Positions:
         self._begins: dict[str, int] = {}
         self._ends: dict[str, int] = {}
         self._uuids: dict[str, ModelEvent] = {}
+        # each generate's last attempt, by its first attempt's uuid, and every
+        # output message a model event holds
+        self._final: dict[str, ModelEvent] = {}
+        self._outputs: set[str] = set()
+        retrying: dict[str | None, tuple[str, ModelEvent]] = {}
         self._tools: dict[str, tuple[list[int], list[ToolEvent]]] = {}
         self._agents: dict[str | None, str] = {}
         # each conversation's model events, by position
@@ -154,6 +161,9 @@ class _Positions:
                 found.append(event)
                 if event.uuid is not None:
                     self._uuids[event.uuid] = event
+                self._attempt(event, retrying)
+                if event.output.choices and event.output.message.id:
+                    self._outputs.add(event.output.message.id)
             elif isinstance(event, ToolEvent):
                 at, tools = self._tools.setdefault(event.id, ([], []))
                 at.append(index)
@@ -179,16 +189,16 @@ class _Positions:
                 found = self._generates.get(span) if span is not None else None
                 return Reference(type="event", id=found) if found else None
             case "model_output":
-                model = self._uuids.get(event.step_id)
-                if model is None:
+                first = self._uuids.get(event.step_id)
+                if first is not None:
+                    # the output is the generate's last attempt's
+                    output = self._final.get(event.step_id, first).output
+                    message = output.message.id if output.choices else None
+                elif event.step_id in self._outputs:
                     # a log from before generate ids keys the step by its output
-                    return (
-                        Reference(type="message", id=event.step_id)
-                        if event.step_id
-                        else None
-                    )
-                output = model.output
-                message = output.message.id if output.choices else None
+                    message = event.step_id
+                else:
+                    message = None
                 return Reference(type="message", id=message) if message else None
             case "tool_call":
                 tool = self._tool(event.step_id, end, after=True)
@@ -197,6 +207,22 @@ class _Positions:
         if tool is None or tool.message_id is None:
             return None
         return Reference(type="message", id=tool.message_id)
+
+    def _attempt(
+        self, event: ModelEvent, retrying: dict[str | None, tuple[str, ModelEvent]]
+    ) -> None:
+        # a generate's attempts: errored attempts followed by one with the same
+        # input, in the same span ("Which steps ran")
+        previous = retrying.pop(event.span_id, None)
+        if previous is not None and _same_input(previous[1], event):
+            first = previous[0]
+        elif event.uuid is not None:
+            first = event.uuid
+        else:
+            return
+        self._final[first] = event
+        if event.error is not None:
+            retrying[event.span_id] = (first, event)
 
     def _agent(self, span: str | None) -> str:
         # the conversation an event is in: the innermost agent span above it,
@@ -268,3 +294,9 @@ def _preceded(
             if uuid is not None and not earlier and not later:
                 preceded[span] = uuid
     return preceded
+
+
+def _same_input(earlier: ModelEvent, later: ModelEvent) -> bool:
+    if earlier.input_refs is not None or later.input_refs is not None:
+        return earlier.input_refs == later.input_refs
+    return earlier.input == later.input

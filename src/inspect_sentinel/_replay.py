@@ -9,7 +9,6 @@ from typing import Any, Literal, TypeAlias, cast
 import anyio
 from inspect_ai._util.logger import warn_once
 from inspect_ai._util.registry import (
-    is_registry_object,
     registry_info,
     registry_unqualified_name,
 )
@@ -111,7 +110,7 @@ async def replay_monitor(
     A monitor that raises is recorded as failed, in `ReplayReport.failed`, as live; a protocol or monitor error that the runner lets through fails the replay.
 
     Args:
-        sentinel: A protocol, or monitors and protocols as `Task(sentinel=)` takes them, which resolve to one root. Monitors alone run under `observe_only()`.
+        sentinel: A protocol, or monitors and protocols as `Task(sentinel=)` takes them, which resolve to one root. Monitors alone run under `observe_only()`; a lone monitor, bare or the only entry of a list or mapping, is the replayed instance, at its name or mapping key.
         steps: The steps, in the order they ran live.
         context: The sample the steps are from, as `Context.eval` gives it. None outside an eval.
         select: Which steps to run the sentinel at; all when None. The others are skipped, not run, so a monitor's state does not see them, and have no report. Bind it to the transcript the steps are from.
@@ -185,12 +184,14 @@ async def replay_monitor(
 
 
 def _root(sentinel: Sentinels) -> tuple[Protocol, str, str]:
-    if is_registry_object(sentinel) and registry_info(sentinel).type == "monitor":
-        name = registry_unqualified_name(registry_info(sentinel))
-        return observe_only(cast(Any, sentinel)), name, name
+    # monitors alone run under observe_only(); a lone one, bare or as the only
+    # entry of a list or mapping, reports at its own name, a mapping's key
     named = named_children(sentinel, None)
     if named and all(registry_info(child).type == "monitor" for _, child in named):
         root = observe_only(cast(Any, sentinel))
+        if len(named) == 1:
+            name = named[0][0]
+            return root, name, name
     else:
         root = resolve_sentinel(sentinel)
     return root, registry_unqualified_name(registry_info(root)), ""

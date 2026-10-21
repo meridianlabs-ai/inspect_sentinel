@@ -23,6 +23,8 @@ from inspect_sentinel import (
 )
 from inspect_sentinel._integration import (
     config_from_sentinel,
+    factory_sources,
+    import_factory_sources,
     sentinel_from_config,
     watched_stages,
 )
@@ -81,7 +83,7 @@ def as_scanner(
 
     For a monitor, a result's `value` is its suspicion, a number or a dict by dimension, `None` where it abstained, and the observation's own metadata is under `metadata`. For a protocol, it is the root's decision: `value` is whether the step was flagged (`reject`, `modify` or `terminate`; `escalate` declines to decide, so it is not), `answer` the action, and the metadata holds `audit`, `modified` and the children's reports. A monitor that raises makes the transcript's result an error.
 
-    Every stage the sentinel watches runs, in order within a unit, as live, so a monitor whose stages share state sees the same state; `stage` only selects which results are returned. The sentinel is recorded in the scan as the configuration an eval log records, so a scan can be resumed and run in other processes.
+    Every stage the sentinel watches runs, in order within a unit, as live, so a monitor whose stages share state sees the same state; `stage` only selects which results are returned. The sentinel is recorded in the scan as the configuration an eval log records, with the modules that define its monitors and protocols (by name, and by file for a script), so a scan can be resumed and run in other processes.
 
     Args:
         sentinel: A monitor or protocol, or monitors and protocols that resolve to one root, as `Task(sentinel=)` takes them, or their configuration. Several monitors with no protocol are refused: scan them one at a time.
@@ -121,7 +123,11 @@ def as_scanner(
     else:
         policy = registered_name("human_stand_in", human, "human")
     return sentinel_replay(
-        sentinel=config.model_dump(mode="json"),
+        # as JSON text: Scout builds any registry entry it finds in a
+        # scanner's parameters before calling its factory, which would rebuild
+        # the sentinel before its factories' modules are imported
+        sentinel=config.model_dump_json(),
+        sources=factory_sources(config),
         unit=unit,
         stage=chosen,
         split=split,
@@ -136,7 +142,8 @@ def as_scanner(
 @scanner(name="replay", messages="all", events=_EVENTS, condensed=True)
 def sentinel_replay(
     *,
-    sentinel: Any,
+    sentinel: str,
+    sources: list[dict[str, str | None]],
     unit: Literal["step", "transcript"],
     stage: Stage,
     split: Split,
@@ -146,7 +153,10 @@ def sentinel_replay(
     human: str,
     compaction: Literal["all", "last"] | int,
 ) -> Scanner[Transcript]:
-    root = sentinel_from_config(sentinel)
+    # a process rebuilding the scanner, as a resumed scan does, has not
+    # imported the modules that register the sentinel's factories
+    import_factory_sources(sources)
+    root = sentinel_from_config(SentinelConfig.model_validate_json(sentinel))
     selector = selector_from(steps)
     policy = stand_in_from(human)
     contexts = Contexts()

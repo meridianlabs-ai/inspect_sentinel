@@ -91,7 +91,7 @@ def steps_from_messages(
         before = BeforeGenerate(
             model=message.model or "",
             conversation=conversation,
-            input=list(sent[:index]),
+            input=Cut(sent, index),
             agent_messages=Cut(ran, len(ran)),
             history=Cut(sent, previous_input),
             human_decisions=None,

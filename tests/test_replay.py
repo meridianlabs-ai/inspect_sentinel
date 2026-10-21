@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 import anyio
 import pytest
@@ -35,6 +35,7 @@ from inspect_sentinel import (
     steps_from_messages,
     threshold,
 )
+from inspect_sentinel._from_messages import Cut
 from tests._fakes import View
 
 
@@ -125,6 +126,31 @@ def test_the_messages_projection_reads_each_message_a_bounded_number_of_times() 
         return messages.reads
 
     assert reads(200) <= 2 * reads(100) + 10
+
+
+def retained(steps: Sequence[ReplayStep]) -> int:
+    # the entries the steps hold: a list they share counts once, and any
+    # other sequence of messages, a copy, counts in full
+    shared: dict[int, int] = {}
+    copied = 0
+    for replay_step in steps:
+        for name in ("input", "history", "agent_messages"):
+            value = getattr(replay_step.step, name)
+            if isinstance(value, Cut):
+                items: list[ChatMessage] = cast(Any, value)._items
+                shared[id(items)] = len(items)
+            elif value is not None:
+                copied += len(value)
+    return sum(shared.values()) + copied
+
+
+def test_the_messages_projection_retains_entries_in_proportion_to_the_transcript() -> (
+    None
+):
+    def kept(turns: int) -> int:
+        return retained(list(steps_from_messages(conversation(turns))))
+
+    assert kept(200) <= 2 * kept(100) + 10
 
 
 @monitor
