@@ -85,7 +85,7 @@ Pure functions for rules that check tool calls, and builders of steps for testin
 
 ## Replay
 
-Running a sentinel over steps rebuilt from a transcript. The Scout adapter, `as_scanner()`, `as_reader()`, `steps_in()` and `fidelity_probe()`, is in `inspect_sentinel.scout`; see [Replay](../replay.qmd).
+Running a sentinel over steps rebuilt from a transcript. The Scout adapter, `as_scanner()`, `as_reader()`, `steps_in()` and `fidelity_probe()`, is in `inspect_sentinel.scout`; see [Replay](../replay.qmd). A sentinel's configuration and the stages it watches are in [`inspect_sentinel.config`](config.qmd).
 
 ### replay_monitor
 ### ReplayReport

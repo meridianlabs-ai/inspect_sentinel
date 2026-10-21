@@ -1586,7 +1586,7 @@ What a monitor can be shown, where each thing comes from, and where it is availa
 | Untruncated tool output | `step.output` | yes | **no** | **no** | evidence |
 | Tool call view (`ToolCallView`) | `step.view` | yes | **no** | from events only | evidence |
 | Exact model input | `step.input` | yes | yes (the request) | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
-| Full history, pre-compaction turns included | `step.agent_messages` | yes | proxy: **no**, `None`; bridged in-process: yes | only where replay can establish it; else `None` | evidence |
+| Full history, pre-compaction turns included | `step.agent_messages` | yes | proxy: **no**, `None`; bridged in-process: yes | no, `None`: a log does not record the agent's own list | evidence |
 | Every message the agent instance has sent, in order sent | `step.history` | yes | proxy: **yes**, built by the sidecar from the requests it sees, matched by content; agents that open alike share one; bridged in-process: yes, one conversation per bridge | **not yet**, `None`: needs agent turns recorded in the log (R7) | evidence |
 | Reasoning (`ContentReasoning`) | inside assistant messages | provider-dependent: full, summary, or redacted | whatever the wire carries | as logged | evidence |
 | System prompt, as the model saw it | `step.input[0]` when present | yes | yes | from events only | **see below** |

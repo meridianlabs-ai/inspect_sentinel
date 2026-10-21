@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import TypeAlias
+
 import anyio
+
+# inspect_ai's designated boundary for sentinel, not inspect_ai's public API
 from inspect_ai._sentinel._integration import EvalInfo
-from inspect_ai.analysis._dataframe.samples.extract import auto_sample_id
 from inspect_ai.log import (
     EvalLog,
     read_eval_log_async,
@@ -19,12 +22,16 @@ from inspect_sentinel import EvalContext
 _SKIPPED = {"events", "messages", "store", "events_data", "timelines", "scores"}
 
 
+# a sample's uuid, or its id as a string and its epoch
+_SampleKey: TypeAlias = str | tuple[str | None, int | None]
+
+
 class Contexts:
     # the context of each transcript a scanner is handed, reading each log's
     # header and sample summaries once
     def __init__(self) -> None:
         self._headers: dict[str, EvalLog] = {}
-        self._samples: dict[str, dict[str, tuple[int | str, int]]] = {}
+        self._samples: dict[str, dict[_SampleKey, tuple[int | str, int]]] = {}
         # one read of a log at a time, so transcripts from one log that miss
         # the cache together share the read the first makes; a read that
         # fails or is cancelled caches nothing, and the next tries again
@@ -59,7 +66,7 @@ class Contexts:
         header = await self._header(log)
         # the sample record's own values: Scout's columns hold its id as a
         # string, which would replay an id of 7 as "7"
-        sample_id, epoch = await self._identity(log, header, transcript.transcript_id)
+        sample_id, epoch = await self._identity(log, transcript)
         sample = await read_eval_log_sample_async(
             log,
             id=sample_id,
@@ -78,29 +85,28 @@ class Contexts:
         )
 
     async def _identity(
-        self, log: str, header: EvalLog, transcript_id: str
+        self, log: str, transcript: Transcript
     ) -> tuple[int | str, int]:
-        # Scout's transcript id is the sample's uuid, or for a sample without
-        # one an id made from the eval id, sample id and epoch; map either to
-        # the sample's own id and epoch
+        # Scout's transcript id is the sample's uuid; a sample without one is
+        # found by the id and epoch Scout records as its task id and repeat,
+        # the id as a string, which names one sample since inspect_ai refuses
+        # ids that share a string
         samples = self._samples.get(log)
         if samples is None:
             async with self._lock(log):
                 samples = self._samples.get(log)
                 if samples is None:
-                    summaries = await read_eval_log_sample_summaries_async(log)
-                    samples = {
-                        s.uuid or auto_sample_id(header.eval.eval_id, s): (
-                            s.id,
-                            s.epoch,
-                        )
-                        for s in summaries
-                    }
+                    samples = dict[_SampleKey, tuple[int | str, int]](
+                        (s.uuid or (str(s.id), s.epoch), (s.id, s.epoch))
+                        for s in await read_eval_log_sample_summaries_async(log)
+                    )
                     self._samples[log] = samples
-        found = samples.get(transcript_id)
+        found = samples.get(transcript.transcript_id) or samples.get(
+            (transcript.task_id, transcript.task_repeat)
+        )
         if found is None:
             raise ValueError(
-                f"Transcript {transcript_id!r} is not a sample of {log}: no sample there has that uuid, or that id and epoch."
+                f"Transcript {transcript.transcript_id!r} is not a sample of {log}: no sample there has that uuid, or its id and epoch."
             )
         return found
 

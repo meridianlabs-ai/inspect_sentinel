@@ -560,7 +560,7 @@ Which surfaces exist where:
 | Untruncated tool output | yes | no | no | evidence |
 | `ToolCallView` | yes | no | from events only | evidence |
 | Exact model input (`step.input`) | yes | yes, the request | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
-| Full history, pre-compaction turns included (`step.agent_messages`) | yes | proxy: no, `None`; bridged in-process: yes | only where replay can establish it; else `None` | evidence |
+| Full history, pre-compaction turns included (`step.agent_messages`) | yes | proxy: no, `None`; bridged in-process: yes | no, `None`: a log does not record the agent's own list | evidence |
 | Every message the agent instance has sent, in order sent (`step.history`) | yes | proxy: yes, built by the sidecar from the requests it sees, matched by content; agents that open alike share one; bridged in-process: yes, one conversation per bridge | not yet, `None` (R7) | evidence |
 | Earlier `human()` decisions in the conversation (`step.human_decisions`) | yes | no: `None`, unless the proxy keeps its own `ask_human` answers | from `SentinelEvent`s | prior verdicts |
 | Reasoning | provider-dependent | whatever the wire carries | as logged | evidence |

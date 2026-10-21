@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from typing import Literal, TypeAlias
 
+# inspect_ai's designated boundary for sentinel, not inspect_ai's public API
 from inspect_ai._sentinel._integration import EvalInfo, steps_from_events
 from inspect_ai.event import (
     Event,
@@ -17,7 +18,6 @@ from inspect_ai.event import (
     timeline_build,
 )
 from inspect_scout import Transcript
-from inspect_scout._transcript.timeline import _walk_spans  # pyright: ignore[reportPrivateUsage]
 
 from inspect_sentinel import (
     BeforeGenerate,
@@ -77,7 +77,7 @@ def within_depth(transcript: Transcript, timeline: str | None, depth: int) -> se
     )
     reached = {
         item.event.uuid
-        for span in _walk_spans(tree.root, depth=depth)
+        for span in _walk_spans(tree.root, depth)
         for item in span.content
         if isinstance(item, TimelineEvent) and isinstance(item.event, ModelEvent)
     }
@@ -128,6 +128,28 @@ class Conversations:
         for visited in walked:
             self._found[visited] = conversation
         return conversation
+
+
+def _walk_spans(
+    span: TimelineSpan, depth: int | None, scannable_depth: int = 0
+) -> Iterator[TimelineSpan]:
+    # mirrors Scout's private `_walk_spans`, so `depth` counts levels as
+    # `llm_scanner(depth=)` does: a span is scannable when it is not a utility
+    # span and holds a model event of its own, and only scannable spans count
+    # a level; others are walked through. A test pins it to Scout's.
+    if depth is not None and depth <= 0:
+        return
+    if not span.utility and any(
+        isinstance(item, TimelineEvent) and isinstance(item.event, ModelEvent)
+        for item in span.content
+    ):
+        scannable_depth += 1
+        if depth is not None and scannable_depth > depth:
+            return
+        yield span
+    for item in span.content:
+        if isinstance(item, TimelineSpan):
+            yield from _walk_spans(item, depth, scannable_depth)
 
 
 def _origins(transcript: Transcript) -> bool:

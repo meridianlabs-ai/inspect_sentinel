@@ -3,6 +3,7 @@ import pytest
 
 import inspect_sentinel
 import inspect_sentinel._integration
+import inspect_sentinel.config
 
 
 def test_version_is_exposed() -> None:
@@ -79,7 +80,9 @@ def test_integration_names_are_not_exported() -> None:
         "SentinelConfig",
         "SentinelEntry",
         "sentinel_from_config",
+        "sentinel_config",
         "config_from_sentinel",
+        "watched_stages",
         "validate_instance_name",
         "PRECEDENCE",
         "named_children",
@@ -101,10 +104,6 @@ def test_integration_module_exports_the_host_surface() -> None:
         "Sentinels",
         "sentinel_from_config",
         "config_from_sentinel",
-        "factory_sources",
-        "import_factory_sources",
-        "import_source",
-        "source_file",
         "kept_human_decision",
         "validate_instance_name",
         "resolve_sentinel",
@@ -114,6 +113,19 @@ def test_integration_module_exports_the_host_surface() -> None:
         "run_sentinel",
         "HostNative",
     }
+
+
+def test_the_config_module_exports_the_configuration_round_trip() -> None:
+    assert set(inspect_sentinel.config.__all__) == {
+        "sentinel_config",
+        "sentinel_from_config",
+        "watched_stages",
+    }
+    # inspect_ai's contract keeps its name for the same function
+    assert (
+        inspect_sentinel._integration.config_from_sentinel
+        is inspect_sentinel.config.sentinel_config
+    )
 
 
 def test_wire_types_come_from_inspect_ai() -> None:

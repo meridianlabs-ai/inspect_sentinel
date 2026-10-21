@@ -6,7 +6,8 @@ from typing import Any, TypeAlias, TypeVar, cast
 from pydantic import BaseModel, PrivateAttr
 
 from inspect_sentinel import HumanPolicy, HumanStandIn, ReplayStep
-from inspect_sentinel._integration import import_source, source_file
+
+from ._sources import import_source, source_file
 
 StepSelector: TypeAlias = Callable[[str, ReplayStep], bool]
 """Which steps of a transcript a scan runs the sentinel at: handed the transcript's id and a step, true to run it."""

@@ -66,7 +66,7 @@ def steps_from_messages(
 
     - At the generate stages, `tools` is empty, `tool_choice` is `"auto"` and `config` is the default; `model` is the assistant message's `model`, or empty. The output has no usage or time.
     - At the tool stages, `input`, `tools` and `tool_choice` are `None`, since a compaction makes the messages before a call differ from what the model was sent. `view` holds the call's own rendering where it has one, `output` is `None` and `truncated` is `None`.
-    - `history` is the messages up to the generate's input (before it, at `model_input`), as if every message had been sent once. `agent_messages` is the messages before the first assistant message, then each assistant and tool message so far, as if the list were one agent's run: an assistant message joins after its `model_output` step, and its calls' results after its last call's steps. `human_decisions` is `None`.
+    - `history` is the messages up to the generate's input (before it, at `model_input`), as if every message had been sent once. `agent_messages` is `None` at every stage, since it is the running agent's own list, which messages do not record, and `human_decisions` is `None`.
     - Every step is in one segment, `(conversation, 0)`, since messages do not say where a compaction was.
 
     A generate's step id is its assistant message's id, or its position (`m3`) when it has none; a tool step's is its call's id.
@@ -76,23 +76,18 @@ def steps_from_messages(
         conversation: The id to give the conversation, `step.conversation` on every step.
     """
     sent: list[ChatMessage] = list(messages)
-    ran: list[ChatMessage] = []
     answers = _answers(sent)
     segment = (conversation, 0)
-    opened = False
     previous_input = 0
     for index, message in enumerate(sent):
         if not isinstance(message, ChatMessageAssistant):
-            if not opened:
-                ran.append(message)
             continue
-        opened = True
         step_id = message.id or f"m{index}"
         before = BeforeGenerate(
             model=message.model or "",
             conversation=conversation,
             input=Cut(sent, index),
-            agent_messages=Cut(ran, len(ran)),
+            agent_messages=None,
             history=Cut(sent, previous_input),
             human_decisions=None,
             tools=[],
@@ -116,7 +111,7 @@ def steps_from_messages(
                 model=before.model,
                 conversation=conversation,
                 input=before.input,
-                agent_messages=before.agent_messages,
+                agent_messages=None,
                 history=Cut(sent, index),
                 human_decisions=None,
                 tools=before.tools,
@@ -126,10 +121,7 @@ def steps_from_messages(
             ),
             segment,
         )
-        ran.append(message)
         history = Cut(sent, index)
-        agent_messages = Cut(ran, len(ran))
-        results: list[ChatMessageTool] = []
         for call in message.tool_calls or []:
             view = ToolCallView(call=call.view)
             yield ReplayStep(
@@ -142,7 +134,7 @@ def steps_from_messages(
                     call=call,
                     view=view,
                     input=None,
-                    agent_messages=agent_messages,
+                    agent_messages=None,
                     history=history,
                     human_decisions=None,
                 ),
@@ -151,7 +143,6 @@ def steps_from_messages(
             result = _answer(answers, call.id, index)
             if result is None:
                 continue
-            results.append(result)
             yield ReplayStep(
                 call.id,
                 "tool_result",
@@ -164,14 +155,13 @@ def steps_from_messages(
                     output=None,
                     view=view,
                     input=None,
-                    agent_messages=agent_messages,
+                    agent_messages=None,
                     history=history,
                     human_decisions=None,
                     truncated=None,
                 ),
                 segment,
             )
-        ran.extend(results)
         previous_input = index
 
 

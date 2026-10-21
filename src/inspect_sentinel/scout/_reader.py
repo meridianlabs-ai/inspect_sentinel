@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+# inspect_ai's designated boundary for sentinel, not inspect_ai's public API
 from inspect_ai._sentinel._integration import MalformedLogError
 from inspect_ai.event import (
     SentinelEvent,

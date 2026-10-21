@@ -18,7 +18,7 @@ from pydantic import JsonValue
 
 from .._context import EvalContext, InspectSample, ProxyContext
 from .._host import HostNative
-from .._integration import HostContext, resolve_sentinel, run_sentinel, watched_stages
+from .._integration import HostContext, resolve_sentinel, run_sentinel
 from .._report import Decision
 from .._step import (
     AfterGenerate,
@@ -28,6 +28,7 @@ from .._step import (
     Step,
 )
 from .._types import Sentinels
+from ..config import watched_stages
 from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request, succeeded
 from ._history import record_sent
 from ._host import Record, RunHost, SidecarHost, stage

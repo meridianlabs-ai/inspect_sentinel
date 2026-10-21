@@ -33,7 +33,16 @@ from inspect_ai.model import (
 from inspect_ai.solver import Generate, Solver, TaskState, generate, solver, use_tools
 from inspect_ai.tool import Tool, ToolError, tool
 from inspect_ai.util._span import span
-from inspect_scout import scan, scan_results_df, scan_resume, transcripts_from
+from inspect_scout import (
+    Result,
+    Scanner,
+    Transcript,
+    scan,
+    scan_results_df,
+    scan_resume,
+    scanner,
+    transcripts_from,
+)
 
 from inspect_sentinel import (
     AfterGenerate,
@@ -64,6 +73,7 @@ from inspect_sentinel.scout import (
     step_selector,
     steps_in,
 )
+from inspect_sentinel.scout._context import Contexts
 from tests._fakes import View
 
 Row = dict[str, Any]
@@ -204,15 +214,37 @@ def test_importing_inspect_sentinel_does_not_load_scout() -> None:
     assert loaded.stdout.strip() == "False"
 
 
-def test_the_scout_adapter_imports_only_public_sentinel_modules() -> None:
-    # so it can move to inspect_scout unchanged; _integration is the contract
-    # sentinel offers other packages, as inspect_ai uses it
-    allowed = {"inspect_sentinel", "inspect_sentinel._integration"}
+def test_the_scout_adapter_imports_nothing_private_but_inspect_ais_boundary() -> None:
+    # so it can move to inspect_scout unchanged: inspect_ai's _integration is
+    # its designated boundary for sentinel, and its registry lookup is the one
+    # private name besides (design call 1)
+    private: dict[str, set[str]] = {}
+    sentinel: set[str] = set()
     for source in SCOUT.glob("*.py"):
         for node in ast.walk(ast.parse(source.read_text())):
             if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                if node.module.startswith("inspect_sentinel"):
-                    assert node.module in allowed, (source.name, node.module)
+                imported = [(node.module, {alias.name for alias in node.names})]
+            elif isinstance(node, ast.Import):
+                imported = [(alias.name, set[str]()) for alias in node.names]
+            else:
+                continue
+            for module, names in imported:
+                if module.split(".")[0] == "inspect_sentinel":
+                    sentinel.add(module)
+                if module != "__future__" and (
+                    any(part.startswith("_") for part in module.split("."))
+                    or any(name.startswith("_") for name in names)
+                ):
+                    private.setdefault(module, set()).update(names)
+    assert sentinel == {"inspect_sentinel", "inspect_sentinel.config"}
+    assert private == {
+        "inspect_ai._sentinel._integration": {
+            "EvalInfo",
+            "MalformedLogError",
+            "steps_from_events",
+        },
+        "inspect_ai._util.registry": {"registry_lookup"},
+    }
 
 
 @pytest.mark.parametrize(
@@ -704,7 +736,7 @@ def test_the_probe_reads_only_the_tip_of_each_conversation_list() -> None:
         call=ToolCall(id="c", function="addition", arguments={"x": 1, "y": 1}),
         view=ToolCallView(),
         input=None,
-        agent_messages=history,
+        agent_messages=None,
         history=history,
         human_decisions=decisions,
     )
@@ -712,7 +744,7 @@ def test_the_probe_reads_only_the_tip_of_each_conversation_list() -> None:
 
     anyio.run(replay_monitor, fidelity_probe(), [replayed])
 
-    assert decisions.reads <= 2 and history.reads <= 4
+    assert decisions.reads <= 2 and history.reads <= 2
 
 
 def test_a_scanned_step_carries_its_stage_and_turns(tmp_path: Path) -> None:
@@ -732,33 +764,39 @@ def test_a_scanned_step_carries_its_stage_and_turns(tmp_path: Path) -> None:
     assert row["value"] == 0.0
 
 
+@scanner(messages="all")
+def sample_identity() -> Scanner[Transcript]:
+    # the sample a transcript's context is read from, as the replay scanner
+    # reads it
+    contexts = Contexts()
+
+    async def scan(transcript: Transcript) -> Result:
+        context = await contexts.eval_context(transcript)
+        assert context is not None
+        return Result(
+            value=repr(context.sample_id),
+            metadata={"epoch": context.epoch, "input": context.sample_input},
+        )
+
+    return scan
+
+
 def test_a_sample_without_a_uuid_gets_its_context_by_its_typed_id(
     tmp_path: Path,
 ) -> None:
-    from inspect_ai.analysis._dataframe.samples.extract import auto_sample_id
-    from inspect_ai.log import write_eval_log
-    from inspect_scout import Transcript
-
-    from inspect_sentinel.scout._context import Contexts
-
     log = run(tmp_path / "logs", [[call(1)], [call(2)]], None)
     assert log.samples is not None
     for sample in log.samples:
         sample.uuid = None
-    path = str(tmp_path / "old.json")
-    write_eval_log(log, path, format="json")
-    second = log.samples[1]
-    transcript = Transcript(
-        transcript_id=auto_sample_id(log.eval.eval_id, second),
-        source_type="eval_log",
-        source_uri=path,
-    )
+    write_eval_log(log, str(tmp_path / "old" / "old.eval"))
 
-    context = anyio.run(Contexts().eval_context, transcript)
+    found = scanned(tmp_path / "scans", tmp_path / "old", identity=sample_identity())
 
-    assert context is not None
-    assert (context.sample_id, context.epoch) == (1, 1)
-    assert context.sample_input == second.input
+    read = {
+        (row["value"], *json.loads(row["metadata"]).values())
+        for row in found["identity"]
+    }
+    assert read == {(repr(s.id), s.epoch, s.input) for s in log.samples}
 
 
 AUTHOR_MODULE = """

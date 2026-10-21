@@ -3,10 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, TypeAlias, cast
 
-from inspect_ai._util.registry import registry_info
 from inspect_ai.log import SentinelConfig
+from inspect_ai.util import registry_info
 from inspect_scout import Result, Scanner, Transcript, scanner
-from inspect_scout._scanner.scanner import SCANNER_TIMELINE_NEEDED_ATTR
 
 from inspect_sentinel import (
     AfterGenerate,
@@ -23,10 +22,8 @@ from inspect_sentinel import (
     Split,
     replay_monitor,
 )
-from inspect_sentinel._integration import (
-    config_from_sentinel,
-    factory_sources,
-    import_factory_sources,
+from inspect_sentinel.config import (
+    sentinel_config,
     sentinel_from_config,
     watched_stages,
 )
@@ -40,6 +37,7 @@ from ._select import (
     selector_from,
     stand_in_from,
 )
+from ._sources import factory_sources, import_factory_sources
 from ._steps import transcript_steps, within_depth
 
 Stage: TypeAlias = Literal["model_input", "model_output", "tool_call", "tool_result"]
@@ -50,6 +48,11 @@ STAGES: dict[type[Any], Stage] = {
     BeforeToolCall: "tool_call",
     AfterToolCall: "tool_result",
 }
+
+# Scout loads timelines for a scanner whose function carries this attribute,
+# as `llm_scanner` asks for them only when it needs them; a copy of Scout's
+# private `SCANNER_TIMELINE_NEEDED_ATTR`, pinned to it by a test
+TIMELINE_NEEDED_ATTR = "___scanner_timeline_needed___"
 
 # what the log driver reads: model and tool events for the steps, compactions
 # for their segments, approvals and sentinel events for earlier decisions and
@@ -111,9 +114,7 @@ def as_scanner(
             f"compaction must be 'all', 'last' or at least 1 segment; got {compaction}."
         )
     config = (
-        sentinel
-        if isinstance(sentinel, SentinelConfig)
-        else config_from_sentinel(sentinel)
+        sentinel if isinstance(sentinel, SentinelConfig) else sentinel_config(sentinel)
     )
     chosen = _stage(sentinel_from_config(config), stage)
     selected: object = (
@@ -208,7 +209,7 @@ def sentinel_replay(
 
     if timeline is not None or depth is not None:
         # Scout reads timelines only for a scanner that asks for them
-        setattr(scan, SCANNER_TIMELINE_NEEDED_ATTR, True)
+        setattr(scan, TIMELINE_NEEDED_ATTR, True)
     return scan
 
 

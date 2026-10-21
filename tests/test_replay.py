@@ -99,8 +99,6 @@ def test_messages_project_each_turn_into_its_steps_in_the_order_they_ran() -> No
     assert isinstance(second, BeforeGenerate)
     assert ids(second.input) == ["task", "a0", "rx", "ry", "nudge"]
     assert ids(second.history) == ["task"]
-    # later user messages are not the agent's own
-    assert ids(second.agent_messages) == ["task", "a0", "rx", "ry"]
     output = by_key[("model_output", "a1")]
     assert isinstance(output, AfterGenerate)
     assert output.output.message.id == "a1"
@@ -108,12 +106,13 @@ def test_messages_project_each_turn_into_its_steps_in_the_order_they_ran() -> No
     before_y = by_key[("tool_call", "y")]
     assert isinstance(before_y, BeforeToolCall)
     assert (before_y.input, before_y.tools, before_y.message_id) == (None, None, "a0")
-    assert ids(before_y.agent_messages) == ["task", "a0"]
     after_y = by_key[("tool_result", "y")]
     assert isinstance(after_y, AfterToolCall)
     assert (after_y.result.id, after_y.output, after_y.truncated) == ("ry", None, None)
     assert all(s.segment == ("conv", 0) for s in steps)
     assert all(s.step.human_decisions is None for s in steps)
+    # the running agent's own list, which messages do not record
+    assert all(s.step.agent_messages is None for s in steps)
 
 
 def test_the_messages_projection_reads_each_message_a_bounded_number_of_times() -> None:
@@ -121,9 +120,9 @@ def test_the_messages_projection_reads_each_message_a_bounded_number_of_times() 
         messages = View(conversation(turns))
         for step in steps_from_messages(messages):
             # what a window monitor reads: the last few of each list
-            for history in (step.step.history, step.step.agent_messages):
-                assert history is not None
-                list(history[-3:])
+            history = step.step.history
+            assert history is not None
+            list(history[-3:])
         return messages.reads
 
     assert reads(200) <= 2 * reads(100) + 10
@@ -135,7 +134,7 @@ def retained(steps: Sequence[ReplayStep]) -> int:
     shared: dict[int, int] = {}
     copied = 0
     for replay_step in steps:
-        for name in ("input", "history", "agent_messages"):
+        for name in ("input", "history"):
             value = getattr(replay_step.step, name)
             if isinstance(value, Cut):
                 items: list[ChatMessage] = cast(Any, value)._items

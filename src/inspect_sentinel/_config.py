@@ -1,15 +1,9 @@
 from __future__ import annotations
 
-import hashlib
-import importlib
-import importlib.util
 import inspect
 import json
 import logging
-import sys
-from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
-from pathlib import Path
-from types import ModuleType
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from typing import Any, NamedTuple, cast
 
 import yaml
@@ -52,7 +46,7 @@ def sentinel_from_config(
 ) -> Sentinels:
     """Build the monitors and protocols a configuration describes.
 
-    Each entry is constructed through the registry with its `params` and its nested entries, which are built first. An entry whose recorded `version` differs from the installed factory's is built anyway, with a warning naming both versions; its `meta` is ignored. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved; pass it to `resolve_sentinel`.
+    Each entry is constructed through the registry with its `params` and its nested entries, which are built first. An entry whose recorded `version` differs from the installed factory's is built anyway, with a warning naming both versions; its `meta` is ignored. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved into its root: it is what `Task(sentinel=)` takes.
 
     Args:
         config: A YAML or JSON file whose only key is `sentinel`, a registered monitor or protocol name, or the configuration itself: one entry, a list of entries, or a mapping of instance names to entries.
@@ -265,171 +259,10 @@ def _lookup(name: str) -> list[_Factory]:
     return found
 
 
-def factory_sources(config: SentinelConfig) -> list[dict[str, str | None]]:
-    """Where the factories a configuration names are defined, so another process can import them before `sentinel_from_config()` rebuilds it.
-
-    A factory registers itself when its module is imported, and a process that rebuilds a configuration, such as a resumed scan or a worker, has not imported the author's modules. Each source is the module's name and its file, relative to the working directory where it is under it, for a module that does not import by name, such as a script run as `__main__`. A module with no file, such as one typed into a REPL, notebook or `python -c`, has none, so only the process that defined it can rebuild the configuration. Factories in this package are left out, since importing it registers them.
-
-    Args:
-        config: The configuration, as `config_from_sentinel()` records it.
-    """
-    sources: dict[str, str | None] = {}
-    for name in _entry_names(config.model_dump(mode="json")):
-        for found in _find_all(name):
-            module = getattr(found.factory, "__module__", None)
-            if module is None or module.split(".")[0] == PACKAGE:
-                continue
-            sources[module] = source_file(module)
-    return [{"module": m, "file": f} for m, f in sorted(sources.items())]
-
-
-def import_factory_sources(
-    config: SentinelConfig, sources: Sequence[Mapping[str, str | None]]
-) -> None:
-    """Import what a process lacks to rebuild a configuration: the modules `factory_sources()` named, for a factory not yet registered here, by name, else from the recorded file.
-
-    Nothing is imported in a process where every factory the configuration names is registered, such as the one that recorded it, so an author's script or notebook is never run again there. A `__main__` source counts as imported when this process's `__main__` is its file.
-
-    Args:
-        config: The configuration.
-        sources: Its sources, as `factory_sources()` returned them.
-
-    Raises:
-        ValueError: If a factory is still not registered after importing the sources, naming it.
-    """
-    if not _unregistered(config):
-        return
-    for source in sources:
-        module, file = source.get("module"), source.get("file")
-        if module is not None:
-            import_source(module, file)
-    missing = _unregistered(config)
-    if missing:
-        raise ValueError(
-            f"Cannot rebuild the sentinel in this process: {', '.join(repr(m) for m in missing)} is not a registered monitor or protocol, and importing the modules that defined its factories did not register it. A factory defined in a REPL, notebook or `python -c` can be rebuilt only in the process that defined it; define it in a module or script."
-        )
-
-
-def _unregistered(config: SentinelConfig) -> list[str]:
-    return sorted(
-        {n for n in _entry_names(config.model_dump(mode="json")) if not _find_all(n)}
-    )
-
-
-def source_file(module: str) -> str | None:
-    """The file a loaded module was read from, relative to the working directory where it is under it, as `factory_sources()` records it; None for a module with no file, such as one typed into a REPL, notebook or `python -c`.
-
-    Args:
-        module: The module's name.
-    """
-    file = getattr(sys.modules.get(module), "__file__", None)
-    return _relative(file) if file and Path(file).is_file() else None
-
-
-def import_source(module: str, file: str | None) -> ModuleType | None:
-    """The module a recorded source names, imported if this process lacks it: by name, else from its file under a name of its own.
-
-    A script, recorded as `__main__`, is this process's `__main__` (or `__mp_main__`, as a worker started by spawning runs it) when that is its file, and is otherwise loaded from the file, once. None when there is no way to load it: a `__main__` with no file.
-
-    Args:
-        module: The module's name, as recorded.
-        file: Its file, as recorded, relative to the working directory or absolute.
-
-    Raises:
-        ModuleNotFoundError: If the module does not import by name and has no file.
-        ValueError: If the recorded file does not exist.
-    """
-    path = _absolute(file) if file is not None else None
-    if module == "__main__":
-        for alias in ("__main__", "__mp_main__"):
-            loaded = sys.modules.get(alias)
-            main = getattr(loaded, "__file__", None)
-            if main is not None and path is not None and Path(main).resolve() == path:
-                return loaded
-        return _import_file(path) if path is not None else None
-    if module in sys.modules:
-        return sys.modules[module]
-    try:
-        return importlib.import_module(module)
-    except ModuleNotFoundError as ex:
-        # only the module itself missing from the path, not one it imports
-        if path is None or ex.name is None or not module.startswith(ex.name):
-            raise
-        return _import_file(path)
-
-
-def _import_file(path: Path) -> ModuleType:
-    # under a name of its own, so it never stands in for a module of the
-    # same name, nor runs twice
-    digest = hashlib.sha256(str(path).encode()).hexdigest()[:8]
-    name = f"_sentinel_source_{path.stem}_{digest}"
-    loaded = sys.modules.get(name)
-    if loaded is not None:
-        return loaded
-    if not path.is_file():
-        raise ValueError(
-            f"Cannot import {str(path)!r}, which defines a monitor, protocol or callback the scan records: the file does not exist."
-        )
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ValueError(f"Cannot import {str(path)!r}.")
-    loaded = importlib.util.module_from_spec(spec)
-    sys.modules[name] = loaded
-    spec.loader.exec_module(loaded)
-    return loaded
-
-
-def _relative(file: str) -> str:
-    path = Path(file).resolve()
-    try:
-        return path.relative_to(Path.cwd().resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def _absolute(file: str) -> Path:
-    return (Path.cwd() / file).resolve()
-
-
-def _entry_names(layer: object) -> Iterator[str]:
-    # every monitor and protocol a configuration names: its entries, the
-    # layers nested under their parameters, and the instances recorded in
-    # their params
-    if isinstance(layer, Mapping):
-        mapping = cast(Mapping[str, object], layer)
-        name = mapping.get("name")
-        if not isinstance(name, str):
-            for entry in mapping.values():
-                yield from _entry_names(entry)
-            return
-        yield name
-        for key, value in mapping.items():
-            if key == "params":
-                yield from _instance_names(value)
-            elif key not in ENTRY_FIELDS:
-                yield from _entry_names(value)
-    elif isinstance(layer, list):
-        for entry in cast(list[object], layer):
-            yield from _entry_names(entry)
-
-
-def _instance_names(value: object) -> Iterator[str]:
-    if _is_sentinel_dict(value):
-        recorded = cast(RegistryDict, value)
-        yield recorded["name"]
-        yield from _instance_names(recorded["params"])
-    elif isinstance(value, Mapping):
-        for item in cast(Mapping[str, object], value).values():
-            yield from _instance_names(item)
-    elif isinstance(value, list):
-        for item in cast(list[object], value):
-            yield from _instance_names(item)
-
-
-def config_from_sentinel(sentinels: Sentinels) -> SentinelConfig:
+def sentinel_config(sentinels: Sentinels) -> SentinelConfig:
     """Record constructed monitors and protocols as the configuration that rebuilds them.
 
-    The inverse of `sentinel_from_config`, for the eval log and retry: each instance becomes an entry with its registry name, the params it was created with, and its factory's version unless that is 0, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a lone entry, so it rebuilds as the root it was.
+    The inverse of `sentinel_from_config()`, for the eval log and retry: each instance becomes an entry with its registry name, the params it was created with, and its factory's version unless that is 0, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a lone entry, so it rebuilds as the root it was.
 
     Args:
         sentinels: One monitor or protocol, or a sequence or mapping of instance names to them, as `Task(sentinel=)` accepts.
