@@ -19,12 +19,13 @@ test:
 LITELLM ?= 1.105.0
 LITELLM_ENV = cd src/proxies/litellm && uv run --isolated --no-project \
 	--with "litellm[proxy]==$(LITELLM)" --with-editable . \
-	--with pytest --with pytest-timeout --with jsonschema --with httpx \
-	--with anthropic
+	--with pytest --with pytest-timeout --with pytest-xdist --with jsonschema \
+	--with httpx --with "anthropic<2"
 
+# in parallel, since many of the tests start a sidecar of their own
 .PHONY: test-litellm
 test-litellm:
-	$(LITELLM_ENV) pytest
+	$(LITELLM_ENV) pytest -n auto
 
 .PHONY: check-litellm
 check-litellm:
@@ -40,6 +41,10 @@ envoy-protos:
 		--with grpcio-tools==1.74.0 --with mypy-protobuf==5.1.0 \
 		python scripts/generate_envoy_protos.py
 
+# The docs tools are in the `doc` extra, which `dev` leaves out, so install it
+# first. `uv pip install` leaves the inspect_ai and inspect_scout installed from
+# git in place, as they satisfy the floors.
 .PHONY: docs
 docs:
+	uv pip install --python .venv/bin/python -e ".[doc]"
 	cd docs && PATH="$(CURDIR)/.venv/bin:$$PATH" ../.venv/bin/quarto render

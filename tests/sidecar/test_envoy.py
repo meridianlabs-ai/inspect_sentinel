@@ -26,6 +26,7 @@ from inspect_sentinel._step import BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, read_reply
 from inspect_sentinel.sidecar._handler import RequestResult
+from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
 from inspect_sentinel.sidecar.envoy import envoy_yaml
 from tests.sidecar._envoy import IMAGE, Scripted, Stack, docker_missing, envoy_stack
 from tests.sidecar._traffic import (
@@ -39,6 +40,7 @@ from tests.sidecar._traffic import (
     weather,
     weather_rule,
 )
+from tests.sidecar.test_early_release import slowly
 
 _MISSING = docker_missing()
 
@@ -770,3 +772,177 @@ def test_configuration_for_the_real_providers_is_one_envoy_takes(
 
     assert checked.returncode == 0, checked.stderr
     assert "warning" not in checked.stderr
+
+
+# Early release through Envoy: text goes out as it arrives, and each call
+# once it is judged.
+
+
+@pytest.mark.parametrize("api", _APIS)
+def test_reply_released_early_has_its_rejected_call_taken_out(
+    stack: Stack, api: str
+) -> None:
+    stack.use(Handler(rejects("Tokyo"), release="early"))
+    _answer_with(stack, api, True)
+
+    assert _ask(stack, api, True) == ["Paris", "Lima"]
+
+
+@pytest.mark.parametrize("api", _APIS)
+def test_reply_released_early_that_passes_reaches_the_client_as_sent(
+    stack: Stack, api: str
+) -> None:
+    stack.use(Handler(weather_rule(city="Oslo"), release="early"))
+    sent = _answer_with(stack, api, True)
+
+    answered = httpx.post(
+        f"{stack.url}{_path(api)}", json=_body(api, True), timeout=_TIMEOUT
+    )
+
+    assert answered.status_code == 200
+    assert answered.content == sent
+
+
+@pytest.mark.parametrize("api", _APIS)
+def test_inspect_client_is_told_what_was_decided_on_a_reply_released_early(
+    stack: Stack, api: str
+) -> None:
+    stack.use(Handler(rejects("Tokyo"), release="early"))
+    _answer_with(stack, api, True)
+
+    answered = httpx.post(
+        f"{stack.url}{_path(api)}",
+        json=_body(api, True),
+        headers=inspect_headers(),
+        timeout=_TIMEOUT,
+    )
+
+    assert answered.status_code == 200
+    assert b'"sentinel"' in answered.content
+    assert b'"reject"' in answered.content
+
+
+def test_turn_of_calls_alone_all_rejected_early_is_refused_with_its_status(
+    stack: Stack,
+) -> None:
+    # the Chat recording holds nothing but calls, so nothing has gone out when
+    # the last call is rejected
+    stack.use(Handler(every_call_rule(), release="early"))
+    _answer_with(stack, "chat", True)
+
+    with pytest.raises(openai.BadRequestError) as refused:
+        _ask(stack, "chat", True)
+
+    assert refused.value.status_code == 400
+
+
+def test_turn_all_rejected_after_reasoning_went_out_raises_in_the_sdk(
+    stack: Stack,
+) -> None:
+    # the Responses recording opens with a reasoning item, which goes out as
+    # it arrives, so the status has been sent when the last call is rejected
+    stack.use(Handler(every_call_rule(), release="early"))
+    _answer_with(stack, "responses", True)
+
+    with pytest.raises(openai.APIError) as raised:
+        _ask(stack, "responses", True)
+
+    assert "is not allowed." in str(raised.value)
+
+
+@pytest.mark.parametrize("api", _APIS)
+def test_turn_ended_after_text_went_out_raises_in_the_sdk(
+    stack: Stack, api: str
+) -> None:
+    stack.use(Handler(ends_at("Lima"), release="early"))
+    _answer_with(stack, api, True)
+
+    error = anthropic.APIStatusError if api == "anthropic" else openai.APIError
+    with pytest.raises(error) as raised:
+        _ask(stack, api, True)
+
+    assert "ended this run" in str(raised.value)
+
+
+@protocol
+def ends_at(city: str) -> Protocol:
+    """End the run at a weather lookup of `city`."""
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        if _city(step.call.arguments.get("location")) == city:
+            return Decision.terminate("ended")
+        return Decision.proceed()
+
+    return decide
+
+
+def test_text_reaches_the_client_through_envoy_before_the_sentinel_answers(
+    stack: Stack,
+) -> None:
+    released = threading.Event()
+    judged: list[str] = []
+    stack.use(Handler(waits_for(released, judged), release="early"))
+    sent = _answer_with(stack, "anthropic", True)
+
+    seen = b""
+    with httpx.stream(
+        "POST",
+        f"{stack.url}/v1/messages",
+        json=_body("anthropic", True),
+        timeout=_TIMEOUT,
+    ) as answered:
+        chunks = answered.iter_raw()
+        while b"text_delta" not in seen:
+            seen += next(chunks)
+        # the text is out, while the sentinel still holds the first call
+        assert not judged and b"tool_use" not in seen
+        released.set()
+        seen += b"".join(chunks)
+
+    # every call was let through, so the client has what the provider sent
+    assert seen == sent
+
+
+def test_reply_released_early_with_trailers_ends_at_its_trailers(stack: Stack) -> None:
+    stack.use(Handler(rejects("Tokyo"), release="early"))
+    content_type, body = _recorded("anthropic", True)
+    stack.provider.script = lambda _: Scripted(
+        body=_split(body),
+        content_type=content_type,
+        trailers={"x-provider-checksum": "abc"},
+    )
+
+    assert _ask(stack, "anthropic", True) == ["Paris", "Lima"]
+
+
+@pytest.mark.parametrize("api", _APIS)
+def test_a_client_waiting_through_envoy_on_a_judgment_is_kept_alive(
+    stack: Stack, api: str
+) -> None:
+    stack.use(Handler(slowly(0.3, "proceed"), release="early", keepalive=0.05))
+    sent = _answer_with(stack, api, True)
+
+    answered = httpx.post(
+        f"{stack.url}{_path(api)}", json=_body(api, True), timeout=_TIMEOUT
+    )
+
+    assert answered.status_code == 200
+    assert KEEPALIVE in answered.content
+    assert answered.content.replace(KEEPALIVE, b"") == sent
+    assert _ask(stack, api, True) == ["Paris", "Tokyo", "Lima"]
+
+
+def test_turn_of_calls_alone_refused_after_a_keepalive_raises_in_the_sdk(
+    stack: Stack,
+) -> None:
+    # the keepalive sent the status, so the refusal is an error event
+    stack.use(Handler(slowly(0.3, "reject"), release="early", keepalive=0.05))
+    _answer_with(stack, "chat", True)
+
+    with pytest.raises(openai.APIError) as raised:
+        _ask(stack, "chat", True)
+
+    assert not isinstance(raised.value, openai.APIStatusError)
+    assert "Lookups are not allowed." in str(raised.value)

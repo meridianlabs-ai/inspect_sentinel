@@ -6,6 +6,7 @@ These tests run in an environment of their own, with one LiteLLM version, and im
 import asyncio
 import base64
 import importlib
+import importlib.metadata
 import inspect
 import json
 import os
@@ -16,12 +17,13 @@ import sys
 import threading
 import time
 import urllib.request
-from collections.abc import AsyncIterator, Callable, Generator
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
+import anthropic
 import httpx
 import jsonschema
 import openai
@@ -245,8 +247,10 @@ def _make(monkeypatch: pytest.MonkeyPatch, url: str | None, **settings: Any) -> 
     return _load(monkeypatch).LiteLLMGuardrail(**(told | settings))
 
 
-async def _chunks(held: list[Any]) -> AsyncIterator[Any]:
+async def _chunks(held: list[Any], pace: float = 0.0) -> AsyncIterator[Any]:
     for chunk in held:
+        if pace:
+            await asyncio.sleep(pace)
         yield chunk
 
 
@@ -256,8 +260,9 @@ def _exchange(
     data: dict[str, Any],
     streamed: bool,
     out: list[Any] | None = None,
+    pace: float = 0.0,
 ) -> tuple[Any, Any]:
-    """Put a request and its reply through the guardrail as LiteLLM does. A streamed reply's chunks are also added to `out` as they are let go."""
+    """Put a request and its reply through the guardrail as LiteLLM does. A streamed reply's chunks are also added to `out` as they are let go, and arrive `pace` seconds apart."""
     let_go: list[Any] = [] if out is None else out
 
     async def run() -> tuple[Any, Any]:
@@ -268,7 +273,7 @@ def _exchange(
                     data, _USER, on.whole()
                 )
             async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-                _USER, _chunks(on.stream()), data
+                _USER, _chunks(on.stream(), pace), data
             ):
                 let_go.append(chunk)
             return sent, let_go
@@ -305,6 +310,8 @@ def weather_rule():
     ) -> Decision | None:
         location = step.call.arguments.get("location")
         if {city!r} in (None, location):
+            if {action!r} == "terminate":
+                return Decision.terminate("a lookup")
             return Decision.reject("a lookup", message=f"{{location}} is not allowed.")
         return Decision.proceed()
 
@@ -326,10 +333,17 @@ def _sidecar_python() -> Path:
 
 
 @contextmanager
-def _sidecar(city: str | None, tmp_path: Path) -> Generator[str]:
-    """The address of a real sidecar, whose sentinel rejects a weather lookup of `city`, or every lookup for None."""
+def _sidecar(
+    city: str | None,
+    tmp_path: Path,
+    *,
+    release: str = "whole",
+    action: str = "reject",
+    max_body_bytes: int | None = None,
+) -> Generator[str]:
+    """The address of a real sidecar, whose sentinel rejects a weather lookup of `city`, or every lookup for None, or ends the run there, releasing replies as `release` says."""
     rule = tmp_path / "weather_rule.py"
-    rule.write_text(_RULE.format(city=city))
+    rule.write_text(_RULE.format(city=city, action=action))
     with socket.socket() as free:
         free.bind(("127.0.0.1", 0))
         port = free.getsockname()[1]
@@ -346,6 +360,13 @@ def _sidecar(city: str | None, tmp_path: Path) -> Generator[str]:
             "weather_rule",
             "--port",
             str(port),
+            "--release",
+            release,
+            *(
+                ["--max-body-bytes", str(max_body_bytes)]
+                if max_body_bytes is not None
+                else []
+            ),
         ],
         cwd=tmp_path,
         stdout=subprocess.DEVNULL,
@@ -374,15 +395,115 @@ def _result(result: Any) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": 1, "result": result}
 
 
-def _scripted(calls: list[Any], *answers: Any, status: int = 200) -> Starlette:
-    """A stand-in for the sidecar that keeps the calls made to it and gives these answers in turn."""
+_KEEPALIVE = b": keepalive\n\n"
+
+# LiteLLM passes on the bytes a guardrail yields on Chat and Responses from
+# 1.105, and writes them as JSON before
+_PASSES_BYTES_ON = tuple(
+    int(part) for part in importlib.metadata.version("litellm").split(".")[:2]
+) >= (1, 105)
+
+_STREAM_METHODS = frozenset(
+    {"begin_reply", "reply_chunk", "end_reply", "abort_reply", "next_release"}
+)
+
+
+def _scripted(
+    calls: list[Any],
+    *answers: Any,
+    status: int = 200,
+    streamed: list[Any] | None = None,
+    chunk_wait: float = 0.0,
+) -> Starlette:
+    """A stand-in for the sidecar that keeps the calls made to it and gives these answers in turn.
+
+    A reply handed over as a reply stream is kept in `calls` as the `judge_reply` that would have held it whole, and answered from the next answer as the stream's outputs: the reply as handed over, then its end, for `pass`; the replacement, then its end, for `replace`; and a refusal, or the error, as it is. The calls of each stream are kept in `streamed`. Each `reply_chunk` is answered after `chunk_wait` seconds, as the sidecar answers while the caller is slow to read what it released.
+    """
     left = list(answers)
+    streams: dict[str, dict[str, Any]] = {}
 
     async def call(http: HttpRequest) -> JSONResponse:
-        calls.append(await http.json())
-        return JSONResponse(left.pop(0), status_code=status)
+        asked = await http.json()
+        method, params = asked["method"], asked.get("params", {})
+        if method not in _STREAM_METHODS:
+            calls.append(asked)
+            return JSONResponse(left.pop(0), status_code=status)
+        if streamed is not None:
+            streamed.append(asked)
+        if status != 200:
+            return JSONResponse({}, status_code=status)
+        taken = _result({"taken": True})
+        if method == "begin_reply":
+            streams[params["id"]] = {"begun": params, "data": b"", "ended": False}
+            return JSONResponse(taken)
+        stream = streams[params["id"]]
+        if method == "reply_chunk":
+            await asyncio.sleep(chunk_wait)
+            stream["data"] += base64.b64decode(params["data"])
+            return JSONResponse(taken)
+        if method == "end_reply":
+            stream["ended"] = True
+            return JSONResponse(taken)
+        if method == "abort_reply":
+            return JSONResponse(taken)
+        if not stream["ended"]:
+            await asyncio.sleep(0.01)
+            return JSONResponse(_result({"position": params["after"], "outputs": []}))
+        if "answer" not in stream:
+            body = base64.b64encode(stream["data"]).decode()
+            calls.append(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "judge_reply",
+                    "params": stream["begun"] | {"body": body},
+                }
+            )
+            stream["answer"] = _as_outputs(
+                left.pop(0), body, stream["begun"].get("keepalive", True)
+            )
+        answer = stream["answer"]
+        if "error" in answer:
+            return JSONResponse(answer)
+        outputs = answer["outputs"]
+        return JSONResponse(
+            _result({"position": len(outputs), "outputs": outputs[params["after"] :]})
+        )
 
     return Starlette(routes=[Route(PATH, call, methods=["POST"])])
+
+
+def _as_outputs(answer: dict[str, Any], body: str, carried: bool) -> dict[str, Any]:
+    # a scripted answer to `judge_reply`, as a reply stream's outputs, which a
+    # pass `kept_alive` opens with a keepalive where the hook can send one
+    if "error" in answer:
+        return answer
+    result = answer["result"]
+    action = result.get("action")
+    if action == "pass":
+        kept_alive = (
+            [{"kind": "release", "data": base64.b64encode(_KEEPALIVE).decode()}]
+            if result.get("kept_alive") and carried
+            else []
+        )
+        return {
+            "outputs": [
+                *kept_alive,
+                {"kind": "release", "data": body},
+                {"kind": "finished"},
+            ]
+        }
+    if action == "replace":
+        return {
+            "outputs": [
+                {"kind": "release", "data": result["body"]},
+                {"kind": "finished"},
+            ]
+        }
+    if action == "refuse":
+        refusal = {key: value for key, value in result.items() if key != "action"}
+        return {"outputs": [{"kind": "refuse", **refusal}]}
+    return {"outputs": [result]}
 
 
 def _fits(part: dict[str, Any], value: Any) -> None:
@@ -410,7 +531,9 @@ def test_exchange_the_sentinel_allows_goes_on_as_it_is(
         # LiteLLM sends on the reply it has
         assert reply is None
     elif on is _MESSAGES:
-        assert reply == on.stream()
+        # the bytes as the provider sent them, in the parts the sidecar
+        # released them in
+        assert b"".join(reply) == b"".join(on.stream())
     else:
         assert [_written(chunk) for chunk in reply] == [
             _written(chunk) for chunk in on.stream()
@@ -493,14 +616,19 @@ def _call_ids(on: _On, reply: Any, streamed: bool) -> list[str]:
         for streamed in (False, True)
     ],
 )
+@pytest.mark.parametrize("release", ["whole", "early"])
 def test_a_reply_with_a_rejected_call_goes_on_without_it(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, on: _On, streamed: bool
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    on: _On,
+    streamed: bool,
+    release: str,
 ) -> None:
     proposed = _call_ids(on, on.stream() if streamed else on.whole(), streamed)
     # the recorded Responses stream is the one reply that names the country too
     city = "Tokyo, Japan" if on is _RESPONSES and streamed else "Tokyo"
 
-    with _sidecar(city, tmp_path) as url:
+    with _sidecar(city, tmp_path, release=release) as url:
         _, reply = _exchange(_make(monkeypatch, url), on, _data(on), streamed)
 
     # the second call, Tokyo, is taken out, and the others go on
@@ -508,21 +636,25 @@ def test_a_reply_with_a_rejected_call_goes_on_without_it(
 
 
 def _refused(
-    guardrail: Any, on: _On, data: dict[str, Any], streamed: bool
+    guardrail: Any, on: _On, data: dict[str, Any], streamed: bool, pace: float = 0.0
 ) -> tuple[int, Any, Any, list[Any]]:
     """How the guardrail refused an exchange: the status and message the caller is given, the sentinel field, and what else went out.
 
-    A streamed reply is refused with an event in place of the reply: on the Responses route a `response.failed` event, which LiteLLM sends on with status 200, and elsewhere an error event, which LiteLLM sends as an error under the status it names. A reply that isn't streamed is refused with an `HTTPException`, whose `provider_specific_fields` LiteLLM writes into the error.
+    A streamed reply is refused with an event in place of the reply: on the Responses route a `response.failed` event with an error at its top, which holds the field and which LiteLLM sends on with status 200, and elsewhere an error event, which LiteLLM sends as an error under the status it names. A reply that isn't streamed is refused with an `HTTPException`, whose `provider_specific_fields` LiteLLM writes into the error.
     """
     let_go: list[Any] = []
     if streamed:
-        _exchange(guardrail, on, data, streamed, let_go)
+        _exchange(guardrail, on, data, streamed, let_go, pace)
         if on is _RESPONSES:
             event = _written(let_go.pop())
             assert event["type"] == "response.failed"
             assert event["response"]["status"] == "failed"
             message = event["response"]["error"]["message"]
-            return 200, message, event.get("sentinel"), let_go
+            # the error the OpenAI SDK raises on and keeps, which holds the field
+            error = event["error"]
+            assert error["message"] == message
+            extra = error.get("provider_specific_fields") or {}
+            return 200, message, extra.get("sentinel"), let_go
         error = _error_event(let_go.pop())
         extra: dict[str, Any] = error.get("provider_specific_fields") or {}
         return error["code"], error["message"], extra.get("sentinel"), let_go
@@ -572,11 +704,22 @@ def test_calls_the_guardrail_makes_fit_the_schema_file(
         "x-api-key": "a provider's key",
     }
     passed = _result({"action": "pass"})
+    stream_calls: list[Any] = []
 
-    with _serving(_scripted(calls, passed, passed)) as url:
+    with _serving(_scripted(calls, passed, passed, streamed=stream_calls)) as url:
         guardrail = _make(monkeypatch, url, sidecar_headers=["x-hawk-*"])
         _exchange(guardrail, on, _data(on, headers), streamed)
 
+    # a streamed reply is handed over as a reply stream, whose every call fits
+    # its method
+    assert bool(stream_calls) == streamed
+    for each in stream_calls:
+        _fits(_METHODS[each["method"]]["params"], each["params"])
+    assert {each["method"] for each in stream_calls} >= (
+        {"begin_reply", "reply_chunk", "end_reply", "next_release"}
+        if streamed
+        else set()
+    )
     asked, held = calls
     assert (asked["jsonrpc"], asked["method"]) == ("2.0", "judge_request")
     assert (held["jsonrpc"], held["method"]) == ("2.0", "judge_reply")
@@ -1017,7 +1160,15 @@ def test_a_responses_stream_is_failed_as_the_response_it_began() -> None:
         "code": "permission_error",
         "message": "Not allowed.",
     }
-    assert event["sentinel"] == _FIELD
+    # the error the OpenAI SDK raises on, the same one, with the field in it
+    assert event["error"] == {
+        "code": "permission_error",
+        "message": "Not allowed.",
+        "type": "permission_error",
+        "param": None,
+        "provider_specific_fields": {"sentinel": _FIELD},
+    }
+    assert "sentinel" not in event
 
 
 def test_a_replaced_chat_stream_sends_the_chunk_with_the_field_as_written(
@@ -1298,15 +1449,16 @@ def test_a_refused_responses_stream_is_read_by_the_sdk_from_what_litellm_writes(
 
     with _serving(_scripted([], *answers)) as url:
         _, let_go = _exchange(_make(monkeypatch, url), _RESPONSES, data, True)
-    events = _read_by_the_sdk(_RESPONSES, _as_litellm_writes(_RESPONSES, let_go, data))
 
-    *_, last = events
-    assert last.type == "response.failed"
+    # the SDK raises on the failed response, rather than handing it over as
+    # one more event a client could take for the reply's end
+    with pytest.raises(openai.APIError) as raised:
+        _read_by_the_sdk(_RESPONSES, _as_litellm_writes(_RESPONSES, let_go, data))
+
+    error: Any = raised.value.body
     # only a server error is one a client tries again
-    assert last.response.error.code == code
-    assert last.response.error.message == "Not allowed."
-    extra: dict[str, Any] = last.model_extra or {}
-    assert extra.get("sentinel") == _FIELD
+    assert (raised.value.code, error["message"]) == (code, "Not allowed.")
+    assert error["provider_specific_fields"]["sentinel"] == _FIELD
 
 
 _NOT_BASE64 = {"action": "replace", "body": "not base64!"}
@@ -1989,3 +2141,701 @@ def test_a_replaced_stream_may_hold_any_line_separator_json_allows(
 
     assert _written(reply[0])["choices"][0]["delta"]["content"] == "Rain and wind"
     assert len(reply) == len(events)
+
+
+def test_text_reaches_the_caller_before_the_reply_has_ended_when_released_early(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    events = anthropic_recorded("parallel-tool-calls").split(b"\n\n")
+    first_call = next(i for i, event in enumerate(events) if b'"tool_use"' in event)
+    text = [event + b"\n\n" for event in events[:first_call]]
+    rest = [event + b"\n\n" for event in events[first_call:] if event]
+    seen_text = asyncio.Event()
+
+    async def provider() -> AsyncIterator[Any]:
+        for chunk in text:
+            yield chunk
+        # the calls come only once the caller has the text, which a reply
+        # held whole would never let it have
+        await asyncio.wait_for(seen_text.wait(), 10)
+        for chunk in rest:
+            yield chunk
+
+    async def run(url: str) -> bytes:
+        guardrail = _make(monkeypatch, url)
+        data = _data(_MESSAGES)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, "anthropic_messages")
+            out = b""
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                _USER, provider(), data
+            ):
+                out += chunk
+                if b"text_delta" in out:
+                    seen_text.set()
+            return out
+        finally:
+            await guardrail.aclose()
+
+    with _sidecar("Cairo", tmp_path, release="early") as url:
+        out = asyncio.run(run(url))
+
+    # every call let through, so the caller has what the provider sent
+    assert out == b"".join(text + rest)
+
+
+def test_a_turn_ended_after_a_call_went_out_raises_in_the_sdk(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # the recorded Chat reply is calls alone: Paris goes out before Tokyo ends
+    # the run
+    data = _data(_CHAT)
+
+    with _sidecar("Tokyo", tmp_path, release="early", action="terminate") as url:
+        _, let_go = _exchange(_make(monkeypatch, url), _CHAT, data, True)
+
+    with pytest.raises(openai.APIError) as raised:
+        _read_by_the_sdk(_CHAT, _as_litellm_writes(_CHAT, let_go, data))
+
+    assert "ended this run" in str(raised.value)
+
+
+def _stand_in(answer: Callable[[str, dict[str, Any]], Any]) -> Starlette:
+    """A stand-in for the sidecar that answers each call with what `answer` gives for its method and parameters: a result, or a JSON-RPC error as `{"error": ...}`."""
+
+    async def call(http: HttpRequest) -> JSONResponse:
+        asked = await http.json()
+        given: Any = answer(asked["method"], asked.get("params", {}))
+        if isinstance(given, Awaitable):
+            given = await cast(Awaitable[Any], given)
+        if isinstance(given, dict) and "error" in given:
+            return JSONResponse({"jsonrpc": "2.0", "id": 1, **given})
+        return JSONResponse(_result(given))
+
+    return Starlette(routes=[Route(PATH, call, methods=["POST"])])
+
+
+async def _never_ready(after: int) -> dict[str, Any]:
+    # a release that never comes, as from a stream whose input never ended
+    await asyncio.sleep(0.05)
+    return {"position": after, "outputs": []}
+
+
+def _within(seconds: float, exchange: Callable[[], tuple[Any, Any]]) -> tuple[Any, Any]:
+    # an exchange that hangs would leave the test waiting, so it fails fast
+    done: list[tuple[Any, Any]] = []
+    raised: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            done.append(exchange())
+        except BaseException as ex:
+            raised.append(ex)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    assert not thread.is_alive(), "the exchange didn't end"
+    if raised:
+        raise raised[0]
+    return done[0]
+
+
+def test_a_reply_whose_chunks_the_sidecar_wont_take_is_refused_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "reply_chunk":
+            return {"error": {"code": -32603, "message": "No."}}
+        if method == "next_release":
+            return _never_ready(params["after"])
+        return {"taken": True}
+
+    with _serving(_stand_in(answer)) as url:
+        _, reply = _within(
+            10, lambda: _exchange(_make(monkeypatch, url), _CHAT, _data(_CHAT), True)
+        )
+
+    [event] = reply
+    assert (_error_event(event)["code"], _error_event(event)["message"]) == _UNANSWERED
+
+
+def test_a_reply_whose_stream_cant_begin_is_let_through_when_set_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        return {"error": {"code": -32603, "message": "No."}}
+
+    with _serving(_stand_in(answer)) as url:
+        guardrail = _make(monkeypatch, url, unreachable_fallback="fail_open")
+        _, reply = _within(10, lambda: _exchange(guardrail, _CHAT, _data(_CHAT), True))
+
+    assert [_written(chunk) for chunk in reply] == [
+        _written(chunk) for chunk in _CHAT.stream()
+    ]
+
+
+def test_a_reply_too_large_to_judge_is_let_through_whole_when_set_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            return _never_ready(params["after"])
+        return {"taken": True}
+
+    with _serving(_stand_in(answer)) as url:
+        guardrail = _make(
+            monkeypatch, url, unreachable_fallback="fail_open", max_reply_bytes=100
+        )
+        _, reply = _within(10, lambda: _exchange(guardrail, _CHAT, _data(_CHAT), True))
+
+    # every chunk, those after the limit too
+    assert [_written(chunk) for chunk in reply] == [
+        _written(chunk) for chunk in _CHAT.stream()
+    ]
+
+
+@pytest.mark.parametrize("release", ["whole", "early"])
+@pytest.mark.parametrize(
+    ("fallback", "let_through"), [("fail_open", True), ("fail_closed", False)]
+)
+def test_a_reply_larger_than_the_sidecar_takes_goes_as_unjudged_replies_do(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    release: str,
+    fallback: str,
+    let_through: bool,
+) -> None:
+    with _sidecar("Oslo", tmp_path, release=release, max_body_bytes=4000) as url:
+        guardrail = _make(monkeypatch, url, unreachable_fallback=fallback)
+        if let_through:
+            # each chunk is uploaded on its own, so that only the whole reply
+            # is past the limit
+            _, reply = _within(
+                30,
+                lambda: _exchange(guardrail, _CHAT, _data(_CHAT), True, pace=0.02),
+            )
+            # nothing had gone out, so it isn't refused as if a sentinel had
+            assert [_written(chunk) for chunk in reply] == [
+                _written(chunk) for chunk in _CHAT.stream()
+            ]
+        else:
+            status, message, _, let_go = _refused(
+                guardrail, _CHAT, _data(_CHAT), True, pace=0.02
+            )
+            # as for any reply the sidecar couldn't judge
+            assert (status, message, let_go) == (*_UNANSWERED, [])
+
+
+def test_a_reply_stream_s_end_is_acknowledged(monkeypatch: pytest.MonkeyPatch) -> None:
+    passed = _result({"action": "pass"})
+    stream_calls: list[Any] = []
+
+    with _serving(_scripted([], passed, passed, streamed=stream_calls)) as url:
+        _exchange(_make(monkeypatch, url), _CHAT, _data(_CHAT), True)
+
+    # the outputs are the reply and its end, both of which the sidecar is told
+    # the guardrail has, so that it lets go of the stream
+    last = stream_calls[-1]
+    assert (last["method"], last["params"]["after"]) == ("next_release", 2)
+
+
+def test_the_session_to_the_sidecar_is_made_one_way_whoever_makes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
+    seen: list[dict[str, Any]] = []
+    _without_eval_route(proxy)
+
+    async def call(guardrail: Any) -> int:
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=proxy.app), base_url="http://litellm"
+            ) as client:
+                await client.get(
+                    "/sentinel/info", headers={"authorization": "Bearer sk-caller"}
+                )
+            # an eval's probe made it, and a reply stream shares it
+            return guardrail._session.connector.limit
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_sidecar_for_evals(seen)) as url:
+        guardrail = _make(monkeypatch, url)
+        guardrail.serve_eval_routes()
+        limit = asyncio.run(call(guardrail))
+
+    assert seen and limit == 0
+
+
+def test_nothing_is_left_running_when_the_caller_goes_mid_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    polled = threading.Event()
+
+    async def slow(after: int) -> dict[str, Any]:
+        polled.set()
+        await asyncio.sleep(5)
+        return {"position": after, "outputs": []}
+
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            return slow(params["after"])
+        return {"taken": True}
+
+    async def run(url: str) -> list[asyncio.Task[Any]]:
+        guardrail = _make(monkeypatch, url)
+        data = _data(_CHAT)
+        await guardrail.async_pre_call_hook(_USER, None, data, _CHAT.call_type)
+        released = guardrail.async_post_call_streaming_iterator_hook(
+            _USER, _chunks(_CHAT.stream()), data
+        )
+
+        async def read() -> None:
+            async for _ in released:
+                pass
+
+        reading = asyncio.ensure_future(read())
+        while not polled.is_set():
+            await asyncio.sleep(0.01)
+        # the caller goes while the guardrail waits for a release
+        reading.cancel()
+        await asyncio.wait({reading})
+        await released.aclose()
+        await guardrail.aclose()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        return [
+            task
+            for task in asyncio.all_tasks()
+            if task is not asyncio.current_task() and not task.done()
+        ]
+
+    with _serving(_stand_in(answer)) as url:
+        left = asyncio.run(run(url))
+
+    assert left == []
+
+
+def test_a_reply_let_through_is_read_no_faster_than_the_caller_takes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pulled = 0
+    chunk = _CHAT.stream()[1]
+
+    async def provider() -> AsyncIterator[Any]:
+        nonlocal pulled
+        for _ in range(50):
+            pulled += 1
+            yield chunk
+
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            return _never_ready(params["after"])
+        return {"taken": True}
+
+    async def run(url: str) -> tuple[int, int]:
+        guardrail = _make(
+            monkeypatch, url, unreachable_fallback="fail_open", max_reply_bytes=500
+        )
+        data = _data(_CHAT)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, _CHAT.call_type)
+            released = guardrail.async_post_call_streaming_iterator_hook(
+                _USER, provider(), data
+            )
+            await released.__anext__()
+            # the caller is slow: what is read meanwhile stays bounded
+            await asyncio.sleep(0.5)
+            read_while_slow = pulled
+            given = 1 + len([each async for each in released])
+            return read_while_slow, given
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_stand_in(answer)) as url:
+        read_while_slow, given = asyncio.run(run(url))
+
+    assert read_while_slow < 20
+    assert given == 50
+
+
+def test_a_reply_let_through_after_its_stream_cant_begin_is_read_to_its_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # more than may wait to be handed over, which nothing hands over once the
+    # stream couldn't begin
+    monkeypatch.setattr(
+        importlib.import_module("inspect_sentinel_litellm._guardrail"),
+        "_PENDING_BYTES",
+        200,
+    )
+    chunk = _CHAT.stream()[1]
+
+    async def provider() -> AsyncIterator[Any]:
+        for _ in range(50):
+            yield chunk
+
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        return {"error": {"code": -32603, "message": "No."}}
+
+    async def run(url: str) -> int:
+        guardrail = _make(monkeypatch, url, unreachable_fallback="fail_open")
+        data = _data(_CHAT)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, _CHAT.call_type)
+            released = guardrail.async_post_call_streaming_iterator_hook(
+                _USER, provider(), data
+            )
+            return len([each async for each in released])
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_stand_in(answer)) as url:
+        given, _ = _within(10, lambda: (asyncio.run(run(url)), None))
+
+    assert given == 50
+
+
+@pytest.mark.parametrize(
+    "on", [_MESSAGES, _CHAT, _RESPONSES], ids=["messages", "chat", "responses"]
+)
+def test_a_keepalive_reaches_the_caller_where_litellm_passes_it_on(
+    monkeypatch: pytest.MonkeyPatch, on: _On
+) -> None:
+    passed = _result({"action": "pass"})
+    stream_calls: list[Any] = []
+    with _serving(
+        _scripted(
+            [],
+            passed,
+            _result({"action": "pass", "kept_alive": True}),
+            streamed=stream_calls,
+        )
+    ) as url:
+        _, let_go = _exchange(_make(monkeypatch, url), on, _data(on), True)
+    with _serving(_scripted([], passed, passed)) as url:
+        _, plain = _exchange(_make(monkeypatch, url), on, _data(on), True)
+
+    [begun] = [call for call in stream_calls if call["method"] == "begin_reply"]
+    carried = on is _MESSAGES or _PASSES_BYTES_ON
+    assert begun["params"]["keepalive"] is carried
+    written = _as_litellm_answers(on, let_go, _data(on))[2]
+    assert (_KEEPALIVE in written) is carried
+    assert (
+        written.replace(_KEEPALIVE, b"") == _as_litellm_answers(on, plain, _data(on))[2]
+    )
+
+
+def test_a_reply_kept_alive_is_still_let_through_when_set_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            if params["after"] == 0:
+                kept_alive = base64.b64encode(_KEEPALIVE).decode()
+                return {
+                    "position": 1,
+                    "outputs": [{"kind": "release", "data": kept_alive}],
+                }
+            return {"error": {"code": -32603, "message": "No."}}
+        return {"taken": True}
+
+    with _serving(_stand_in(answer)) as url:
+        guardrail = _make(monkeypatch, url, unreachable_fallback="fail_open")
+        _, reply = _within(
+            10, lambda: _exchange(guardrail, _MESSAGES, _data(_MESSAGES), True)
+        )
+
+    # a keepalive holds nothing, so the reply can go on unjudged after it
+    assert b"".join(reply) == _KEEPALIVE + b"".join(_MESSAGES.stream())
+
+
+def test_a_reply_kept_alive_is_refused_in_the_stream_when_the_sidecar_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            if params["after"] == 0:
+                kept_alive = base64.b64encode(_KEEPALIVE).decode()
+                return {
+                    "position": 1,
+                    "outputs": [{"kind": "release", "data": kept_alive}],
+                }
+            return {"error": {"code": -32603, "message": "No."}}
+        return {"taken": True}
+
+    with _serving(_stand_in(answer)) as url:
+        _, reply = _within(
+            10,
+            lambda: _exchange(
+                _make(monkeypatch, url), _MESSAGES, _data(_MESSAGES), True
+            ),
+        )
+    status, _, written = _as_litellm_answers(_MESSAGES, reply, _data(_MESSAGES))
+
+    # the keepalive sent the status, so only an error event refuses the reply
+    async def sent(_: HttpRequest) -> HttpResponse:
+        return HttpResponse(written, status_code=status, media_type=_EVENT_STREAM)
+
+    async def read(url: str) -> None:
+        client = anthropic.AsyncAnthropic(api_key="sk-caller", base_url=url)
+        try:
+            asked: dict[str, Any] = {
+                "model": "a-model",
+                "max_tokens": 100,
+                "messages": [_QUESTION],
+            }
+            async for _ in await client.messages.create(**asked, stream=True):
+                pass
+        finally:
+            await client.close()
+
+    routes = [Route("/v1/messages", sent, methods=["POST"])]
+    with _serving(Starlette(routes=routes)) as url:
+        with pytest.raises(anthropic.APIStatusError) as raised:
+            asyncio.run(read(url))
+
+    assert status == 200
+    assert "gave no usable answer" in str(raised.value)
+
+
+@pytest.mark.parametrize("on", [_CHAT, _RESPONSES], ids=["chat", "responses"])
+def test_a_streamed_reply_is_not_judged_again_once_whole(
+    monkeypatch: pytest.MonkeyPatch, on: _On
+) -> None:
+    # LiteLLM 1.83 shows a guardrail a streamed reply again once it has gone
+    # out, put together whole, which the stream's own judging has covered
+    passed = _result({"action": "pass"})
+    calls: list[Any] = []
+    data = _data(on) | {"stream": True}
+
+    async def run(url: str) -> Any:
+        guardrail = _make(monkeypatch, url)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, on.call_type)
+            async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                _USER, _chunks(on.stream()), data
+            ):
+                pass
+            return await guardrail.async_post_call_success_hook(data, _USER, on.whole())
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_scripted(calls, passed, passed, passed)) as url:
+        answered = asyncio.run(run(url))
+
+    assert answered is None
+    assert [call["method"] for call in calls] == ["judge_request", "judge_reply"]
+
+
+@pytest.mark.parametrize("stream", [1, "false", "true"])
+@pytest.mark.parametrize("on", [_CHAT, _RESPONSES], ids=["chat", "responses"])
+def test_a_reply_not_streamed_is_judged_whatever_the_caller_set_stream_to(
+    monkeypatch: pytest.MonkeyPatch, on: _On, stream: object
+) -> None:
+    # LiteLLM streams only for `"stream": true`, and answers any other value
+    # with a whole reply, which reaches only the success hook
+    calls: list[Any] = []
+    data = _data(on) | {"stream": stream}
+
+    with _serving(
+        _scripted(calls, _result({"action": "pass"}), _result(_REFUSAL))
+    ) as url:
+        with pytest.raises(HTTPException) as refused:
+            _exchange(_make(monkeypatch, url), on, data, False)
+
+    assert refused.value.status_code == 403
+    assert [call["method"] for call in calls] == ["judge_request", "judge_reply"]
+
+
+@pytest.mark.parametrize("fallback", ["fail_closed", "fail_open"])
+def test_a_streamed_reply_not_judged_within_the_timeout_is_a_reply_unanswered(
+    monkeypatch: pytest.MonkeyPatch, fallback: str
+) -> None:
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            # a sentinel that never finishes
+            return _never_ready(params["after"])
+        return {"taken": True}
+
+    with _serving(_stand_in(answer)) as url:
+        guardrail = _make(monkeypatch, url, unreachable_fallback=fallback, timeout=0.3)
+        _, reply = _within(5, lambda: _exchange(guardrail, _CHAT, _data(_CHAT), True))
+
+    if fallback == "fail_open":
+        assert [_written(chunk) for chunk in reply] == [
+            _written(chunk) for chunk in _CHAT.stream()
+        ]
+    else:
+        [event] = reply
+        assert (_error_event(event)["code"], _error_event(event)["message"]) == (
+            _UNANSWERED
+        )
+
+
+def test_a_slow_provider_is_not_held_to_the_sidecar_s_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the timeout is the sidecar's, from when it has the whole reply, as for
+    # a reply that isn't streamed
+    passed = _result({"action": "pass"})
+
+    async def slowly() -> AsyncIterator[Any]:
+        for chunk in _CHAT.stream():
+            await asyncio.sleep(0.05)
+            yield chunk
+
+    async def run(url: str) -> list[Any]:
+        guardrail = _make(monkeypatch, url, timeout=0.2)
+        data = _data(_CHAT)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, _CHAT.call_type)
+            return [
+                chunk
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    _USER, slowly(), data
+                )
+            ]
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_scripted([], passed, passed)) as url:
+        reply = asyncio.run(run(url))
+
+    assert len(_CHAT.stream()) * 0.05 > 0.2
+    assert [_written(chunk) for chunk in reply] == [
+        _written(chunk) for chunk in _CHAT.stream()
+    ]
+
+
+def test_a_caller_slow_to_read_a_released_reply_is_not_held_to_the_sidecar_s_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # more text than the sidecar keeps waiting for the guardrail to collect,
+    # so that its end can only be collected once the caller has read on
+    text = [
+        f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'x' * 65536}})}\n\n".encode()
+        for _ in range(24)
+    ]
+    sent = [
+        b'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "a-model", "content": [], "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 1, "output_tokens": 1}}}\n\n',
+        b'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}\n\n',
+        *text,
+        b'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n',
+        b'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": null}, "usage": {"output_tokens": 1}}\n\n',
+        b'event: message_stop\ndata: {"type": "message_stop"}\n\n',
+    ]
+
+    async def run(url: str, timeout: float | None, pause: float) -> list[Any]:
+        guardrail = _make(monkeypatch, url, timeout=timeout)
+        data = _data(_MESSAGES)
+        read: list[Any] = []
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, _MESSAGES.call_type)
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                _USER, _chunks(sent), data
+            ):
+                if not read:
+                    await asyncio.sleep(pause)
+                read.append(chunk)
+        finally:
+            await guardrail.aclose()
+        return read
+
+    with _sidecar("Oslo", tmp_path, release="early") as url:
+        # the sidecar loads what reads a reply on its first, which takes it
+        # longer than the timeout on a busy machine
+        asyncio.run(run(url, None, 0))
+        # every wait for the sidecar's output after the reply's end counts
+        # towards the timeout, so it leaves room for many polls on a slow
+        # machine, and the pause is well past it
+        read = asyncio.run(run(url, 3, 6))
+
+    assert b"".join(read) == b"".join(sent)
+
+
+def test_a_caller_slow_to_read_is_not_held_to_the_sidecar_s_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the sidecar answers a chunk only once there is room for its output,
+    # which a caller slow to read keeps from it
+    passed = _result({"action": "pass"})
+
+    with _serving(_scripted([], passed, passed, chunk_wait=0.3)) as url:
+        _, reply = _exchange(
+            _make(monkeypatch, url, timeout=0.1), _CHAT, _data(_CHAT), True
+        )
+
+    assert [_written(chunk) for chunk in reply] == [
+        _written(chunk) for chunk in _CHAT.stream()
+    ]
+
+
+_SIDECAR_ERROR = b'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "Not judged."}}\n\n'
+
+
+@pytest.mark.parametrize(
+    ("fallback", "not_judged", "let_through"),
+    [
+        ("fail_open", "error", True),
+        ("fail_closed", "error", False),
+        ("fail_open", None, False),
+    ],
+    ids=["not judged, let through", "not judged, refused", "refused"],
+)
+def test_a_reply_kept_alive_then_not_judged_goes_as_unjudged_replies_do(
+    monkeypatch: pytest.MonkeyPatch,
+    fallback: str,
+    not_judged: str | None,
+    let_through: bool,
+) -> None:
+    ended: dict[str, Any] = {
+        "kind": "error_event",
+        "data": base64.b64encode(_SIDECAR_ERROR).decode(),
+    }
+    if not_judged is not None:
+        ended["not_judged"] = not_judged
+
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            if params["after"] == 0:
+                kept_alive = base64.b64encode(_KEEPALIVE).decode()
+                return {
+                    "position": 1,
+                    "outputs": [{"kind": "release", "data": kept_alive}],
+                }
+            if params["after"] == 1:
+                return {"position": 2, "outputs": [ended]}
+            return {"position": params["after"], "outputs": []}
+        return {"taken": True}
+
+    with _serving(_stand_in(answer)) as url:
+        guardrail = _make(monkeypatch, url, unreachable_fallback=fallback)
+        _, reply = _within(
+            10, lambda: _exchange(guardrail, _MESSAGES, _data(_MESSAGES), True)
+        )
+
+    # only keepalives went out, so the setting for a reply not judged holds
+    expected = b"".join(_MESSAGES.stream()) if let_through else _SIDECAR_ERROR
+    assert b"".join(reply) == _KEEPALIVE + expected
