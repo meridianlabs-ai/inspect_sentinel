@@ -597,7 +597,7 @@ class Handler:
                 model=held.model,
                 conversation=conversation_key,
                 input=messages,
-                # the conversation as the agent ran it is not known behind a proxy
+                # the agent's own message list is not known behind a proxy
                 agent_messages=None,
                 # what was sent before this request, which isn't sent yet
                 history=list(conversation.sent),

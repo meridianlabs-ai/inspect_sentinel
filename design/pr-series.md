@@ -572,17 +572,13 @@ Decided by the maintainer on 2026-10-15, for the 0.2.0 breaking release, bundled
 - The positional order of the payloads is unchanged: `agent_messages` takes the old field's place, and `history` stays keyword-only with a default of `None`.
 - Earlier records in this file and in [generate-stages.md](generate-stages.md) keep the names they were written with.
 
-## `agent_messages` is the conversation as the agent ran it
+## `agent_messages` is the agent's own list
 
-Built in inspect_ai #5986 (2026-10-20), with this repository's docs and docstrings; no sentinel type changed. Before it, `agent_messages` was the list passed to `generate()` at the generate stages and the list passed to `execute_tools()` at the tool stages. A scaffold that rebuilds its input each turn (AISI's custom solvers fold earlier calls into one user message) passes the two different lists, so a monitor at `AfterGenerate` saw the fold rather than the outputs and results.
+Built in inspect_ai #5986 (2026-10-21), with this repository's docs and docstrings; no sentinel type changed. Before it, the generate stages received the list passed to `generate()` and the tool stages received the list passed to `execute_tools()`. The new field is the `messages` of the `AgentState` the outermost `@agent` agent in the conversation was called with, read live by reference at every stage.
 
-- **One record per conversation**, kept by inspect_ai while a sentinel runs, from three things: the first agent-turn input as sent (after model hooks), each agent-turn output returned to the agent, and the tool messages `execute_tools()` returned, in call order. It holds references to the scaffold's message objects.
-- **Every stage reads it.** The generate stages get the record so far (at `AfterGenerate` the new output is `step.output`, not in it); the tool stages get it cut after the call's assistant message, or whole when that message is not in it.
-- **Not in it**: user messages added after the first turn (`react`'s continue nudge, a person's message), results of tools run outside `execute_tools()`, and compaction summaries. Those sent are in `history` and `input`.
-- **`None`** under a proxy, in a replay that cannot establish it, and in-process at a tool stage of a conversation no agent turn has opened (a scorer's tools, `execute_tools()` with no model call before it).
-- **Known behaviour, documented rather than retracted**: an output `react` discards after `generate()` returns it stays in the record (a refusal retried under `retry_refusals`, a `model_length` turn removed by overflow recovery). Replay rebuilds the record from events, which cannot see the discards either, so live and replay agree.
-- **Resolves** the Deferred item "`react` overflow recovery rewriting history": the record never drops a turn.
-- **Cost**: each step gets its own list cut from the record, O(n) per step over a long run, as `history` is; read-only views replace the copies with sentinel #133 (R7).
+- **Curation matters.** A control scaffold may leave hidden side-task instructions out of its own list while adding them to the model request. A monitor that must not see those instructions reads `agent_messages`; the model traffic is in `input` and `history`. The list may contain retries. With compaction it remains the full list, while `input` is the compacted request. Hidden input stays out only when the scaffold that owns the conversation is the outermost decorated agent.
+- **One source at every stage.** There is no tool-stage cut. A scaffold that replaces its state object shows the earlier object it was called with. `react` keeps its own object, and sub-agents through handoff or `as_tool()` have their own conversations and lists.
+- **`None`** when no `@agent` agent is running, for bridged agents, in replay (the log does not record the list), and for sidecar and proxy hosts. A monitor must not mutate a present list: it is shared with the agent by reference.
 
 ## Deferred
 
