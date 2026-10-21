@@ -2727,6 +2727,49 @@ def test_a_slow_provider_is_not_held_to_the_sidecar_s_timeout(
     ]
 
 
+def test_a_caller_slow_to_read_a_released_reply_is_not_held_to_the_sidecar_s_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # more text than the sidecar keeps waiting for the guardrail to collect,
+    # so that its end can only be collected once the caller has read on
+    text = [
+        f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'x' * 65536}})}\n\n".encode()
+        for _ in range(24)
+    ]
+    sent = [
+        b'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "a-model", "content": [], "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 1, "output_tokens": 1}}}\n\n',
+        b'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}\n\n',
+        *text,
+        b'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n',
+        b'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": null}, "usage": {"output_tokens": 1}}\n\n',
+        b'event: message_stop\ndata: {"type": "message_stop"}\n\n',
+    ]
+
+    async def run(url: str, timeout: float | None, pause: float) -> list[Any]:
+        guardrail = _make(monkeypatch, url, timeout=timeout)
+        data = _data(_MESSAGES)
+        read: list[Any] = []
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, _MESSAGES.call_type)
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                _USER, _chunks(sent), data
+            ):
+                if not read:
+                    await asyncio.sleep(pause)
+                read.append(chunk)
+        finally:
+            await guardrail.aclose()
+        return read
+
+    with _sidecar("Oslo", tmp_path, release="early") as url:
+        # the sidecar loads what reads a reply on its first, which takes it
+        # longer than the timeout on a busy machine
+        asyncio.run(run(url, None, 0))
+        read = asyncio.run(run(url, 1, 2.5))
+
+    assert b"".join(read) == b"".join(sent)
+
+
 def test_a_caller_slow_to_read_is_not_held_to_the_sidecar_s_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

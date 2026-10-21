@@ -8,7 +8,7 @@ It is set in LiteLLM's config, beside `guardrail`, `mode` and `default_on`:
 
 - `api_base`: the sidecar's address for proxies, as `https://<sentinel host>:<port>`. Required.
 - `unreachable_fallback`: `fail_closed` refuses a call when the sidecar gives no usable answer, and `fail_open` lets it through. `fail_closed` unless set, which is LiteLLM's own default.
-- `timeout`: how many seconds the sidecar may take to answer, counted for a streamed reply from when the sidecar has the whole of it. No limit unless set, because a sentinel may ask a person.
+- `timeout`: how many seconds the sidecar may take to answer, counted for a streamed reply from when the sidecar has the whole of it, and only while the guardrail is waiting for the sidecar rather than for its caller to read. No limit unless set, because a sentinel may ask a person.
 - `sidecar_headers`: request headers the sidecar is shown besides Inspect's own, as a list of names, or prefixes ending in `*`. None unless set.
 - `max_reply_bytes`: the largest reply that is held to be judged. 32 MiB unless set.
 
@@ -220,7 +220,7 @@ class LiteLLMGuardrail(CustomGuardrail):
     Args:
         api_base: The sidecar's address for proxies. The path of the methods this calls is added to it.
         unreachable_fallback: `fail_closed` refuses a call when the sidecar gives no usable answer, and `fail_open` lets it through.
-        timeout: How many seconds the sidecar may take to answer, counted for a streamed reply from when the sidecar has the whole of it. No limit when None.
+        timeout: How many seconds the sidecar may take to answer, counted for a streamed reply from when the sidecar has the whole of it, and only while the guardrail is waiting for the sidecar rather than for its caller to read. No limit when None.
         sidecar_headers: Request headers the sidecar is shown besides Inspect's own, as names, or prefixes ending in `*`. A comma-separated string is read as a list.
         max_reply_bytes: The largest reply that is held to be judged.
         **kwargs: LiteLLM's own settings for a guardrail, which it passes to every one.
@@ -606,8 +606,12 @@ class _Relay:
         # makes, which it is told the guardrail has, so it lets go of them
         self._ended_at: int | None = None
         # the guardrail's timeout, counted from when the sidecar has the whole
-        # reply, as for a reply that isn't streamed
+        # reply, as for a reply that isn't streamed, and only while waiting for
+        # the sidecar: what of it is left once counting has begun, and since
+        # when the relay has been waiting
         self._timer: asyncio.TimerHandle | None = None
+        self._time_left: float | None = None
+        self._waiting_since: float | None = None
 
     async def released(self) -> AsyncIterator[Any]:
         """The chunks to yield to LiteLLM, as the sidecar releases them."""
@@ -739,6 +743,8 @@ class _Relay:
 
     async def _next(self, position: int) -> dict[str, Any]:
         # the next release, or why the relay can't go on, whichever comes first
+        self._waiting_since = asyncio.get_running_loop().time()
+        self._start_timer()
         polling = asyncio.ensure_future(
             self._guardrail._call(  # pyright: ignore[reportPrivateUsage]
                 "next_release",
@@ -757,6 +763,7 @@ class _Relay:
                 if not racing.done():
                     racing.cancel()
             await asyncio.wait({polling, failing})
+            self._stop_timer()
         if polling not in done:
             if self._raised is not None:
                 # LiteLLM's own error, which LiteLLM sees as it would have
@@ -827,14 +834,30 @@ class _Relay:
                     await self._guardrail._call(  # pyright: ignore[reportPrivateUsage]
                         "end_reply", {"id": self._told["id"]}
                     )
-                    seconds = self._guardrail._timeout.total  # pyright: ignore[reportPrivateUsage]
-                    if seconds is not None:
-                        self._timer = asyncio.get_running_loop().call_later(
-                            seconds, self._out_of_time
-                        )
+                    self._time_left = self._guardrail._timeout.total  # pyright: ignore[reportPrivateUsage]
+                    if self._waiting_since is not None:
+                        self._waiting_since = asyncio.get_running_loop().time()
+                        self._start_timer()
                     return
         except SidecarError as ex:
             self._stop(ex)
+
+    def _start_timer(self) -> None:
+        if self._time_left is not None:
+            self._timer = asyncio.get_running_loop().call_later(
+                self._time_left, self._out_of_time
+            )
+
+    def _stop_timer(self) -> None:
+        # the time spent waiting for the sidecar is counted; the time LiteLLM
+        # takes to ask for the next chunk is its caller's
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+        if self._time_left is not None and self._waiting_since is not None:
+            waited = asyncio.get_running_loop().time() - self._waiting_since
+            self._time_left = max(0.0, self._time_left - waited)
+        self._waiting_since = None
 
     def _out_of_time(self) -> None:
         if self._ended_at is None:
