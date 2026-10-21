@@ -23,6 +23,7 @@ from inspect_ai.event import (
 from inspect_ai.log import EvalLog, write_eval_log
 from inspect_ai.model import (
     ChatMessage,
+    ChatMessageTool,
     ChatMessageUser,
     ModelOutput,
     execute_tools,
@@ -1106,6 +1107,12 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
     assert (
         keyed(found["replay"], "value").keys() == keyed(found["read"], "value").keys()
     )
+    for kind in ("message", "event"):
+        cited = {k: references(r, kind) for k, r in by_key(found["replay"]).items()}
+        assert cited == {
+            k: references(r, kind) for k, r in by_key(found["read"]).items()
+        }
+    assert all(references(r, "event") for r in found["read"])
     [row] = found["human"]
     assert (row["answer"], row["metadata.human"], row["metadata.turns"]) == (
         "reject",
@@ -1246,3 +1253,337 @@ def test_a_label_names_one_transcripts_sub_agent_step_of_a_shared_call_id(
     )
 
     assert keyed(found["s"], "value") == {(labelled, "shared"): 0.6}
+
+
+DRIVING_SCRIPT = """
+import sys
+from pathlib import Path
+
+from inspect_scout import scan, transcripts_from
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Escalations,
+    HumanAnswer,
+    MonitorGroup,
+    Observation,
+    ReplayStep,
+    human,
+    monitor,
+    sequential,
+    threshold,
+)
+from inspect_sentinel.scout import as_scanner, human_stand_in, step_selector
+
+
+@monitor
+def scripted_score(marker: str) -> MonitorGroup:
+    async def before(context: Context, step: BeforeToolCall) -> Observation:
+        if Path(marker).exists():
+            raise RuntimeError("interrupted")
+        return Observation.score(min(1.0, int(step.call.arguments["x"]) / 10))
+
+    return MonitorGroup(before)
+
+
+@step_selector
+def calls_named_a(transcript_id: str, step: ReplayStep) -> bool:
+    return step.id.startswith("a")
+
+
+@human_stand_in
+async def scripted_person(
+    step: ReplayStep, escalations: Escalations, choices: list[str]
+) -> HumanAnswer:
+    return HumanAnswer("reject", "the script's person")
+
+
+if __name__ == "__main__":
+    logs, scans, marker, processes = sys.argv[1:5]
+    sentinel = sequential(
+        [threshold(scripted_score(marker), escalate_at=0.5), human(stages=["tool_call"])]
+    )
+    status = scan(
+        scanners={
+            "s": as_scanner(sentinel, steps=calls_named_a, human=scripted_person)
+        },
+        transcripts=transcripts_from(logs),
+        scans=scans,
+        display="none",
+        max_processes=int(processes),
+    )
+    print(status.complete, status.location)
+"""
+
+
+def drive(tmp_path: Path, *args: str, cwd: Path) -> list[str]:
+    done = subprocess.run(
+        [sys.executable, *args], capture_output=True, text=True, cwd=cwd
+    )
+    assert done.returncode == 0, done.stderr[-3000:]
+    return done.stdout.split()
+
+
+def test_a_scripts_own_selector_and_stand_in_run_in_workers_and_resume(
+    tmp_path: Path,
+) -> None:
+    log = run(
+        tmp_path / "logs", [[call(9, "a1"), call(8, "b1")], [call(7, "a2")]], None
+    )
+    assert log.samples is not None
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "driving.py").write_text(DRIVING_SCRIPT)
+    marker = tmp_path / "marker"
+    expected = {
+        (log.samples[0].uuid, "a1"): "reject",
+        (log.samples[1].uuid, "a2"): "reject",
+    }
+
+    def scanned_by_script(scans: str, processes: int) -> list[str]:
+        return drive(
+            tmp_path,
+            "driving.py",
+            str(tmp_path / "logs"),
+            str(tmp_path / scans),
+            str(marker),
+            str(processes),
+            cwd=scripts,
+        )
+
+    # in two worker processes
+    complete, location = scanned_by_script("workers", 2)
+    assert complete == "True"
+    found = rows(location)["s"]
+    assert keyed(found, "answer") == expected
+    assert {r["metadata.human"] for r in found} == {"simulated"}
+
+    # interrupted, then resumed by an interpreter that never ran the script
+    marker.touch()
+    complete, location = scanned_by_script("resumed", 1)
+    assert complete == "False"
+    marker.unlink()
+    [complete] = drive(
+        tmp_path,
+        "-c",
+        "import sys; from inspect_scout import scan_resume; "
+        "print(scan_resume(sys.argv[1], display='none').complete)",
+        location,
+        cwd=scripts,
+    )
+    assert complete == "True"
+    assert keyed(rows(location)["s"], "answer") == expected
+
+
+def test_a_stand_in_typed_into_python_c_is_refused() -> None:
+    code = """
+from inspect_sentinel import HumanAnswer, human
+from inspect_sentinel.scout import as_scanner, human_stand_in
+
+@human_stand_in
+async def typed_in(step, escalations, choices):
+    return HumanAnswer("approve")
+
+as_scanner(human(stages=["tool_call"]), human=typed_in)
+"""
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+
+    assert done.returncode != 0
+    assert "notebook, REPL or `python -c`" in done.stderr
+
+
+@monitor
+def ties() -> MonitorGroup:
+    # the same score at every step, as a benign transcript gives
+    async def before(context: Context, step: BeforeToolCall) -> Observation:
+        return Observation.score(0.0)
+
+    return MonitorGroup(before)
+
+
+@monitor
+def sparse() -> MonitorGroup:
+    # a dimension of its own at every step
+    async def before(context: Context, step: BeforeToolCall) -> Observation:
+        return Observation(suspicion={f"d_{step.call.id}": 0.5})
+
+    return MonitorGroup(before)
+
+
+def messages(turns: int) -> list[ChatMessage]:
+    found: list[ChatMessage] = [ChatMessageUser(id="task", content="add")]
+    for turn in range(turns):
+        made = call(turn, f"c{turn}").message
+        made.id = f"a{turn}"
+        found.append(made)
+        found.append(
+            ChatMessageTool(id=f"r{turn}", content="1", tool_call_id=f"c{turn}")
+        )
+    return found
+
+
+def work(scanner: Any, turns: int) -> int:
+    # every Python call and generator resume while the scanner reads one
+    # transcript of messages: the whole pipeline's work, end to end
+    from inspect_scout import Transcript
+
+    transcript = Transcript(transcript_id="t", messages=messages(turns))
+    calls = 0
+
+    def count(frame: Any, event: str, arg: Any) -> None:
+        nonlocal calls
+        if event == "call":
+            calls += 1
+
+    async def scanned() -> None:
+        sys.setprofile(count)
+        try:
+            await scanner(transcript)
+        finally:
+            sys.setprofile(None)
+
+    anyio.run(scanned)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "sentinel",
+    [
+        lambda: ties(),
+        lambda: sparse(),
+        lambda: threshold(ties(), reject_at=0.9),
+    ],
+    ids=["tied scores", "sparse dimensions", "tied actions"],
+)
+def test_a_transcript_reduction_does_work_in_proportion_to_its_steps(
+    sentinel: Any,
+) -> None:
+    scanner = as_scanner(sentinel(), unit="transcript")
+    # the first transcript rebuilds the sentinel, once per process
+    work(scanner, 1)
+
+    assert work(scanner, 400) <= 2.2 * work(scanner, 200)
+
+
+def test_transcripts_from_one_log_share_its_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from inspect_scout import Transcript
+
+    from inspect_sentinel.scout import _context
+
+    log = run(tmp_path / "logs", [[call(i)] for i in range(5)], None)
+    assert log.samples is not None
+    path = str(log.location)
+    reads = {"header": 0, "summaries": 0}
+    failures = [RuntimeError("the first header read fails")]
+    from inspect_ai.log import (
+        read_eval_log_async as header,
+    )
+    from inspect_ai.log import (
+        read_eval_log_sample_summaries_async as summaries,
+    )
+
+    async def read_header(log: str, header_only: bool) -> Any:
+        reads["header"] += 1
+        await anyio.sleep(0)  # let the other transcripts reach the cache
+        if failures:
+            raise failures.pop()
+        return await header(log, header_only=header_only)
+
+    async def read_summaries(log: str) -> Any:
+        reads["summaries"] += 1
+        await anyio.sleep(0)
+        return await summaries(log)
+
+    monkeypatch.setattr(_context, "read_eval_log_async", read_header)
+    monkeypatch.setattr(
+        _context, "read_eval_log_sample_summaries_async", read_summaries
+    )
+    contexts = _context.Contexts()
+    transcripts = [
+        Transcript(transcript_id=s.uuid or "", source_type="eval_log", source_uri=path)
+        for s in log.samples
+    ]
+    found: dict[str, Any] = {}
+
+    async def read_all() -> None:
+        async def one(transcript: Transcript) -> None:
+            found[transcript.transcript_id] = await contexts.eval_context(transcript)
+
+        async with anyio.create_task_group() as tg:
+            for transcript in transcripts:
+                tg.start_soon(one, transcript)
+
+    # the failed read reaches its caller and leaves nothing cached
+    with pytest.raises(BaseExceptionGroup):
+        anyio.run(read_all)
+    reads.update(header=0, summaries=0)
+    anyio.run(read_all)
+
+    assert reads == {"header": 1, "summaries": 1}
+    assert [found[s.uuid or ""].sample_id for s in log.samples] == [0, 1, 2, 3, 4]
+
+
+def test_the_probe_digests_each_live_context_once_and_keeps_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import gc
+    import weakref
+
+    from inspect_ai.tool import ToolCall, ToolCallView
+
+    from inspect_sentinel import EvalContext, Host
+    from inspect_sentinel.scout import _probe
+    from tests._fakes import FakeHost
+
+    forms = 0
+    form = _probe._eval_form
+
+    def counted(context: Any) -> Any:
+        nonlocal forms
+        forms += 1
+        return form(context)
+
+    monkeypatch.setattr(_probe, "_eval_form", counted)
+
+    def context(sample: int) -> Context:
+        large: list[ChatMessage] = [
+            ChatMessageUser(content=f"part {i}") for i in range(2000)
+        ]
+        evaluated = EvalContext(
+            task="t",
+            task_description=None,
+            sample_id=sample,
+            epoch=1,
+            sample_description=None,
+            sample_input=large,
+            metadata={},
+        )
+        return Context(path="", host=Host(FakeHost(eval=evaluated)))
+
+    step = BeforeToolCall(
+        conversation="c",
+        message="",
+        message_id="m",
+        call=ToolCall(id="c", function="addition", arguments={"x": 1, "y": 1}),
+        view=ToolCallView(),
+        input=None,
+        agent_messages=[],
+        history=[],
+    )
+    tool_call: Any = next(
+        f for f in fidelity_probe().functions if f.__name__ == "tool_call"
+    )
+    first, second = context(1), context(2)
+
+    # two transcripts' steps, interleaved
+    for _ in range(10):
+        for current in (first, second):
+            anyio.run(tool_call, current, step)
+
+    assert forms == 2
+    held = weakref.ref(cast(Any, first.eval))
+    del first
+    gc.collect()
+    assert held() is None

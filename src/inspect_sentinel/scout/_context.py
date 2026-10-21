@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import anyio
 from inspect_ai._sentinel._integration import EvalInfo
 from inspect_ai.analysis._dataframe.samples.extract import auto_sample_id
 from inspect_ai.log import (
@@ -24,6 +25,10 @@ class Contexts:
     def __init__(self) -> None:
         self._headers: dict[str, EvalLog] = {}
         self._samples: dict[str, dict[str, tuple[int | str, int]]] = {}
+        # one read of a log at a time, so transcripts from one log that miss
+        # the cache together share the read the first makes; a read that
+        # fails or is cancelled caches nothing, and the next tries again
+        self._reading: dict[str, anyio.Lock] = {}
 
     async def eval_context(self, transcript: Transcript) -> EvalContext | None:
         if transcript.source_type == "eval_log" and transcript.source_uri:
@@ -38,10 +43,17 @@ class Contexts:
 
     async def _header(self, log: str) -> EvalLog:
         header = self._headers.get(log)
-        if header is None:
-            header = await read_eval_log_async(log, header_only=True)
-            self._headers[log] = header
+        if header is not None:
+            return header
+        async with self._lock(log):
+            header = self._headers.get(log)
+            if header is None:
+                header = await read_eval_log_async(log, header_only=True)
+                self._headers[log] = header
         return header
+
+    def _lock(self, log: str) -> anyio.Lock:
+        return self._reading.setdefault(log, anyio.Lock())
 
     async def _from_log(self, transcript: Transcript, log: str) -> EvalContext:
         header = await self._header(log)
@@ -73,12 +85,18 @@ class Contexts:
         # the sample's own id and epoch
         samples = self._samples.get(log)
         if samples is None:
-            summaries = await read_eval_log_sample_summaries_async(log)
-            samples = {
-                s.uuid or auto_sample_id(header.eval.eval_id, s): (s.id, s.epoch)
-                for s in summaries
-            }
-            self._samples[log] = samples
+            async with self._lock(log):
+                samples = self._samples.get(log)
+                if samples is None:
+                    summaries = await read_eval_log_sample_summaries_async(log)
+                    samples = {
+                        s.uuid or auto_sample_id(header.eval.eval_id, s): (
+                            s.id,
+                            s.epoch,
+                        )
+                        for s in summaries
+                    }
+                    self._samples[log] = samples
         found = samples.get(transcript_id)
         if found is None:
             raise ValueError(

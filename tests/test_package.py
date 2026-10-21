@@ -103,6 +103,8 @@ def test_integration_module_exports_the_host_surface() -> None:
         "config_from_sentinel",
         "factory_sources",
         "import_factory_sources",
+        "import_source",
+        "source_file",
         "kept_human_decision",
         "validate_instance_name",
         "resolve_sentinel",

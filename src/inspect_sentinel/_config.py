@@ -9,6 +9,7 @@ import logging
 import sys
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from pathlib import Path
+from types import ModuleType
 from typing import Any, NamedTuple, cast
 
 import yaml
@@ -278,8 +279,7 @@ def factory_sources(config: SentinelConfig) -> list[dict[str, str | None]]:
             module = getattr(found.factory, "__module__", None)
             if module is None or module.split(".")[0] == PACKAGE:
                 continue
-            file = getattr(sys.modules.get(module), "__file__", None)
-            sources[module] = _relative(file) if file and Path(file).is_file() else None
+            sources[module] = source_file(module)
     return [{"module": m, "file": f} for m, f in sorted(sources.items())]
 
 
@@ -302,7 +302,7 @@ def import_factory_sources(
     for source in sources:
         module, file = source.get("module"), source.get("file")
         if module is not None:
-            _import_source(module, file)
+            import_source(module, file)
     missing = _unregistered(config)
     if missing:
         raise ValueError(
@@ -316,35 +316,59 @@ def _unregistered(config: SentinelConfig) -> list[str]:
     )
 
 
-def _import_source(module: str, file: str | None) -> None:
+def source_file(module: str) -> str | None:
+    """The file a loaded module was read from, relative to the working directory where it is under it, as `factory_sources()` records it; None for a module with no file, such as one typed into a REPL, notebook or `python -c`.
+
+    Args:
+        module: The module's name.
+    """
+    file = getattr(sys.modules.get(module), "__file__", None)
+    return _relative(file) if file and Path(file).is_file() else None
+
+
+def import_source(module: str, file: str | None) -> ModuleType | None:
+    """The module a recorded source names, imported if this process lacks it: by name, else from its file under a name of its own.
+
+    A script, recorded as `__main__`, is this process's `__main__` (or `__mp_main__`, as a worker started by spawning runs it) when that is its file, and is otherwise loaded from the file, once. None when there is no way to load it: a `__main__` with no file.
+
+    Args:
+        module: The module's name, as recorded.
+        file: Its file, as recorded, relative to the working directory or absolute.
+
+    Raises:
+        ModuleNotFoundError: If the module does not import by name and has no file.
+        ValueError: If the recorded file does not exist.
+    """
     path = _absolute(file) if file is not None else None
     if module == "__main__":
-        main = getattr(sys.modules.get("__main__"), "__file__", None)
-        if path is None or (main is not None and Path(main).resolve() == path):
-            return
-        _import_file(path)
-        return
+        for alias in ("__main__", "__mp_main__"):
+            loaded = sys.modules.get(alias)
+            main = getattr(loaded, "__file__", None)
+            if main is not None and path is not None and Path(main).resolve() == path:
+                return loaded
+        return _import_file(path) if path is not None else None
     if module in sys.modules:
-        return
+        return sys.modules[module]
     try:
-        importlib.import_module(module)
+        return importlib.import_module(module)
     except ModuleNotFoundError as ex:
         # only the module itself missing from the path, not one it imports
         if path is None or ex.name is None or not module.startswith(ex.name):
             raise
-        _import_file(path)
+        return _import_file(path)
 
 
-def _import_file(path: Path) -> None:
+def _import_file(path: Path) -> ModuleType:
     # under a name of its own, so it never stands in for a module of the
     # same name, nor runs twice
     digest = hashlib.sha256(str(path).encode()).hexdigest()[:8]
     name = f"_sentinel_source_{path.stem}_{digest}"
-    if name in sys.modules:
-        return
+    loaded = sys.modules.get(name)
+    if loaded is not None:
+        return loaded
     if not path.is_file():
         raise ValueError(
-            f"Cannot import {str(path)!r}, which defines a monitor or protocol in the configuration: the file does not exist."
+            f"Cannot import {str(path)!r}, which defines a monitor, protocol or callback the scan records: the file does not exist."
         )
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
@@ -352,6 +376,7 @@ def _import_file(path: Path) -> None:
     loaded = importlib.util.module_from_spec(spec)
     sys.modules[name] = loaded
     spec.loader.exec_module(loaded)
+    return loaded
 
 
 def _relative(file: str) -> str:

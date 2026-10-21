@@ -3,7 +3,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from typing import Any
 
-from inspect_ai.event import ModelEvent, ToolEvent
+from inspect_ai.event import ModelEvent, SentinelEvent, ToolEvent
 from inspect_ai.scorer import Reference
 from inspect_scout import Result, Transcript
 from pydantic import JsonValue
@@ -21,6 +21,7 @@ from inspect_sentinel import (
     Reported,
 )
 
+from ._positions import Positions
 from ._steps import Conversations
 
 # the actions a step is flagged for; escalate declines to decide, so it is not
@@ -104,6 +105,16 @@ class Citations:
         self._positions = {
             m.id: i for i, m in enumerate(transcript.messages) if m.id is not None
         }
+        # generate steps a sentinel recorded, cited as read mode cites them
+        self._recorded: dict[str, tuple[SentinelEvent, int]] = {}
+        for index, event in enumerate(transcript.events):
+            if isinstance(event, SentinelEvent) and event.stage == "model_input":
+                self._recorded.setdefault(event.step_id, (event, index))
+        self._spans = (
+            Positions(transcript.events, transcript.transcript_id)
+            if self._recorded
+            else None
+        )
         self._answers: dict[str, tuple[list[int], list[str]]] = {}
         for index, message in enumerate(transcript.messages):
             call_id = getattr(message, "tool_call_id", None)
@@ -117,6 +128,11 @@ class Citations:
         if isinstance(step, BeforeGenerate):
             if replay_step.id in self._events:
                 return Reference(type="event", id=replay_step.id)
+            recorded = self._recorded.get(replay_step.id)
+            if recorded is not None and self._spans is not None:
+                # a log from before generate ids: the generate the step's
+                # sentinel span preceded, where none overlaps it, else nothing
+                return self._spans.cite(*recorded)
             last = step.input[-1].id if step.input else None
             return Reference(type="message", id=last) if last else None
         if isinstance(step, AfterGenerate):
@@ -181,9 +197,10 @@ def _highest(results: list[Result], label: str, steps: int) -> Result:
             for dimension, score in _scores(result).items():
                 if dimension not in best or score > best[dimension]:
                     best[dimension] = score
+        # each result against the best of its own dimensions only, so sparse
+        # dimensions cost what the results hold
         for result in dimensioned:
-            scores = _scores(result)
-            if any(scores.get(d) == s for d, s in best.items()):
+            if any(best[d] == score for d, score in _scores(result).items()):
                 setting.append(result)
         value: JsonValue = dict(best)
     else:
@@ -221,10 +238,15 @@ def _reduced(setting: list[Result], steps: int) -> dict[str, Any]:
 
 
 def _cited(setting: list[Result]) -> list[Reference]:
+    # each step's citation once, in order, found by its fields rather than by
+    # comparing it with every one kept
     cited: list[Reference] = []
+    seen: set[tuple[str, str, str | None]] = set()
     for result in setting:
         for reference in result.references[:1]:
-            if reference not in cited:
+            key = (reference.type, reference.id, reference.cite)
+            if key not in seen:
+                seen.add(key)
                 cited.append(reference)
     return cited
 

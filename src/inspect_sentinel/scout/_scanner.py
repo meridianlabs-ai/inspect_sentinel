@@ -36,7 +36,7 @@ from ._results import Citations, child_report, step_result, transcript_result
 from ._select import (
     StepSelector,
     StepsIn,
-    registered_name,
+    callback_ref,
     selector_from,
     stand_in_from,
 )
@@ -94,8 +94,8 @@ def as_scanner(
         split: How each transcript's steps are grouped into units, as `replay_monitor()` takes it. Recorded in the scan.
         max_unit_steps: Split units further into runs of at most this many steps, each with a fresh store.
         max_units: How many units of one transcript run at once.
-        steps: Which steps to run the sentinel at: a `steps_in()` label table, or a selector `(transcript_id, step) -> bool` registered with `@step_selector` (or its registered name). Every step is still rebuilt; only the chosen ones run, so a monitor's state does not see the others.
-        human: How `human()` is answered where no answer was recorded at the step: `"recorded"`, the fail-closed answer; `"fail_closed"`, the fail-closed answer even where one was recorded; or a stand-in registered with `@human_stand_in` (or its registered name).
+        steps: Which steps to run the sentinel at: a `steps_in()` label table, or a selector `(transcript_id, step) -> bool` registered with `@step_selector`, or the `module:name` it is registered as. Every step is still rebuilt; only the chosen ones run, so a monitor's state does not see the others.
+        human: How `human()` is answered where no answer was recorded at the step: `"recorded"`, the fail-closed answer; `"fail_closed"`, the fail-closed answer even where one was recorded; or a stand-in registered with `@human_stand_in`, or the `module:name` it is registered as. A selector or stand-in defined in a notebook, REPL or `python -c` is refused, since a scan's worker processes cannot load it.
         timeline: The stored timeline whose agent spans and branches are the conversations, such as Petri's `"target"`, in place of the log's span tree. Raises for a transcript with no timeline of that name.
         depth: Run only conversations at most this deep in the timeline, counting as `llm_scanner` does: only spans that make model calls count, so 1 is the outermost such span on each branch. All conversations when None.
         compaction: Which compaction segments of each conversation to run: `"all"`, `"last"`, or that many of the latest, at least 1.
@@ -116,15 +116,16 @@ def as_scanner(
         else config_from_sentinel(sentinel)
     )
     chosen = _stage(sentinel_from_config(config), stage)
-    if steps is None or isinstance(steps, StepsIn | str):
-        selected: object = steps
-    else:
-        selected = registered_name("step_selector", steps, "steps")
-    if isinstance(human, str):
-        policy = human
-        stand_in_from(human)
-    else:
-        policy = registered_name("human_stand_in", human, "human")
+    selected: object = (
+        steps
+        if steps is None or isinstance(steps, StepsIn)
+        else callback_ref("step_selector", steps, "steps")
+    )
+    policy: object = (
+        human
+        if human == "recorded" or human == "fail_closed"
+        else callback_ref("human_stand_in", human, "human")
+    )
     return sentinel_replay(
         # as JSON text: Scout builds any registry entry it finds in a
         # scanner's parameters before calling its factory, which would rebuild
@@ -155,7 +156,7 @@ def sentinel_replay(
     max_unit_steps: int | None,
     max_units: int,
     steps: Any,
-    human: str,
+    human: Any,
     timeline: str | None,
     depth: int | None,
     compaction: Literal["all", "last"] | int,
@@ -221,7 +222,7 @@ class _Rebuilt:
         sentinel: str,
         sources: list[dict[str, str | None]],
         steps: Any,
-        human: str,
+        human: Any,
     ) -> None:
         self._sentinel = sentinel
         self._sources = sources

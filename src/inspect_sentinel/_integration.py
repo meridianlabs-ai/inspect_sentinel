@@ -9,7 +9,9 @@ from ._config import (
     config_from_sentinel,
     factory_sources,
     import_factory_sources,
+    import_source,
     sentinel_from_config,
+    source_file,
 )
 from ._context import validate_instance_name
 from ._decorators import step_types, watched_stages
@@ -26,6 +28,8 @@ __all__ = [
     "config_from_sentinel",
     "factory_sources",
     "import_factory_sources",
+    "import_source",
+    "source_file",
     "kept_human_decision",
     "Sentinels",
     "sentinel_from_config",

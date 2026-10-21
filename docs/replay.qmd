@@ -100,7 +100,7 @@ flagged = steps[steps["value"] >= 0.8]
 as_scanner(suspicion_monitor(), stage="tool_call", steps=steps_in(flagged))
 ```
 
-A selector of your own is a module-level function `(transcript_id, step) -> bool` decorated with `@step_selector`, so a resumed scan can find it. The steps not chosen are not run, so a monitor's state does not see them.
+A selector of your own is a module-level function `(transcript_id, step) -> bool` decorated with `@step_selector`, in a module or in the script that runs the scan, so a worker process or a resumed scan can find it. One defined in a notebook, a REPL or `python -c` is refused, since another process cannot load it. The steps not chosen are not run, so a monitor's state does not see them.
 
 ### Human decisions
 
@@ -108,7 +108,7 @@ A selector of your own is a module-level function `(transcript_id, step) -> bool
 
 - `"recorded"` (default): the fail-closed answer a host gives when nobody can be asked, `reject` where it is offered and `terminate` otherwise. A protocol then decides as it would live with nobody there.
 - `"fail_closed"`: the fail-closed answer even where an answer was recorded.
-- A stand-in for the person: an `async` function `(step, escalations, choices) -> HumanAnswer` decorated with `@human_stand_in`, such as an oracle built from labels, or a model.
+- A stand-in for the person: an `async` function `(step, escalations, choices) -> HumanAnswer` decorated with `@human_stand_in`, such as an oracle built from labels, or a model. It is defined at module level, in a module or the scan's script, as a selector is.
 
 A row's `human` metadata says which answered: `"recorded"`, `"unanswered"` or `"simulated"`, so a back-test can count the steps that would have gone to a person apart from real decisions.
 
