@@ -2696,16 +2696,17 @@ def test_a_slow_provider_is_not_held_to_the_sidecar_s_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # the timeout is the sidecar's, from when it has the whole reply, as for
-    # a reply that isn't streamed
+    # a reply that isn't streamed. It is long enough for each exchange with the
+    # sidecar on a busy runner, and the stream lasts twice as long.
     passed = _result({"action": "pass"})
 
     async def slowly() -> AsyncIterator[Any]:
         for chunk in _CHAT.stream():
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.1)
             yield chunk
 
     async def run(url: str) -> list[Any]:
-        guardrail = _make(monkeypatch, url, timeout=0.2)
+        guardrail = _make(monkeypatch, url, timeout=1.0)
         data = _data(_CHAT)
         try:
             await guardrail.async_pre_call_hook(_USER, None, data, _CHAT.call_type)
@@ -2721,7 +2722,7 @@ def test_a_slow_provider_is_not_held_to_the_sidecar_s_timeout(
     with _serving(_scripted([], passed, passed)) as url:
         reply = asyncio.run(run(url))
 
-    assert len(_CHAT.stream()) * 0.05 > 0.2
+    assert len(_CHAT.stream()) * 0.1 > 2 * 1.0
     assert [_written(chunk) for chunk in reply] == [
         _written(chunk) for chunk in _CHAT.stream()
     ]
