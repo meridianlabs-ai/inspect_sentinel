@@ -36,6 +36,7 @@ from inspect_ai.util._span import span
 from inspect_scout import scan, scan_results_df, scan_resume, transcripts_from
 
 from inspect_sentinel import (
+    AfterGenerate,
     BeforeGenerate,
     BeforeToolCall,
     Context,
@@ -1662,3 +1663,59 @@ def test_a_stored_timeline_cites_a_sub_agents_tool_message(tmp_path: Path) -> No
         call_id: [{"type": "message", "id": tools[call_id].message_id}]
         for call_id in ("helper", "main")
     }
+
+
+@monitor(portable=False)
+def records_contexts(path: str) -> MonitorGroup:
+    # the probe's digest of each context the host hands over, computed whole
+    from inspect_sentinel.scout._probe import context_digest
+
+    def write(context: Context) -> Observation:
+        with open(path, "a") as recorded:
+            recorded.write(context_digest(context.eval) + "\n")
+        return Observation.score(0.0)
+
+    async def model_input(context: Context, step: BeforeGenerate) -> Observation:
+        return write(context)
+
+    async def model_output(context: Context, step: AfterGenerate) -> Observation:
+        return write(context)
+
+    return MonitorGroup(model_input, model_output)
+
+
+@solver
+def changes_its_metadata() -> Solver:
+    """Two generates, with the sample's metadata changed between them."""
+
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        state.output = await get_model().generate(state.messages)
+        state.metadata["phase"] = "later"
+        state.output = await get_model().generate(state.messages)
+        return state
+
+    return solve
+
+
+def test_the_probe_digests_the_context_each_step_is_handed(tmp_path: Path) -> None:
+    handed = tmp_path / "handed"
+    [log] = eval(
+        Task(
+            dataset=[Sample(input="go", metadata={"phase": "initial"})],
+            solver=changes_its_metadata(),
+            sentinel=observe_only([fidelity_probe(), records_contexts(str(handed))]),
+        ),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "logs"),
+        display="none",
+    )
+    assert log.samples is not None
+
+    recorded = [
+        cast(dict[str, Any], e.metadata)["eval"]
+        for e in log.samples[0].events
+        if isinstance(e, SentinelEvent) and e.path == "fidelity_probe"
+    ]
+
+    assert recorded == handed.read_text().split()
+    assert len(set(recorded)) == 2

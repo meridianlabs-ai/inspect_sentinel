@@ -41,15 +41,20 @@ def fidelity_probe() -> MonitorGroup:
     """
 
     def digest(context: Context, step: Step) -> Observation:
-        # the context is the sample's, constant for its store's life: the
-        # sample live, the unit in replay; a host may build a new EvalContext
-        # for every step, as inspect_ai does, so the digest is kept there
+        # A host may build a new EvalContext for every step, as inspect_ai
+        # does, so the digest of the parts that cannot change within a sample,
+        # its input above all, is kept in the store, which is the sample's
+        # live and the unit's in replay. The metadata, which a solver can
+        # change, is digested at every step.
         state = context.store_as(_ProbeState)
-        if state.eval_digest is None:
-            state.eval_digest = _hash(_eval_form(context.eval))
+        if state.fixed_digest is None:
+            state.fixed_digest = _hash(_eval_form(context.eval))
         return Observation(
             suspicion=0.0,
-            metadata={"step": _step_digest(step), "eval": state.eval_digest},
+            metadata={
+                "step": _step_digest(step),
+                "eval": _combined(state.fixed_digest, context.eval),
+            },
         )
 
     async def model_input(context: Context, step: BeforeGenerate) -> Observation:
@@ -68,7 +73,7 @@ def fidelity_probe() -> MonitorGroup:
 
 
 class _ProbeState(StoreModel):
-    eval_digest: str | None = None
+    fixed_digest: str | None = None
 
 
 def _step_digest(step: Step) -> dict[str, str]:
@@ -88,7 +93,17 @@ def _step_digest(step: Step) -> dict[str, str]:
     return digests
 
 
+def context_digest(context: EvalContext | None) -> str:
+    # the probe's digest of a context, computed whole
+    return _combined(_hash(_eval_form(context)), context)
+
+
+def _combined(fixed: str, context: EvalContext | None) -> str:
+    return _hash([fixed, context.metadata if context is not None else None])
+
+
 def _eval_form(context: EvalContext | None) -> Any:
+    # the parts of a context that cannot change within a sample
     if context is None:
         return None
     return {
@@ -99,7 +114,6 @@ def _eval_form(context: EvalContext | None) -> Any:
         "epoch": context.epoch,
         "sample_description": context.sample_description,
         "sample_input": context.sample_input,
-        "metadata": context.metadata,
     }
 
 

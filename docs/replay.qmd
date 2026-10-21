@@ -149,7 +149,7 @@ scan(
 )
 ```
 
-Where a field's digest differs, replay handed the monitor something other than what it saw live. The probe digests the conversation lists by their length and last message, and the sample's context once, keeping that digest in the sample's store, so it does a constant amount of work per step. It cannot see an edit in the middle of a list, nor a change a solver makes to the sample's metadata after its first step.
+Where a field's digest differs, replay handed the monitor something other than what it saw live. The probe digests the conversation lists by their length and last message, and the sample's input and the rest of its context that cannot change once per sample, keeping that digest in the sample's store, so its work per step does not grow with the conversation or the input. The context's metadata, which a solver can change, it digests at every step. It cannot see an edit in the middle of a list. A replay hands the monitor the sample's final metadata, so where a solver changed it during the run, the earlier steps' digests differ.
 
 ## What a replayed step holds
 
