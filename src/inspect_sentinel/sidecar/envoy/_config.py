@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from .._http import MAX_BODY_BYTES
+from .._exchange import MAX_BODY_BYTES
 from ._metadata import FORMAT_METADATA, INSPECT_HEADERS, PROVIDER_METADATA
 
 ENVOY_VERSION = "1.39.4"
