@@ -793,3 +793,31 @@ async def test_a_providers_comment_holds_nothing_back(name: str) -> None:
 
     assert first is not None and rest[-1] == Finished()
     assert _sent([first, *rest]) == body
+
+
+@pytest.mark.anyio
+async def test_a_turn_whose_client_goes_while_text_waits_to_go_out_is_not_judged() -> (
+    None
+):
+    # the provider has finished, and the proxy hasn't collected the text, when
+    # the client goes: no judgment starts after that
+    asked, reply = _exchange("anthropic", inspect=True)
+    seen: list[tuple[str, str]] = []
+    handler = Handler(noting(seen, "reject", "Tokyo"), release="early", keepalive=None)
+    await handler.request(asked)
+    stream = handler.reply_stream(_start(reply))
+    events = reply.body.split(b"\n\n")
+    text = next(i for i, event in enumerate(events) if b"text_delta" in event)
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(stream.run)
+            await stream.feed(b"\n\n".join(events[: text + 1]) + b"\n\n")
+            await anyio.wait_all_tasks_blocked()
+            await stream.feed(b"\n\n".join(events[text + 1 :]))
+            await stream.end()
+            await anyio.wait_all_tasks_blocked()
+            await stream.abort()
+
+    assert seen == []
+    assert await _result(handler) == ("not_judged", "cut_off")

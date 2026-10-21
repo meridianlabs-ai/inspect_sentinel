@@ -383,6 +383,11 @@ class ReplyStream:
                 if ending:
                     arrived += events.reader.finish()
                 await self._release_ready(arrived)
+            if self._aborted:
+                # the client went while what was ready went out, so no
+                # judgment starts
+                await self._handler.reply_not_judged(self._start.id, "cut_off")
+                return False
             if ending:
                 return True
 
