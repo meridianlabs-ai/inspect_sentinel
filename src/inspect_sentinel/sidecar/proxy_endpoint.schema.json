@@ -90,6 +90,27 @@
           "description": "The event, as base64.",
           "title": "Data",
           "type": "string"
+        },
+        "not_judged": {
+          "anyOf": [
+            {
+              "enum": [
+                "unreadable",
+                "unregistered",
+                "time_limit",
+                "error",
+                "provider_error",
+                "cut_off"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why the turn wasn't judged, when it wasn't, rather than being refused. A proxy hook that lets through what isn't judged may let the reply through instead, if it has sent its caller nothing but keepalives.",
+          "title": "Not Judged"
         }
       },
       "required": [

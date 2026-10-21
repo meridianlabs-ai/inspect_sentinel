@@ -29,6 +29,7 @@ from .._step import (
 )
 from .._types import Sentinels
 from ._errors import TimeLimitError
+from ._errors import not_judged as _not_judged
 from ._exchange import (
     MAX_BODY_BYTES,
     Answer,
@@ -121,16 +122,6 @@ class RunResult:
     """`terminate` if a sentinel ended the run."""
     store: dict[str, Any]
     """The sentinel's store, by the keys the sentinel wrote."""
-
-
-def _not_judged(ex: Exception) -> NotJudged:
-    if isinstance(ex, UnreadableError):
-        return "unreadable"
-    if isinstance(ex, UnregisteredSampleError):
-        return "unregistered"
-    if isinstance(ex, TimeLimitError):
-        return "time_limit"
-    return "error"
 
 
 class ModifyError(Exception):

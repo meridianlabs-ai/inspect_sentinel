@@ -649,6 +649,17 @@ class _Relay:
                             yield chunk
                     elif kind == "error_event":
                         self._ended_at = position
+                        if (
+                            output.get("not_judged")
+                            and not sent
+                            and guardrail._let_through  # pyright: ignore[reportPrivateUsage]
+                        ):
+                            # the reply wasn't judged, and nothing but keepalives
+                            # went out, so it goes through as set to
+                            self._stop(_failed("a reply not judged"))
+                            async for chunk in self._unjudged():
+                                yield chunk
+                            return
                         for chunk in _released(
                             _decoded(output), self._format, self._samples()
                         ):

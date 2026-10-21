@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, TypeAlias
 
 import anyio
 
-from ._errors import error_event, refusal_for
+from ._errors import error_event, not_judged, refusal_for
 from ._exchange import Refuse, Replace, Reply, succeeded
 from ._release import (
     AnthropicTurn,
@@ -18,6 +18,7 @@ from ._release import (
     Role,
     Turn,
 )
+from ._state import NotJudged
 from ._wire import Format, StreamEvent, write_events
 
 if TYPE_CHECKING:
@@ -76,6 +77,8 @@ class ErrorEvent:
     """
 
     data: bytes
+    not_judged: NotJudged | None = None
+    """Why the turn wasn't judged, when it wasn't, rather than being refused. A proxy that lets through what can't be judged may let the reply through instead, if it has sent its client nothing but keepalives."""
 
 
 @dataclass(frozen=True)
@@ -320,7 +323,9 @@ class ReplyStream:
             await self._handler.reply_not_judged(start.id, "unreadable")
             if not self._sent or self._aborted:
                 raise
-            await self._fail(refusal_for(ex, "reply", start.id, reply=True))
+            await self._fail(
+                refusal_for(ex, "reply", start.id, reply=True), "unreadable"
+            )
             return
         if not ended:
             return
@@ -332,7 +337,9 @@ class ReplyStream:
         except Exception as ex:
             if not self._sent or self._aborted:
                 raise
-            await self._fail(refusal_for(ex, "reply", start.id, reply=True))
+            await self._fail(
+                refusal_for(ex, "reply", start.id, reply=True), not_judged(ex)
+            )
             return
         if isinstance(answer, Refuse):
             await self._fail(answer)
@@ -369,7 +376,8 @@ class ReplyStream:
                     Refuse(
                         502,
                         f"The provider's reply is larger than the {self._max_held_bytes} bytes the sidecar holds, so it was not judged.",
-                    )
+                    ),
+                    "unreadable",
                 )
                 return False
             data = bytes(self._held[self._consumed :])
@@ -419,15 +427,15 @@ class ReplyStream:
         self._sent = True
         await self._out(Release(written))
 
-    async def _fail(self, refused: Refuse) -> None:
-        # a refusal: an HTTP error while nothing has gone out, and an error
-        # event in the stream once something has
+    async def _fail(self, refused: Refuse, unjudged: NotJudged | None = None) -> None:
+        # a refusal, or a turn that wasn't judged: an HTTP error while nothing
+        # has gone out, and an error event in the stream once something has
         events = self._events
         if not self._sent or events.format is None:
             await self._out(refused)
             return
         await self._out(
-            ErrorEvent(error_event(events.format, refused, events.originals))
+            ErrorEvent(error_event(events.format, refused, events.originals), unjudged)
         )
 
     def _closed(self) -> bool:

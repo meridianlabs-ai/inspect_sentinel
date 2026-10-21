@@ -29,7 +29,7 @@ from tests.sidecar._traffic import (
     request,
     weather_rule,
 )
-from tests.sidecar.test_early_release import slowly
+from tests.sidecar.test_early_release import fails_after, slowly
 
 _BODY = anthropic_recorded("parallel-tool-calls")
 
@@ -408,3 +408,64 @@ async def test_a_proxy_hook_is_given_keepalives_only_if_it_can_send_them(
     kept_alive = {"kind": "release", "data": _b64(KEEPALIVE)}
     assert (kept_alive in outputs) == carried
     assert outputs[-1] == {"kind": "finished"}
+
+
+@pytest.mark.anyio
+async def test_a_chunk_sent_again_while_it_waits_is_taken_only_once_it_is_in() -> None:
+    handler = Handler(weather_rule())
+    await handler.request(request())
+    part = json.dumps({"type": "error", "error": {"message": "x" * 400}}).encode()
+    taken: list[int] = []
+    blocked = 0
+    outputs: list[dict[str, Any]] = []
+
+    with anyio.fail_after(10):
+        async with _serving(handler, max_pending_bytes=100) as client:
+            await _call(
+                client,
+                "begin_reply",
+                **_begun(status=500, content_type="application/json"),
+            )
+
+            async def send(seq: int) -> None:
+                await _call(client, "reply_chunk", id="x", seq=seq, data=_b64(part))
+                taken.append(seq)
+
+            async def rest(after: int) -> None:
+                for seq in range(after + 1, 8):
+                    await send(seq)
+                await _call(client, "end_reply", id="x")
+
+            async with anyio.create_task_group() as group:
+                # chunks until one waits, as nothing is collected
+                blocked = 0
+                while True:
+                    group.start_soon(send, blocked)
+                    await anyio.wait_all_tasks_blocked()
+                    if blocked not in taken:
+                        break
+                    blocked += 1
+                # the proxy hook gives up waiting, and sends it again
+                group.start_soon(send, blocked)
+                await anyio.wait_all_tasks_blocked()
+                assert blocked not in taken
+                group.start_soon(rest, blocked)
+                outputs = await _collect(client)
+
+    assert taken.count(blocked) == 2
+    assert _sent(outputs) == part * 8
+
+
+@pytest.mark.anyio
+async def test_an_error_event_for_a_turn_not_judged_says_why() -> None:
+    handler = Handler(fails_after(0.2), release="early", keepalive=0.02)
+    await handler.request(request())
+
+    with anyio.fail_after(10):
+        async with _serving(handler) as client:
+            await _call(client, "begin_reply", **_begun())
+            await _feed(client, _BODY)
+            outputs = await _collect(client)
+
+    assert outputs[-1]["kind"] == "error_event"
+    assert outputs[-1]["not_judged"] == "error"

@@ -25,6 +25,7 @@ from ._reply_stream import (
     ReplyStart,
     ReplyStream,
 )
+from ._state import NotJudged
 from ._wire import Format
 
 POLL_SECONDS = 20.0
@@ -117,6 +118,10 @@ class ErrorEventOutput(BaseModel):
 
     kind: Literal["error_event"] = "error_event"
     data: str = Field(description="The event, as base64.")
+    not_judged: NotJudged | None = Field(
+        default=None,
+        description="Why the turn wasn't judged, when it wasn't, rather than being refused. A proxy hook that lets through what isn't judged may let the reply through instead, if it has sent its caller nothing but keepalives.",
+    )
 
 
 class FinishedOutput(BaseModel):
@@ -148,8 +153,12 @@ class _Open:
     stream: ReplyStream
     begun: BeginReplyParams
     # each chunk taken, by its place, as a digest, so a chunk sent again can
-    # be told from another
+    # be told from another, with whether the stream has it yet, which a chunk
+    # sent again waits for
     chunks: list[bytes] = field(default_factory=list[bytes])
+    fed: list[anyio.Event] = field(default_factory=list[anyio.Event])
+    # one chunk is fed at a time, so that none overtakes another
+    feeding: anyio.Lock = field(default_factory=anyio.Lock)
     # the outputs given, the first of them at `base`, as those before were
     # collected
     outputs: list[StreamOutput] = field(default_factory=list[StreamOutput])
@@ -247,6 +256,8 @@ class ReplyStreams:
                     INVALID_PARAMS,
                     f"Chunk {given.seq} of the reply {given.id!r} was sent before with other bytes.",
                 )
+            # taken once the stream has it, as the first sending of it is
+            await open.fed[given.seq].wait()
             return TakenResult()
         if given.seq > len(open.chunks):
             raise RpcError(
@@ -254,16 +265,24 @@ class ReplyStreams:
                 f"Chunk {given.seq} of the reply {given.id!r} comes before chunk {len(open.chunks)}.",
             )
         open.chunks.append(digest)
+        fed = anyio.Event()
+        open.fed.append(fed)
         try:
-            await open.stream.feed(data)
+            async with open.feeding:
+                await open.stream.feed(data)
         except RuntimeError:
             raise RpcError(
                 INVALID_REQUEST, f"The reply {given.id!r} has already been ended."
             ) from None
+        finally:
+            fed.set()
         return TakenResult()
 
     async def end(self, given: StreamParams) -> TakenResult:
-        await self._find(given.id).stream.end()
+        open = self._find(given.id)
+        # after the chunks being fed, so that none is left out
+        async with open.feeding:
+            await open.stream.end()
         return TakenResult()
 
     async def abort(self, given: StreamParams) -> TakenResult:
@@ -347,7 +366,10 @@ def _output(output: Output) -> StreamOutput:
     if isinstance(output, Release):
         return ReleaseOutput(data=base64.b64encode(output.data).decode("ascii"))
     if isinstance(output, ErrorEvent):
-        return ErrorEventOutput(data=base64.b64encode(output.data).decode("ascii"))
+        return ErrorEventOutput(
+            data=base64.b64encode(output.data).decode("ascii"),
+            not_judged=output.not_judged,
+        )
     if isinstance(output, Finished):
         return FinishedOutput()
     assert isinstance(output, Refuse)

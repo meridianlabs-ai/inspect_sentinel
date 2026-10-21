@@ -562,7 +562,7 @@ async def test_a_turn_refused_after_a_keepalive_went_out_is_an_error_event() -> 
 
     # the keepalive sent the status, so the refusal can't have one of its own
     assert outputs[0] == Release(KEEPALIVE)
-    assert isinstance(outputs[-1], ErrorEvent)
+    assert isinstance(outputs[-1], ErrorEvent) and outputs[-1].not_judged is None
     _read_with_sdk("chat", _sent(outputs))
 
 
@@ -821,3 +821,31 @@ async def test_a_turn_whose_client_goes_while_text_waits_to_go_out_is_not_judged
 
     assert seen == []
     assert await _result(handler) == ("not_judged", "cut_off")
+
+
+@protocol
+def fails_after(seconds: float) -> Protocol:
+    """Fail on every call, after `seconds`."""
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        await anyio.sleep(seconds)
+        raise RuntimeError("The monitor failed.")
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_turn_not_judged_after_a_keepalive_says_so_in_its_error_event() -> None:
+    # nothing but keepalives went out, so a proxy that lets a reply it couldn't
+    # have judged through may still let this one through
+    asked, reply = _exchange("chat", inspect=False)
+    handler = Handler(fails_after(0.2), release="early", keepalive=0.02)
+    await handler.request(asked)
+
+    outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
+
+    assert outputs[0] == Release(KEEPALIVE)
+    last = outputs[-1]
+    assert isinstance(last, ErrorEvent) and last.not_judged == "error"

@@ -2662,3 +2662,54 @@ def test_a_slow_provider_is_not_held_to_the_sidecar_s_timeout(
     assert [_written(chunk) for chunk in reply] == [
         _written(chunk) for chunk in _CHAT.stream()
     ]
+
+
+_SIDECAR_ERROR = b'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "Not judged."}}\n\n'
+
+
+@pytest.mark.parametrize(
+    ("fallback", "not_judged", "let_through"),
+    [
+        ("fail_open", "error", True),
+        ("fail_closed", "error", False),
+        ("fail_open", None, False),
+    ],
+    ids=["not judged, let through", "not judged, refused", "refused"],
+)
+def test_a_reply_kept_alive_then_not_judged_goes_as_unjudged_replies_do(
+    monkeypatch: pytest.MonkeyPatch,
+    fallback: str,
+    not_judged: str | None,
+    let_through: bool,
+) -> None:
+    ended: dict[str, Any] = {
+        "kind": "error_event",
+        "data": base64.b64encode(_SIDECAR_ERROR).decode(),
+    }
+    if not_judged is not None:
+        ended["not_judged"] = not_judged
+
+    def answer(method: str, params: dict[str, Any]) -> Any:
+        if method == "judge_request":
+            return {"action": "pass"}
+        if method == "next_release":
+            if params["after"] == 0:
+                kept_alive = base64.b64encode(_KEEPALIVE).decode()
+                return {
+                    "position": 1,
+                    "outputs": [{"kind": "release", "data": kept_alive}],
+                }
+            if params["after"] == 1:
+                return {"position": 2, "outputs": [ended]}
+            return {"position": params["after"], "outputs": []}
+        return {"taken": True}
+
+    with _serving(_stand_in(answer)) as url:
+        guardrail = _make(monkeypatch, url, unreachable_fallback=fallback)
+        _, reply = _within(
+            10, lambda: _exchange(guardrail, _MESSAGES, _data(_MESSAGES), True)
+        )
+
+    # only keepalives went out, so the setting for a reply not judged holds
+    expected = b"".join(_MESSAGES.stream()) if let_through else _SIDECAR_ERROR
+    assert b"".join(reply) == _KEEPALIVE + expected

@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from ._exchange import Refuse
 from ._registration import UnregisteredSampleError
+from ._state import NotJudged
 from ._wire import Format, StreamEvent, UnreadableError
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,17 @@ logger = logging.getLogger(__name__)
 
 class TimeLimitError(TimeoutError):
     """The sentinel didn't finish judging a request or a reply within the handler's time limit, and was cancelled."""
+
+
+def not_judged(ex: Exception) -> NotJudged:
+    """Why a request or a reply wasn't judged, from what judging it raised."""
+    if isinstance(ex, UnreadableError):
+        return "unreadable"
+    if isinstance(ex, UnregisteredSampleError):
+        return "unregistered"
+    if isinstance(ex, TimeLimitError):
+        return "time_limit"
+    return "error"
 
 
 _ANTHROPIC_ERRORS = {
