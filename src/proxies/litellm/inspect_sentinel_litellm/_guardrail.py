@@ -92,6 +92,9 @@ _PATH = "/proxy/v1"
 # a call to `next_release` waits up to 20 seconds for output, and is given as
 # long again to answer
 _POLL_TIMEOUT = aiohttp.ClientTimeout(total=40)
+# a call to `reply_chunk` waits while the caller is slow to read what the
+# sidecar has released, which says nothing of how long the sidecar takes
+_CHUNK_TIMEOUT = aiohttp.ClientTimeout()
 # how much a reply stream reads ahead of what it has handed to the sidecar
 _PENDING_BYTES = 1024 * 1024
 # the size a chunk this can't write counts as, for what is kept of it
@@ -815,6 +818,7 @@ class _Relay:
                             "seq": seq,
                             "data": base64.b64encode(data).decode("ascii"),
                         },
+                        _CHUNK_TIMEOUT,
                     )
                     seq += 1
                     self._to_upload.set()

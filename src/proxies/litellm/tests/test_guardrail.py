@@ -413,10 +413,11 @@ def _scripted(
     *answers: Any,
     status: int = 200,
     streamed: list[Any] | None = None,
+    chunk_wait: float = 0.0,
 ) -> Starlette:
     """A stand-in for the sidecar that keeps the calls made to it and gives these answers in turn.
 
-    A reply handed over as a reply stream is kept in `calls` as the `judge_reply` that would have held it whole, and answered from the next answer as the stream's outputs: the reply as handed over, then its end, for `pass`; the replacement, then its end, for `replace`; and a refusal, or the error, as it is. The calls of each stream are kept in `streamed`.
+    A reply handed over as a reply stream is kept in `calls` as the `judge_reply` that would have held it whole, and answered from the next answer as the stream's outputs: the reply as handed over, then its end, for `pass`; the replacement, then its end, for `replace`; and a refusal, or the error, as it is. The calls of each stream are kept in `streamed`. Each `reply_chunk` is answered after `chunk_wait` seconds, as the sidecar answers while the caller is slow to read what it released.
     """
     left = list(answers)
     streams: dict[str, dict[str, Any]] = {}
@@ -437,6 +438,7 @@ def _scripted(
             return JSONResponse(taken)
         stream = streams[params["id"]]
         if method == "reply_chunk":
+            await asyncio.sleep(chunk_wait)
             stream["data"] += base64.b64decode(params["data"])
             return JSONResponse(taken)
         if method == "end_reply":
@@ -2724,6 +2726,22 @@ def test_a_slow_provider_is_not_held_to_the_sidecar_s_timeout(
         _written(chunk) for chunk in _CHAT.stream()
     ]
 
+
+def test_a_caller_slow_to_read_is_not_held_to_the_sidecar_s_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the sidecar answers a chunk only once there is room for its output,
+    # which a caller slow to read keeps from it
+    passed = _result({"action": "pass"})
+
+    with _serving(_scripted([], passed, passed, chunk_wait=0.3)) as url:
+        _, reply = _exchange(
+            _make(monkeypatch, url, timeout=0.1), _CHAT, _data(_CHAT), True
+        )
+
+    assert [_written(chunk) for chunk in reply] == [
+        _written(chunk) for chunk in _CHAT.stream()
+    ]
 
 
 _SIDECAR_ERROR = b'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "Not judged."}}\n\n'
