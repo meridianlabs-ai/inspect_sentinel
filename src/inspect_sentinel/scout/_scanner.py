@@ -14,6 +14,7 @@ from inspect_sentinel import (
     BeforeGenerate,
     BeforeToolCall,
     Decision,
+    HumanPolicy,
     HumanStandIn,
     MonitorFailedError,
     ReplayReport,
@@ -39,7 +40,7 @@ from ._select import (
     selector_from,
     stand_in_from,
 )
-from ._steps import conversation_depths, transcript_steps
+from ._steps import transcript_steps, within_depth
 
 Stage: TypeAlias = Literal["model_input", "model_output", "tool_call", "tool_result"]
 
@@ -82,7 +83,7 @@ def as_scanner(
 
     Each transcript's steps are rebuilt as the sentinel would have been handed them live, the sentinel runs over them with `replay_monitor()`, and each step at `stage` becomes one `Result` in the transcript's resultset, so `scan_results_df(..., rows="results")` gives one row per step. A result's metadata holds the step's `step_id` and `stage`, how the transcript's agent turns were established (`turns`: `"recorded"` from the log, `"inferred"`, or `"stored"` from a stored timeline) and, when the step reached `human()`, where the answer came from (`human`). Its references cite the step's model event or message first, then what the report cites.
 
-    For a monitor, a result's `value` is its suspicion, a number or a dict by dimension, `None` where it abstained, and the observation's own metadata is under `metadata`. For a protocol, it is the root's decision: `value` is whether the step was flagged (`reject`, `modify` or `terminate`; `escalate` declines to decide, so it is not), `answer` the action, and the metadata holds `audit`, `modified` and the children's reports. A monitor that raises makes the transcript's result an error.
+    For a monitor, a result's `value` is its suspicion, a number or a dict by dimension, `None` where it abstained, and the observation's own metadata is under `metadata`. For a protocol, it is the root's decision: `value` is whether the step was flagged (`reject`, `modify` or `terminate`; `escalate` declines to decide, so it is not), `answer` the action, and the metadata holds `audit`, `modified` and the children's reports. A monitor that raises, anywhere in the sentinel, makes the transcript's result an error, even where a protocol went on without it.
 
     Every stage the sentinel watches runs, in order within a unit, as live, so a monitor whose stages share state sees the same state; `stage` only selects which results are returned. The sentinel is recorded in the scan as the configuration an eval log records, with the modules that define its monitors and protocols (by name, and by file for a script), so a scan can be resumed and run in other processes.
 
@@ -96,15 +97,19 @@ def as_scanner(
         steps: Which steps to run the sentinel at: a `steps_in()` label table, or a selector `(transcript_id, step) -> bool` registered with `@step_selector` (or its registered name). Every step is still rebuilt; only the chosen ones run, so a monitor's state does not see the others.
         human: How `human()` is answered where no answer was recorded at the step: `"recorded"`, the fail-closed answer; `"fail_closed"`, the fail-closed answer even where one was recorded; or a stand-in registered with `@human_stand_in` (or its registered name).
         timeline: The stored timeline whose agent spans and branches are the conversations, such as Petri's `"target"`, in place of the log's span tree. Raises for a transcript with no timeline of that name.
-        depth: Run only conversations at most this deep, counting as `llm_scanner` does: 1 for the sample's own conversation and top-level agents, one more for each agent above. All conversations when None.
-        compaction: Which compaction segments of each conversation to run: `"all"`, `"last"`, or that many of the latest.
+        depth: Run only conversations at most this deep in the timeline, counting as `llm_scanner` does: only spans that make model calls count, so 1 is the outermost such span on each branch. All conversations when None.
+        compaction: Which compaction segments of each conversation to run: `"all"`, `"last"`, or that many of the latest, at least 1.
 
     Raises:
-        ValueError: If `stage` is missing or not a stage the sentinel watches, the sentinel is several monitors and no protocol, or `depth` is less than 1.
+        ValueError: If `stage` is missing or not a stage the sentinel watches, the sentinel is several monitors and no protocol, or `depth` or `compaction` is less than 1.
         TypeError: If `steps` or `human` is a callable not registered for a scan.
     """
     if depth is not None and depth < 1:
         raise ValueError(f"depth must be at least 1; got {depth}.")
+    if not isinstance(compaction, str) and compaction < 1:
+        raise ValueError(
+            f"compaction must be 'all', 'last' or at least 1 segment; got {compaction}."
+        )
     config = (
         sentinel
         if isinstance(sentinel, SentinelConfig)
@@ -155,25 +160,22 @@ def sentinel_replay(
     depth: int | None,
     compaction: Literal["all", "last"] | int,
 ) -> Scanner[Transcript]:
-    # a process rebuilding the scanner, as a resumed scan does, has not
-    # imported the modules that register the sentinel's factories
-    import_factory_sources(sources)
-    root = sentinel_from_config(SentinelConfig.model_validate_json(sentinel))
-    selector = selector_from(steps)
-    policy = stand_in_from(human)
-    contexts = Contexts()
+    rebuilt = _Rebuilt(sentinel, sources, steps, human)
 
     async def scan(transcript: Transcript) -> Result | list[Result]:
+        root, selector, policy, contexts = rebuilt.get()
         eval_info = await contexts.eval_info(transcript)
         built, turns = transcript_steps(transcript, eval_info, timeline)
         segments = _segments(built, compaction)
-        depths = conversation_depths(transcript, timeline) if depth is not None else {}
+        shallow = (
+            within_depth(transcript, timeline, depth) if depth is not None else None
+        )
         transcript_id = transcript.transcript_id
 
         def select(step: ReplayStep) -> bool:
             if step.segment not in segments:
                 return False
-            if depth is not None and depths.get(step.step.conversation, 1) > depth:
+            if shallow is not None and step.step.conversation not in shallow:
                 return False
             return selector is None or selector(transcript_id, step)
 
@@ -191,7 +193,9 @@ def sentinel_replay(
         results: list[Result] = []
         label = ""
         for report in reports:
-            failed = [f for f in report.failed if f.path == report.path]
+            # any failure at or below the scanned instance fails the transcript,
+            # including one a protocol went on without
+            failed = [f for f in report.failed if within(f.path, report.path)]
             if failed:
                 raise MonitorFailedError(failed)
             label = report.path or report.name
@@ -201,10 +205,52 @@ def sentinel_replay(
             return transcript_result(results, label)
         return results
 
-    if timeline is not None:
-        # a stored timeline is read only when a scanner asks Scout for timelines
+    if timeline is not None or depth is not None:
+        # Scout reads timelines only for a scanner that asks for them
         setattr(scan, SCANNER_TIMELINE_NEEDED_ATTR, True)
     return scan
+
+
+class _Rebuilt:
+    # The sentinel, selector and stand-in, rebuilt from the scan's recorded
+    # parameters in each process the scan runs in, on its first transcript.
+    # Scout sends the scanner to its worker processes by pickling it, and a
+    # sentinel's functions cannot be pickled, so only the parameters travel.
+    def __init__(
+        self,
+        sentinel: str,
+        sources: list[dict[str, str | None]],
+        steps: Any,
+        human: str,
+    ) -> None:
+        self._sentinel = sentinel
+        self._sources = sources
+        self._steps = steps
+        self._human = human
+        self._built: (
+            tuple[Sentinels, StepSelector | None, HumanPolicy, Contexts] | None
+        ) = None
+
+    def get(self) -> tuple[Sentinels, StepSelector | None, HumanPolicy, Contexts]:
+        if self._built is None:
+            config = SentinelConfig.model_validate_json(self._sentinel)
+            # a process that has not imported the modules registering the
+            # sentinel's factories, such as a worker or a resumed scan
+            import_factory_sources(config, self._sources)
+            self._built = (
+                sentinel_from_config(config),
+                selector_from(self._steps),
+                stand_in_from(self._human),
+                Contexts(),
+            )
+        return self._built
+
+    def __getstate__(self) -> dict[str, Any]:
+        return {**self.__dict__, "_built": None}
+
+
+def within(path: str, scanned: str) -> bool:
+    return scanned == "" or path == scanned or path.startswith(scanned + "/")
 
 
 def _result(report: ReplayReport, citations: Citations, turns: str) -> Result:

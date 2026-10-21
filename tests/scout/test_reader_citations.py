@@ -192,3 +192,59 @@ async def test_a_failure_at_another_stage_fails_the_read() -> None:
 
     with pytest.raises(MonitorFailedError, match="broke"):
         await scan(Transcript(transcript_id=SAMPLE, events=events))
+
+
+@pytest.mark.anyio
+async def test_a_superseded_decision_is_read_as_one() -> None:
+    def decided(status: Any, action: Any) -> SentinelEvent:
+        return SentinelEvent(
+            factory="inspect_sentinel/check",
+            path="",
+            function="check",
+            step_id="c1",
+            conversation=SAMPLE,
+            stage="tool_call",
+            kind="decision",
+            status=status,
+            action=action,
+        )
+
+    results = await read(
+        "tool_call", [decided("reported", "terminate"), decided("superseded", "reject")]
+    )
+
+    assert [(r.answer, (r.metadata or {}).get("status")) for r in results] == [
+        ("terminate", None),
+        ("reject", "superseded"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_decision_with_no_action_is_a_malformed_log() -> None:
+    from inspect_ai._sentinel._integration import MalformedLogError
+
+    # a log that skipped validation: the model refuses to build one
+    events: list[Event] = [
+        SentinelEvent.model_construct(
+            factory="inspect_sentinel/check",
+            path="",
+            function="check",
+            step_id="c1",
+            conversation=SAMPLE,
+            stage="tool_call",
+            kind="decision",
+            status="reported",
+            action=None,
+            suspicion=None,
+            span_id=None,
+            references=[],
+        )
+    ]
+
+    scan: Any = as_reader("", stage="tool_call")
+    transcript = Transcript.model_construct(
+        transcript_id=SAMPLE, events=events, messages=[], timelines=[]
+    )
+
+    with pytest.raises(MalformedLogError, match="has no action"):
+        await scan(transcript)

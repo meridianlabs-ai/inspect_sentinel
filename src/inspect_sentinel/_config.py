@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import inspect
@@ -266,7 +267,7 @@ def _lookup(name: str) -> list[_Factory]:
 def factory_sources(config: SentinelConfig) -> list[dict[str, str | None]]:
     """Where the factories a configuration names are defined, so another process can import them before `sentinel_from_config()` rebuilds it.
 
-    A factory registers itself when its module is imported, and a process that rebuilds a configuration, such as a resumed scan, has not imported the author's modules. Each source is the module's name and its file, for a module that does not import by name, such as a script run as `__main__`. Factories in this package are left out, since importing it registers them.
+    A factory registers itself when its module is imported, and a process that rebuilds a configuration, such as a resumed scan or a worker, has not imported the author's modules. Each source is the module's name and its file, relative to the working directory where it is under it, for a module that does not import by name, such as a script run as `__main__`. A module with no file, such as one typed into a REPL, notebook or `python -c`, has none, so only the process that defined it can rebuild the configuration. Factories in this package are left out, since importing it registers them.
 
     Args:
         config: The configuration, as `config_from_sentinel()` records it.
@@ -277,63 +278,127 @@ def factory_sources(config: SentinelConfig) -> list[dict[str, str | None]]:
             module = getattr(found.factory, "__module__", None)
             if module is None or module.split(".")[0] == PACKAGE:
                 continue
-            loaded = sys.modules.get(module)
-            sources[module] = getattr(loaded, "__file__", None)
+            file = getattr(sys.modules.get(module), "__file__", None)
+            sources[module] = _relative(file) if file and Path(file).is_file() else None
     return [{"module": m, "file": f} for m, f in sorted(sources.items())]
 
 
-def import_factory_sources(sources: Sequence[Mapping[str, str | None]]) -> None:
-    """Import the modules `factory_sources()` named, so their factories are registered: by name, else from the file, as for a script run as `__main__`.
+def import_factory_sources(
+    config: SentinelConfig, sources: Sequence[Mapping[str, str | None]]
+) -> None:
+    """Import what a process lacks to rebuild a configuration: the modules `factory_sources()` named, for a factory not yet registered here, by name, else from the recorded file.
+
+    Nothing is imported in a process where every factory the configuration names is registered, such as the one that recorded it, so an author's script or notebook is never run again there. A `__main__` source counts as imported when this process's `__main__` is its file.
 
     Args:
-        sources: The sources, as `factory_sources()` returned them.
+        config: The configuration.
+        sources: Its sources, as `factory_sources()` returned them.
 
     Raises:
-        ValueError: If a module neither imports by name nor has a file that exists.
+        ValueError: If a factory is still not registered after importing the sources, naming it.
     """
+    if not _unregistered(config):
+        return
     for source in sources:
-        module, file = source["module"], source.get("file")
-        assert module is not None
-        if module != "__main__":
-            if module in sys.modules:
-                continue
-            try:
-                importlib.import_module(module)
-                continue
-            except ImportError:
-                if file is None:
-                    raise
-        if file is None or not exists(file):
-            raise ValueError(
-                f"Cannot import {module!r}, which defines a monitor or protocol in the configuration: it does not import by name, and its file {file!r} does not exist."
-            )
-        _import_file(module, file)
+        module, file = source.get("module"), source.get("file")
+        if module is not None:
+            _import_source(module, file)
+    missing = _unregistered(config)
+    if missing:
+        raise ValueError(
+            f"Cannot rebuild the sentinel in this process: {', '.join(repr(m) for m in missing)} is not a registered monitor or protocol, and importing the modules that defined its factories did not register it. A factory defined in a REPL, notebook or `python -c` can be rebuilt only in the process that defined it; define it in a module or script."
+        )
 
 
-def _import_file(module: str, file: str) -> None:
-    name = f"_sentinel_main_{Path(file).stem}" if module == "__main__" else module
+def _unregistered(config: SentinelConfig) -> list[str]:
+    return sorted(
+        {n for n in _entry_names(config.model_dump(mode="json")) if not _find_all(n)}
+    )
+
+
+def _import_source(module: str, file: str | None) -> None:
+    path = _absolute(file) if file is not None else None
+    if module == "__main__":
+        main = getattr(sys.modules.get("__main__"), "__file__", None)
+        if path is None or (main is not None and Path(main).resolve() == path):
+            return
+        _import_file(path)
+        return
+    if module in sys.modules:
+        return
+    try:
+        importlib.import_module(module)
+    except ModuleNotFoundError as ex:
+        # only the module itself missing from the path, not one it imports
+        if path is None or ex.name is None or not module.startswith(ex.name):
+            raise
+        _import_file(path)
+
+
+def _import_file(path: Path) -> None:
+    # under a name of its own, so it never stands in for a module of the
+    # same name, nor runs twice
+    digest = hashlib.sha256(str(path).encode()).hexdigest()[:8]
+    name = f"_sentinel_source_{path.stem}_{digest}"
     if name in sys.modules:
         return
-    spec = importlib.util.spec_from_file_location(name, file)
+    if not path.is_file():
+        raise ValueError(
+            f"Cannot import {str(path)!r}, which defines a monitor or protocol in the configuration: the file does not exist."
+        )
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
-        raise ValueError(f"Cannot import {module!r} from {file!r}.")
+        raise ValueError(f"Cannot import {str(path)!r}.")
     loaded = importlib.util.module_from_spec(spec)
     sys.modules[name] = loaded
     spec.loader.exec_module(loaded)
 
 
-def _entry_names(value: object) -> Iterator[str]:
-    # every entry name in a configuration, nested entries included
-    if isinstance(value, Mapping):
-        mapping = cast(Mapping[str, object], value)
+def _relative(file: str) -> str:
+    path = Path(file).resolve()
+    try:
+        return path.relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _absolute(file: str) -> Path:
+    return (Path.cwd() / file).resolve()
+
+
+def _entry_names(layer: object) -> Iterator[str]:
+    # every monitor and protocol a configuration names: its entries, the
+    # layers nested under their parameters, and the instances recorded in
+    # their params
+    if isinstance(layer, Mapping):
+        mapping = cast(Mapping[str, object], layer)
         name = mapping.get("name")
-        if isinstance(name, str):
-            yield name
-        for item in mapping.values():
-            yield from _entry_names(item)
+        if not isinstance(name, str):
+            for entry in mapping.values():
+                yield from _entry_names(entry)
+            return
+        yield name
+        for key, value in mapping.items():
+            if key == "params":
+                yield from _instance_names(value)
+            elif key not in ENTRY_FIELDS:
+                yield from _entry_names(value)
+    elif isinstance(layer, list):
+        for entry in cast(list[object], layer):
+            yield from _entry_names(entry)
+
+
+def _instance_names(value: object) -> Iterator[str]:
+    if _is_sentinel_dict(value):
+        recorded = cast(RegistryDict, value)
+        yield recorded["name"]
+        yield from _instance_names(recorded["params"])
+    elif isinstance(value, Mapping):
+        for item in cast(Mapping[str, object], value).values():
+            yield from _instance_names(item)
     elif isinstance(value, list):
         for item in cast(list[object], value):
-            yield from _entry_names(item)
+            yield from _instance_names(item)
 
 
 def config_from_sentinel(sentinels: Sentinels) -> SentinelConfig:

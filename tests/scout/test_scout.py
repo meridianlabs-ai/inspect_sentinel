@@ -21,7 +21,13 @@ from inspect_ai.event import (
     TimelineSpan,
 )
 from inspect_ai.log import EvalLog, write_eval_log
-from inspect_ai.model import ChatMessageUser, ModelOutput, get_model
+from inspect_ai.model import (
+    ChatMessage,
+    ChatMessageUser,
+    ModelOutput,
+    execute_tools,
+    get_model,
+)
 from inspect_ai.solver import Generate, Solver, TaskState, generate, solver, use_tools
 from inspect_ai.tool import Tool, ToolError, tool
 from inspect_ai.util._span import span
@@ -89,13 +95,32 @@ def call(x: int, call_id: str | None = None) -> ModelOutput:
     return output
 
 
+@solver
+def with_helper() -> Solver:
+    """A sub-agent that makes one tool call in a conversation of its own, before the agent's own turns."""
+
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        async with span("helper", type="agent"):
+            messages: list[ChatMessage] = [ChatMessageUser(content="help me add")]
+            output = await get_model().generate(messages, tools=[addition()])
+            messages.append(output.message)
+            await execute_tools(messages, [addition()])
+        return state
+
+    return solve
+
+
 def run(
     log_dir: Path,
     turns: Sequence[Sequence[ModelOutput]],
     sentinel: Sentinels | None,
     samples: Sequence[Sample] | None = None,
+    *,
+    helpers: Sequence[ModelOutput] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> EvalLog:
-    # one sample per list of tool-call outputs, each ending with a reply
+    # one sample per list of tool-call outputs, each ending with a reply, after
+    # its helper's tool call where there are helpers
     found = (
         list(samples)
         if samples is not None
@@ -105,14 +130,23 @@ def run(
     )
     outputs = [
         output
-        for calls in turns
-        for output in [*calls, ModelOutput.from_content("mockllm/model", "done")]
+        for index, calls in enumerate(turns)
+        for output in [
+            *([helpers[index]] if helpers is not None else []),
+            *calls,
+            ModelOutput.from_content("mockllm/model", "done"),
+        ]
     ]
     [log] = eval(
         Task(
             dataset=found,
-            solver=[use_tools(addition()), generate()],
+            solver=[
+                use_tools(addition()),
+                *([with_helper()] if helpers is not None else []),
+                generate(),
+            ],
             sentinel=sentinel,
+            metadata=metadata,
         ),
         model=get_model("mockllm/model", custom_outputs=outputs),
         log_dir=str(log_dir),
@@ -194,6 +228,8 @@ def test_replay_and_read_agree_through_scout(tmp_path: Path, stage: Stage) -> No
         [[call(1), call(2)], [call(3)], [call(4)]],
         observe_only(fidelity_probe()),
         samples,
+        helpers=[call(5, f"sub{i}") for i in range(3)],
+        metadata={"difficulty": "hard"},
     )
 
     found = scanned(
@@ -206,12 +242,9 @@ def test_replay_and_read_agree_through_scout(tmp_path: Path, stage: Stage) -> No
     replayed = keyed(found["replay"], "metadata.metadata")
     read = keyed(found["read"], "metadata.metadata")
     assert replayed.keys() == read.keys()
-    assert (
-        len(read)
-        == {"model_input": 7, "model_output": 7, "tool_call": 4, "tool_result": 4}[
-            stage
-        ]
-    )
+    # each sample's turns and its helper's
+    expected = {"model_input": 10, "model_output": 10, "tool_call": 7}
+    assert len(read) == expected.get(stage, 7)
     for key, recorded in read.items():
         assert replayed[key]["eval"] == recorded["eval"], key
         differ = {
@@ -220,6 +253,18 @@ def test_replay_and_read_agree_through_scout(tmp_path: Path, stage: Stage) -> No
             if replayed[key]["step"].get(name) != digest
         }
         assert not differ, (key, differ)
+    for kind in ("message", "event"):
+        cited = {k: references(r, kind) for k, r in by_key(found["replay"]).items()}
+        assert cited == {
+            k: references(r, kind) for k, r in by_key(found["read"]).items()
+        }
+    assert all(
+        references(r, "message") or references(r, "event") for r in found["read"]
+    )
+
+
+def by_key(found: list[Row]) -> dict[tuple[str, str], Row]:
+    return {(row["transcript_id"], row["metadata.step_id"]): row for row in found}
 
 
 @monitor
@@ -820,3 +865,384 @@ def test_a_lone_monitor_reports_and_fails_alike_bare_or_in_a_container(
     else:
         assert status.complete
         assert (row["value"], row["label"]) == (0.8, label)
+
+
+def scan_rows(
+    logs: Path, scans: Path, processes: int | None, **scanners: Any
+) -> tuple[bool, dict[str, list[Row]]]:
+    status = scan(
+        scanners=scanners,
+        transcripts=transcripts_from(str(logs)),
+        scans=str(scans),
+        display="none",
+        max_processes=processes,
+    )
+    return status.complete, rows(status.location)
+
+
+@pytest.mark.parametrize("processes", [2, None])
+def test_a_scan_in_worker_processes_gives_the_rows_one_process_gives(
+    tmp_path: Path, processes: int | None
+) -> None:
+    log = run(
+        tmp_path / "logs",
+        [[call(9, "a"), call(4, "b")], [call(8, "c")], [call(2, "d")]],
+        None,
+    )
+    assert log.samples is not None
+    labels = [(s.uuid, "a") for s in log.samples] + [
+        (log.samples[1].uuid, "c"),
+        (log.samples[2].uuid, "d"),
+    ]
+
+    def scanner() -> Any:
+        sentinel = sequential(
+            [threshold(by_argument(), escalate_at=0.5), human(stages=["tool_call"])]
+        )
+        return as_scanner(sentinel, steps=steps_in(labels), human=approves)
+
+    one, single = scan_rows(tmp_path / "logs", tmp_path / "one", 1, s=scanner())
+    many, workers = scan_rows(
+        tmp_path / "logs", tmp_path / "many", processes, s=scanner()
+    )
+
+    assert one and many
+    for column in ("answer", "metadata.human"):
+        assert keyed(workers["s"], column) == keyed(single["s"], column)
+    assert len(single["s"]) == 3
+
+
+def test_a_monitor_typed_into_python_c_scans(tmp_path: Path) -> None:
+    run(tmp_path / "logs", [[call(3)]], None)
+    code = f"""
+from inspect_scout import scan, transcripts_from
+from inspect_sentinel import BeforeToolCall, Context, MonitorGroup, Observation, monitor
+from inspect_sentinel.scout import as_scanner
+
+@monitor
+def typed_in() -> MonitorGroup:
+    async def before(context: Context, step: BeforeToolCall) -> Observation:
+        return Observation.score(0.3)
+
+    return MonitorGroup(before)
+
+status = scan(
+    scanners={{"s": as_scanner(typed_in())}},
+    transcripts=transcripts_from({str(tmp_path / "logs")!r}),
+    scans={str(tmp_path / "scans")!r},
+    display="none",
+    max_processes=1,
+)
+print(status.complete)
+"""
+
+    done = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=tmp_path
+    )
+
+    assert done.returncode == 0, done.stderr[-3000:]
+    assert done.stdout.split()[-1] == "True"
+
+
+SCRIPT = """
+import sys
+from pathlib import Path
+
+from inspect_scout import scan, transcripts_from
+from inspect_sentinel import BeforeToolCall, Context, MonitorGroup, Observation, monitor
+from inspect_sentinel.scout import as_scanner
+
+# a side effect of running the script, which must happen once
+with open(sys.argv[1], "a") as counter:
+    counter.write("ran\\n")
+
+
+@monitor
+def scripted() -> MonitorGroup:
+    async def before(context: Context, step: BeforeToolCall) -> Observation:
+        return Observation.score(0.3)
+
+    return MonitorGroup(before)
+
+
+if __name__ == "__main__":
+    status = scan(
+        scanners={"s": as_scanner(scripted())},
+        transcripts=transcripts_from(sys.argv[2]),
+        scans=sys.argv[3],
+        display="none",
+        max_processes=1,
+    )
+    print(status.complete)
+"""
+
+
+def test_a_scripts_top_level_code_runs_once(tmp_path: Path) -> None:
+    run(tmp_path / "logs", [[call(3)]], None)
+    (tmp_path / "authoring.py").write_text(SCRIPT)
+    counter = tmp_path / "counter"
+
+    done = subprocess.run(
+        [
+            sys.executable,
+            "authoring.py",
+            str(counter),
+            str(tmp_path / "logs"),
+            str(tmp_path / "scans"),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+
+    assert done.returncode == 0, done.stderr[-3000:]
+    assert done.stdout.split()[-1] == "True"
+    assert counter.read_text().splitlines() == ["ran"]
+
+
+def test_a_failure_a_protocol_went_on_without_fails_both_modes(tmp_path: Path) -> None:
+    marker = tmp_path / "marker"
+    marker.touch()
+
+    def sentinel() -> Any:
+        return sequential(
+            [breaks_while(str(marker)), threshold(by_argument(), reject_at=0.9)]
+        )
+
+    run(tmp_path / "logs", [[call(2)]], sentinel())
+
+    status = scan(
+        scanners={
+            "replay": as_scanner(sentinel()),
+            "read": as_reader("", stage="tool_call"),
+        },
+        transcripts=transcripts_from(str(tmp_path / "logs")),
+        scans=str(tmp_path / "scans"),
+        display="none",
+        max_processes=1,
+    )
+
+    assert not status.complete
+    found = rows(status.location)
+    for name in ("replay", "read"):
+        [row] = found[name]
+        assert "interrupted" in row["scan_error"], name
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "from inspect_ai._util.entrypoints import ensure_entry_points; ensure_entry_points()",
+        "from inspect_ai import Task, eval; from inspect_ai.dataset import Sample; "
+        "eval(Task(dataset=[Sample(input='x')]), model='mockllm/model', display='none', log_dir=sys.argv[1])",
+    ],
+)
+def test_loading_inspect_ai_entry_points_does_not_load_scout(
+    tmp_path: Path, code: str
+) -> None:
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"import sys; {code}; print('inspect_scout' in sys.modules)",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+
+    assert done.returncode == 0, done.stderr[-3000:]
+    assert done.stdout.split()[-1] == "False"
+
+
+def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
+    tmp_path: Path,
+) -> None:
+    log = run(tmp_path / "run", [[call(9, "a")]], observe_only(fidelity_probe()))
+    assert log.samples is not None
+    sample = log.samples[0]
+    # as an inspect_ai of that time wrote it: no origins, and the generate
+    # stages keyed by the last input message's id and the output message's
+    turns = {e.uuid: e for e in sample.events if isinstance(e, ModelEvent) and e.uuid}
+    for event in sample.events:
+        if isinstance(event, ModelEvent):
+            event.origin = None
+        elif isinstance(event, SentinelEvent) and event.step_id in turns:
+            turn = turns[event.step_id]
+            event.step_id = (
+                turn.input[-1].id or ""
+                if event.stage == "model_input"
+                else turn.output.message.id or ""
+            )
+    # a person rejected the call through human(), as a sentinel recorded it
+    sample.events.append(
+        SentinelEvent(
+            factory="inspect_sentinel/human",
+            path="human",
+            function="tool_call",
+            step_id="a",
+            conversation=sample.uuid or "",
+            stage="tool_call",
+            kind="decision",
+            status="reported",
+            action="reject",
+            explanation="not that",
+        )
+    )
+    write_eval_log(log, str(tmp_path / "logs" / "old.eval"))
+    escalating = sequential(
+        [threshold(by_argument(), escalate_at=0.5), human(stages=["tool_call"])]
+    )
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        replay=as_scanner(fidelity_probe(), stage="model_input"),
+        read=as_reader("fidelity_probe", stage="model_input"),
+        human=as_scanner(escalating),
+    )
+
+    assert (
+        keyed(found["replay"], "value").keys() == keyed(found["read"], "value").keys()
+    )
+    [row] = found["human"]
+    assert (row["answer"], row["metadata.human"], row["metadata.turns"]) == (
+        "reject",
+        "recorded",
+        "inferred",
+    )
+
+
+@solver
+def own_calls_and_an_agent() -> Solver:
+    """The sample's own generate, then one in a top-level agent."""
+
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        await get_model().generate([ChatMessageUser(content="mine")])
+        async with span("worker", type="agent"):
+            state.output = await get_model().generate(
+                [ChatMessageUser(content="the worker's")]
+            )
+        return state
+
+    return solve
+
+
+def test_depth_counts_spans_that_make_model_calls_as_scout_does(tmp_path: Path) -> None:
+    [log] = eval(
+        Task(dataset=[Sample(input="go")], solver=own_calls_and_an_agent()),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "logs"),
+        display="none",
+    )
+    assert log.samples is not None
+    sample = log.samples[0]
+    worker = next(
+        e.id
+        for e in sample.events
+        if isinstance(e, SpanBeginEvent) and e.name == "worker"
+    )
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        one=as_scanner(conversations(), depth=1),
+        two=as_scanner(conversations(), depth=2),
+        all=as_scanner(conversations()),
+    )
+
+    def seen(found: list[Row]) -> list[str]:
+        return [r["metadata.metadata"]["conversation"] for r in found]
+
+    # Scout's timeline makes the worker its top span and leaves the sample's
+    # lone call, which makes no tool calls, out of every span it scans, so
+    # llm_scanner(depth=) never reaches it; a count of agent spans would
+    assert seen(found["all"]) == [sample.uuid, worker]
+    assert seen(found["one"]) == [worker]
+    assert seen(found["two"]) == [worker]
+
+
+@tool
+def long_output() -> Tool:
+    async def execute(x: int) -> str:
+        """Return a long output.
+
+        Args:
+            x: Any number.
+        """
+        return "result " * 120
+
+    return execute
+
+
+def test_compaction_chooses_the_latest_segments(tmp_path: Path) -> None:
+    from inspect_ai.agent import react
+    from inspect_ai.model import CompactionTrim
+
+    outputs = [
+        ModelOutput.for_tool_call("mockllm/model", "long_output", {"x": i})
+        for i in range(6)
+    ] + [ModelOutput.for_tool_call("mockllm/model", "submit", {"answer": "done"})]
+    eval(
+        Task(
+            dataset=[Sample(input="go")],
+            solver=react(
+                tools=[long_output()], compaction=CompactionTrim(threshold=700)
+            ),
+        ),
+        model=get_model("mockllm/model", custom_outputs=outputs),
+        log_dir=str(tmp_path / "logs"),
+        display="none",
+    )
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        all=as_scanner(fidelity_probe(), stage="tool_call"),
+        last=as_scanner(fidelity_probe(), stage="tool_call", compaction="last"),
+        two=as_scanner(fidelity_probe(), stage="tool_call", compaction=2),
+    )
+
+    # five segments: three calls before the first compaction, one after each
+    assert [len(found[n]) for n in ("all", "last", "two")] == [7, 1, 2]
+
+
+@pytest.mark.parametrize("compaction", [0, -1])
+def test_compaction_takes_at_least_one_segment(compaction: int) -> None:
+    with pytest.raises(ValueError, match="compaction"):
+        as_scanner(by_argument(), compaction=compaction)
+
+
+def test_a_protocol_reduces_to_its_strongest_decision(tmp_path: Path) -> None:
+    run(tmp_path / "logs", [[call(2), call(9), call(3)]], None)
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        t=as_scanner(threshold(by_argument(), reject_at=0.5), unit="transcript"),
+    )
+
+    [row] = found["t"]
+    assert (row["answer"], row["value"]) == ("reject", True)
+
+
+def test_a_label_names_one_transcripts_sub_agent_step_of_a_shared_call_id(
+    tmp_path: Path,
+) -> None:
+    log = run(
+        tmp_path / "logs",
+        [[call(1)], [call(2)]],
+        None,
+        helpers=[call(5, "shared"), call(6, "shared")],
+    )
+    assert log.samples is not None
+    labelled = log.samples[1].uuid
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        s=as_scanner(by_argument(), steps=steps_in([(labelled, "shared")])),
+    )
+
+    assert keyed(found["s"], "value") == {(labelled, "shared"): 0.6}

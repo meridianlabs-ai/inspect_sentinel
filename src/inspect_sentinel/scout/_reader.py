@@ -4,6 +4,7 @@ import sys
 from bisect import bisect_left, bisect_right
 from typing import Any
 
+from inspect_ai._sentinel._integration import MalformedLogError
 from inspect_ai.event import (
     Event,
     ModelEvent,
@@ -18,7 +19,8 @@ from inspect_scout import Result, Scanner, Transcript, scanner
 from inspect_sentinel import Decision, Failed, MonitorFailedError, Observation, Report
 
 from ._results import step_result
-from ._scanner import Stage
+from ._scanner import Stage, within
+from ._steps import Conversations
 
 _EVENTS: list[Any] = ["model", "tool", "sentinel", "span_begin", "span_end"]
 
@@ -27,7 +29,7 @@ _EVENTS: list[Any] = ["model", "tool", "sentinel", "span_begin", "span_end"]
 def as_reader(path: str, *, stage: Stage | None = None) -> Scanner[Transcript]:
     """Read what a monitor or protocol reported in the runs it was attached to, as a transcript scanner: read mode.
 
-    No inference runs. Each `SentinelEvent` the instance at `path` recorded with status `reported`, and each of its decisions recorded `superseded`, becomes one `Result` in the transcript's resultset, mapped as `as_scanner()` maps a replayed report and citing the step's model event or message the same way, so the two modes' rows join on transcript, `step_id` and `stage`. A superseded decision's metadata says so (`status`). A step the instance abstained at recorded nothing, so it has no result; a step that left no model event or tool result cites nothing. A recorded failure makes the transcript's result an error, as in replay.
+    No inference runs. Each `SentinelEvent` the instance at `path` recorded with status `reported`, and each of its decisions recorded `superseded`, becomes one `Result` in the transcript's resultset, mapped as `as_scanner()` maps a replayed report and citing the step's model event or message the same way, so the two modes' rows join on transcript, `step_id` and `stage`. A superseded decision's metadata says so (`status`). A step the instance abstained at recorded nothing, so it has no result; a step that left no model event or tool result cites nothing. A failure recorded at or below `path`, at any stage, makes the transcript's result an error, as in replay, even where a protocol went on without the failed monitor.
 
     Args:
         path: The instance's path: empty for the root protocol, else as `SentinelEvent.path` records it, such as `attempt/suspicion`.
@@ -40,23 +42,26 @@ def as_reader(path: str, *, stage: Stage | None = None) -> Scanner[Transcript]:
         for event in transcript.events:
             if isinstance(event, SentinelEvent) and _below(event.path, path):
                 children.setdefault((event.stage, event.step_id), []).append(event)
+        # a failure at or below the instance, at any stage, fails the read, as
+        # in replay, including one a protocol went on without
+        failures = [
+            Failed(
+                name=event.path.rsplit("/", 1)[-1] or _name(event),
+                path=event.path,
+                function=event.function or "",
+                error=RuntimeError(event.error),
+            )
+            for event in transcript.events
+            if isinstance(event, SentinelEvent)
+            and event.status == "error"
+            and within(event.path, path)
+        ]
+        if failures:
+            raise MonitorFailedError(failures)
         results: list[Result] = []
         for index, event in enumerate(transcript.events):
             if not isinstance(event, SentinelEvent) or event.path != path:
                 continue
-            # a failure at any stage fails the read, as in replay, which runs
-            # every stage the instance watches whichever it reports
-            if event.status == "error":
-                raise MonitorFailedError(
-                    [
-                        Failed(
-                            name=path.rsplit("/", 1)[-1] or _name(event),
-                            path=path,
-                            function=event.function or "",
-                            error=RuntimeError(event.error),
-                        )
-                    ]
-                )
             if stage is not None and event.stage != stage:
                 continue
             superseded = event.status == "superseded" and event.kind == "decision"
@@ -100,14 +105,20 @@ def _name(event: SentinelEvent) -> str:
 
 def _report(event: SentinelEvent) -> Report:
     if event.kind == "observation":
-        assert event.suspicion is not None
+        if event.suspicion is None:
+            raise MalformedLogError(
+                f"The observation recorded at {event.path!r}, {event.stage} step {event.step_id!r}, has no suspicion."
+            )
         return Observation(
             suspicion=event.suspicion,
             explanation=event.explanation,
             references=list(event.references),
             metadata=event.metadata,
         )
-    assert event.action is not None
+    if event.action is None:
+        raise MalformedLogError(
+            f"The decision recorded at {event.path!r}, {event.stage} step {event.step_id!r}, has no action."
+        )
     return Decision(
         action=event.action,
         audit=event.audit,
@@ -133,8 +144,6 @@ class _Positions:
     # where each step's model event or tool call sits relative to its sentinel
     # span, indexed in one pass so each citation is a lookup
     def __init__(self, events: list[Event], sample: str) -> None:
-        self._sample = sample
-        self._spans: dict[str, SpanBeginEvent] = {}
         self._begins: dict[str, int] = {}
         self._ends: dict[str, int] = {}
         self._uuids: dict[str, ModelEvent] = {}
@@ -144,19 +153,20 @@ class _Positions:
         self._outputs: set[str] = set()
         retrying: dict[str | None, tuple[str, ModelEvent]] = {}
         self._tools: dict[str, tuple[list[int], list[ToolEvent]]] = {}
-        self._agents: dict[str | None, str] = {}
+        self._conversations = Conversations(events, sample)
         # each conversation's model events, by position
         models: dict[str, tuple[list[int], list[ModelEvent]]] = {}
         # the span of each recorded model_input step, and its conversation
         inputs: dict[str, str] = {}
         for index, event in enumerate(events):
             if isinstance(event, SpanBeginEvent):
-                self._spans[event.id] = event
                 self._begins[event.id] = index
             elif isinstance(event, SpanEndEvent):
                 self._ends[event.id] = index
             elif isinstance(event, ModelEvent):
-                at, found = models.setdefault(self._agent(event.span_id), ([], []))
+                at, found = models.setdefault(
+                    self._conversations.of(event.span_id), ([], [])
+                )
                 at.append(index)
                 found.append(event)
                 if event.uuid is not None:
@@ -223,31 +233,6 @@ class _Positions:
         self._final[first] = event
         if event.error is not None:
             retrying[event.span_id] = (first, event)
-
-    def _agent(self, span: str | None) -> str:
-        # the conversation an event is in: the innermost agent span above it,
-        # else the sample, as live; a parent_id cycle ends the walk
-        found = self._agents.get(span)
-        if found is not None:
-            return found
-        walked: list[str | None] = []
-        current = span
-        conversation = self._sample
-        while current is not None and current not in walked:
-            walked.append(current)
-            if current in self._agents:
-                conversation = self._agents[current]
-                break
-            begin = self._spans.get(current)
-            if begin is None:
-                break
-            if begin.type == "agent":
-                conversation = begin.id
-                break
-            current = begin.parent_id
-        for visited in walked:
-            self._agents[visited] = conversation
-        return conversation
 
     def _tool(self, call_id: str, at: int, *, after: bool) -> ToolEvent | None:
         found = self._tools.get(call_id)

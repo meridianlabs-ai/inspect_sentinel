@@ -3,7 +3,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from typing import Any
 
-from inspect_ai.event import ModelEvent
+from inspect_ai.event import ModelEvent, ToolEvent
 from inspect_ai.scorer import Reference
 from inspect_scout import Result, Transcript
 from pydantic import JsonValue
@@ -20,6 +20,8 @@ from inspect_sentinel import (
     Report,
     Reported,
 )
+
+from ._steps import Conversations
 
 # the actions a step is flagged for; escalate declines to decide, so it is not
 FLAGGED = ("reject", "modify", "terminate")
@@ -91,6 +93,14 @@ class Citations:
             for e in transcript.events
             if isinstance(e, ModelEvent) and e.uuid is not None
         }
+        # each tool call's tool events, by call id and conversation, as read
+        # mode finds them
+        conversations = Conversations(transcript.events, transcript.transcript_id)
+        self._tools: dict[tuple[str, str], list[ToolEvent]] = {}
+        for event in transcript.events:
+            if isinstance(event, ToolEvent):
+                key = (event.id, conversations.of(event.span_id))
+                self._tools.setdefault(key, []).append(event)
         self._positions = {
             m.id: i for i, m in enumerate(transcript.messages) if m.id is not None
         }
@@ -112,19 +122,27 @@ class Citations:
         if isinstance(step, AfterGenerate):
             message = step.output.message.id if step.output.choices else None
             return Reference(type="message", id=message) if message else None
+        return self._call(step)
+
+    def _call(self, step: BeforeToolCall | AfterToolCall) -> Reference | None:
+        # the call's tool message, as its tool event in the step's conversation
+        # records it; else, from messages alone, the result, or the first
+        # answer after the message that made the call, since a provider can
+        # reuse call ids
+        tools = self._tools.get((step.call.id, step.conversation), [])
+        if len(tools) == 1:
+            found = tools[0].message_id
+            return Reference(type="message", id=found) if found else None
+        if tools:
+            return None
         if isinstance(step, AfterToolCall):
             return (
                 Reference(type="message", id=step.result.id) if step.result.id else None
             )
-        return self._answer(step)
-
-    def _answer(self, step: BeforeToolCall) -> Reference | None:
-        # the call's tool message: the first answer after the message that
-        # made the call, since a provider can reuse call ids
-        found = self._answers.get(step.call.id)
-        if found is None:
+        answers = self._answers.get(step.call.id)
+        if answers is None:
             return None
-        positions, ids = found
+        positions, ids = answers
         after = bisect_right(positions, self._positions.get(step.message_id, -1))
         return Reference(type="message", id=ids[after]) if after < len(ids) else None
 

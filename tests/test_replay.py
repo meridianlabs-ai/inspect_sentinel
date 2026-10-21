@@ -26,6 +26,7 @@ from inspect_sentinel import (
     MonitorGroup,
     Observation,
     ReplayStep,
+    concurrent,
     handle_escalation,
     human,
     monitor,
@@ -455,3 +456,62 @@ async def test_a_step_not_selected_is_not_run_and_its_state_is_not_kept() -> Non
         if r.report is not None and r.report.report.metadata is not None
     ]
     assert seen == [1, 2]
+
+
+@pytest.mark.anyio
+async def test_a_recorded_terminate_is_kept_even_where_not_offered() -> None:
+    # human() accepts the fail-closed terminate a host gives for a closed prompt
+    step = next(s for s in segmented([1]) if s.stage == "tool_call")
+    sentinel = sequential(
+        [
+            threshold(flag(), escalate_at=0.5),
+            human(stages=["tool_call"], choices=["approve", "reject"]),
+        ]
+    )
+    answered = ReplayStep(
+        step.id,
+        step.stage,
+        step.step,
+        step.segment,
+        {"human": HumanAnswer("terminate")},
+    )
+
+    [report] = await replay_monitor(sentinel, [answered])
+
+    assert report.decision is not None and report.decision.action == "terminate"
+    assert report.human == "recorded"
+
+
+async def approves_all(
+    step: ReplayStep, escalations: Escalations, choices: Sequence[str]
+) -> HumanAnswer:
+    return HumanAnswer("approve")
+
+
+@pytest.mark.parametrize(
+    "answers,policy,source",
+    [
+        # one human() answered as recorded, the other got nobody
+        ({"first": HumanAnswer("approve")}, "recorded", "unanswered"),
+        # one answered as recorded, the other by the stand-in
+        ({"first": HumanAnswer("approve")}, approves_all, "simulated"),
+        (
+            {"first": HumanAnswer("approve"), "second": HumanAnswer("approve")},
+            "recorded",
+            "recorded",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_step_that_asked_two_people_reports_the_least_real_answer(
+    answers: dict[str, HumanAnswer], policy: Any, source: str
+) -> None:
+    step = next(s for s in segmented([1]) if s.stage == "tool_call")
+    sentinel = concurrent(
+        {"first": human(stages=["tool_call"]), "second": human(stages=["tool_call"])}
+    )
+    answered = ReplayStep(step.id, step.stage, step.step, step.segment, answers)
+
+    [report] = await replay_monitor(sentinel, [answered], human=policy)
+
+    assert report.human == source

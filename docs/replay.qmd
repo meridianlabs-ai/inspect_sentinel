@@ -67,11 +67,11 @@ Each transcript gives one result per step at `stage`, in its resultset, so the r
 | decision | whether the step was flagged: `reject`, `modify` or `terminate` | the action |
 | abstained | `None` | `None` |
 
-`escalate` declines to decide, so it is not flagged; `answer` carries it for anyone who wants to count it. A row's metadata holds `step_id`, `stage`, the report's own metadata, `turns` (how the transcript's agent turns were established) and, where the step reached `human()`, `human` (where the answer came from). Its references cite the step's model event or message first. A monitor that raises makes that transcript's result an error, so a scan never reports a failed monitor as an abstention.
+`escalate` declines to decide, so it is not flagged; `answer` carries it for anyone who wants to count it. A row's metadata holds `step_id`, `stage`, the report's own metadata, `turns` (how the transcript's agent turns were established) and, where the step reached `human()`, `human` (where the answer came from). Its references cite the step's model event or message first. A monitor that raises makes that transcript's result an error, so a scan never reports a failed monitor as an abstention. That holds for any monitor in the sentinel, even one a protocol went on without at the step, since a row cannot say that a monitor behind it failed.
 
 `unit="transcript"` reduces each transcript to one result: a monitor's highest suspicion, per dimension when structured, or a protocol's strongest decision, citing the steps that set it.
 
-The scan records the sentinel as the configuration an eval log records, so it can be resumed and run in other processes.
+The scan records the sentinel as the configuration an eval log records, with the modules and scripts that define its monitors and protocols, so it can run in Scout's worker processes and be resumed in another process, which imports them. A monitor typed into a notebook, a REPL or `python -c` scans in that process only. Resuming a scan imports the code its scan directory names, so resume only scan directories you trust.
 
 ### Models
 
@@ -155,8 +155,8 @@ Where a field's digest differs, replay handed the monitor something other than w
 
 From an Inspect log that records where each model call was made, a step holds what the live step held, rebuilt by the same code inspect_ai uses live: the model's input and tools, `history`, `agent_messages`, the earlier `human()` decisions in `human_decisions`, and at a tool stage its view and whether its output was cut. The untruncated tool output is not in a log, so `AfterToolCall.output` is `None`. A row's `turns` is `"recorded"`, or `"stored"` when `timeline=` named a stored timeline, such as Petri's `"target"`, whose branches are then the conversations.
 
-From an older log, or a transcript from another source, a step is the projection a proxy makes from the messages, and `turns` is `"inferred"`: each assistant message is a generate whose input is everything before it, and each tool call and its answering tool message are its tool steps. It does not hold the generate's tools and configuration, or a tool step's `input`, `tools`, `view` and `truncated`; `human_decisions` is `None`. A portable monitor, which already handles a proxy's steps, replays from messages unchanged.
+From an older log, or a transcript from another source, a step is the projection a proxy makes from the messages, and `turns` is `"inferred"`: each assistant message is a generate whose input is everything before it, and each tool call and its answering tool message are its tool steps. It does not hold the generate's tools and configuration, or a tool step's `input`, `tools`, `view` and `truncated`; `history` and `agent_messages` take every message for one agent's, and `human_decisions` is `None`. A portable monitor, which already handles a proxy's steps, replays from messages unchanged. An older log that ran a sentinel keys its steps as that sentinel did, so its rows join read mode's, and `human()` is answered as the person answered there; a step the old sentinel recorded no generate for, or two generates in flight at once in one conversation, can still key differently.
 
-`depth=` runs only conversations at most that deep: 1 for the sample's own conversation and top-level agents, one more for each agent above.
+`depth=` runs only conversations with a model call in a span `llm_scanner(depth=)` would reach: Scout's timeline counts only the spans that make model calls, so 1 is the outermost such span on each branch. A call the timeline treats as a helper, or leaves out of every span, is not reached at any depth.
 
 What replay cannot do is show a decision's effect: a `reject` in replay does not change the transcript, since the agent already did what it did. Replay measures reports, not interventions.
