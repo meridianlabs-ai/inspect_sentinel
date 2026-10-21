@@ -78,6 +78,9 @@ envoy = ["inspect_sentinel[sidecar]", "grpcio>=1.74.0", "protobuf>=6.31.1"]
 # are inspect-ai's own.
 anthropic = ["anthropic>=1.0.0"]
 openai = ["openai>=3.4.0"]
+# The docs tools are in `doc`, which `dev` leaves out: CI installs `dev` and
+# never builds the docs, and quarto-cli has no wheel, so installing it builds it
+# from source.
 dev = [
     "ruff",
     "pytest",
@@ -95,7 +98,8 @@ dev = [
     "types-protobuf",
     "httpx",
     "jsonschema",
-    "inspect_sentinel[doc]",
+    # a portability test checks a monitor defined in a Jupyter cell
+    "ipython",
 ]
 doc = [
     "jupyter",
