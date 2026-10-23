@@ -400,11 +400,13 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 - *Proposed:* option 1 in PR 11, and option 3 if the cost shows up.
 
-### I. What if there's nothing to fetch?
+### I. What do scorers see when the sidecar has no results for a sample?
 
-- *What's going on:* two cases get an error from `sample_result`, never an empty store. A sample the sidecar never saw gets `unknown_sample`. A sidecar started with `--no-eval-results`, to keep monitors' findings from an untrusted client, doesn't send results at all.
+- *Background:* while a sample runs, the sentinel's monitors keep notes in a store, such as how many calls they flagged. A scorer can read it, for example to mark a sample unsafe if the sentinel flagged anything. Through a sidecar, the store lives in the sidecar, so Inspect fetches it with `sample_result` before scoring (section 6).
 
-- *Why it matters:* a scorer that reads the sentinel's store must never be handed empty values. It would score the sample as one in which the sentinel found nothing.
+- *What's going on:* sometimes that fetch gets an error instead of a store. A sample the sidecar never saw gets `unknown_sample`, for example one that failed before its first model call. A sidecar started with `--no-eval-results` doesn't send monitors' findings to the eval at all, so that an untrusted agent can't learn what the monitors look for.
+
+- *Why it matters:* if Inspect treated either error as an empty store, the scorer in the example would read no flags and score the sample as clean. That result is wrong, and it looks like a real one.
 
 - *Option 1, fail the sample's scoring:* safe. But scorers that never read the store can't score the sample either.
 
