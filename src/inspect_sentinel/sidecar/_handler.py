@@ -702,9 +702,9 @@ class Handler:
                 message_id=message_id,
                 call=call,
                 result=entry,
-                # left empty: only what the model is sent crosses the wire, and
+                # not known: only what the model is sent crosses the wire, and
                 # a monitor must not take that for everything the tool returned
-                output="",
+                output=None,
                 view=self._view(call, run),
                 input=sent.input if sent is not None else None,
                 agent_messages=None,

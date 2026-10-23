@@ -1,6 +1,8 @@
 import json
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import replace
+from typing import Any, cast
 
 import anyio
 import pytest
@@ -42,7 +44,9 @@ from inspect_sentinel._runner import run_monitors, run_protocols, run_sentinel
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
 
 from ._fakes import (
+    SEQUENCES,
     ListRecorder,
+    View,
     after_generate_step,
     after_tool_call,
     before_generate_step,
@@ -96,19 +100,19 @@ ALL = StepPreprocessor(
 LISTS = ("input", "history", "agent_messages")
 
 
-def texts(messages: list[ChatMessage] | None) -> list[str] | None:
+def texts(messages: Sequence[ChatMessage] | None) -> list[str] | None:
     return None if messages is None else [m.text for m in messages]
 
 
 def tool_step(
-    input: list[ChatMessage] | None, agent_messages: list[ChatMessage] | None
+    input: Sequence[ChatMessage] | None, agent_messages: Sequence[ChatMessage] | None
 ) -> BeforeToolCall:
     return replace(
         before_tool_call("bash", cmd="ls"), input=input, agent_messages=agent_messages
     )
 
 
-def all_lists(messages: list[ChatMessage] | None) -> BeforeToolCall:
+def all_lists(messages: Sequence[ChatMessage] | None) -> BeforeToolCall:
     return replace(tool_step(messages, messages), history=messages)
 
 
@@ -153,11 +157,15 @@ async def render(
     ],
 )
 @pytest.mark.parametrize("name", LISTS)
+@pytest.mark.parametrize("sequence", SEQUENCES)
 @pytest.mark.anyio
 async def test_each_window_cuts_its_list_as_it_is(
-    window: Window, kept: list[str], name: str
+    window: Window,
+    kept: list[str],
+    name: str,
+    sequence: Callable[[list[ChatMessage]], Sequence[ChatMessage]],
 ) -> None:
-    step = all_lists(CONVERSATION)
+    step = all_lists(sequence(CONVERSATION))
     thinned = await preprocess_step(step, replace(ALL, **{f"{name}_window": window}))
     assert every(thinned) == {**every(step), name: kept}
 
@@ -166,6 +174,68 @@ async def test_each_window_cuts_its_list_as_it_is(
 def test_a_negative_window_raises(window: type[LastTurns | LastMessages]) -> None:
     with pytest.raises(ValueError, match="n >= 0"):
         window(-1)
+
+
+# a long conversation of turns: a task, then a reply and its result each turn
+LONG = [user("task")] + [
+    message
+    for turn in range(500)
+    for message in (
+        asks(f"reply {turn}", call(f"c{turn}")),
+        result(f"c{turn}", f"r{turn}"),
+    )
+]
+
+
+@pytest.mark.parametrize(
+    "window, kept",
+    [
+        (LastMessages(2), ["reply 499", "r499"]),
+        (LastTurns(2), ["reply 498", "r498", "reply 499", "r499"]),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_window_reads_only_the_end_of_a_list_it_keeps_the_end_of(
+    window: Window, kept: list[str]
+) -> None:
+    view = View(LONG)
+    thinned = await preprocess_step(
+        replace(tool_step(None, None), history=view),
+        StepPreprocessor(input_window=None, history_window=window),
+    )
+    assert texts(thinned.history) == kept
+    # a few reads at the end, not the whole conversation
+    assert view.reads < 4 * len(kept)
+
+
+@pytest.mark.parametrize("sequence", SEQUENCES)
+@pytest.mark.anyio
+async def test_any_sequence_renders_as_a_list_does(
+    sequence: Callable[[list[Any]], Sequence[Any]],
+) -> None:
+    def step(sequence: Callable[[list[Any]], Sequence[Any]]) -> AfterToolCall:
+        return replace(
+            after_tool_call("bash", "out", cmd="ls"),
+            input=sequence(CONVERSATION),
+            history=sequence(CONVERSATION),
+            agent_messages=sequence(CONVERSATION),
+            tools=sequence([BASH]),
+            tool_choice="auto",
+        )
+
+    assert await render(step(sequence), ALL) == await render(step(list), ALL)
+    # rendered without preprocessing too
+    assert (await step_as_str(step(sequence)))[0] == (await step_as_str(step(list)))[0]
+
+
+@pytest.mark.anyio
+async def test_a_result_whose_whole_output_is_unknown_is_shown_by_its_result() -> None:
+    known = after_tool_call("bash", "out", cmd="ls")
+    unknown = replace(known, output=None)
+    assert await preprocess_step(unknown) == replace(
+        await preprocess_step(known), output=None
+    )
+    assert await render(unknown, ALL) == await render(known, ALL)
 
 
 WHOLE = [m.text for m in CONVERSATION]
@@ -349,19 +419,111 @@ NEXT = user("next")
         ([[V1], [V1, NEXT, V2]], [["v1"], ["next", "v2"]]),
     ],
 )
+@pytest.mark.parametrize("sequence", SEQUENCES)
 @pytest.mark.anyio
 async def test_new_since_last_report_resumes_after_the_copy_shown_last(
-    histories: list[list[ChatMessage]], expected: list[list[str]]
+    histories: list[list[ChatMessage]],
+    expected: list[list[str]],
+    sequence: Callable[[list[ChatMessage]], Sequence[ChatMessage]],
 ) -> None:
     store = Store()
     seen: list[list[str]] = []
     for history in histories:
-        step = replace(tool_step(None, None), history=history)
+        step = replace(tool_step(None, None), history=sequence(history))
         with in_step(store=store) as context:
             observations = await run_monitors({"judge": sent_since()}, context, step)
         [observation] = observations.succeeded
         seen.append(json.loads(observation.report.explanation or ""))
     assert seen == expected
+
+
+@pytest.mark.anyio
+async def test_new_since_last_report_reads_only_what_is_new_in_a_list_that_grew() -> (
+    None
+):
+    store = Store()
+    shown: list[list[str]] = []
+    views = [View(LONG[:-2]), View(LONG)]
+    for view in views:
+        step = replace(tool_step(None, None), history=view)
+        with in_step(store=store) as context:
+            observations = await run_monitors({"judge": sent_since()}, context, step)
+        [observation] = observations.succeeded
+        shown.append(json.loads(observation.report.explanation or ""))
+    assert shown[1] == ["reply 499", "r499"]
+    # a few reads at the end, not the whole conversation again
+    assert views[1].reads < 4 * len(shown[1])
+
+
+@pytest.mark.parametrize("sequence", SEQUENCES)
+@pytest.mark.anyio
+async def test_new_since_last_report_shows_a_rewritten_list_whole_when_the_copy_shown_last_is_gone(
+    sequence: Callable[[list[ChatMessage]], Sequence[ChatMessage]],
+) -> None:
+    def said(id: str, text: str) -> ChatMessage:
+        return ChatMessageUser(id=id, content=text)
+
+    # the rewrite puts another version of the last message shown where that
+    # message was, but holds fewer copies of it: what was shown is gone
+    first = [said("edited", "v1"), said("middle", "middle"), said("edited", "v2")]
+    second = [
+        said("summary", "summary"),
+        said("next", "new request"),
+        said("edited", "v3"),
+        said("tail", "tail"),
+    ]
+    steps: list[Step] = [tool_step(None, sequence(m)) for m in (first, second)]
+    assert await seen_by(Store(), steps) == [
+        shared(None, ["v1", "middle", "v2"]),
+        shared(None, ["summary", "new request", "v3", "tail"]),
+    ]
+
+
+class CountingStore(Store):
+    # counts the entries each write puts in the store, a dict's as many
+    def __init__(self) -> None:
+        super().__init__()
+        self.written = 0
+
+    def set(self, key: str, value: Any) -> None:
+        self.written += (
+            len(cast("dict[str, Any]", value)) if isinstance(value, dict) else 1
+        )
+        super().set(key, value)
+
+
+@pytest.mark.anyio
+async def test_new_since_last_report_writes_each_conversation_alone() -> None:
+    async def written(conversations: int) -> int:
+        store = CountingStore()
+        for n in range(conversations):
+            step = replace(
+                tool_step(None, None), conversation=f"c{n}", history=[user(f"m{n}")]
+            )
+            with in_step(store=store) as context:
+                await run_monitors({"judge": sent_since()}, context, step)
+        return store.written
+
+    # twice the conversations, twice the writes, not four times
+    assert await written(200) <= 2 * await written(100)
+
+
+@pytest.mark.anyio
+async def test_new_since_last_report_keeps_monitors_and_conversations_apart() -> None:
+    # names that would read the same joined with a delimiter
+    store = Store()
+    shown: list[list[str]] = []
+    for name, conversation in [("a", "b:c"), ("a:b", "c")]:
+        step = replace(
+            tool_step(None, None),
+            conversation=conversation,
+            history=[ChatMessageUser(id="shared", content=f"{name} history")],
+        )
+        with in_step(store=store) as context:
+            observations = await run_monitors({name: sent_since()}, context, step)
+        [observation] = observations.succeeded
+        shown.append(json.loads(observation.report.explanation or ""))
+    assert shown == [["a history"], ["a:b history"]]
 
 
 @pytest.mark.anyio

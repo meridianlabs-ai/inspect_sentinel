@@ -1,5 +1,6 @@
 from collections import OrderedDict, UserDict, UserList
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from typing import Any, cast, get_args
 
 import pytest
@@ -14,12 +15,20 @@ from inspect_sentinel._decorators import (
     step_types,
 )
 from inspect_sentinel._final import decide_final
+from inspect_sentinel._host import HumanAnswer
 from inspect_sentinel._integration import (
     config_from_sentinel,
     resolve_sentinel,
     sentinel_from_config,
 )
-from inspect_sentinel._protocols import concurrent, observe_only, sequential, threshold
+from inspect_sentinel._protocols import (
+    concurrent,
+    handle_escalation,
+    human,
+    observe_only,
+    sequential,
+    threshold,
+)
 from inspect_sentinel._report import (
     Action,
     Decision,
@@ -40,7 +49,9 @@ from inspect_sentinel._types import (
     Protocols,
 )
 from tests._fakes import (
+    FakeHost,
     ListRecorder,
+    after_step,
     before_step,
     host_context,
     in_step,
@@ -644,3 +655,29 @@ def keeps(options: Mapping[str, float]) -> Protocol:
 def test_a_factory_gets_any_other_argument_as_given() -> None:
     options = UserDict[str, float](limit=0.5)
     assert getattr(keeps(options), _GIVEN) is options
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: observe_only(afterwards()),
+        lambda: threshold(afterwards(), terminate_at=0.8),
+        lambda: concurrent([threshold(afterwards(), escalate_at=0.5), says()]),
+        lambda: sequential(
+            [threshold(afterwards(), escalate_at=0.5), human(stages=["tool_result"])]
+        ),
+        lambda: sequential(
+            [threshold(afterwards(), escalate_at=0.5), handle_escalation("proceed")]
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_shipped_protocols_take_a_result_whose_whole_output_is_unknown(
+    build: Callable[[], Protocols],
+) -> None:
+    async def decided(output: str | None) -> Decision | None:
+        context = host_context(host=FakeHost(HumanAnswer("approve")))
+        step = replace(after_step(), output=output)
+        return await run_sentinel(resolve_sentinel(build()), context, step)
+
+    assert await decided(None) == await decided("out")
