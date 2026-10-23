@@ -312,15 +312,21 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 ### C. What if a task has a sentinel inside Inspect and a sidecar too?
 
-- *What's going on:* a researcher can run a sentinel inside Inspect, set with `--sentinel`, while the deployment runs another in a sidecar behind the proxy.
+- *What's going on:* a task can carry its own sentinel: its author sets `sentinel=` on the `Task`. Someone can then run that task in a deployment whose proxy has a sidecar. The person running the eval can also add one with `--sentinel`, which is hidden from `--help` while it's experimental.
 
-- *Why it matters:* both would judge the same calls. They could disagree, and the transcript would hold two sets of reports for each call.
+- *Why it matters:* the task's author and the proxy's admin are usually different people, and neither knows about the other's sentinel. Both would judge the same calls. They could disagree, and the transcript would hold two sets of reports for each call.
 
-- *Option 1, fail the task at the start:* simple, and nobody is surprised by two sentinels. But it rules out a researcher adding their own monitor on top of the deployment's.
+- *Why Inspect can't just leave the sidecar out:* the proxy hands every call it carries to the sidecar, whoever sent it. If Inspect didn't probe, the sidecar would still judge its calls, without the task's facts, and a rejection would come back as a bare HTTP error that fails the sample.
+
+- *Option 1, fail the task at the start:* simple, and nobody is surprised by two sentinels. But a task with its own sentinel could never run in a deployment that has a sidecar.
 
 - *Option 2, run both:* the sidecar judges first, in the proxy, and the sentinel inside Inspect then judges each call before it runs, so either can stop it. But every call is judged twice, at twice the cost, and the transcript needs a way to show which sentinel said what.
 
-- *Proposed:* option 1, until someone needs both.
+- *Option 3, the sentinel inside Inspect takes over where the sidecar allows it:* Inspect says in `register_task` that the task has a sentinel inside Inspect. For a task Inspect registers, the sidecar stands down for that task's calls: the deployment already trusts this client to describe the task honestly, so it can trust this too. For a fixed task, one the admin wrote into the tasks folder because the client isn't trusted, the sidecar keeps judging and answers `fixed: true`. Either way, Inspect learns before any sample starts whether both sentinels will run.
+
+- *Also:* a client that never registers is judged as any client's, so it can't stand the sidecar down (question G).
+
+- *Proposed:* option 3. For a fixed task, where the sidecar keeps judging, option 1 until someone needs both to run.
 
 ### D. How long should Inspect wait for the sidecar's answer?
 
@@ -376,6 +382,8 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 - *Also to settle:* calls that name no task at all, such as a naked agent's, which the sidecar also judges today. That is a separate choice.
 
+- *Also:* a client that never registers gets no say over the sidecar. It can't stand the sidecar down (question C) or mark calls as not the agent's (question K).
+
 - *Proposed:* option 1. This is a sidecar change, not an Inspect one.
 
 ### H. Is fetching the store before every scoring too slow?
@@ -426,6 +434,8 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 - *Option 1, leave them unmarked:* nothing to build. But the sidecar spends judging on calls the sentinel inside Inspect would ignore, and a monitor could block a grader.
 
-- *Option 2, mark them, and the sidecar lets marked calls through:* matches inside Inspect. But the mark is a header the client sets and the sidecar can't check, so any client could mark an agent's call to get it past the sentinel. A deployment that can't trust its client must ignore the mark.
+- *Option 2, mark them, and the sidecar lets marked calls through:* a grader's calls would carry `x-inspect-context`, naming their sample, with a mark saying they aren't the agent's, where section 3 now sends the header only on agent turns. This matches inside Inspect. But the mark is something the client sets and the sidecar can't check, so a client could mark an agent's call to get it past the sentinel.
 
-- *Proposed:* option 2, with the sidecar honouring the mark only where the deployment trusts the client.
+- *The trust rule, as in question C:* the sidecar honours the mark only for a task Inspect registered, since the deployment already trusts that client to describe the task. For a fixed task, it ignores the mark and judges the call. A client that never registers can't use the mark either (question G).
+
+- *Proposed:* option 2, with that trust rule.
