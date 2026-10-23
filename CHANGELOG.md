@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.2.0...0.2.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **sidecar:** regenerate the endpoint schema for inspect_ai's new docs link ([#147](https://github.com/meridianlabs-ai/inspect_sentinel/issues/147)) ([d78583a](https://github.com/meridianlabs-ai/inspect_sentinel/commit/d78583a21a939904f28f0dff02c71101092da72c))
+
 ## [0.2.0](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.4...0.2.0) (2026-10-21)
 
 
