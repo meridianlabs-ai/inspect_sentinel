@@ -32,6 +32,25 @@ Inspect talks to the sidecar in two ways:
 1. **Inside its model calls.** Inspect adds a header to the agent's model calls, saying which sample each is for. The sidecar adds a `sentinel` field to each reply.
 2. **Through a small endpoint.** Inspect calls the sidecar directly under `/sentinel/`, through the proxy's own address. It uses this at the start of a task, at the end of a sample, and when a reply arrives without the `sentinel` field.
 
+## Words this document uses
+
+Three words mean more than one thing around Inspect and the sentinel. This document uses each in one sense only, and says where in the stack it happens. **Client side** is Inspect, where the eval runs. **Server side** is the proxy and its sidecar.
+
+**Judging a step.** The sentinel looks at one step, such as a model call, its reply, a tool call or a tool result, and reaches a decision on it. Judging has two parts:
+
+- a **suspicion rating**: what a monitor reports about the step, from 0.0 to 1.0. It is evidence, and decides nothing.
+- a **protocol decision**: what a protocol does with the ratings: proceed, modify, reject, terminate or escalate.
+
+Judging happens wherever the sentinel runs: client side when the sentinel runs inside Inspect, server side when it runs in the sidecar. A monitor can ask a model for its rating. This document calls that model the **judge model**, and it runs with the sentinel.
+
+**Scoring.** Inspect grading a sample: a scorer gives the sample a **score**, such as correct or incorrect. Scoring is always client side, in Inspect, and the sentinel never scores. It usually happens after the agent finishes, and sometimes during a sample (section 6). A scorer can ask a model to grade an answer. This document calls that model the **grader**. Its calls can pass through the proxy, but they are not the agent's.
+
+**The stores.**
+
+- **The sample store**: Inspect's key-value store for one sample in one epoch. It is client side, always. It exists only while that sample runs, and its final contents are saved in the eval log. Tools, solvers and scorers use it.
+- **Monitor state**: what a monitor or protocol keeps between steps, with `context.store_as()`, such as a count of failed calls. When the sentinel runs inside Inspect, it is a slice of the sample store, client side, named by the monitor's place in the sentinel. Through a sidecar, it is server side, kept for each run: one sample in one epoch, named by the `sample_uuid` in `x-inspect-context`. The sidecar drops it at `end_sample`, or a day after the run's last request.
+- **The sidecar's records**: server side. What the sentinel reported for each model call, by the call's `x-irid`. They reach Inspect in the `sentinel` field, or through `request_result`. When the sentinel runs inside Inspect, the same history is the transcript's `SentinelEvent`s, client side.
+
 ## 1. Finding the sidecar
 
 **Short version:** at the start of each task, Inspect asks the proxy once whether a sidecar is there. If it isn't, nothing else in this document happens.
@@ -80,7 +99,7 @@ Envoy and LiteLLM both forward `/sentinel/` at the root. An OpenAI base URL usua
 
 - Inspect probes the endpoint of the task's assigned model: the model the eval runs with, such as `--model`.
 - It probes once per task.
-- Other models are not probed and get none of Inspect's headers. Examples are a model given to a role, or a grader model a scorer calls.
+- Other models' endpoints are not probed. An agent call to another model at the same endpoint still gets Inspect's headers (section 3). A call to a different endpoint gets none (question J).
 - Nothing is shared between tasks in this PR.
 
 More than one sidecar in a task is question J.
@@ -144,7 +163,7 @@ This is an advanced setup, described in sidecar.md section 9:
 
 **Proposed: which calls get it.** `x-inspect-context` goes only on calls that are:
 
-- **agent turns**, the calls a sentinel inside Inspect would judge. A scorer's, an approver's or a compaction summary's calls are not.
+- **agent turns**, the calls the sentinel would judge if it ran inside Inspect. Calls made by a scorer's grader, an approver or a compaction summary are not.
 - **to the endpoint the probe found a sidecar at**, the assigned model's (section 1).
 
 `x-irid` is unchanged: Inspect sends it on every model call, as it does today.
@@ -175,7 +194,7 @@ This is an advanced setup, described in sidecar.md section 9:
 
 The proxy removes both headers before the request reaches the provider.
 
-**Proposed: Inspect's completion cache is off.** While a sidecar is active, Inspect doesn't reuse cached model replies. A cached reply was judged for an earlier run, so it says nothing about this one. The plan also allows having the sidecar judge a cached reply afresh. Turning the cache off is simpler. The provider's own prompt caching is unaffected.
+**Proposed: Inspect's completion cache is off.** While a sidecar is active, Inspect doesn't reuse cached model replies. The sidecar judged a cached reply when it was first made, in an earlier eval, so its protocol decision says nothing about this one. The plan also allows having the sidecar judge a cached reply afresh. Turning the cache off is simpler. The provider's own prompt caching is unaffected.
 
 ## 4. What comes back
 
@@ -195,7 +214,7 @@ Inspect turns that error into an ordinary model output. The output holds the mod
 
 This is a change. Today, Inspect only sees an HTTP error. It retries only when the sidecar is set to answer with 503.
 
-**Case C: the run is ended.** The field says `outcome: terminate`. Inspect ends the sample, as in process: the sample's limit is recorded as `operator`, and the sample is still scored.
+**Case C: the run is ended.** The field says `outcome: terminate`. Inspect ends the sample, as in process: the sample's limit is recorded as `operator`, and Inspect's scorers still grade the sample.
 
 **Case D: no field.** See the next section.
 
@@ -235,39 +254,41 @@ Some ways the field goes missing:
 | `decided` | the sidecar judged the call | acts on the decision, as in section 4 | a rejection or a `terminate`: acts on it, as in section 4. A `proceed`: the reply itself was lost on the way, so the call stays a failed call, and Inspect retries it as it does today |
 | `judging` or `awaiting_reply` | it's still being judged | waits, then asks again (question D) | waits, then asks again (question D) |
 | `not_judged`, with a reason | the sidecar saw the call but couldn't judge it | uses the reply, since the proxy chose to let it through, and records why it wasn't judged | fails the sample with that reason |
-| `dropped` | the sidecar once held the call's records, and no longer keeps them. Judging may not have finished | `auto`: uses the reply, and records the judgment as unavailable. `required`: fails the sample | fails the sample |
+| `dropped` | the sidecar once held the call's records, and no longer keeps them. The sidecar's judging may not have finished | `auto`: uses the reply, and records the protocol decision as unavailable. `required`: fails the sample | fails the sample |
 | `unknown` | the sidecar never saw the call | as for `dropped` | fails the sample |
 | no answer | `request_result` itself failed | as for `dropped` | fails the sample |
 
 - **Ordinary retries stay.** Inspect still retries the provider and network failures it retries today. Once `request_result` confirms that the sidecar couldn't judge a call that came back as an error, the sample fails, with no extra retry on top.
-- **None of these is permission to go on.** `dropped`, `unknown` and a failed lookup say nothing about what the sentinel decided. Under `auto`, the reply is used as it would be with no sidecar, and the transcript says the judgment is unavailable.
+- **None of these is permission to go on.** `dropped`, `unknown` and a failed lookup say nothing about what the sentinel decided. Under `auto`, the reply is used as it would be with no sidecar, and the transcript says the sidecar's protocol decision is unavailable.
 
 **Proposed: a fuller answer.** Today `request_result` gives the outcome and the records, but not the field's step-by-step decisions. It should give the same information as the field, so Inspect can act exactly as it would on the field. This is a change on the sidecar's side.
 
 ## 6. The end of a sample
 
-**Short version:** before any scoring, Inspect copies the sentinel's store into the sample. After the final scoring, it tells the sidecar the sample is over.
+**Short version:** before Inspect scores a sample, it copies the monitor state from the sidecar (server side) into the sample store (client side). After the final scoring, it tells the sidecar the sample is over.
 
-**Scoring can happen during a sample, not only at its end.** For example, `react` with more than one attempt scores each answer the model submits, to decide whether to stop (`agent/_react.py`). In process, that scorer reads the sentinel's live store. Through a sidecar, the store has to be fetched first.
+**Scoring can happen during a sample, not only at its end.** For example, `react` with more than one attempt scores each answer the model submits, to decide whether to stop (`agent/_react.py`). When the sentinel runs inside Inspect, the monitor state is already in the sample store, where that scorer can read it. Through a sidecar, the monitor state is server side, so it has to be fetched first.
 
 **Proposed.**
 
-1. Before any scoring, Inspect calls `sample_result` and copies the store into the sample's own store, so scorers read the latest. Scoring happens in three places in Inspect, and all of them need it:
+1. Before any scoring, Inspect calls `sample_result` and copies the monitor state into the sample store, so Inspect's scorers read the latest. Scoring happens in three places in Inspect, and all of them need it:
    - `score()` (`scorer/_score.py`), which an agent such as `react` calls during the sample;
    - the final scoring, where the task runner calls each scorer itself (`_eval/task/run.py`);
    - interim scoring, where `inspect ctl task score` scores a running eval's samples on request, from outside them (question H).
+
+   A fourth place needs no copy: `inspect score` re-scores a finished eval from its log (`_eval/score.py`), after the sidecar may have dropped the run. It reads the monitor state saved in the log with the sample store, which is why the copy has to happen before the final scoring.
 2. Inspect scores the sample.
-3. After the final scoring, `end_sample`: the sidecar drops the sample's state.
+3. After the final scoring, `end_sample`: the sidecar drops the run's monitor state, and the rest of what it keeps for the sample.
 
-Inspect skips `end_sample` when it will retry the sample, so that the retry keeps the sentinel's state.
+Inspect skips `end_sample` when it will retry the sample, so that the retry keeps its monitor state in the sidecar.
 
-**To decide:** what happens when `sample_result` fails (question D), and samples that have no result to fetch (question I). A failed fetch must never look like a sample in which the sentinel had nothing to say.
+**To decide:** what Inspect's scorers see when `sample_result` fails or has no monitor state for the sample (question I), and whether this copy is wanted at all (also question I). A failed copy must never look like a sample in which the sentinel had nothing to say.
 
 ## 7. Streams
 
 **Short version:** PR 11 works with a sidecar that holds whole replies. Early release waits for PR 12.
 
-**Decided.** PR 11 is built and tested for `release: whole`, where the proxy holds the whole reply until it is judged. A whole reply can still travel as a stream: Inspect reads the stream, and the `sentinel` field is in its last event (section 4).
+**Decided.** PR 11 is built and tested for `release: whole`, where the proxy holds the whole reply until the sidecar has judged it. A whole reply can still travel as a stream: Inspect reads the stream, and the `sentinel` field is in its last event (section 4).
 
 `release: early`, where text arrives while the rest is held, is [PR 12](sidecar-plan.md#pr-12-inspect-incremental-streaming). That covers a refusal arriving as an error event after some text, streams that are cut off, cancellation, and partial output shown while streaming.
 
@@ -277,7 +298,7 @@ Running as if there were no sidecar would be unsafe. Inspect's completion cache 
 
 ## Not built
 
-**A response header.** If some proxy can't pass the `sentinel` field through, the sidecar could add a header saying the request was judged. No proxy we know of needs one, so none is designed.
+**A response header.** If some proxy can't pass the `sentinel` field through, the sidecar could add a header saying it judged the request. No proxy we know of needs one, so none is designed.
 
 ## Questions to decide
 
@@ -297,7 +318,9 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 - *Option 3, list the unknown samples in the answer to `register_task`:* Inspect fails just those samples, before their setup. But it needs a change on both sides, and it can't cover samples the task adds later, because they don't exist at registration.
 
-- *Proposed:* option 1.
+- *Decided:* option 1. Inspect turns the sidecar's refusal into a sample error, which says the admin didn't register the sample. The eval's own error settings decide what it tolerates, as for any other sample error: `fail_on_error` fails the eval on the first error by default, or allows a number or proportion of failed samples.
+
+- *Still to settle:* whether `retry_on_error` should retry such a sample. A retry asks the sidecar again and is refused the same way.
 
 ### B. Where should Inspect act on the sentinel's decisions?
 
@@ -311,7 +334,10 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 - *Option 2, carry each decision to the moment its tool runs:* the same code as inside Inspect, at the same point, after the approver. But putting the model's turn back puts the rejected calls back too, and only Inspect's tool loop would stop them. A bridged agent, or a custom agent that calls its tools directly, would run them.
 
-- *Proposed:* option 1, as designed. The new code should build its approval errors and events the way the in-process code does, so the two read the same.
+- *Decided:* option 1, as designed. This is deliberately different from inside Inspect, and the differences are to be stated plainly, here and in the user docs:
+  - **An approver never sees a call the sentinel took out.** Inside Inspect, an approver sees every call first, and the sentinel judges after it. Through a sidecar, the sentinel has judged the whole turn before any approver runs, and an approver sees only the calls left.
+  - **The whole turn is judged at once.** Inside Inspect, the sentinel judges each call just before it runs. Through a sidecar, it judges every call of a turn together, before any of them runs, so a `terminate` ends the sample before any call in that turn runs.
+  - **What stays the same:** a rejected call is answered with an approval error, a changed call runs with its new arguments, and the model's own turn stays in the conversation. The new code builds those errors and events the way the in-process code does, so the two read the same.
 
 ### C. What if a task has a sentinel inside Inspect and a sidecar too?
 
@@ -325,7 +351,14 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 - *Option 2, run both:* the sidecar judges first, in the proxy, and the sentinel inside Inspect then judges each call before it runs, so either can stop it. Each owner's sentinel runs, as each expects. But every call is judged twice, the transcript has to show which sentinel said what, and a monitor inside Inspect that calls a model through the same proxy has its own calls judged too, until question K is settled ([pr-series.md](pr-series.md#then-hosts-in-process-bridge-sidecar)).
 
-- *To settle:* option 1 is the smaller change for PR 11. Option 2 is what both owners would expect, once question K keeps the monitor's own calls from being judged.
+- *Decided:* option 2, run both, with the sentinel inside Inspect first wherever it can be.
+  - On a request, the sentinel inside Inspect judges it before Inspect sends it. It can end the sample there, so the request never reaches the proxy. Otherwise the request goes on, and the sidecar judges it in the proxy.
+  - On a reply, the order is fixed the other way: the reply passes through the proxy before Inspect gets it, so the sidecar has judged it first. Inspect acts on the sidecar's decisions (question B), then the sentinel inside Inspect judges the reply and each remaining tool call as usual.
+  - The transcript says which sentinel made each report.
+
+- *Still to settle:* a monitor inside Inspect that calls a model through the same proxy has its own calls judged by the sidecar, until question K is settled.
+
+- *To confirm with Meridian:* that "inside Inspect first" means wherever it can be. Going first on a reply too would need the proxy to hold every reply until Inspect's sentinel had judged it, which is a much larger design.
 
 ### D. How long should Inspect wait for the sidecar's answer?
 
@@ -337,11 +370,14 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 - *Option 1, a fixed deadline in Inspect:* predictable. But a slow monitor's decision is lost, and under `auto` the reply is then used as if no sidecar had judged it.
 
-- *Option 2, keep asking until the sidecar answers something else:* closest to inside Inspect, where Inspect waits for its sentinel within the sample's limits. The sidecar can be started with a time limit for judging, after which it answers `not_judged`, but that limit is off by default. Without one, only the sample's own limits end the wait.
+- *Option 2, keep asking until the sidecar answers something else:* closest to inside Inspect, where Inspect waits for its sentinel within the sample's limits. The sidecar can be started with a time limit for judging a step, after which it answers `not_judged`, but that limit is off by default. Without one, only the sample's own limits end the wait.
 
 - *Also to settle:* how often to ask, since each ask is a call through the proxy. A sample that errors or is cancelled must stop asking at once, and `end_sample` belongs where Inspect already records every way a sample can end, exactly once (inspect_ai's `design/sample-lifecycle.md`).
 
-- *Proposed:* option 2, with the sample's limits as the backstop.
+- *Decided:* option 2, with the same settings Inspect has today for a sentinel inside it, and no new ones until users ask for them.
+  - Inside Inspect, nothing limits how long a sentinel may take. While it runs, the sample's token, turn and working limits are paused, and only the sample's time limit, its clock time, still applies. Waiting on the sidecar works the same way.
+  - The one limit on judging itself is the sidecar's `--time-limit`, set by whoever runs the proxy. It is off by default, as it is inside Inspect.
+  - How often Inspect asks is Inspect's own choice, not a setting.
 
 ### E. How should the sentinel's decisions show in the transcript?
 
@@ -355,6 +391,18 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 - *Also to settle:* a trimmed report. A sidecar started with `--no-eval-results` leaves monitors' explanations out of the field, so an agent can't learn what the monitors look for. Inspect can't fetch the rest, so the event should say the report was trimmed, rather than look as if the monitor had nothing to say.
 
+- *Also needed: where each report came from.* A `SentinelEvent` doesn't record where its sentinel ran, because until now it always ran inside Inspect. Each event should say whether it came from inside Inspect or from a sidecar. Then the log viewer, and any portal that shows results, can make a remote report plain, and the two sentinels of question C can be told apart. For a sidecar's report, Inspect also knows details a reader may want:
+  - the proxy address where Inspect found the sidecar;
+  - the endpoint version the sidecar speaks, and whether it holds whole replies, both from the probe (section 1);
+  - the model call's `x-irid`, which matches the report to the sidecar's own records;
+  - whether the report was trimmed.
+
+  The event should carry these. Which of them a viewer shows can follow from what users ask for.
+
+- *Gaps compared with inside Inspect, even with the events right:*
+  - **Which sentinel ran.** Inside Inspect, the eval log records the sentinel's configuration: each monitor's and protocol's name, parameters and version. Through a sidecar, Inspect doesn't learn which sentinel the sidecar runs, so the log can't record it unless the sidecar says, for example in its answer to the probe.
+  - **The judge models' calls.** Inside Inspect, a monitor's calls to its judge model appear in the transcript as model events, inside the sentinel's span. Through a sidecar, the sidecar makes those calls, server side, and they are recorded nowhere an eval or an operator can read later. They belong in the sidecar's record log, which is not yet designed ([sidecar.md](sidecar.md#10-operations)).
+
 ### F. What if a task has a very large dataset?
 
 - *What's going on:* registering a task sends every selected sample's input and metadata to the sidecar before the first sample starts ([sidecar.md, registering a task](sidecar.md#registering-a-task)). The proxy's size limits are the operator's to raise. Inside Inspect, the sentinel reads each sample directly, so nothing is sent.
@@ -367,53 +415,71 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 - *Option 3, register each sample just before it starts:* small requests, nothing read early, and samples added later are covered. But it adds a call per sample, and the sidecar never holds the whole task, which a monitor that compares samples would need.
 
-- *To settle:* option 1 is what sidecar.md describes. Option 3 is the only one that covers samples a task adds while running.
+- *Option 4, register the task with its sample ids, and complete each sample's registration before it runs:* `register_task` sends the task's facts, the ids of the samples selected for this run, and the number of epochs. Before a sample's first epoch, Inspect sends that sample's input and metadata, which completes its registration. A sample's input is the same in every epoch, so it is sent once. The first request stays small, the sidecar knows from the start which samples to expect, and Inspect reads each sample only when it runs, as it does anyway. But it adds a call per sample, and a new method on the sidecar's endpoint. A monitor that compares samples sees each one's input only once it has started.
 
-### G. Should a locked-down sidecar refuse calls from tasks it doesn't know?
+- *Edges of option 4:*
+  - A sample a task adds while it runs, with `enqueue_sample`, isn't in the first list. Adding it extends the registration rather than completing it, which a locked-down sidecar should refuse.
+  - Listing the ids is free when Inspect assigns them, since they are numbers. A dataset with its own ids has to be read once, record by record, without keeping anything, as inspect_ai's lazy datasets already do when they are built.
 
-- *What's going on:* a sidecar can be locked down to run only the tasks an admin registered, for a deployment where the eval's client can't be trusted. It refuses to register any other task. But it still judges calls that name a task it doesn't hold, such as from a client that skipped registration.
+- *Proposed:* option 4. A fixed task is unaffected, since the admin's file already holds every sample.
 
-- *Already in the design:* this is stated as not yet designed ([sidecar.md](sidecar.md#advanced-a-sidecar-that-runs-only-the-tasks-in-its-folder)). The plan for PR 15 points one way: "A protected model route must not treat missing identity as permission to create an anonymous run" ([sidecar-plan.md](sidecar-plan.md#pr-15-trusted-run-identity-and-termination-scopes)).
+### G. How strict should a sidecar be about calls it can't place?
+
+- *What's going on:* a sidecar can be locked down to run only the tasks an admin registered, for a deployment where the eval's client can't be trusted. It refuses to register any other task. But it still judges every call the proxy carries, and those come in three kinds:
+  - calls that name a task the sidecar holds, which it judges with the task's facts;
+  - calls that name a task it doesn't hold, such as from a client that skipped registration;
+  - calls that name no task at all: non-eval traffic, such as a naked agent's, and today also a grader's calls (question K).
+
+- *Already in the design:* what to do with the second and third kinds is stated as not yet designed ([sidecar.md](sidecar.md#advanced-a-sidecar-that-runs-only-the-tasks-in-its-folder)). The plan for PR 15 points one way: "A protected model route must not treat missing identity as permission to create an anonymous run" ([sidecar-plan.md](sidecar-plan.md#pr-15-trusted-run-identity-and-termination-scopes)).
 
 - *Why it matters:* the lockdown is aimed at a client that can't be trusted, and that client is the one most likely to skip registration. Its calls are then judged without the task's facts, which a monitor may rely on.
 
-- *Option 1, refuse calls that name a task it doesn't hold:* the lockdown then covers every call, not only registration. But a client with a bug in its registration fails at its first model call rather than at the start.
+- *The catch with telling eval traffic from other traffic:* the only thing that marks a call as an eval's is the `x-inspect-context` header, which the client sets. A client that wants to dodge a refusal can leave the header off, and its calls then look like non-eval traffic. So a rule that blocks unknown tasks but lets non-eval traffic through only binds an honest client, unless the proxy tells the two apart some other way, such as by the caller's credential.
 
-- *Option 2, judge them, as today:* nothing changes. But the lockdown only binds clients that register honestly.
+- *Proposed: one setting on the sidecar, with levels of strictness.*
+  - `open`, today's behaviour and the default: every call is judged, and a call that names a task the sidecar doesn't hold is judged without its facts.
+  - `known_tasks`: a call that names a task the sidecar doesn't hold is refused. A call that names no task is still judged, so non-eval traffic keeps working. This catches a client with a bug in its registration, but not one that leaves the header off.
+  - `registered_only`: a call that doesn't name a task the sidecar holds is refused, including non-eval traffic. This binds a client that can't be trusted, but nothing other than registered evals can use the proxy, and a grader's calls are refused until question K gives them a way through.
 
-- *Also to settle:* calls that name no task at all, such as a naked agent's. That is a separate choice, and PR 15's.
+- *Also to settle:* whether a deployment that wants non-eval traffic and a client it can't trust should tell them apart by credential, as PR 15's trusted run identity would. The setting's name and its levels are Meridian's to choose. This is a sidecar change, not an Inspect one.
 
-- *Proposed:* option 1, in line with PR 15. This is a sidecar change, not an Inspect one.
+### H. Is copying the monitor state before every scoring too slow?
 
-### H. Is fetching the store before every scoring too slow?
+- *What's going on:* monitor state holds what monitors note about a sample, such as counts, and Inspect's scorers can read it. When the sentinel runs inside Inspect, the monitor state is in the sample store, client side, so a scorer reads it live. Through a sidecar, the monitor state is server side, so each scoring needs a fresh copy in the sample store, which is one more call through the proxy.
 
-- *What's going on:* the sentinel's store holds what its monitors note about a sample, such as counts, and scorers can read it. Inside Inspect, a scorer reads the live store. Through a sidecar, the store lives in the sidecar, so each scoring needs a fresh copy, which is one more call through the proxy.
+- *Why it matters:* Inspect scores at more moments than the end of a sample. Some agents have their answers scored as they go, to decide whether to try again (section 6). And `inspect ctl task score` scores a running eval's samples on request, from outside the samples (inspect_ai's `design/ctl/interim-scoring.md`), so a fetch tied to a sample's own scoring would miss it.
 
-- *Why it matters:* scoring happens at more moments than the end of a sample. Some agents score their own answers as they go, to decide whether to try again (section 6). And `inspect ctl task score` scores a running eval's samples on request, from outside the samples (inspect_ai's `design/ctl/interim-scoring.md`), so a fetch tied to a sample's own scoring would miss it.
+- *Option 1, copy before every scoring, wherever it runs:* the scorer always reads the latest monitor state, as inside Inspect. But it is a call per scoring, and an agent that scores often pays it each time.
 
-- *Option 1, fetch before every scoring, wherever it runs:* always the latest store, as inside Inspect. But it is a call per scoring, and an agent that scores often pays it each time.
+- *Option 2, copy only before the final scoring:* one call per sample. But a scorer during the sample, or an interim scoring, reads out-of-date monitor state, which differs from inside Inspect.
 
-- *Option 2, fetch only before the final scoring:* one call per sample. But a scorer during the sample, or an interim scoring, reads an out-of-date store, which differs from inside Inspect.
+- *Option 3, copy only if a model call has gone through since the last copy:* the monitor state changes only when the sidecar judges a step, so this is always the latest, with fewer calls. But Inspect has to track which calls went through since.
 
-- *Option 3, fetch only if a model call has gone through since the last fetch:* the store changes only when the sidecar judges a call, so this is always the latest, with fewer calls. But Inspect has to track which calls went through since.
+- *Deliberately different, whichever option:* inside Inspect, every change to monitor state is recorded in the transcript as a `StoreEvent`, and the state survives checkpoint and resume. Through a sidecar, the copy gives the sample store only the monitor state at the moment of scoring, with no record of each change.
+
+- *Depends on question I:* if scorers aren't to read monitor state through a sidecar at all, there is nothing to copy, and this question goes away.
 
 - *Proposed:* option 1 in PR 11, and option 3 if the cost shows up.
 
-### I. What do scorers see when the sidecar has no results for a sample?
+### I. What do Inspect's scorers see when the sidecar has no monitor state for a sample?
 
-- *Background:* while a sample runs, the sentinel's monitors keep notes in a store, such as how many calls they flagged. A scorer can read it, for example to mark a sample unsafe if the sentinel flagged anything. Through a sidecar, Inspect fetches the store with `sample_result` before scoring (section 6).
+- *Background:* while a sample runs, monitors keep monitor state, such as how many calls they flagged. An Inspect scorer can read it from the sample store, for example to mark a sample unsafe if the sentinel flagged anything. Through a sidecar, the monitor state is server side, so Inspect copies it into the sample store with `sample_result` before scoring (section 6).
 
-- *What's going on:* sometimes that fetch gets an error instead of a store. A sample the sidecar never saw gets `unknown_sample`, for example one that failed before its first model call. A sidecar started with `--no-eval-results` doesn't send monitors' findings to the eval at all, so that an untrusted agent can't learn what the monitors look for.
+- *Where this comes from:* Meridian's own design docs say a scorer can read what a monitor accumulated: "a scorer holding a `TaskState` reads it with the existing `store_as(TrajectoryState, instance="attempt/internet_attempt")`" ([sentinel.md, State](sentinel.md#state), and the same in sentinel-reference.md and sentinel-deployment.md). It is incidental, not designed: it works because, inside Inspect, monitor state is kept in the sample store. Nothing in inspect_sentinel uses it, in an example or a test. The sidecar's design took it as a capability to keep, and built `sample_result` and the copy for it.
 
-- *Already in the design:* a missing result is never read as clean. Without the fetch, "a scorer would find the default values in the store and would read the sample as clean, with no error to show that anything was missing" ([sidecar.md](sidecar.md#what-comes-back-to-the-eval)).
+- *First, to settle with Meridian:* whether scorers should be able to read monitor state through a sidecar at all. If not, `sample_result`'s copy isn't needed for scorers, section 6 shrinks to `end_sample`, and this question and question H go away.
 
-- *Option 1, fail the sample's scoring:* safe. But scorers that never read the store can't score the sample either.
+- *What's going on:* sometimes `sample_result` answers with an error instead of the monitor state. A sample the sidecar never saw gets `unknown_sample`, for example one that failed before its first model call. A sidecar started with `--no-eval-results` doesn't send monitors' findings to the eval at all, so that an untrusted agent can't learn what the monitors look for.
 
-- *Option 2, mark the store as unavailable:* scorers that don't read it score as normal, and one that reads it gets an error saying which case happened. But Inspect needs a way to mark a store as unavailable, which it doesn't have today. Interim scoring already works this way for scorer failures: they're "recorded on the row and don't fail the pass".
+- *Already in the design:* missing monitor state is never read as clean. Without the copy, "a scorer would find the default values in the store and would read the sample as clean, with no error to show that anything was missing" ([sidecar.md](sidecar.md#what-comes-back-to-the-eval)).
+
+- *Option 1, fail the sample's scoring:* safe. But scorers that never read the monitor state can't score the sample either.
+
+- *Option 2, mark the monitor state as unavailable in the sample store:* scorers that don't read it score as normal, and one that reads it gets an error saying which case happened. But Inspect needs a way to mark part of the sample store as unavailable, which it doesn't have today. Interim scoring already works this way for scorer failures: they're "recorded on the row and don't fail the pass".
 
 - *Also:* a sample that never called the model can skip the fetch, since the sidecar has nothing for it.
 
-- *Proposed:* option 2.
+- *Proposed, if the copy is kept:* option 2.
 
 ### J. What if a task's models sit behind more than one sidecar?
 
@@ -427,20 +493,33 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 - *Option 2, probe each endpoint the task's models use, once per endpoint and credentials:* every agent call is tied to its sample, as inside Inspect. inspect_ai already probes a proxy once per base URL and key when it sets up its LiteLLM provider. But a task can then have more than one sidecar, each needing its own registration, and Inspect needs a rule for combining their stores.
 
-- *To settle:* option 2 matches inside Inspect. Option 1 is smaller, and is what section 1 proposes for PR 11, with the gap stated.
+- *Option 3, one proxy per task:* a proxy such as LiteLLM serves many models from one address, so a task whose models all go through one proxy has one endpoint and one sidecar, however many models it uses. Inspect probes the assigned model's endpoint, as section 1 says, and every agent call to that endpoint gets Inspect's headers, whatever its model (section 3). That closes the gap for a role model behind the same proxy. A task whose models go through different proxies isn't supported in PR 11.
+
+- *Direction:* option 3.
+
+- *Still to settle:* what Inspect does with an agent call to a different endpoint anyway, such as a role model pointed at another address. It could send the call without headers, so it isn't tied to its sample; fail the sample under `required`, so a deployment that relies on its sidecar never gets an agent call it can't place; or warn once.
 
 ### K. What about model calls that aren't the agent's?
 
-- *What's going on:* scorers often ask a "grader" model to judge an answer, and those calls can go through the same proxy. Inspect sends them without `x-inspect-context` (section 3). The sidecar judges them as agent turns.
+- *What's going on:* Inspect's scorers often ask a grader to grade an answer, and the grader's calls can go through the same proxy. Inspect sends them without `x-inspect-context` (section 3). The sidecar judges them as agent turns.
 
-- *Why it matters:* inside Inspect, the sentinel never judges a grader. A sidecar spends judging on such calls, and a monitor could block a grader.
+- *Why it matters:* inside Inspect, the sentinel never judges a grader's calls. A sidecar spends judging on them, and a protocol decision could block a grader.
 
-- *Already in the design:* Meridian's plan is that "the proxy marks calls that aren't the agent's turns … so the sidecar can skip them as `is_agent_generate()` does in-process" ([pr-series.md](pr-series.md#then-hosts-in-process-bridge-sidecar)). sidecar.md asks inspect_ai for a label on a grader's calls ([sidecar.md](sidecar.md#asked-of-inspect_ai)). And where the sidecar's own calls are exempted, it is "by the sidecar's signed-in identity, and not by a header" ([sidecar.md](sidecar.md#8-what-a-sentinel-is-given)), because anything in a header is the caller's claim.
+- *Already in the design:* Meridian's plan is that "the proxy marks calls that aren't the agent's turns … so the sidecar can skip them as `is_agent_generate()` does in-process" ([pr-series.md](pr-series.md#then-hosts-in-process-bridge-sidecar)). Where the sidecar's own calls are exempted, it is "by the sidecar's signed-in identity, and not by a header" ([sidecar.md](sidecar.md#8-what-a-sentinel-is-given)), because anything in a header is the caller's claim. And no method on the endpoint for evals can loosen a decision ([sidecar.md](sidecar.md#a-client-that-cant-be-trusted)), so Inspect can't be the one to say which calls go unjudged.
 
-- *Option 1, leave them as they are:* nothing to build. But graders are judged as agents.
+- *Direction:* the operator preconfigures which models serve roles other than the agent's, such as the grader, in the sidecar's configuration or the admin's task file. It is fixed for the run, and nothing the client sends can change it. The sidecar doesn't judge calls to those models.
 
-- *Option 2, Inspect labels a grader's calls, and the sidecar skips labelled calls:* matches inside Inspect. But a label is a header the client sets, so any client could label an agent's call to get it past the sentinel.
+- *The catch, and how to close it:* that exempts a model, not a caller. An agent allowed to call the grader's model could do its work there, unjudged. So the proxy side honours the exemption only for a call that carries proof it came from Inspect's grader. The proof can't be reusable, or one leak would exempt anything forever. Each proof is:
+  - tied to its request, as a signature over the request's content, so it can't be moved to another call;
+  - single use, with a nonce the proxy side refuses to see twice, so a captured call can't be replayed;
+  - short-lived, with a timestamp in a small window;
+  - scoped to one sample and one role.
 
-- *Option 3, Inspect labels a grader's calls, and the proxy decides whether to trust the label:* for example, the operator gives graders a credential of their own, and the proxy honours the label only with that credential. This matches inside Inspect without trusting the agent's side. But it needs the operator to set up that credential.
+  AWS's request signing works the same way: every request is signed over its own content and time, with a key that never travels.
 
-- *Proposed:* option 3, which follows Meridian's plan: Inspect supplies the label, and the proxy decides.
+- *Not this:* `Host.score` already puts a nonce on the markers in the prompt a monitor sends its judge model. That guards the prompt against injection. It is kept in the monitor state, which can leak to the agent, and no proxy checks it.
+
+- *Still to settle:*
+  - **Where the signing key lives, out of the agent's reach.** In a Docker sandbox, or with a sandboxed agent behind the bridge, the agent's actions run away from the host, where Inspect can keep the key. With the `local` sandbox, the agent's commands run on the host, so no key there is safe. In a deployment that runs a sidecar because it can't trust the client, the host is the untrusted part, and the operator should exempt nothing.
+  - **How Inspect keeps the key out of anything it passes into a sandbox,** such as environment variables.
+  - **Who issues the key:** the operator, on both sides, or the sidecar at registration, as a short-lived key for that task. Either way it belongs with PR 15's trusted run identity ([sidecar-plan.md](sidecar-plan.md#pr-15-trusted-run-identity-and-termination-scopes)).
