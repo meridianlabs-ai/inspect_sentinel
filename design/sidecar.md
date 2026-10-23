@@ -511,7 +511,7 @@ At task init, Inspect sends a probe there: `GET /sentinel/info`, at the proxy's 
 
 `release` says how the sidecar passes on a streamed reply: `whole` when every reply is held until it is judged, and `early` when the text and reasoning before the turn's first call go out as they arrive and the rest is held until the turn is judged ([section 5](#what-a-sentinel-sees-under-early-release)).
 
-If the answer does not name the service and a version Inspect knows, or no answer comes, Inspect runs the task with no sentinel in a sidecar: it sends no `x-inspect-context` and registers nothing. A proxy with no sidecar behind it answers with an error, or passes the path on to the provider, which answers with one.
+What Inspect does with each answer depends on the mode of its sidecar setting ([inspect-client.md](inspect-client.md), section 1). When no sidecar answers, under `auto`, Inspect runs the task with no sentinel in a sidecar: it sends no `x-inspect-context` and registers nothing. A sidecar that answers with no version Inspect knows fails the task in every mode. A proxy with no sidecar behind it answers with an error, or passes the path on to the provider, which answers with one.
 
 ### Registering a task
 
@@ -579,23 +579,18 @@ An admin registers tasks beforehand in the tasks folder. It holds what Inspect i
 
 ### When registration fails
 
-Registration at task init can fail because the endpoint for evals is down, cannot be reached, or answers with an error, such as `registrations_full` when the sidecar keeps as many registrations as it takes. Registering a task that the tasks folder already holds, under the same name, is not a failure: the sidecar answers that the task is already registered. Inspect has a setting for what it does when registration fails:
+Registration at task init can fail because the endpoint for evals is down, cannot be reached, or answers with an error, such as `registrations_full` when the sidecar keeps as many registrations as it takes. Registering a task that the tasks folder already holds, under the same name, is not a failure: the sidecar answers that the task is already registered. Inspect has one setting for its sidecar client, with the modes `auto`, `required` and `off` ([inspect-client.md](inspect-client.md), section 1). Both modes require registration once a supported sidecar is found: a failed registration stops the task before any sample starts, and Inspect records the failure as the error. A policy that lets a task run without registering can be added later, if one is needed.
 
-- **`required`, the default.** The task does not start. Inspect records the failure as the error. This is the setting for an eval whose sentinel needs the samples' inputs or metadata.
-- **`optional`.** Inspect logs a warning, writes into each sample's transcript that its sentinel runs without the sample's details, and starts the task. Inspect still sends `x-inspect-context` on every model request.
+A refusal is not a failure either, though it also stops the task. When runtime registration is off and the task is not in the tasks folder, the sidecar refuses the registration with `registration_refused`. The deployment runs only the tasks in its folder, so the task does not start, whatever the mode. `registration_refused` comes only from a sidecar with runtime registration off. A sidecar whose registrations are full answers with `registrations_full` instead, which is a failure, and stops the task as any failed registration does. "Advanced: a sidecar that runs only the tasks in its folder" below shows the flow.
 
-A refusal is not a failure, and the setting doesn't apply to it. When runtime registration is off and the task is not in the tasks folder, the sidecar refuses the registration with `registration_refused`. The deployment runs only the tasks in its folder, so the task does not start, even under `optional`. `registration_refused` comes only from a sidecar with runtime registration off. A sidecar whose registrations are full answers with `registrations_full` instead, which is a failure the setting covers. "Advanced: a sidecar that runs only the tasks in its folder" below shows the flow.
-
-With `optional`, the sidecar sees requests for samples that were never registered. It treats them like this:
+A client can still send `x-inspect-context` for samples that were never registered, such as a client that skips registration, or a registration policy added later. The sidecar treats such requests like this:
 
 - **The run is still keyed by the sample.** The sidecar takes `sample_uuid` from the header as the run, as it does when registration succeeds. Tallies are kept for each sample, and the `sentinel` field is sent as usual.
 - **`context.eval` is None.** The sample's input and metadata are not in the header, and the sidecar does not invent them.
 - **The header's fields are given to the sentinel as `context.proxy.inspect`.** This is the eval id, the task, the sample id, the epoch, the sample's uuid and the attempt. They are unverified, like everything else in `context.proxy`, because the caller set the header. A monitor that needs only the task's name or the epoch reads them there.
 - **Registration that arrives later is accepted.** If Inspect retries the registration once the endpoint is back, the sidecar stores it, and later steps are given `context.eval`. Steps already judged are not judged again.
 
-Where a task is registered beforehand, its registration at task init fails only when the endpoint for evals cannot be reached or does not answer, so only then does the setting matter. Whatever the setting, its sentinel is given the file's facts from the first request, and the sidecar refuses a request for a sample of that task that is not in the file.
-
-The `optional` setting may be removed later, if deployments turn out not to need it.
+Where a task is registered beforehand, its registration at task init fails only when the endpoint for evals cannot be reached or does not answer, and the task then stops. Whatever happens at registration, its sentinel is given the file's facts from the first request, and the sidecar refuses a request for a sample of that task that is not in the file.
 
 ### The flow, scenario by scenario
 
@@ -792,7 +787,7 @@ In more detail:
 
 6. **The proxy completes Inspect's request** with what the sidecar answered. Inspect reads the `sentinel` field before the agent is given anything.
 
-A model call that Inspect answers from its cache never reaches the proxy, so none of its steps are judged. How a cache hit is handled is not designed. `reject` and `modify` at the generate stages are not supported by the core package yet. What they would mean in the sidecar follows whatever the core package defines for them.
+A model call that Inspect answers from its cache never reaches the proxy, so none of its steps are judged. How a cache hit is handled is proposed in [inspect-client.md](inspect-client.md), section 3: Inspect turns its completion cache off while a sidecar is active. `reject` and `modify` at the generate stages are not supported by the core package yet. What they would mean in the sidecar follows whatever the core package defines for them.
 
 ### The `sentinel` field
 
@@ -883,8 +878,13 @@ And this is a refusal, after a sentinel ended the run at a tool result in the re
 | The sidecar's answer to `request_result` | What happened | What Inspect does |
 | --- | --- | --- |
 | `held`, with a decision | the sidecar judged the request, and the proxy dropped the field on the way to Inspect | applies and records the decision, as if the field had arrived |
-| `not_judged`, with a reason | the sidecar saw the request but could not decide, and the proxy let the call through | records the request as not judged, with the reason |
-| `unknown`, or no answer at all | the proxy could not reach the sidecar, and let the call through | records the request as not judged, because the sidecar could not be reached |
+| `held`, still judging or awaiting the reply | the sidecar hasn't decided yet | waits, then asks again |
+| `not_judged`, with a reason | the sidecar saw the request but could not decide | records the request as not judged, with the reason |
+| `dropped` | the sidecar once held the request's records, and no longer keeps them; judging may not have finished | records the judgment as unavailable |
+| `unknown` | the sidecar never saw the request, for example because the proxy couldn't reach it | records the judgment as unavailable |
+| no answer | `request_result` itself failed | records the judgment as unavailable |
+
+A judgment that is unavailable is never read as the sentinel allowing the call. What Inspect does with the model call in each case is in [inspect-client.md](inspect-client.md), section 5.
 
 A proxy drops the field only on the routes its proxy hook's README lists. A proxy lets a call through unjudged only when its operator has set it to.
 
@@ -923,7 +923,7 @@ sequenceDiagram
     P->>S: Forward
     S-->>P: unknown, or no answer
     P-->>I: unknown, or an error
-    Note over I: Record the request as not judged
+    Note over I: Record the judgment as unavailable
 ```
 
 ### Tool views
@@ -956,7 +956,7 @@ The sidecar serves two endpoints:
 
 **By default, the sidecar serves both on one port, 8900, and only the proxy reaches it.** Inspect reaches the endpoint for evals through the proxy, at the model API's base URL, and the proxy forwards `/sentinel` to the sidecar. The proxy applies to `/sentinel` the same access control it applies to model calls, and Inspect sends with these calls whatever it sends with a model call. Nothing new is configured in Inspect.
 
-**As an advanced option, the endpoint for evals has a port of its own**, 8901 unless set otherwise, and a token of its own, read from the `INSPECT_SENTINEL_EVAL_TOKEN` environment variable. This is for a deployment where something other than the eval can make model calls through the proxy, such as an agent that makes its own model calls ("A client that can't be trusted" below). Inspect is then configured with that port's URL and the token, and sends the token as a bearer credential, in the `Authorization` header. A call without the right token is answered with HTTP 401.
+**As an advanced option, the endpoint for evals has a port of its own**, 8901 unless set otherwise, and a token of its own, read from the `INSPECT_SENTINEL_EVAL_TOKEN` environment variable. This is for a deployment where something other than the eval can make model calls through the proxy, such as an agent that makes its own model calls ("A client that can't be trusted" below). An eval is then configured with that port's URL and the token, and sends the token as a bearer credential, in the `Authorization` header. A call without the right token is answered with HTTP 401. Inspect's first sidecar client doesn't support this port. It finds the endpoint through the model's address ([inspect-client.md](inspect-client.md), section 1).
 
 The endpoint for evals uses JSON-RPC 2.0. JSON-RPC was chosen to be consistent with inspect_ai, which already uses it to talk to the tools it runs in a sandbox and so already has the client code. Every call is a POST to one path, `/sentinel/v1`, and the body names the method. The `v1` in the path is the version of the methods. The methods are `register_task`, `request_result`, `sample_result` and `end_sample`. None of them is needed for the sidecar to make a decision. `sample_result` and `end_sample` reach only the runs an eval names, by the sample's uuid. A run no eval names is keyed by how its conversation opens, which anyone who knows the opening could work out, so the sidecar keeps such runs apart and these methods never reach them. The methods are described by a JSON Schema file, `eval_endpoint.schema.json`, generated from the endpoint's models and kept beside them. A test fails if the file is out of date.
 
@@ -1053,7 +1053,7 @@ When the latest attempt's turn was refused because a call in it was rejected, th
 
 `records` says whether the sidecar has records for the request. It is one of three values: `held` means it has them, and they are in `recorded`; `dropped` means it had them and no longer keeps them; `unknown` means it never saw the request. `dropped` and `unknown` are normal results and not errors, because the eval writes them into its log. Once a request's records are dropped, the sidecar keeps the request's id alone, for as long again as it kept the records and up to a limit on how many ids it keeps, so that it can answer `dropped`. After that, it answers `unknown`. With either of them, the result has no `outcome`, `message`, `recorded`, `withheld` or `proposed`.
 
-**`sample_result`.** The eval asks once for each sample, in each epoch, before scoring it:
+**`sample_result`.** The eval asks before each time it scores a sample: during the sample, when an agent scores its own answers as it goes, and before the final scoring:
 
 ```json
 {
@@ -1112,7 +1112,7 @@ A deployment can run only the tasks that an admin registered beforehand. This is
 
 - **Inspect registers every task at task init, as usual.** Inspect does not know beforehand that the sidecar runs only the tasks in its folder. It learns that from the sidecar's answer to `register_task`.
 - **A task in the folder is already registered.** The sidecar answers `register_task` with `fixed` true and stores nothing. Inspect starts the task. From the task's first model request, its sentinel is given the facts in the folder.
-- **Any other task is refused.** The sidecar answers `register_task` with the error `registration_refused`. Inspect does not start the task, whatever the `required` or `optional` setting says, and records the refusal as the task's error. The setting is for an endpoint for evals that can't be reached or that fails. A refusal is the deployment saying that the task may not run there.
+- **Any other task is refused.** The sidecar answers `register_task` with the error `registration_refused`. Inspect does not start the task, in any mode, and records the refusal as the task's error. A refusal is the deployment saying that the task may not run there.
 - **A sample that is not in the folder is refused.** Its task is in the folder, so the sidecar refuses a model request that names another sample of that task, with a 400 ("The tasks folder" above).
 
 In this diagram, the tasks folder holds `data_exfiltration` and not `file_cleanup`. Each task's probe is as in scenario 1, and is left out.
@@ -1227,7 +1227,7 @@ Considered and not taken:
 - **Public functions that read the tools, the tool choice and the generation settings from a request**, in each provider's format. A generate step is given all three. inspect_ai has these functions only in its agent bridge, `inspect_ai.agent._bridge`, where they are written for the bridge: they leave out a tool that the provider runs unless the eval grants it, and some raise an error on a kind of tool they don't know. They also index fields a provider lets a declaration leave out: a description, a function's parameters, a custom tool's format, and an MCP server's allowed tools and headers. Until there are public ones, the sidecar fills those in with what leaving them out means, and uses the bridge's readers with every tool granted, and treats a request with a tool declaration they can't read, or leave out, as unreadable.
 - **A public function that describes a tool as the model is offered it**, as a `ToolInfo`. The bridge's readers return some tools as a `Tool`, such as a web search, and the sidecar turns each into a `ToolInfo` with `tool_to_tool_info` in `inspect_ai.tool._tool_util`.
 - **The JSON request context on each provider call.** Inspect sends `x-inspect-context` with the fields listed in section 7: the version, the eval id, the task, the sample id, the epoch, the sample's uuid and the attempt. It sends the sample input and private metadata through registration.
-- **Inspect's sidecar client**, as section 9 describes: the probe at task init, registering the task where that is allowed, and the setting for a failed registration, `required` or `optional`.
+- **Inspect's sidecar client**, as section 9 describes: the probe at task init, registering the task where that is allowed, and one setting for the client, `auto`, `required` or `off`.
 - **A way to export what Inspect would register, as a tasks file.** A tasks file has to match the samples an eval runs, and at task init Inspect has the loaded task, its arguments and its dataset. Exporting from `inspect eval` the registration it would send gives an admin the file with nothing to reproduce. This is for the workstream that builds Inspect's sidecar client.
 - **Reading the `sentinel` field** on a reply, an error or the last event of a stream, and acting on it as in process: a call taken out goes back into Inspect's copy with an approval error, a changed call keeps the model's original, a `terminate` ends the sample, and every step is written into the transcript.
 - **A person's answer to a sentinel in a sidecar.** Inspect's approval UI shows a question that the sidecar holds, and the answer goes to the sidecar on the person's own credential. This follows incremental streaming in [PR 13](sidecar-plan.md#pr-13-human-review).
