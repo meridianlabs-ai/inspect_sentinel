@@ -26,11 +26,28 @@ How to write a monitor: a `@monitor` factory returning a function that takes a `
 - Monitor or protocol? Keeping thresholds out of monitors
 - Several functions in one monitor: `MonitorGroup`
 - An LLM monitor's `model=` and `role=` parameters, passed to `context.host.generate()` or `context.host.score()`: a model name and a model role (see [The Host and Model Roles](host.qmd))
-- Prompting an LLM monitor safely: separating instructions from evidence; a `StepPreprocessor` (windows `LastTurns`, `LastMessages` and `NewSinceLastReport` for the input, `history` and `agent_messages`, omissions, a `transform`; for an incremental monitor, put `NewSinceLastReport` on `history`, the append-only record of what was sent, which it resumes cheaply, since over `input` or `agent_messages` it rereads the whole list at each step) that chooses what a model sees, `preprocess_step()` to apply it and `step_as_str()` to render it; `monitor_prompt()` (planned)
+- Prompting an LLM monitor safely: separating instructions from evidence; a `StepPreprocessor` (windows `LastTurns`, `LastMessages` and `NewSinceLastReport` for the input, `history` and `agent_messages`, omissions, a `transform`) that chooses what a model sees, `preprocess_step()` to apply it and `step_as_str()` to render it; `monitor_prompt()` (planned)
 - Failures: a monitor that raises is recorded as failed and the step goes on; a protocol that reads its scores fails unless it checks `observations.failed`
 - Testing a monitor
 
 A scaffold can keep hidden side-task instructions out of `agent_messages` only when it owns the conversation as the outermost `@agent` agent function. `input` and `history` contain what the model was sent, including those instructions. To omit the request lists and show the agent's own list, use `StepPreprocessor(input_window=None, history_window=None, agent_messages_window=AllMessages())`. The default preprocessor shows all of `input`, so curation alone does not hide the instructions from the monitor model. Other stage content remains: every stage renders the request's tools and tool choice while `input` is known (a tool stage's are the producing request's); `AfterGenerate` renders the reply, including reasoning by default before the scaffold has curated it; both tool stages render the assistant text and call; and `AfterToolCall` renders the result. Strict blindness also needs a stage-specific `transform` or a custom prompt that curates these surfaces; a transform can clear `tools` and `tool_choice`. Check for `agent_messages=None` and abstain or say that the list is unavailable rather than falling back to `input` or `history`.
+
+An incremental monitor, one that shows its model only what is new since it last reported, chooses `input_window` as well as `history_window`. `StepPreprocessor` shows all of `input` by default, so windowing only `history` still sends the monitor model the whole request at every step. What to show depends on what the monitor judges:
+
+```python
+# not incremental: input_window defaults to AllMessages()
+StepPreprocessor(history_window=NewSinceLastReport(context))
+
+# what was already sent, at AfterGenerate or a tool stage: history holds the
+# request there, so omit input (or bound it with LastTurns or LastMessages)
+StepPreprocessor(input_window=None, history_window=NewSinceLastReport(context))
+
+# the request about to go out, at BeforeGenerate: history lags it by one
+# send, so keep input, showing only what is new in it
+StepPreprocessor(input_window=NewSinceLastReport(context))
+```
+
+`NewSinceLastReport` resumes `history`, which only grows, where it left off. Over `input` or `agent_messages`, which can be rewritten, it rereads the whole list at each step to find what is new, though it shows only that.
 
 ## Annotating Calls a Person Reviewed
 
