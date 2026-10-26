@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, TypeAlias, cast
 
@@ -42,6 +43,8 @@ from ._select import (
 )
 from ._sources import factory_sources, import_factory_sources
 from ._steps import transcript_steps
+
+logger = logging.getLogger(__name__)
 
 Stage: TypeAlias = Literal["model_input", "model_output", "tool_call", "tool_result"]
 
@@ -94,7 +97,7 @@ def as_scanner(
         results: `"step"` for one result per step, `"transcript"` for one per transcript: a monitor's highest suspicion, per dimension when structured, or a protocol's strongest decision, citing the steps that set it.
         stage: The stage whose steps give results; every stage the sentinel watches when None, each row carrying its stage. Every watched stage still runs either way. Scout's summary of a scan averages a scanner's values over all its rows, so pass `stage` for a summary of one stage.
         steps: Which steps to run the sentinel at: a label table (`StepTable`), such as a filtered results dataframe, or a selector `(transcript_id, step) -> bool` registered with `@step_selector`, or the `module:name` it is registered as. The others are not run, so a monitor's state does not see them. A transcript a table does not list gives no results and its steps are not rebuilt; narrow the scan's transcripts to the table's too, so they are not read.
-        human: How `human()` is answered where no answer was recorded at the step; a recorded answer is always given first. `"approve"`, `"reject"` or `"terminate"` gives that answer, or `terminate` where the asking `human()` does not offer it, as `reject` is not offered after a tool runs or a model replies. Or a stand-in registered with `@human_stand_in`, or the `module:name` it is registered as. A selector or stand-in defined in a notebook, REPL or `python -c` is refused, since a scan's worker processes cannot load it; put it in a `.py` file next to the notebook.
+        human: How `human()` is answered where no answer was recorded at the step; a recorded answer is always given first, to the `human()` at the path that recorded it, and the scan logs one warning where none of a transcript's recorded answers is at the path of a `human()` that asks. `"approve"`, `"reject"` or `"terminate"` gives that answer, or `terminate` where the asking `human()` does not offer it, as `reject` is not offered after a tool runs or a model replies. Or a stand-in registered with `@human_stand_in`, or the `module:name` it is registered as. A selector or stand-in defined in a notebook, REPL or `python -c` is refused, since a scan's worker processes cannot load it; put it in a `.py` file next to the notebook.
         timeline: The stored timeline whose agent spans and branches are the conversations, such as Petri's `"target"`, in place of the log's span tree. Raises for a transcript with no timeline of that name.
         depth: Run only steps whose conversation is at most this deep in the timeline (`ReplayStep.depth`), counting as `llm_scanner(depth=)` does. All steps when None.
 
@@ -146,8 +149,10 @@ def sentinel_replay(
     depth: int | None,
 ) -> Scanner[Transcript]:
     rebuilt = _Rebuilt(sentinel, sources, steps, human)
+    warned = False
 
     async def scan(transcript: Transcript) -> Result | list[Result]:
+        nonlocal warned
         root, selector, policy, contexts = rebuilt.get()
         stages = _stages(root, stage)
         transcript_id = transcript.transcript_id
@@ -168,6 +173,10 @@ def sentinel_replay(
             select=select,
             human=policy,
         )
+        unused = _unused_answers(built, reports)
+        if unused is not None and not warned:
+            warned = True
+            logger.warning(unused)
         citations = Citations(transcript, timeline)
         found: list[Result] = []
         label = ""
@@ -230,6 +239,23 @@ class _Rebuilt:
 
     def __getstate__(self) -> dict[str, Any]:
         return {**self.__dict__, "_built": None}
+
+
+def _unused_answers(
+    steps: Sequence[ReplayStep], reports: Sequence[ReplayReport]
+) -> str | None:
+    # recorded human() answers go only to the instance at the same path, so a
+    # sentinel whose human() asked at none of the recorded paths used none
+    recorded = {path for step in steps for path in step.recorded_answers}
+    asked = {path for report in reports for path in report.human_paths}
+    if not recorded or not asked or recorded & asked:
+        return None
+    instances = "human() is" if len(asked) == 1 else "human() instances are"
+    return f"The log has human() answers under {_listed(recorded)}, but this sentinel's {instances} at {_listed(asked)}; they were not used, and human= answered in their place. A recorded answer is given only to the human() at the path that recorded it."
+
+
+def _listed(paths: set[str]) -> str:
+    return ", ".join(repr(path) for path in sorted(paths))
 
 
 def within(path: str, scanned: str) -> bool:

@@ -91,7 +91,7 @@ def after_two_compactions(transcript_id: str, step: ReplayStep) -> bool:
 
 ### Human decisions
 
-`human()` cannot ask a person in a replay. Where the person answered at that step when the run was recorded, through the same `human()` instance, that answer is given again, always. Elsewhere `human=` answers:
+`human()` cannot ask a person in a replay. Where the person answered at that step when the run was recorded, through the same `human()` instance, that answer is given again, always. The instance is matched by its path, exactly: answers a log recorded under `triage/human` are not given to a sentinel whose `human()` is at `human`, and where none of a transcript's recorded answers match a `human()` that asks, the scan logs one warning naming both paths. Elsewhere `human=` answers:
 
 - `"reject"` (default), `"approve"` or `"terminate"`: that answer, so a protocol decides as it would live with that answer. A `human()` that does not offer it gets `terminate`, which `human()` takes whatever it offers, as the answer a host gives when nobody can be asked. So `"reject"` gives `terminate` after a tool runs or a model replies, where `reject` is not offered.
 - A stand-in for the person: an `async` function `(step, escalations, choices) -> HumanAnswer` decorated with `@human_stand_in`, such as an oracle built from labels, or a model. It is defined at module level, in a module or the scan's script, as a selector is.

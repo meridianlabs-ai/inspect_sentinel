@@ -1228,6 +1228,63 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
     )
 
 
+@pytest.mark.parametrize(
+    ("recorded_at", "source", "warnings"),
+    [
+        ("human", "recorded", []),
+        (
+            "triage/human",
+            "unanswered",
+            [
+                "The log has human() answers under 'triage/human', but this sentinel's human() is at 'human'; they were not used, and human= answered in their place. A recorded answer is given only to the human() at the path that recorded it."
+            ],
+        ),
+    ],
+)
+def test_answers_recorded_under_another_human_path_are_unused_with_one_warning(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    recorded_at: str,
+    source: str,
+    warnings: list[str],
+) -> None:
+    log = run(tmp_path / "run", [[call(9, "a")], [call(9, "b")]], None)
+    assert log.samples is not None
+    # an older log, whose answers each step carries as recorded, in which a
+    # person answered both calls through a human() at recorded_at
+    for sample in log.samples:
+        for event in sample.events:
+            if isinstance(event, ModelEvent):
+                event.origin = None
+        call_id = "a" if sample.id == 0 else "b"
+        sample.events.append(
+            SentinelEvent(
+                factory="inspect_sentinel/human",
+                path=recorded_at,
+                function="tool_call",
+                step_id=call_id,
+                conversation=sample.uuid or "",
+                stage="tool_call",
+                kind="decision",
+                status="reported",
+                action="proceed",
+                explanation="fine",
+            )
+        )
+    write_eval_log(log, str(tmp_path / "logs" / "old.eval"))
+    sentinel = sequential(
+        [threshold(by_argument(), escalate_at=0.5), human(stages=["tool_call"])]
+    )
+
+    with caplog.at_level("WARNING", logger="inspect_sentinel.scout"):
+        found = scanned(tmp_path / "scans", tmp_path / "logs", s=as_scanner(sentinel))
+
+    assert [row["metadata.human"] for row in found["s"]] == [source, source]
+    assert [
+        r.getMessage() for r in caplog.records if r.name.startswith("inspect_sentinel")
+    ] == warnings
+
+
 @solver
 def own_calls_and_an_agent() -> Solver:
     """The sample's own generate, then one in a top-level agent."""
