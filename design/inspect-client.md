@@ -97,12 +97,14 @@ Envoy and LiteLLM both forward `/sentinel/` at the root. An OpenAI base URL usua
 
 **Proposed: which endpoint, and how often.**
 
-- Inspect probes the endpoint of the task's assigned model: the model the eval runs with, such as `--model`.
-- It probes once per task.
-- Other models' endpoints are not probed. An agent call to another model at the same endpoint still gets Inspect's headers (section 3). A call to a different endpoint gets none (question J).
+- **At task start, Inspect probes the endpoint of the task's assigned model:** the model the eval runs with, such as `--model`. So `required` fails the task before any sample runs.
+- **Any other endpoint is probed the first time an agent call goes to it,** such as a model given to a role that the agent hands work to. Inspect can't know these up front, because an agent can pick a model at any point.
+- **Each endpoint is probed once per task,** per endpoint and credentials, and the answer is kept for the rest of the task.
+- **An endpoint only graders, approvers, compaction or monitors use is never probed,** because no agent call reaches it.
+- **An endpoint with no sidecar behind it gets plain model calls,** with none of Inspect's headers, as today.
 - Nothing is shared between tasks in this PR.
 
-More than one sidecar in a task is question J.
+Why it works this way, and what it costs, is question J.
 
 Models are shared between tasks inside Inspect. So the sidecar's state for a task lives with the task, not with the model.
 
@@ -155,7 +157,7 @@ This is an advanced setup, described in sidecar.md section 9:
 - [The tasks folder](sidecar.md#the-tasks-folder) shows how an admin writes the tasks.
 - [Advanced: a sidecar that runs only the tasks in its folder](sidecar.md#advanced-a-sidecar-that-runs-only-the-tasks-in-its-folder) shows a sidecar that runs only predefined tasks.
 
-**To decide:** what happens to a selected sample that isn't in the admin's file (question A below).
+**Decided:** a selected sample that isn't in the admin's file fails with a sample error that isn't retried (question A below).
 
 ## 3. Each model call
 
@@ -164,7 +166,7 @@ This is an advanced setup, described in sidecar.md section 9:
 **Proposed: which calls get it.** `x-inspect-context` goes only on calls that are:
 
 - **agent turns**, the calls the sentinel would judge if it ran inside Inspect. Calls made by a scorer's grader, an approver or a compaction summary are not.
-- **to the endpoint the probe found a sidecar at**, the assigned model's (section 1).
+- **to an endpoint where a probe found a sidecar**, whatever the model (section 1).
 
 `x-irid` is unchanged: Inspect sends it on every model call, as it does today.
 
@@ -320,7 +322,9 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 - *Decided:* option 1. Inspect turns the sidecar's refusal into a sample error, which says the admin didn't register the sample. The eval's own error settings decide what it tolerates, as for any other sample error: `fail_on_error` fails the eval on the first error by default, or allows a number or proportion of failed samples.
 
-- *Still to settle:* whether `retry_on_error` should retry such a sample. A retry asks the sidecar again and is refused the same way.
+- *Decided: the error is not retried.* A retry would be refused the same way, after running the sample's setup again. Inspect knows the cause for certain: the model call fails with a 400 and no `sentinel` field, so Inspect asks `request_result` (section 5), and the sidecar answers `not_judged` with the reason `unregistered`. Only that reason is never retried. The other reasons, such as `time_limit` or `provider_error`, can come out differently on another attempt, so they stay retryable.
+
+- *Needed in inspect_ai:* a sample error that `retry_on_error` doesn't retry. Today Inspect retries every sample error while retries remain, except a cancellation (`SampleAttempt` in `_eval/task/run.py`).
 
 ### B. Where should Inspect act on the sentinel's decisions?
 
@@ -372,7 +376,9 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 - *Option 2, keep asking until the sidecar answers something else:* closest to inside Inspect, where Inspect waits for its sentinel within the sample's limits. The sidecar can be started with a time limit for judging a step, after which it answers `not_judged`, but that limit is off by default. Without one, only the sample's own limits end the wait.
 
-- *Also to settle:* how often to ask, since each ask is a call through the proxy. A sample that errors or is cancelled must stop asking at once, and `end_sample` belongs where Inspect already records every way a sample can end, exactly once (inspect_ai's `design/sample-lifecycle.md`).
+- *Decided: how often to ask.* Inspect backs off: it asks again after half a second, then doubles the wait each time, up to a cap such as 10 seconds. A short judgment is caught quickly, and a long one costs only a few calls through the proxy. inspect_ai already backs off this way when it retries model calls (`_util/retry.py`). `request_result` can't wait for a judgment today. If the lag after a long wait ever matters, the sidecar could take an optional wait, at the cost of a request that stays quiet, which a proxy or load balancer may cut off.
+
+- *Also:* a sample that errors or is cancelled stops asking at once, and `end_sample` belongs where Inspect already records every way a sample can end, exactly once (inspect_ai's `design/sample-lifecycle.md`).
 
 - *Decided:* option 2, with the same settings Inspect has today for a sentinel inside it, and no new ones until users ask for them.
   - Inside Inspect, nothing limits how long a sentinel may take. While it runs, the sample's token, turn and working limits are paused, and only the sample's time limit, its clock time, still applies. Waiting on the sidecar works the same way.
@@ -483,21 +489,21 @@ The aim throughout is that a sentinel in a sidecar behaves as one inside Inspect
 
 ### J. What if a task's models sit behind more than one sidecar?
 
-- *What's going on:* a task can use several models. For example, an agent can hand part of its work to a model given to a role, and each model could go through a different proxy. Section 1 proposes probing only the task's assigned model.
+- *What's going on:* a task can use several models. For example, an agent can hand part of its work to a model given to a role, and each model could go through a different proxy, or straight to its provider.
 
 - *Already in inspect_ai's design:* inside Inspect, the sentinel judges every agent call: "a call is the agent's whatever model it uses" ([generate-stages.md](generate-stages.md#the-rule)).
 
-- *Why it matters:* with only the assigned model probed, an agent call to another model gets none of Inspect's headers, so no sidecar can tie it to its sample. That is a gap compared with inside Inspect, not just a simplification.
+- *Why it matters:* an agent call that gets none of Inspect's headers can't be tied to its sample by any sidecar. Probing only the assigned model would leave that gap for every other model the agent uses.
 
-- *Option 1, probe only the task's assigned model:* simple, and a task has at most one sidecar. But it leaves the gap above.
+- *Decided: probe each endpoint the agent uses, and send headers only where a sidecar answers* (section 1). The assigned model's endpoint is probed at task start. Any other endpoint is probed on the agent's first call to it, and the answer is kept for the task, per endpoint and credentials. An endpoint with no sidecar gets plain model calls. Endpoints that only graders, approvers, compaction or monitors use are never probed, since no agent call reaches them.
 
-- *Option 2, probe each endpoint the task's models use, once per endpoint and credentials:* every agent call is tied to its sample, as inside Inspect. inspect_ai already probes a proxy once per base URL and key when it sets up its LiteLLM provider. But a task can then have more than one sidecar, each needing its own registration, and Inspect needs a rule for combining their stores.
+- *What it adds:*
+  - Each sidecar found gets its own `register_task`, and its own `end_sample` when the sample ends. Inspect sends `request_result` to the sidecar the call went to.
+  - Registering can happen mid-run, on the agent's first call to a new endpoint. A failed or refused registration there fails that sample, not the task. This fits the registration that question F proposes, which comes in pieces anyway.
 
-- *Option 3, one proxy per task:* a proxy such as LiteLLM serves many models from one address, so a task whose models all go through one proxy has one endpoint and one sidecar, however many models it uses. Inspect probes the assigned model's endpoint, as section 1 says, and every agent call to that endpoint gets Inspect's headers, whatever its model (section 3). That closes the gap for a role model behind the same proxy. A task whose models go through different proxies isn't supported in PR 11.
+- *Stated plainly:* `required` covers only the assigned model's endpoint. An agent call to another endpoint with no sidecar behind it goes through unjudged, even under `required`.
 
-- *Direction:* option 3.
-
-- *Still to settle:* what Inspect does with an agent call to a different endpoint anyway, such as a role model pointed at another address. It could send the call without headers, so it isn't tied to its sample; fail the sample under `required`, so a deployment that relies on its sidecar never gets an agent call it can't place; or warn once.
+- *Still to settle:* monitor state from more than one sidecar. If Inspect's scorers are to read monitor state (question I), Inspect would copy it from each sidecar, and two sentinels could use the same names in it. If they aren't, this goes away.
 
 ### K. What about model calls that aren't the agent's?
 
