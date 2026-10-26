@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from typing import Literal, TypeAlias
@@ -9,6 +10,7 @@ from inspect_ai._sentinel._integration import EvalInfo, steps_from_events
 from inspect_ai.event import (
     Event,
     ModelEvent,
+    SentinelEvent,
     SpanBeginEvent,
     Timeline,
     TimelineEvent,
@@ -18,7 +20,7 @@ from inspect_ai.event import (
 from inspect_ai.log import condense_events
 from inspect_scout import Transcript
 
-from inspect_sentinel import ReplayStep
+from inspect_sentinel import BeforeGenerate, HumanAnswer, ReplayStep
 
 # sentinel's own messages projection, internal since 2026-10-26: the adapter
 # is its only caller
@@ -29,6 +31,7 @@ Turns: TypeAlias = Literal["recorded", "inferred", "stored"]
 _AGENT = "agent"
 # the registry name inspect_ai's built-in human approver records
 _HUMAN_APPROVER = "human"
+_HUMAN = "inspect_sentinel/human"
 
 
 def transcript_steps(
@@ -48,6 +51,9 @@ def transcript_steps(
                 transcript.messages, conversation=transcript.transcript_id
             )
         )
+        recorded = [e for e in transcript.events if isinstance(e, SentinelEvent)]
+        if recorded:
+            steps = _as_recorded(steps, recorded)
         turns = "inferred"
     else:
         # Scout hands every model input expanded, a list of messages it shares
@@ -178,6 +184,46 @@ def _origins(transcript: Transcript) -> bool:
     return any(
         isinstance(e, ModelEvent) and e.origin is not None for e in transcript.events
     )
+
+
+def _as_recorded(
+    steps: list[ReplayStep], recorded: list[SentinelEvent]
+) -> list[ReplayStep]:
+    # A transcript with no model events that ran a sentinel, which then keyed
+    # each generate's model_input step by its last input message's id: key
+    # them so, with a count on repeats, so its rows join read mode's, and
+    # give each step the human() answers recorded at it.
+    answers: dict[tuple[str, str], dict[str, HumanAnswer]] = {}
+    for event in recorded:
+        if (
+            event.factory == _HUMAN
+            and event.kind == "decision"
+            and event.status == "reported"
+            and event.action is not None
+        ):
+            answers.setdefault((event.stage, event.step_id), {})[event.path] = (
+                HumanAnswer(
+                    decision="approve" if event.action == "proceed" else event.action,
+                    reason=event.explanation,
+                    modified=event.modified,
+                )
+            )
+    seen = Counter[str]()
+    keyed: list[ReplayStep] = []
+    for step in steps:
+        step_id = step.id
+        if isinstance(step.step, BeforeGenerate):
+            last = (step.step.input[-1].id if step.step.input else None) or ""
+            seen[last] += 1
+            step_id = last if seen[last] == 1 else f"{last}:{seen[last]}"
+        keyed.append(
+            replace(
+                step,
+                id=step_id,
+                recorded_answers=answers.get((step.stage, step_id), {}),
+            )
+        )
+    return keyed
 
 
 def stored_conversations(transcript: Transcript, name: str) -> dict[str | None, str]:

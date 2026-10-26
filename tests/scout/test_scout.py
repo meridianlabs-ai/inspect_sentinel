@@ -1176,14 +1176,16 @@ def test_loading_inspect_ai_entry_points_does_not_load_scout(
     assert done.stdout.split()[-1] == "False"
 
 
+@pytest.mark.parametrize("model_events", [True, False])
 def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
-    tmp_path: Path,
+    tmp_path: Path, model_events: bool
 ) -> None:
     log = run(tmp_path / "run", [[call(9, "a")]], observe_only(replay_check()))
     assert log.samples is not None
     sample = log.samples[0]
     # as an inspect_ai of that time wrote it: no origins, and the generate
-    # stages keyed by the last input message's id and the output message's
+    # stages keyed by the last input message's id and the output message's;
+    # without model events, it replays from its messages
     turns = {e.uuid: e for e in sample.events if isinstance(e, ModelEvent) and e.uuid}
     for event in sample.events:
         if isinstance(event, ModelEvent):
@@ -1218,6 +1220,8 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
             explanation="not that",
         ),
     )
+    if not model_events:
+        sample.events = [e for e in sample.events if not isinstance(e, ModelEvent)]
     write_eval_log(log, str(tmp_path / "logs" / "old.eval"))
     escalating = sequential(
         [threshold(by_argument(), escalate_at=0.5), human(stages=["tool_call"])]
@@ -1239,7 +1243,10 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
         assert cited == {
             k: references(r, kind) for k, r in by_key(found["read"]).items()
         }
-    assert all(references(r, "event") for r in found["read"])
+    if model_events:
+        # read mode cites the step's model event, which a transcript without
+        # them does not have
+        assert all(references(r, "event") for r in found["read"])
     [row] = found["human"]
     assert (row["answer"], row["metadata.human"], row["metadata.turns"]) == (
         "reject",
