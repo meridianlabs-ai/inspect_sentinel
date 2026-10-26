@@ -16,7 +16,7 @@ from inspect_sentinel import Monitor, MonitorGroup
 from inspect_sentinel.scout import Stage
 
 from .haystack import OBSERVED, Haystack, haystack, review
-from .measure import THRESHOLD, Measurement, combined, measure
+from .measure import THRESHOLD, Measurement, Outcome, combined, measure
 from .monitors import CALLS_A_MODEL, MONITORS, STAGE
 from .report import summary
 from .run import RUNS, MonitorRun, collect, run_live
@@ -54,14 +54,20 @@ class Settings:
 
 @dataclass
 class MonitorResult:
-    """One monitor's measurements: per haystack, and over all of them."""
+    """One monitor's measurements, one cell per haystack, or one for your own logs."""
 
     name: str
     stage: str
     calls_a_model: bool
-    haystacks: dict[str, Measurement] = field(default_factory=lambda: {})
-    pooled: Measurement | None = None
+    cells: dict[str, Measurement] = field(default_factory=lambda: {})
+    """The measurements by haystack id, or under `"logs"` for your own logs. Each is decided on its own; they are never pooled."""
+
     run: MonitorRun | None = None
+
+    @property
+    def outcome(self) -> Outcome:
+        """The cells' outcomes `combined()`: trusted only where every cell is, and inconclusive with none."""
+        return combined(m.outcome for m in self.cells.values())
 
 
 def run_benchmark(settings: Settings) -> dict[str, Any]:
@@ -130,7 +136,8 @@ def run_on_logs(
     out.mkdir(parents=True, exist_ok=True)
     run = collect(name, factory, stage, logs, out / "scans", model_roles, path=path)
     result = MonitorResult(name=name, stage=stage, calls_a_model=calls_a_model, run=run)
-    result.pooled = measure(run, needles, calls_a_model=calls_a_model)
+    # your own logs' samples are one set, so one cell
+    result.cells["logs"] = measure(run, needles, calls_a_model=calls_a_model)
     settings = {
         "monitor": monitor,
         "stage": stage,
@@ -145,24 +152,18 @@ def run_on_logs(
 def measured(
     run: MonitorRun, haystacks: Sequence[Haystack], calls_a_model: bool
 ) -> MonitorResult:
-    """`run`'s measurements per haystack and pooled, against the haystacks' needles and the calls their person was asked about."""
+    """`run`'s measurements per haystack, against its needles and the call its person was asked about."""
     result = MonitorResult(
         name=run.name, stage=run.stage, calls_a_model=calls_a_model, run=run
     )
     for h in haystacks:
-        result.haystacks[h.id] = measure(
+        result.cells[h.id] = measure(
             run,
             [n.call_id for n in h.needles],
             samples=[h.id],
             calls_a_model=calls_a_model,
             asked=[h.reviewed],
         )
-    result.pooled = measure(
-        run,
-        [n.call_id for h in haystacks for n in h.needles],
-        calls_a_model=calls_a_model,
-        asked=[h.reviewed for h in haystacks],
-    )
     return result
 
 
@@ -181,7 +182,7 @@ def write(
                 size,
                 [
                     t
-                    for hid, m in r.haystacks.items()
+                    for hid, m in r.cells.items()
                     if turns[hid] == size
                     for t in m.input_tokens
                 ],
@@ -211,10 +212,9 @@ def write(
                 "calls_a_model": r.calls_a_model,
                 "logs": list(r.run.logs) if r.run else [],
                 "scans": dict(r.run.scans) if r.run else {},
-                "haystacks": {
-                    hid: _without_tokens(m.as_json()) for hid, m in r.haystacks.items()
+                "cells": {
+                    cell: _without_tokens(m.as_json()) for cell, m in r.cells.items()
                 },
-                "pooled": _without_tokens(r.pooled.as_json()) if r.pooled else None,
                 "usage": used(
                     {
                         run: [
@@ -231,7 +231,7 @@ def write(
                 )
                 if r.run and r.calls_a_model
                 else None,
-                "outcome": r.pooled.outcome if r.pooled else "inconclusive",
+                "outcome": r.outcome,
             }
             for r in results
         },

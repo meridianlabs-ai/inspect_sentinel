@@ -17,6 +17,22 @@ def summary(results: dict[str, Any]) -> str:
         "",
         f"**Outcome: {results['outcome']}.**",
         "",
+        "## Decisions",
+        "",
+        "Each monitor is decided on each haystack on its own, never on haystacks pooled: trusted only where every measurement is, not trusted where any finds a difference, and otherwise inconclusive, where a sample is too small to trust. A monitor is trusted only where every haystack is, and the run only where every monitor is. The findings say why a haystack is not trusted or inconclusive.",
+        "",
+        "| monitor | haystack | outcome | findings |",
+        "|---|---|---|---|",
+        *[
+            f"| {name} | {where} | {_outcome(m['outcome'])} | {'; '.join(why for _, why in m['findings'])} |"
+            for name, monitor in results["monitors"].items()
+            for where, m in _rows(monitor)
+        ],
+        *[
+            f"| **{name}** | all, each decided | {_outcome(monitor['outcome'])} | |"
+            for name, monitor in results["monitors"].items()
+        ],
+        "",
         "## 1. The same prompt",
         "",
         "Steps whose first monitor model request is identical live and in replay, after the nonce is replaced; beside them the same comparison between the two live runs and between the two replays. A monitor that asks its model again after an unusable answer sends that answer back, so those further requests are model noise: they are counted (asked again, in `live_a` and `replay_1`), not compared.",
@@ -33,20 +49,19 @@ def summary(results: dict[str, Any]) -> str:
             lines.append(
                 f"| {name} | {where} | {p['compared']} | {p['identical']} | {p['explained']} | {_maybe(p['live_floor'])} | {p['replay_floor']} | {p['asked_again']['live_a']} / {p['asked_again']['replay_1']} | {_outcome(m['same_prompt_outcome'])} |"
             )
-            if where == "all":
-                for known, count in p["by_known"].items():
-                    if count:
-                        differences.append(
-                            f"- {name}: {count} steps differ by a known difference: {known}."
-                        )
-                for d in (d for d in p["differences"] if d["known"] is None):
+            for known, count in p["by_known"].items():
+                if count:
                     differences.append(
-                        f"- {name}, {d['sample']} {d['stage']} `{d['key']}`: {d['reason']}, {d['known'] or 'unexplained'}"
+                        f"- {name}, {where}: {count} steps differ by a known difference: {known}."
                     )
-                    if d["diff"]:
-                        differences.extend(
-                            ["", "  ```diff", *[f"  {x}" for x in d["diff"]], "  ```"]
-                        )
+            for d in (d for d in p["differences"] if d["known"] is None):
+                differences.append(
+                    f"- {name}, {d['sample']} {d['stage']} `{d['key']}`: {d['reason']}, {d['known'] or 'unexplained'}"
+                )
+                if d["diff"]:
+                    differences.extend(
+                        ["", "  ```diff", *[f"  {x}" for x in d["diff"]], "  ```"]
+                    )
     if differences:
         lines.extend(["", "Differences, known and unexplained:", "", *differences])
     lines.extend(
@@ -88,15 +103,14 @@ def summary(results: dict[str, Any]) -> str:
             lines.append(
                 f"| {name} | {where} | {n['labelled']} | {sum(len(ids) for ids in lost.values())} | {len(n['changed'])} | {_proportion(n['recall']['live_a'])} | {_proportion(n['recall']['replay_1'])} | {_proportion(n['false_positive_rate']['live_a'])} | {_proportion(n['false_positive_rate']['replay_1'])} | {_outcome(m['needles_found_outcome'])} |"
             )
-            if where == "all":
-                missed.extend(
-                    f"- {name}: {run} missed {', '.join(f'`{i}`' for i in ids)}"
-                    for run, ids in lost.items()
-                )
-                missed.extend(
-                    f"- {name}: `{needle}` changed, flagged {n['flagged'][needle]}"
-                    for needle in n["changed"]
-                )
+            missed.extend(
+                f"- {name}, {where}: {run} missed {', '.join(f'`{i}`' for i in ids)}"
+                for run, ids in lost.items()
+            )
+            missed.extend(
+                f"- {name}, {where}: `{needle}` changed, flagged {n['flagged'][needle]}"
+                for needle in n["changed"]
+            )
     if missed:
         lines.extend(["", "Needles missed or changed:", "", *missed])
     human = [
@@ -122,12 +136,11 @@ def summary(results: dict[str, Any]) -> str:
                 ],
             ]
         )
-        for name, where, m in human:
-            if where == "all":
-                lines.extend(
-                    f"- {name}, {d['sample']} `{d['call']}`: answers {d['answers']}, sources {d['sources']}"
-                    for d in m["same_human_answers"]["differences"]
-                )
+        for name, _, m in human:
+            lines.extend(
+                f"- {name}, {d['sample']} `{d['call']}`: answers {d['answers']}, sources {d['sources']}"
+                for d in m["same_human_answers"]["differences"]
+            )
     usage: list[tuple[str, str, dict[str, Any]]] = [
         (name, run, u)
         for name, monitor in results["monitors"].items()
@@ -191,10 +204,7 @@ def summary(results: dict[str, Any]) -> str:
 
 
 def _rows(monitor: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    rows = list(monitor["haystacks"].items())
-    if monitor["pooled"] is not None:
-        rows.append(("all", monitor["pooled"]))
-    return rows
+    return list(monitor["cells"].items())
 
 
 def _settings(settings: dict[str, Any]) -> str:
