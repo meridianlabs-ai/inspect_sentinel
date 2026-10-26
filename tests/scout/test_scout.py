@@ -11,6 +11,15 @@ import anyio
 import pytest
 from inspect_ai import Task, eval
 from inspect_ai._sentinel._integration import EvalInfo, steps_from_events
+from inspect_ai.approval import (
+    Approval,
+    ApprovalPolicy,
+    Approver,
+    approver,
+    human_approver,
+)
+from inspect_ai.approval._human import acp as acp_module
+from inspect_ai.approval._human import approver as approver_module
 from inspect_ai.dataset import Sample
 from inspect_ai.event import (
     Event,
@@ -37,7 +46,7 @@ from inspect_ai.model import (
     get_model,
 )
 from inspect_ai.solver import Generate, Solver, TaskState, generate, solver, use_tools
-from inspect_ai.tool import Tool, ToolError, tool
+from inspect_ai.tool import Tool, ToolCall, ToolCallView, ToolError, tool
 from inspect_ai.util import StoreModel
 from inspect_ai.util._span import span
 from inspect_scout import (
@@ -662,8 +671,9 @@ def two_branches() -> Solver:
     return solve
 
 
+@pytest.mark.parametrize("origins", [True, False])
 def test_a_petri_shaped_log_replays_one_conversation_per_branch(
-    tmp_path: Path,
+    tmp_path: Path, origins: bool
 ) -> None:
     # Petri stores a "target" timeline whose branches are the rolled-back
     # attempts, which the span tree alone puts in one conversation
@@ -673,6 +683,8 @@ def test_a_petri_shaped_log_replays_one_conversation_per_branch(
         log_dir=str(tmp_path / "run"),
         display="none",
     )
+    if not origins:
+        without_origins(log)
     assert log.samples is not None
     sample = log.samples[0]
     spans = {e.name: e.id for e in sample.events if isinstance(e, SpanBeginEvent)}
@@ -1183,9 +1195,17 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
                 if event.stage == "model_input"
                 else turn.output.message.id or ""
             )
-    # a person rejected the call through human(), as a sentinel recorded it
-    sample.events.append(
+    # a person rejected the call through human(), as a sentinel recorded it:
+    # in the sentinel span of the call's tool_call step
+    at, step = next(
+        (i, e)
+        for i, e in enumerate(sample.events)
+        if isinstance(e, SentinelEvent) and (e.stage, e.step_id) == ("tool_call", "a")
+    )
+    sample.events.insert(
+        at + 1,
         SentinelEvent(
+            span_id=step.span_id,
             factory="inspect_sentinel/human",
             path="human",
             function="tool_call",
@@ -1196,7 +1216,7 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
             status="reported",
             action="reject",
             explanation="not that",
-        )
+        ),
     )
     write_eval_log(log, str(tmp_path / "logs" / "old.eval"))
     escalating = sequential(
@@ -2177,3 +2197,139 @@ async def test_the_probe_digests_a_context_a_sidecar_learns_late() -> None:
     assert before["replay_check"] == before["hands_over"]
     assert after["replay_check"] == after["hands_over"]
     assert before["hands_over"] != after["hands_over"]
+
+
+# logs that do not record where each model call was made (R7 PR 6)
+
+
+def without_origins(log: EvalLog) -> EvalLog:
+    # as an inspect_ai from before ModelEvent.origin wrote it
+    for sample in log.samples or []:
+        for event in sample.events:
+            if isinstance(event, ModelEvent):
+                event.origin = None
+    return log
+
+
+@pytest.mark.parametrize(
+    "stage", ["model_input", "model_output", "tool_call", "tool_result"]
+)
+def test_a_log_without_origins_replays_as_one_with_them(
+    tmp_path: Path, stage: Stage
+) -> None:
+    log = run(
+        tmp_path / "run",
+        [[call(1), call(2)], [call(3)]],
+        observe_only(replay_check()),
+        helpers=[call(5, f"sub{i}") for i in range(2)],
+    )
+    write_eval_log(log, str(tmp_path / "recorded" / "log.eval"))
+    write_eval_log(without_origins(log), str(tmp_path / "inferred" / "log.eval"))
+
+    found = {
+        name: scanned(
+            tmp_path / f"scans-{name}",
+            tmp_path / name,
+            replay=as_scanner(replay_check(), stage=stage),
+        )["replay"]
+        for name in ("recorded", "inferred")
+    }
+
+    recorded = keyed(found["recorded"], "metadata.metadata")
+    inferred = keyed(found["inferred"], "metadata.metadata")
+    assert recorded and inferred == recorded
+    assert {r["metadata.turns"] for r in found["recorded"]} == {"recorded"}
+    assert {r["metadata.turns"] for r in found["inferred"]} == {"inferred"}
+
+
+@monitor
+def decisions_so_far() -> MonitorGroup:
+    # the human() decisions a generate is handed
+    async def model_input(context: Context, step: BeforeGenerate) -> Observation:
+        return Observation(
+            suspicion=0.0,
+            metadata={
+                "decisions": [
+                    [d.decided.name, d.decided.report.action]
+                    for d in step.human_decisions or []
+                ]
+            },
+        )
+
+    return MonitorGroup(model_input)
+
+
+@approver(name="team_review")
+def team_review() -> Approver:
+    async def approve(
+        message: str, call: ToolCall, view: ToolCallView, history: list[ChatMessage]
+    ) -> Approval:
+        return Approval(decision="reject", explanation="not ours")
+
+    return approve
+
+
+@pytest.mark.parametrize("person", ["human", "team_review"])
+def test_only_the_built_in_human_approver_is_a_person_in_a_log_without_a_sentinel(
+    tmp_path: Path, person: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def acp(**kwargs: object) -> Approval | None:
+        return None
+
+    async def panel(
+        message: str,
+        call: ToolCall,
+        view: ToolCallView,
+        history: object,
+        choices: list[str],
+    ) -> Approval:
+        return Approval(decision="reject", explanation="not that")
+
+    monkeypatch.setattr(acp_module, "request_human_approval_via_acp", acp)
+    monkeypatch.setattr(approver_module, "panel_approval", panel)
+    [log] = eval(
+        Task(
+            dataset=[Sample(input="add")],
+            solver=[use_tools(addition()), generate()],
+            approval=[
+                ApprovalPolicy(
+                    human_approver() if person == "human" else team_review(), "*"
+                )
+            ],
+        ),
+        model=get_model(
+            "mockllm/model",
+            custom_outputs=[call(1), ModelOutput.from_content("mockllm/model", "done")],
+        ),
+        log_dir=str(tmp_path / "run"),
+        display="none",
+    )
+    assert log.status == "success", log.error
+    write_eval_log(without_origins(log), str(tmp_path / "logs" / "log.eval"))
+
+    found = scanned(
+        tmp_path / "scans", tmp_path / "logs", replay=as_scanner(decisions_so_far())
+    )
+
+    last = found["replay"][-1]["metadata.metadata"]["decisions"]
+    assert last == ([["human", "reject"]] if person == "human" else [])
+
+
+def test_a_transcript_without_model_events_replays_from_its_messages(
+    tmp_path: Path,
+) -> None:
+    log = run(tmp_path / "run", [[call(1), call(2)]], None)
+    assert log.samples is not None
+    sample = log.samples[0]
+    sample.events = [e for e in sample.events if not isinstance(e, ModelEvent)]
+    write_eval_log(log, str(tmp_path / "logs" / "log.eval"))
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        replay=as_scanner(conversations()),
+    )
+
+    generates = [m for m in sample.messages if isinstance(m, ChatMessageAssistant)]
+    assert len(found["replay"]) == len(generates)
+    assert {r["metadata.turns"] for r in found["replay"]} == {"inferred"}

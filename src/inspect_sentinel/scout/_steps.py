@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from typing import Literal, TypeAlias
@@ -10,7 +9,6 @@ from inspect_ai._sentinel._integration import EvalInfo, steps_from_events
 from inspect_ai.event import (
     Event,
     ModelEvent,
-    SentinelEvent,
     SpanBeginEvent,
     Timeline,
     TimelineEvent,
@@ -20,11 +18,7 @@ from inspect_ai.event import (
 from inspect_ai.log import condense_events
 from inspect_scout import Transcript
 
-from inspect_sentinel import (
-    BeforeGenerate,
-    HumanAnswer,
-    ReplayStep,
-)
+from inspect_sentinel import ReplayStep
 
 # sentinel's own messages projection, internal since 2026-10-26: the adapter
 # is its only caller
@@ -33,33 +27,28 @@ from inspect_sentinel._from_messages import steps_from_messages
 Turns: TypeAlias = Literal["recorded", "inferred", "stored"]
 
 _AGENT = "agent"
-_HUMAN = "inspect_sentinel/human"
+# the registry name inspect_ai's built-in human approver records
+_HUMAN_APPROVER = "human"
 
 
 def transcript_steps(
     transcript: Transcript, eval_info: EvalInfo, timeline: str | None
 ) -> tuple[list[ReplayStep], Turns]:
-    # A log that records where each model call was made replays from its
-    # events, the driver inspect_ai shares with live. One that does not, an
-    # older Inspect log or another source, replays from its messages, each
-    # assistant message taken for an agent turn, until turns can be inferred
-    # from its timeline (R7 PR 6). Each step gets its conversation's depth in
-    # the chosen timeline.
+    # A transcript with model events replays from them, through the driver
+    # inspect_ai shares with live: by the origins its log records, else with
+    # turns inferred from its timeline (older Inspect logs, other sources).
+    # One with none replays from its messages, each assistant message taken
+    # for an agent turn. Each step gets its conversation's depth in the
+    # chosen timeline.
     stored = _timeline(transcript, timeline) if timeline is not None else None
-    if not _origins(transcript):
-        if stored is not None:
-            raise NotImplementedError(
-                f"as_scanner(timeline={timeline!r}) needs a log that records where each model call was made (ModelEvent.origin); replaying older logs by their timeline comes later."
-            )
+    turns: Turns
+    if not _model_events(transcript):
         steps = list(
             steps_from_messages(
                 transcript.messages, conversation=transcript.transcript_id
             )
         )
-        recorded = [e for e in transcript.events if isinstance(e, SentinelEvent)]
-        if recorded:
-            steps = _as_recorded(steps, recorded)
-        turns: Turns = "inferred"
+        turns = "inferred"
     else:
         # Scout hands every model input expanded, a list of messages it shares
         # between inputs; the driver reads inputs as ranges of a pool, so pool
@@ -73,8 +62,17 @@ def transcript_steps(
             sample_uuid=transcript.transcript_id,
             eval_info=eval_info,
             timeline=stored,
+            # in a log from an eval that ran no sentinel, the decisions of
+            # inspect_ai's built-in human approver, and no other, are a
+            # person's
+            human_approvers=(_HUMAN_APPROVER,),
         )
-        turns = "stored" if stored is not None else "recorded"
+        if stored is not None:
+            turns = "stored"
+        elif _origins(transcript):
+            turns = "recorded"
+        else:
+            turns = "inferred"
     depths = _depths(transcript, stored)
     return [replace(s, depth=depths.get(s.step.conversation)) for s in steps], turns
 
@@ -93,7 +91,7 @@ def _depths(transcript: Transcript, stored: Timeline | None) -> dict[str, int]:
         and isinstance(item.event, ModelEvent)
         and item.event.uuid is not None
     }
-    if not _origins(transcript):
+    if not _model_events(transcript):
         # the messages projection's steps are all in the transcript's own
         conversations: dict[str | None, str] = dict.fromkeys(
             levels, transcript.transcript_id
@@ -172,50 +170,14 @@ def _walk_spans(
             yield from _walk_spans(item, depth, scannable_depth)
 
 
+def _model_events(transcript: Transcript) -> bool:
+    return any(isinstance(e, ModelEvent) for e in transcript.events)
+
+
 def _origins(transcript: Transcript) -> bool:
     return any(
         isinstance(e, ModelEvent) and e.origin is not None for e in transcript.events
     )
-
-
-def _as_recorded(
-    steps: list[ReplayStep], recorded: list[SentinelEvent]
-) -> list[ReplayStep]:
-    # A log from before recorded origins that ran a sentinel: key each
-    # generate's model_input step as live did then, by its last input
-    # message's id with a count on repeats, so its rows join read mode's, and
-    # give each step the human() answers recorded at it.
-    answers: dict[tuple[str, str], dict[str, HumanAnswer]] = {}
-    for event in recorded:
-        if (
-            event.factory == _HUMAN
-            and event.kind == "decision"
-            and event.status == "reported"
-            and event.action is not None
-        ):
-            answers.setdefault((event.stage, event.step_id), {})[event.path] = (
-                HumanAnswer(
-                    decision="approve" if event.action == "proceed" else event.action,
-                    reason=event.explanation,
-                    modified=event.modified,
-                )
-            )
-    seen = Counter[str]()
-    keyed: list[ReplayStep] = []
-    for step in steps:
-        step_id = step.id
-        if isinstance(step.step, BeforeGenerate):
-            last = (step.step.input[-1].id if step.step.input else None) or ""
-            seen[last] += 1
-            step_id = last if seen[last] == 1 else f"{last}:{seen[last]}"
-        keyed.append(
-            replace(
-                step,
-                id=step_id,
-                recorded_answers=answers.get((step.stage, step_id), {}),
-            )
-        )
-    return keyed
 
 
 def stored_conversations(transcript: Transcript, name: str) -> dict[str | None, str]:
