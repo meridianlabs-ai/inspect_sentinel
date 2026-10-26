@@ -54,7 +54,7 @@ Judging happens wherever the sentinel runs: client side when the sentinel runs i
 
 ## 1. Finding the sidecar
 
-**Short version:** at the start of each task, Inspect asks the proxy once whether a sidecar is there. If it isn't, nothing else in this document happens.
+**Short version:** at the start of each task, if the model's base URL was set, Inspect asks the proxy there once whether a sidecar is there. If it isn't, nothing else in this document happens.
 
 **In the plan.** Inspect sends `GET /sentinel/info`. A sidecar answers:
 
@@ -68,7 +68,7 @@ Inspect goes on only if `versions` holds a version it knows.
 
 | Mode | What Inspect does |
 | --- | --- |
-| `auto`, the default | Probes quietly, and uses a sidecar it finds. If the probe can't tell, Inspect carries on as today. |
+| `auto`, the default | Probes quietly, only where a base URL was set, and uses a sidecar it finds. If the probe can't tell, Inspect carries on as today. |
 | `required` | Fails the task at the start unless a sidecar Inspect supports answers. |
 | `off` | Doesn't probe, and runs as today. |
 
@@ -98,6 +98,8 @@ Envoy and LiteLLM both forward `/sentinel/` at the root. An OpenAI base URL usua
 
 **Proposed: which endpoint, and how often.**
 
+- **Under `auto`, Inspect probes only an endpoint whose base URL was set,** in any of the ways inspect_ai's `model_base_url()` reads one: `--model-base-url`, the model's `base_url` argument, the provider's base URL environment variable (such as `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`), or `INSPECT_EVAL_MODEL_BASE_URL`. A provider's own default address is never probed, because a sidecar can only sit behind a proxy that Inspect was pointed at. An eval that calls a provider directly sends the same requests as today.
+- **Under `required`, the assigned model's endpoint is probed whatever its address,** so a task that relies on a sidecar fails if it is pointed at the provider directly.
 - **At task start, Inspect probes the endpoint of the task's assigned model:** the model the eval runs with, such as `--model`. So `required` fails the task before any sample runs.
 - **Any other endpoint is probed the first time an agent call goes to it,** such as a model given to a role that the agent hands work to. Inspect can't know these up front, because an agent can pick a model at any point.
 - **Each endpoint is probed once per task,** per endpoint and credentials, and the answer is kept for the rest of the task.
@@ -392,7 +394,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 ### J. Models behind more than one proxy
 
-- Inspect probes each endpoint the agent uses, because inside Inspect the sentinel judges every agent call: "a call is the agent's whatever model it uses" (Meridian's [generate-stages.md](generate-stages.md#the-rule)). It probes the assigned model's endpoint at task start, and any other on the agent's first call to it, once per endpoint and credentials, as inspect_ai already probes a LiteLLM proxy once per base URL and key (`design/litellm-proxy.md`). An endpoint that only graders, approvers, compaction or monitors use is never probed, since no agent call reaches it.
+- Inspect probes each endpoint the agent uses whose base URL was set (section 1), because inside Inspect the sentinel judges every agent call: "a call is the agent's whatever model it uses" (Meridian's [generate-stages.md](generate-stages.md#the-rule)). It probes the assigned model's endpoint at task start, and any other on the agent's first call to it, once per endpoint and credentials, as inspect_ai already probes a LiteLLM proxy once per base URL and key (`design/litellm-proxy.md`). An endpoint that only graders, approvers, compaction or monitors use is never probed, since no agent call reaches it.
 
 - Inspect's headers go only on agent calls to an endpoint where a sidecar answered. Every other endpoint gets plain model calls, as today.
 
