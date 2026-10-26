@@ -145,16 +145,16 @@ Replay reproduces the monitor's *reports*, not its *effects*. A `reject` in repl
 
 ## Step ids
 
-Per-step validation needs each step to have an id that exists in a messages-only transcript, in an events transcript, and **live, at the moment the monitor runs** — so that a label made once serves replay and also the read mode over recorded events. Message and tool-call ids satisfy that. Event uuids do not: a `BeforeGenerate` monitor runs before its `ModelEvent` exists.
+Per-step validation needs each step to have an id that exists in an events transcript and **live, at the moment the monitor runs** — so that a label made once serves replay and also the read mode over recorded events. Tool call ids satisfy that. At the generate stages the step id is the generate's own id, the `uuid` of its first `ModelEvent`, which inspect_ai mints before `BeforeGenerate` runs (inspect_ai #5990), so it exists live before the monitor runs and is recorded on the event. A messages-only transcript has no `ModelEvent`s, so it has no generate id.
 
 | Stage | Step id |
 |------------------------|------------------------|
-| `BeforeGenerate` | id of the last input message — the one that triggered the generate |
-| `AfterGenerate` | id of the assistant message produced |
+| `BeforeGenerate` | the generate's id: the `uuid` of its first `ModelEvent` |
+| `AfterGenerate` | the same id, so a generate's two steps join |
 | `BeforeToolCall` | the tool call id |
 | `AfterToolCall` | the tool call id |
 
-One wrinkle: a rejected call followed by a regenerate produces two `BeforeGenerate` steps behind the same last message. That stage takes an ordinal suffix on repeat — `{message_id}:2` — and the other three stages are clean. Within one monitor's stage, ids are unique per transcript; a `BeforeToolCall` monitor and an `AfterToolCall` monitor both key by tool call id, but validation sets are per scanner so there is no collision.
+A provider retry inside one call keeps the generate's id; a rejected call followed by a regenerate is a new `Model.generate()` call with its own id. Message ids are no longer used at the generate stages, so the ordinal suffix they needed on a repeat (`{message_id}:2`) is retired, and two cache hits on one request no longer share an id. Within one monitor's stage, ids are unique per transcript; a `BeforeToolCall` monitor and an `AfterToolCall` monitor both key by tool call id, but validation sets are per scanner so there is no collision.
 
 **Consequence for `sentinel.md`:** `SentinelEvent` gains `step_id: str`, recorded by the runner live, so the read-mode scanner emits results with the same subjects the replay scanner does.
 
