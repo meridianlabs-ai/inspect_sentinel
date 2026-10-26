@@ -80,7 +80,7 @@ anthropic = ["anthropic>=2.0.0"]
 # Replay through Inspect Scout (inspect_sentinel.scout). Scout is a runtime
 # dependency already, for step_as_str; this extra names the first Scout
 # release that loads a scanner's timelines only when it asks for them, which
-# as_scanner(timeline=, depth=) does.
+# as_scanner(timeline=) does.
 scout = ["inspect-scout>=0.6.1"]
 openai = ["openai>=3.4.0"]
 # The docs tools are in `doc`, which `dev` leaves out: CI installs `dev` and

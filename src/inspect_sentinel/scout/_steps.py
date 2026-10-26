@@ -81,14 +81,10 @@ def transcript_steps(
 
 def _depths(transcript: Transcript, stored: Timeline | None) -> dict[str, int]:
     # each conversation's depth: the shallowest level Scout's walk, as
-    # llm_scanner(depth=) walks, gives a span holding one of its model calls
-    tree = (
-        stored
-        if stored is not None
-        else transcript.timelines[0]
-        if transcript.timelines
-        else timeline_build(transcript.events)
-    )
+    # llm_scanner(depth=) walks, gives a span holding one of its model calls,
+    # in the timeline the conversations come from: the stored one chosen,
+    # else one built from the span tree, whatever the transcript stores
+    tree = stored if stored is not None else timeline_build(transcript.events)
     levels = {
         item.event.uuid: level
         for span, level in _walk_spans(tree.root, None)

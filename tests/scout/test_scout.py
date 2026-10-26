@@ -1345,8 +1345,7 @@ def test_depth_reads_a_transcripts_model_inputs_as_scout_does(tmp_path: Path) ->
     def seen(found: list[Row]) -> set[str]:
         return {r["metadata.metadata"]["conversation"] for r in found}
 
-    # Scout builds the timeline a scanner asks for where a log stores none; a
-    # transcript handed to the scanner without one has it built by depth=
+    # the same holds for a transcript handed to the scanner directly
     handed = Transcript(
         transcript_id=sample.uuid or "",
         messages=sample.messages,
@@ -1359,6 +1358,88 @@ def test_depth_reads_a_transcripts_model_inputs_as_scout_does(tmp_path: Path) ->
     assert {r.metadata["metadata"]["conversation"] for r in results if r.metadata} == {
         spans["agent"]
     }
+
+
+def test_depth_without_timeline_is_the_span_trees_whatever_is_stored(
+    tmp_path: Path,
+) -> None:
+    # the steps' conversations come from the span tree unless timeline= names
+    # a stored timeline, so their depth does too, even where the log stores a
+    # timeline that puts every model call in a branch, which no depth reaches
+    [log] = eval(
+        Task(dataset=[Sample(input="go")], solver=nested_agents()),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "run"),
+        display="none",
+    )
+    assert log.samples is not None
+    sample = log.samples[0]
+    calls: list[TimelineEvent | TimelineSpan] = [
+        TimelineEvent(event=e) for e in sample.events if isinstance(e, ModelEvent)
+    ]
+    sample.timelines = [
+        Timeline(
+            name="target",
+            description="",
+            root=TimelineSpan(
+                id="target",
+                name="target",
+                content=[],
+                branches=[TimelineSpan(id="rollback", name="rollback", content=calls)],
+            ),
+        )
+    ]
+    write_eval_log(log, str(tmp_path / "logs" / "stored.eval"))
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        top=as_scanner(conversations(), depth=1),
+        all=as_scanner(conversations()),
+        stored=as_scanner(conversations(), timeline="target", depth=1),
+    )
+
+    assert [r["metadata.depth"] for r in found["all"]] == [1, 2]
+    assert [r["metadata.depth"] for r in found["top"]] == [1]
+    assert found["stored"] == []
+    # a transcript handed to the scanner directly, with its stored timeline
+    handed = Transcript(
+        transcript_id=sample.uuid or "",
+        messages=sample.messages,
+        events=sample.events,
+        timelines=sample.timelines,
+    )
+    results = anyio.run(as_scanner(conversations(), depth=1), handed)
+    assert isinstance(results, list)
+    assert [r.metadata["depth"] for r in results if r.metadata] == [1]
+
+
+def test_depth_builds_one_timeline_per_transcript(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import inspect_ai.event
+
+    from inspect_sentinel.scout import _steps
+
+    run(tmp_path / "logs", [[call(1)], [call(2)], [call(3)]], None)
+    built = 0
+    build = inspect_ai.event.timeline_build
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        nonlocal built
+        built += 1
+        return build(*args, **kwargs)
+
+    # Scout's own build imports it from inspect_ai.event when it runs
+    monkeypatch.setattr(inspect_ai.event, "timeline_build", counted)
+    monkeypatch.setattr(_steps, "timeline_build", counted)
+
+    found = scanned(
+        tmp_path / "scans", tmp_path / "logs", s=as_scanner(by_argument(), depth=1)
+    )
+
+    assert len(found["s"]) == 3
+    assert built == 3
 
 
 @tool

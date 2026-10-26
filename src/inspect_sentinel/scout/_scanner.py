@@ -184,9 +184,11 @@ def sentinel_replay(
             return transcript_result(found, label)
         return found
 
-    # Scout reads timelines only for a scanner that asks for them, and every
-    # step's depth is counted in one
-    setattr(scan, TIMELINE_NEEDED_ATTR, True)
+    if timeline is not None:
+        # Scout reads stored timelines only for a scanner that asks for them;
+        # without one, each step's depth is counted in a timeline built from
+        # the span tree, so Scout is not asked to build another
+        setattr(scan, TIMELINE_NEEDED_ATTR, True)
     return scan
 
 
