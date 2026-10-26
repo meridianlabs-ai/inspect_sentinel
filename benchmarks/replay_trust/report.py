@@ -47,7 +47,7 @@ def summary(results: dict[str, Any]) -> str:
             if p is None:
                 continue
             lines.append(
-                f"| {name} | {where} | {p['compared']} | {p['identical']} | {p['explained']} | {_maybe(p['live_floor'])} | {p['replay_floor']} | {p['asked_again']['live_a']} / {p['asked_again']['replay_1']} | {_outcome(m['same_prompt_outcome'])} |"
+                f"| {name} | {where} | {p['compared']} | {p['identical']} | {p['explained']} | {p['live_floor']} | {p['replay_floor']} | {p['asked_again']['live_a']} / {p['asked_again']['replay_1']} | {_outcome(m['same_prompt_outcome'])} |"
             )
             for known, count in p["by_known"].items():
                 if count:
@@ -79,7 +79,7 @@ def summary(results: dict[str, Any]) -> str:
         for where, m in _rows(monitor):
             v = m["same_verdict"]
             lines.append(
-                f"| {name} | {where} | {v['steps']} | {v['unmatched']} | {' / '.join(str(_disagreements(p)) for p in v['pairs'].values())} | {_maybe(_disagreements(v['noise'].get('live_a vs live_b')))} | {_disagreements(v['noise']['replay_1 vs replay_2'])} | {_number(min(p['p_value'] for p in v['pairs'].values()))} | {_number(min(p['excess_p_value'] for p in v['pairs'].values()))} | {_number(v['alpha'])} | {_number(v['mean_abs_difference'])} | {_outcome(m['same_verdict_outcome'])} |"
+                f"| {name} | {where} | {v['steps']} | {v['unmatched']} | {' / '.join(str(_disagreements(p)) for p in v['pairs'].values())} | {_disagreements(v['noise']['live_a vs live_b'])} | {_disagreements(v['noise']['replay_1 vs replay_2'])} | {_number(min(p['p_value'] for p in v['pairs'].values()))} | {_number(min(p['excess_p_value'] for p in v['pairs'].values()))} | {_number(v['alpha'])} | {_number(v['mean_abs_difference'])} | {_outcome(m['same_verdict_outcome'])} |"
             )
     lines.extend(
         [
@@ -217,12 +217,8 @@ def _proportion(p: dict[str, Any]) -> str:
     return f"{p['k']}/{p['n']} = {p['rate']:.2f} [{p['low']:.2f}, {p['high']:.2f}]"
 
 
-def _disagreements(pair: dict[str, Any] | None) -> int | None:
-    return None if pair is None else pair["first_only"] + pair["second_only"]
-
-
-def _maybe(value: Any) -> str:
-    return "n/a" if value is None else str(value)
+def _disagreements(pair: dict[str, Any]) -> int:
+    return pair["first_only"] + pair["second_only"]
 
 
 def _number(value: float | None) -> str:

@@ -97,13 +97,13 @@ class MonitorRun:
     """The steps at `stage`, in `live_a`'s order."""
 
     logs: tuple[str, ...]
-    """The live logs: `live_a`'s, and `live_b`'s where there was a second live run."""
+    """The live logs: `live_a`'s and `live_b`'s."""
 
     scans: dict[str, str]
     """Each scan's location, by what it read or replayed."""
 
-    asked: list[Asked] | None = None
-    """The calls `human()` was asked about, in `live_a`'s order; None where the review was not replayed."""
+    asked: list[Asked] = field(default_factory=lambda: [])
+    """The calls `human()` was asked about, in `live_a`'s order."""
 
 
 def run_live(
@@ -139,8 +139,8 @@ def collect(
     scans: Path,
     model_roles: Mapping[str, str],
     *,
-    path: str | None = None,
-    review: Callable[[], Sentinels] | None = None,
+    path: str,
+    review: Callable[[], Sentinels],
 ) -> MonitorRun:
     """Read `monitor`'s live reports from `logs`, replay it twice over the first, and gather each step at `stage` across the runs.
 
@@ -148,14 +148,14 @@ def collect(
         name: A name for the monitor, for the scans.
         monitor: Makes the monitor to replay, as it ran live.
         stage: The stage to measure.
-        logs: One or two live logs of the same samples with the monitor attached, the second for the live-against-live noise floor.
+        logs: Two live logs of the same samples with the monitor attached, the second for the live-against-live noise floor.
         scans: Where to write the scans.
         model_roles: The model roles for the replays, as the live runs had them.
-        path: The monitor's instance path in the live sentinel, for read mode; `name` when None, as for a lone monitor.
-        review: Makes the part of the live sentinel that asks `human()`, with the instance paths it had live, to replay in each replay beside the monitor; the answers are not gathered when None.
+        path: The monitor's instance path in the live sentinel, for read mode.
+        review: Makes the part of the live sentinel that asks `human()`, with the instance paths it had live, to replay in each replay beside the monitor.
     """
-    if not 1 <= len(logs) <= 2:
-        raise ValueError(f"collect() takes one or two live logs, got {len(logs)}.")
+    if len(logs) != 2:
+        raise ValueError(f"collect() takes two live logs, got {len(logs)}.")
     read = [read_eval_log(log, resolve_attachments=True) for log in logs]
     records: dict[Key, StepRecord] = {}
     order: list[Key] = []
@@ -184,12 +184,12 @@ def collect(
             order.append(k)
         return records[k]
 
-    for run, log, location in zip(("live_a", "live_b"), read, logs, strict=False):
+    for run, log, location in zip(("live_a", "live_b"), read, logs, strict=True):
         run = cast(RunName, run)
         samples = {s.uuid: s for s in log.samples or []}
         keys = {s.uuid: generate_keys(s.events) for s in log.samples or []}
         scanned = _scan(
-            {run: as_reader(path or name, stage=stage)},
+            {run: as_reader(path, stage=stage)},
             location,
             scans / f"{name}-{run}",
             model_roles,
@@ -208,21 +208,20 @@ def collect(
                 if found is not None:
                     found.requests[run] = requests
             # a recorded abstention is a row, where read mode has none
-            for step in live_abstentions(sample.events, path or name):
+            for step in live_abstentions(sample.events, path):
                 found = record(sample_key(sample), step, keys[sample.uuid])
                 if found is not None and run not in found.scores:
                     found.scores[run] = None
-            if review is not None:
-                for event in sample.events:
-                    if (
-                        isinstance(event, SentinelEvent)
-                        and event.factory == _HUMAN
-                        and event.kind == "decision"
-                        and event.status == "reported"
-                        and event.action is not None
-                    ):
-                        answered = ask(sample_key(sample), event.step_id)
-                        answered.answers[run] = event.action
+            for event in sample.events:
+                if (
+                    isinstance(event, SentinelEvent)
+                    and event.factory == _HUMAN
+                    and event.kind == "decision"
+                    and event.status == "reported"
+                    and event.action is not None
+                ):
+                    answered = ask(sample_key(sample), event.step_id)
+                    answered.answers[run] = event.action
 
     log_a = read[0]
     samples = {s.uuid: s for s in log_a.samples or []}
@@ -232,25 +231,21 @@ def collect(
         scanners: dict[str, Any] = {
             run: as_scanner(monitor(), stage=stage, steps=every_step_marked)
         }
-        if review is not None:
-            # a person who was not asked live would get approve, which the
-            # scripted person never answers
-            scanners[f"{run}_review"] = as_scanner(
-                review(), stage="tool_call", human="approve"
-            )
+        # a person who was not asked live would get approve, which the
+        # scripted person never answers
+        scanners[f"{run}_review"] = as_scanner(
+            review(), stage="tool_call", human="approve"
+        )
         scanned = _scan(scanners, logs[0], scans / f"{name}-{run}", model_roles)
         locations[run] = scanned
-        if review is not None:
-            for transcript_id, results, _ in _transcripts(scanned, f"{run}_review"):
-                sample = samples[transcript_id]
-                for result in results:
-                    source = result["metadata"].get("human")
-                    if source is not None:
-                        answered = ask(
-                            sample_key(sample), result["metadata"]["step_id"]
-                        )
-                        answered.answers[run] = str(result["answer"])
-                        answered.sources[run] = str(source)
+        for transcript_id, results, _ in _transcripts(scanned, f"{run}_review"):
+            sample = samples[transcript_id]
+            for result in results:
+                source = result["metadata"].get("human")
+                if source is not None:
+                    answered = ask(sample_key(sample), result["metadata"]["step_id"])
+                    answered.answers[run] = str(result["answer"])
+                    answered.sources[run] = str(source)
         for transcript_id, results, events in _transcripts(scanned, run):
             sample = samples[transcript_id]
             for result in results:
@@ -269,7 +264,7 @@ def collect(
         steps=[records[k] for k in order],
         logs=tuple(logs),
         scans=locations,
-        asked=list(asked.values()) if review is not None else None,
+        asked=list(asked.values()),
     )
 
 

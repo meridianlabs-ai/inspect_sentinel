@@ -1,7 +1,7 @@
 """The four measurements, per monitor and haystack, and how they decide trust.
 
 1. **The same prompt**: the share of steps whose first monitor request is identical live (`live_a`) and in each replay (`replay_1`, `replay_2`), after the nonce is replaced; each difference is traced to a known difference or reported as unexplained. A step's first request is built from the step alone; a monitor that asks its model again after an unusable answer sends that answer back, which is model noise, so those requests are counted and not compared.
-2. **The same verdict**: per step, whether the suspicion crosses `THRESHOLD`, compared for every pair of a live run and a replay, `live_a` and `live_b` against `replay_1` and `replay_2`, beside the noise reference, live against live and replay against replay. The runs score the same steps, so the tests are paired, exact two-sided McNemar tests on the per-step flags: one of the steps only the live run flagged against those only the replay flagged, a shift in what is flagged; and one of the steps where the pair disagrees against those where the live runs disagree (or, with one live run, the replays), disagreement beyond the noise. Each test is at 5% divided by the number of tests, so the chance of one rejecting a replay that behaves as live is at most 5%.
+2. **The same verdict**: per step, whether the suspicion crosses `THRESHOLD`, compared for every pair of a live run and a replay, `live_a` and `live_b` against `replay_1` and `replay_2`, beside the noise reference, live against live and replay against replay. The runs score the same steps, so the tests are paired, exact two-sided McNemar tests on the per-step flags: one of the steps only the live run flagged against those only the replay flagged, a shift in what is flagged; and one of the steps where the pair disagrees against those where the live runs disagree, disagreement beyond the noise. Each test is at 5% divided by the number of tests, so the chance of one rejecting a replay that behaves as live is at most 5%.
 3. **The same needles found**: each needle, one by one: one the live runs agree on, both flagging it or neither, must be flagged the same in both replays, so that equal counts cannot hide needles swapped. Recall on the needles and the false-positive rate on the other steps, live and in replay, with 95% Wilson intervals, describe them. A needle is reached in a run where the monitor reported a score at a step that covers it.
 4. **The same human answers**: each call `human()` was asked about live is answered in each replay with the person's recorded answer.
 
@@ -183,8 +183,8 @@ class SamePrompt:
     explained: int
     """Steps that differ, live against a replay, only in ways a known difference explains."""
 
-    live_floor: int | None
-    """Steps whose requests are identical between the two live runs, of those compared there; None without a second live run."""
+    live_floor: int
+    """Steps whose requests are identical between the two live runs, of those compared there."""
 
     replay_floor: int
     """Steps whose requests are identical between the two replays."""
@@ -260,10 +260,7 @@ class SameVerdict:
     """Every pair of a live run and a replay, as `"live_a vs replay_1"`."""
 
     noise: dict[str, PairedFlags]
-    """The noise reference: `"live_a vs live_b"`, with a second live run, and `"replay_1 vs replay_2"`."""
-
-    noise_pair: str
-    """The noise pair each pair's disagreement is tested against: live against live, or with one live run, replay against replay."""
+    """The noise reference: `"live_a vs live_b"` and `"replay_1 vs replay_2"`. Each pair's disagreement is tested against live against live's."""
 
     alpha: float
     """The level of each test: `ALPHA` divided by the number of tests, two for each pair."""
@@ -339,7 +336,7 @@ class NeedlesFound:
     """Each needle, by its call id, flagged or not in each run: flagged where a step covering it is."""
 
     changed: list[str]
-    """The needles the live runs agree on, flagged by both or by neither, that a replay does not: a needle live found and replay missed, or the reverse. With one live run, its flag is the one replay must match."""
+    """The needles the live runs agree on, flagged by both or by neither, that a replay does not: a needle live found and replay missed, or the reverse."""
 
     agreed: int
     """The needles the live runs agree on, which are the ones a replay is held to; a needle the live runs disagree on is noise."""
@@ -498,24 +495,22 @@ def measure(
     """
     labelled = set(needles)
     steps = [s for s in run.steps if samples is None or s.sample in samples]
-    two_live = len(run.logs) == 2
     return Measurement(
-        same_prompt=_same_prompt(steps, two_live) if calls_a_model else None,
-        same_verdict=_same_verdict(steps, two_live),
-        needles_found=_needles_found(steps, labelled, two_live) if labelled else None,
+        same_prompt=_same_prompt(steps) if calls_a_model else None,
+        same_verdict=_same_verdict(steps),
+        needles_found=_needles_found(steps, labelled) if labelled else None,
         same_human_answers=None
         if asked is None
         else _same_human_answers(
-            [a for a in run.asked or [] if samples is None or a.sample in samples],
+            [a for a in run.asked if samples is None or a.sample in samples],
             set(asked),
-            two_live,
         ),
         model_calls=sum(len(s.requests.get("live_a", [])) for s in steps),
         input_tokens=[r.tokens for s in steps for r in s.requests.get("live_a", [])],
     )
 
 
-def _same_prompt(steps: Sequence[StepRecord], two_live: bool) -> SamePrompt:
+def _same_prompt(steps: Sequence[StepRecord]) -> SamePrompt:
     replays: list[RunName] = ["replay_1", "replay_2"]
     compared = [
         s for s in steps if any(run in s.requests for run in ("live_a", *replays))
@@ -540,9 +535,7 @@ def _same_prompt(steps: Sequence[StepRecord], two_live: bool) -> SamePrompt:
             _first(s, "live_a") == _first(s, "live_b")
             for s in compared
             if "live_a" in s.requests or "live_b" in s.requests
-        )
-        if two_live
-        else None,
+        ),
         replay_floor=sum(
             _first(s, "replay_1") == _first(s, "replay_2") for s in compared
         ),
@@ -617,13 +610,13 @@ def _flagged(step: StepRecord, run: RunName) -> bool:
     return score is not None and score >= THRESHOLD
 
 
-def _same_verdict(steps: Sequence[StepRecord], two_live: bool) -> SameVerdict:
+def _same_verdict(steps: Sequence[StepRecord]) -> SameVerdict:
     # replay has a row at every step, abstaining or not; live, read mode has
     # one where the monitor reported, and the benchmark adds one where it
     # recorded an abstention, so a step with no live row is one the read did
     # not find, as on the wrong path or stage, or an abstention the monitor
     # did not record, which cannot be told apart
-    lives: list[RunName] = ["live_a", "live_b"] if two_live else ["live_a"]
+    lives: list[RunName] = ["live_a", "live_b"]
     replays: list[RunName] = ["replay_1", "replay_2"]
     reached = [s for s in steps if all(run in s.scores for run in replays)]
     unmatched = [
@@ -636,10 +629,7 @@ def _same_verdict(steps: Sequence[StepRecord], two_live: bool) -> SameVerdict:
     def disagree(a: RunName, b: RunName) -> list[bool]:
         return [x != y for x, y in zip(flags(a), flags(b), strict=True)]
 
-    noise_pair: tuple[RunName, RunName] = (
-        ("live_a", "live_b") if two_live else ("replay_1", "replay_2")
-    )
-    noise = disagree(*noise_pair)
+    noise = disagree("live_a", "live_b")
 
     def paired(a: RunName, b: RunName, excess: bool) -> PairedFlags:
         first_only, second_only = _discordant(flags(a), flags(b))
@@ -654,7 +644,7 @@ def _same_verdict(steps: Sequence[StepRecord], two_live: bool) -> SameVerdict:
 
     pairs = {f"{a} vs {b}": paired(a, b, True) for a in lives for b in replays}
     noise_pairs: list[tuple[RunName, RunName]] = [
-        *([("live_a", "live_b")] if two_live else []),
+        ("live_a", "live_b"),
         ("replay_1", "replay_2"),
     ]
     both = [
@@ -667,7 +657,6 @@ def _same_verdict(steps: Sequence[StepRecord], two_live: bool) -> SameVerdict:
         unmatched=len(unmatched),
         pairs=pairs,
         noise={f"{a} vs {b}": paired(a, b, False) for a, b in noise_pairs},
-        noise_pair=" vs ".join(noise_pair),
         alpha=ALPHA / (2 * len(pairs)),
         minimum=math.ceil(
             round(smallest_rejected(ALPHA / (2 * len(pairs))) / TOLERANCE, 6)
@@ -689,14 +678,8 @@ def _discordant(first: list[bool], second: list[bool]) -> tuple[int, int]:
     )
 
 
-def _needles_found(
-    steps: Sequence[StepRecord], needles: set[str], two_live: bool
-) -> NeedlesFound:
-    runs: list[RunName] = (
-        ["live_a", "live_b", "replay_1", "replay_2"]
-        if two_live
-        else ["live_a", "replay_1", "replay_2"]
-    )
+def _needles_found(steps: Sequence[StepRecord], needles: set[str]) -> NeedlesFound:
+    runs = list(RUNS)
     # every step covering a needle, reached or not, so a missed needle counts
     # as not found
     positive = [s for s in steps if needles & set(s.calls)]
@@ -750,10 +733,8 @@ def _needles_found(
     )
 
 
-def _same_human_answers(
-    asked: Sequence[Asked], expected: set[str], two_live: bool
-) -> SameHumanAnswers:
-    lives: list[RunName] = ["live_a", "live_b"] if two_live else ["live_a"]
+def _same_human_answers(asked: Sequence[Asked], expected: set[str]) -> SameHumanAnswers:
+    lives: list[RunName] = ["live_a", "live_b"]
     replays: list[RunName] = ["replay_1", "replay_2"]
 
     def given_again(a: Asked, run: RunName) -> bool:

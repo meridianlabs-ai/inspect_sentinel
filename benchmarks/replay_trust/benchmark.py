@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
 
-from inspect_sentinel import Monitor, MonitorGroup
 from inspect_sentinel.scout import Stage
 
 from .haystack import OBSERVED, Haystack, haystack, review
@@ -25,6 +23,9 @@ from .spend import PRICES, pricing, spend, used
 JUDGE = "replay_trust_judge/judge"
 """The deterministic stand-in for the judges' model."""
 
+SIZES = (20, 100, 300)
+"""The haystack sizes run by default, in agent turns."""
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -33,7 +34,7 @@ class Settings:
     out: Path
     """Where the logs, scans and results go."""
 
-    sizes: tuple[int, ...] = (20, 100, 300)
+    sizes: tuple[int, ...] = SIZES
     """The haystack sizes, in agent turns."""
 
     samples: int = 1
@@ -54,13 +55,13 @@ class Settings:
 
 @dataclass
 class MonitorResult:
-    """One monitor's measurements, one cell per haystack, or one for your own logs."""
+    """One monitor's measurements, one cell per haystack."""
 
     name: str
     stage: str
     calls_a_model: bool
     cells: dict[str, Measurement] = field(default_factory=lambda: {})
-    """The measurements by haystack id, or under `"logs"` for your own logs. Each is decided on its own; they are never pooled."""
+    """The measurements by haystack id. Each is decided on its own; they are never pooled."""
 
     run: MonitorRun | None = None
 
@@ -106,47 +107,6 @@ def run_benchmark(settings: Settings) -> dict[str, Any]:
         )
         results.append(measured(run, haystacks, name in CALLS_A_MODEL))
     return write(settings.out, results, haystacks, _settings_json(settings))
-
-
-def run_on_logs(
-    out: Path,
-    monitor: str,
-    stage: Stage,
-    logs: Sequence[str],
-    model_roles: Mapping[str, str],
-    *,
-    needles: Sequence[str] = (),
-    path: str | None = None,
-    calls_a_model: bool = True,
-) -> dict[str, Any]:
-    """Measure your own monitor on your own logs: replay it twice over the first log and compare with what it reported live.
-
-    Args:
-        out: Where the scans and results go.
-        monitor: The monitor's factory, as `module:name`, called with no arguments.
-        stage: The stage to measure.
-        logs: One or two eval logs of the same samples with the monitor attached observe-only. With two, the live-against-live noise floor is measured; with one, the replay-against-replay floor stands in.
-        model_roles: The model roles the live runs had, such as `{"monitor": "openai/gpt-4o-mini"}`.
-        needles: The tool call ids labelled as breaking the policy, for measurement 3.
-        path: The monitor's instance path in the live sentinel; its name when None.
-        calls_a_model: Whether to compare the monitor's model requests.
-    """
-    factory = load_factory(monitor)
-    name = monitor.rsplit(":", 1)[-1]
-    out.mkdir(parents=True, exist_ok=True)
-    run = collect(name, factory, stage, logs, out / "scans", model_roles, path=path)
-    result = MonitorResult(name=name, stage=stage, calls_a_model=calls_a_model, run=run)
-    # your own logs' samples are one set, so one cell
-    result.cells["logs"] = measure(run, needles, calls_a_model=calls_a_model)
-    settings = {
-        "monitor": monitor,
-        "stage": stage,
-        "logs": list(logs),
-        "model_roles": dict(model_roles),
-        "needles": list(needles),
-        "threshold": THRESHOLD,
-    }
-    return write(out, [result], [], settings)
 
 
 def measured(
@@ -224,10 +184,7 @@ def write(
                         ]
                         for run in RUNS
                     },
-                    str(
-                        settings.get("monitor_model")
-                        or settings.get("model_roles", {}).get("monitor", "")
-                    ),
+                    str(settings["monitor_model"]),
                 )
                 if r.run and r.calls_a_model
                 else None,
@@ -271,17 +228,6 @@ def write(
     )
     (out / "summary.md").write_text(summary(document))
     return document
-
-
-def load_factory(reference: str) -> Callable[[], Monitor | MonitorGroup]:
-    """The monitor factory `module:name` names."""
-    module, _, name = reference.partition(":")
-    if not name:
-        raise ValueError(f"Name a monitor factory as module:name, got {reference!r}.")
-    return cast(
-        Callable[[], Monitor | MonitorGroup],
-        getattr(importlib.import_module(module), name),
-    )
 
 
 def _price(model: str) -> dict[str, Any]:
