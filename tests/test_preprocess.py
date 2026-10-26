@@ -37,7 +37,6 @@ from inspect_sentinel import (
     step_as_str,
 )
 from inspect_sentinel._decorators import monitor, protocol
-from inspect_sentinel._preprocess import scout_nonce
 from inspect_sentinel._report import Decision, Escalations, Observation
 from inspect_sentinel._runner import run_monitors, run_protocols, run_sentinel
 from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
@@ -743,9 +742,7 @@ async def test_a_nonce_marks_every_block_and_every_message_header(
     ]
     assert f'[TOOL CHOICE{mark}] "auto"' in rendered.splitlines()
     assert rendered.endswith(f"[END AGENT STEP - TOOL CALL REQUEST{mark}]")
-    # Scout 0.5.5 and earlier write no nonce on message headers
-    header = mark if scout_nonce("3f9a1c7e") else ""
-    assert f"USER{header}:\ngo" in rendered
+    assert f"USER{mark}:\ngo" in rendered
 
 
 @pytest.mark.anyio

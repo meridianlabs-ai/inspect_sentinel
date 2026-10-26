@@ -22,6 +22,7 @@ from inspect_sentinel.sidecar._json_rpc import (
     PARSE_ERROR,
     SENTINEL_FAILED,
     TIME_LIMIT,
+    UNKNOWN_STREAM,
     UNREADABLE,
     UNREGISTERED,
 )
@@ -446,6 +447,7 @@ def test_schema_file_says_a_call_not_judged_is_refused() -> None:
         str(SENTINEL_FAILED),
         str(TIME_LIMIT),
         str(UNREGISTERED),
+        str(UNKNOWN_STREAM),
     }
     assert all("refuses the call" in error["description"] for error in errors.values())
 

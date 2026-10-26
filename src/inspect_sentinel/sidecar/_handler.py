@@ -28,7 +28,18 @@ from .._step import (
     Step,
 )
 from .._types import Sentinels
-from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request, succeeded
+from ._errors import TimeLimitError
+from ._errors import not_judged as _not_judged
+from ._exchange import (
+    MAX_BODY_BYTES,
+    Answer,
+    Pass,
+    Refuse,
+    Replace,
+    Reply,
+    Request,
+    succeeded,
+)
 from ._history import record_sent
 from ._host import Record, RunHost, SidecarHost, stage
 from ._inspect_ai import VIEWED_TOOLS, tool_call_view
@@ -46,9 +57,11 @@ from ._registration import (
     TASK_EXPIRY,
     FileTask,
     RegistrationError,
+    RegistrationsFullError,
     TaskFacts,
     UnregisteredSampleError,
 )
+from ._reply_stream import KEEPALIVE_SECONDS, PENDING_BYTES, ReplyStart, ReplyStream
 from ._state import (
     MADE_KEPT,
     Attempt,
@@ -103,31 +116,17 @@ class RequestResult:
 
 
 @dataclass(frozen=True)
-class RunResult:
-    """What a run came to."""
+class SampleResult:
+    """What an eval's sample came to."""
 
     outcome: Literal["proceed", "terminate"]
-    """`terminate` if a sentinel ended the run."""
+    """`terminate` if a sentinel ended the sample."""
     store: dict[str, Any]
     """The sentinel's store, by the keys the sentinel wrote."""
 
 
-def _not_judged(ex: Exception) -> NotJudged:
-    if isinstance(ex, UnreadableError):
-        return "unreadable"
-    if isinstance(ex, UnregisteredSampleError):
-        return "unregistered"
-    if isinstance(ex, TimeLimitError):
-        return "time_limit"
-    return "error"
-
-
 class ModifyError(Exception):
     """The sentinel decided to change a tool call that the sidecar can't change in the reply, such as one that is not a function call, so the reply was not judged."""
-
-
-class TimeLimitError(TimeoutError):
-    """The sentinel didn't finish judging a request or a reply within the handler's time limit, and was cancelled."""
 
 
 class Handler:
@@ -153,6 +152,8 @@ class Handler:
         runtime_task_registration: bool = True,
         task_expiry: float = MAX_TASK_EXPIRY,
         max_task_registrations: int = MAX_TASK_REGISTRATIONS,
+        release: Literal["whole", "early"] = "whole",
+        keepalive: float | None = KEEPALIVE_SECONDS,
     ) -> None:
         """Create a handler.
 
@@ -167,7 +168,18 @@ class Handler:
             runtime_task_registration: Whether an eval may register its tasks itself, at task init.
             task_expiry: The longest a task an eval registered is kept once no request has named it, in seconds, whatever the registration asks.
             max_task_registrations: How many tasks registered by evals are kept at once. A registration past it is refused.
+            release: How a streamed reply is passed on. `whole`, the default, holds every reply until the sentinel has judged it. `early` passes on the text and reasoning that come before the turn's first tool call as they arrive, holds the rest of the turn, and judges it once the turn has ended, as `whole` does. The sentinel is given the whole turn either way.
+            keepalive: Under early release, the longest a client is sent nothing while a streamed reply is held, in seconds, after which it is sent a keepalive, an SSE comment that every provider SDK skips. The keepalive sends the status, so a turn refused after it is refused with an error event in the stream. None sends no keepalives.
+
+        Raises:
+            ValueError: If `keepalive` isn't a positive number of seconds.
         """
+        if keepalive is not None and not keepalive > 0:
+            raise ValueError(
+                f"A keepalive is sent after some seconds, not {keepalive}."
+            )
+        self._release: Literal["whole", "early"] = release
+        self._keepalive = keepalive
         self._protocol = resolve_sentinel(sentinel)
         # a stage nothing watches is never built, as in Inspect's own process
         self._watched = watched_stages(self._protocol)
@@ -183,6 +195,16 @@ class Handler:
         # the tool results being judged now, by run, conversation and digest,
         # so that a request holding one waits for the request judging it
         self._judging: dict[tuple[str, str, str], anyio.Event] = {}
+
+    @property
+    def release(self) -> Literal["whole", "early"]:
+        """How a streamed reply is passed on."""
+        return self._release
+
+    @property
+    def keepalive(self) -> float | None:
+        """Under early release, how many seconds a client may be sent nothing before it is sent a keepalive, or None for no keepalives."""
+        return self._keepalive
 
     async def request(self, request: Request) -> Answer:
         """Judge a request before the proxy sends it.
@@ -234,7 +256,7 @@ class Handler:
                 attempt.state = "awaiting_reply"
         return answer
 
-    async def reply(self, reply: Reply) -> Answer:
+    async def reply(self, reply: Reply, *, released: bytes = b"") -> Answer:
         """Judge a reply before the proxy passes any of it on.
 
         The reply is put to the sentinel as an `AfterGenerate` step, then each tool call in it as a `BeforeToolCall` step, in order, leaving out a stage nothing in the sentinel watches. Every call is judged, as in Inspect's own process, unless one ends the run. The rejected calls are taken out of the reply and the rest of the turn goes on, answered with `Replace`, as the other calls of a turn still run in Inspect's own process. Each later request of the conversation that holds the turn has the calls taken out put back, each with its rejection as its result. A turn whose every call is rejected is refused whole, as is one that can't be edited, and its rejections are added to the later requests of its conversation. The third turn refused whole in a row within an attempt at a sample ends the run; a turn in which a call ran starts the count again. A provider's error, a reply in a status outside 2xx, is passed on unjudged; a reply in any 2xx is the model's, and judged, as the provider's SDK reads it so.
@@ -243,6 +265,7 @@ class Handler:
 
         Args:
             reply: The reply, as the proxy handed it over.
+            released: The start of the reply, as the client has already been sent it, for a reply released early. A reply edited in a way that changes it can't be sent, and is not judged.
 
         Raises:
             UnreadableError: If the reply can't be read, or answers a request this handler was never shown or no longer keeps.
@@ -255,7 +278,7 @@ class Handler:
             attempt.state = "judging"
         try:
             answer = await self._within_limit(
-                self._reply(reply, held), "reply", reply.id
+                self._reply(reply, held, released), "reply", reply.id
             )
         except Exception as ex:
             if attempt is not None:
@@ -275,6 +298,32 @@ class Handler:
             attempt.decide("reject", held.exchange.message)
             attempt.withheld = held.exchange.withheld
         return answer
+
+    def reply_stream(
+        self,
+        start: ReplyStart,
+        *,
+        max_held_bytes: int = MAX_BODY_BYTES,
+        max_pending_bytes: int = PENDING_BYTES,
+        keepalive: bool = True,
+    ) -> ReplyStream:
+        """Judge a reply that the proxy hands over as it arrives, rather than whole.
+
+        The proxy runs the stream's `run`, feeds it the provider's bytes, and sends the client what iterating over it gives, all at once. The reply is judged as `reply` judges it, once it has ended.
+
+        Args:
+            start: The reply's status and headers, before any of its body.
+            max_held_bytes: The most of the reply the stream holds back to judge. A reply larger than it is refused with a 502, and not judged.
+            max_pending_bytes: How much of what goes out as it arrives may wait for the proxy to collect it before feeding waits.
+            keepalive: Whether the proxy can send its client a keepalive. Where it can't, none is given, so that a refusal keeps its status for as long as nothing else has gone out.
+        """
+        return ReplyStream(
+            self,
+            start,
+            max_held_bytes=max_held_bytes,
+            max_pending_bytes=max_pending_bytes,
+            keepalive=self._keepalive if keepalive else None,
+        )
 
     async def reply_not_judged(self, id: str, reason: NotJudged) -> None:
         """Let go of a request whose reply the proxy refused without handing it over, as one larger than it holds.
@@ -313,33 +362,34 @@ class Handler:
             records.extend(kept)
         return RequestResult(attempts[-1], records)
 
-    async def run_result(self, run: str) -> RunResult | None:
-        """What a run came to, and the sentinel's store, for an eval to copy into its sample's store before scoring.
+    async def sample_result(self, sample_uuid: str) -> SampleResult | None:
+        """What an eval's sample came to, and the sentinel's store, for the eval to copy into the sample's store before scoring. The handler keeps one run for each sample in each epoch, across the sample's retries.
 
         Args:
-            run: The run, as the eval names it: its sample's uuid.
+            sample_uuid: The sample's uuid, as the eval names it.
 
         Returns:
-            The run's outcome and store, or None if nothing is kept for it.
+            The sample's outcome and store, or None if nothing is kept for it.
         """
-        kept = await self._state.existing_run(_run_key(True, run))
+        kept = await self._state.existing_run(_run_key(True, sample_uuid))
         if kept is None:
             return None
-        return RunResult(
+        return SampleResult(
             "terminate" if kept.refusal is not None else "proceed",
             dict(kept.store.items()),
         )
 
-    async def end_run(self, run: str) -> Literal["ended", "unknown"]:
-        """Drop a run's state, once its eval has scored the sample. A later request of the run is refused, as for a run a sentinel ended.
+    async def end_sample(self, sample_uuid: str) -> Literal["ended", "unknown"]:
+        """Drop the state kept for an eval's sample, once the eval has scored it. A later request of the sample is refused, as for a sample a sentinel ended.
 
         Args:
-            run: The run, as the eval names it: its sample's uuid.
+            sample_uuid: The sample's uuid, as the eval names it.
 
         Returns:
-            `ended`, or `unknown` for a run the handler never saw. Ending a run again has no effect.
+            `ended`, or `unknown` for a sample the handler never saw. Ending a sample again has no effect.
         """
-        return "ended" if await self._state.end_run(_run_key(True, run)) else "unknown"
+        ended = await self._state.end_run(_run_key(True, sample_uuid))
+        return "ended" if ended else "unknown"
 
     async def _within_limit(
         self, judging: Awaitable[Answer], what: str, id: str
@@ -377,7 +427,8 @@ class Handler:
             How long it is kept once no request has named the task: `expiry`, or less if that is longer than the handler keeps any. None for a task registered beforehand, which is never dropped.
 
         Raises:
-            RegistrationError: If the handler takes no registrations from evals and the task was not registered beforehand, or already keeps as many as it takes.
+            RegistrationError: If the handler takes no registrations from evals and the task was not registered beforehand.
+            RegistrationsFullError: If the handler already keeps as many registrations as it takes.
         """
         if facts.task in self._tasks:
             return None
@@ -389,7 +440,7 @@ class Handler:
         if not await self._state.register(
             eval_id, facts.task, facts, granted, self._max_task_registrations
         ):
-            raise RegistrationError(
+            raise RegistrationsFullError(
                 f"This sidecar already keeps the {self._max_task_registrations} tasks registered by evals that it takes. One is taken again once a kept task expires."
             )
         return granted
@@ -546,7 +597,7 @@ class Handler:
                 model=held.model,
                 conversation=conversation_key,
                 input=messages,
-                # the caller's own list is not known behind a proxy
+                # the agent's own message list is not known behind a proxy
                 agent_messages=None,
                 # what was sent before this request, which isn't sent yet
                 history=list(conversation.sent),
@@ -676,8 +727,10 @@ class Handler:
                 judging.set()
         return None
 
-    async def _reply(self, reply: Reply, held: Held | None) -> Answer:
-        answer = await self._judge_reply(reply, held)
+    async def _reply(
+        self, reply: Reply, held: Held | None, released: bytes = b""
+    ) -> Answer:
+        answer = await self._judge_reply(reply, held, released)
         if held is None or not succeeded(reply.status):
             return answer
         if held.proxy.inspect is None:
@@ -688,14 +741,19 @@ class Handler:
         body = answer.body if isinstance(answer, Replace) else reply.body
         field = self._field(held.exchange, "proceed")
         try:
-            return Replace(with_sentinel(reply.content_type, body, field))
+            with_field = with_sentinel(reply.content_type, body, field)
         except UnreadableError:
+            with_field = None
+        if with_field is None or not with_field.startswith(released):
             # The reply was judged and goes on, and the run already counts it
             # as passed, so the client is handed it as judged, without the
             # field. Inspect then asks what was decided, by `request_result`.
             return answer
+        return Replace(with_field)
 
-    async def _judge_reply(self, reply: Reply, held: Held | None) -> Answer:
+    async def _judge_reply(
+        self, reply: Reply, held: Held | None, released: bytes = b""
+    ) -> Answer:
         if not succeeded(reply.status):
             # nothing came from the model to judge
             return Pass()
@@ -783,7 +841,16 @@ class Handler:
             return await self._reject(held, run, conversation, message, noted, rejected)
         try:
             return await self._edit(
-                reply, held, run, conversation, output, start, noted, rejected, modified
+                reply,
+                held,
+                run,
+                conversation,
+                output,
+                start,
+                noted,
+                rejected,
+                modified,
+                released=released,
             )
         except UnreadableError as ex:
             if not rejected:
@@ -837,6 +904,8 @@ class Handler:
         noted: JsonValue | None,
         rejected: Sequence[tuple[ToolCall, Decision]],
         modified: Mapping[str, ToolCall],
+        *,
+        released: bytes = b"",
     ) -> Replace:
         # The rejected calls are taken out and the changed calls go out
         # changed, and the rest of the turn goes on, as in Inspect's own
@@ -857,6 +926,11 @@ class Handler:
             output,
             start=start,
         )
+        if not body.startswith(released):
+            # what has gone out can't be taken back
+            raise UnreadableError(
+                "The reply as edited changes what the client was already sent."
+            )
         calls = message.tool_calls or []
         conversation.edited.append(
             Edited(

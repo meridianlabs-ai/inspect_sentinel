@@ -8,18 +8,32 @@ The sidecar described in `design/sidecar.md`. A proxy hands over each model requ
 from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request
 from ._handler import Handler, ModifyError, TimeLimitError
 from ._host import Record, SidecarHost, Stage
+from ._reply_stream import (
+    ErrorEvent,
+    Finished,
+    Output,
+    Release,
+    ReplyStart,
+    ReplyStream,
+)
 from ._wire import Format, UnreadableError, read_reply, read_request
 
 __all__ = [
     "Answer",
+    "ErrorEvent",
+    "Finished",
     "Format",
     "Handler",
     "ModifyError",
+    "Output",
     "Pass",
     "Record",
     "Refuse",
+    "Release",
     "Replace",
     "Reply",
+    "ReplyStart",
+    "ReplyStream",
     "Request",
     "SidecarHost",
     "Stage",

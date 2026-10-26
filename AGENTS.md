@@ -29,11 +29,12 @@
 
 ## Pull Requests
 
+- Unless the account you operate for is a maintainer, open a PR only for an issue where a maintainer has said they want the change, and link it (`Fixes #NNN`). Without an accepted issue, file your evidence on an issue and stop. Trivial documentation fixes (typos, broken links) are exempt
 - Title PRs as Conventional Commits (`<type>: <description>`)—we squash-merge, so the PR title becomes the commit message that drives releases; `pr-title-lint` enforces it
 - `feat:`/`fix:` are for user-facing changes only: they headline the release notes and bump the version. `perf:`/`revert:` also appear in the notes (no bump); `docs:`, `refactor:`, `chore:`, `build:`, `ci:`, `test:`, `style:` are hidden
 - Body lines starting with `<type>:` are parsed as extra changelog entries—don't begin description lines with a conventional-commit prefix unless that's intended
 - Never edit `CHANGELOG.md`, version numbers, or `.release-please-manifest.json`—Release Please owns them
-- Keep the `inspect-ai` dependency in `pyproject.toml` a PyPI floor, never a git reference—development installs inspect_ai's `main` over the floor (CONTRIBUTING.md), and `release-pin-deps.yml` raises the floor on the release PR
+- Keep the `inspect-ai` and `inspect-scout` dependencies in `pyproject.toml` PyPI floors, never git references—development installs their `main` over the floors (CONTRIBUTING.md), and `release-pin-deps.yml` raises the floors on the release PR
 - Before opening a non-trivial PR, run at least one code review pass in a fresh context (e.g. `/code-review` or a subagent that hasn't seen the authoring conversation) using a frontier-class model — the authoring context is blind to its own assumptions, and in our experience reviews from small fast-tier models rarely surface real issues. Fix or explicitly dismiss each finding before opening the PR, and disclose the pass in the description (see "Agent review disclosure" below).
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines
 
@@ -81,7 +82,7 @@ Supports Python 3.11+ (the same floor as `inspect-ai`, which is intended to depe
 
 ### Common Pitfalls
 - Use the venv for all Python commands: either reference `.venv/bin/` directly or run `source .venv/bin/activate`
-- **Never use `uv sync` or `uv run`**—there is no `uv.lock`, so they lock and sync the project and silently replace inspect_ai's `main` (or a local editable inspect_ai) with a PyPI release. Set up with `uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git` then `uv pip install -e ".[dev]"`; refresh inspect_ai with `uv pip install --upgrade git+https://github.com/UKGovernmentBEIS/inspect_ai.git`
+- **Never use `uv sync` or `uv run`**—there is no `uv.lock`, so they lock and sync the project and silently replace inspect_ai's and inspect_scout's `main` (or a local editable checkout) with a PyPI release. Set up with `uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git git+https://github.com/meridianlabs-ai/inspect_scout.git` then `uv pip install -e ".[dev]"`; refresh them with `uv pip install --upgrade git+https://github.com/UKGovernmentBEIS/inspect_ai.git git+https://github.com/meridianlabs-ai/inspect_scout.git`
 
 ## Reviewing other people's pull requests
 

@@ -6,7 +6,7 @@ import os
 import sys
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import anyio
 import uvicorn
@@ -15,11 +15,13 @@ from starlette.applications import Starlette
 
 from .._config import parse_config_file, sentinel_from_config
 from ._eval_endpoint import TOKEN_VARIABLE, eval_routes
+from ._exchange import MAX_BODY_BYTES
 from ._handler import Handler
 from ._host import SidecarHost
-from ._http import HEALTH_PATH, MAX_BODY_BYTES, health_route
+from ._http import HEALTH_PATH, health_route
 from ._proxy_endpoint import proxy_app
 from ._registration import MAX_TASK_EXPIRY, MAX_TASK_REGISTRATIONS, read_tasks_folder
+from ._reply_stream import KEEPALIVE_SECONDS
 from ._state import RUN_EXPIRY, MemoryState
 
 
@@ -72,6 +74,19 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default=[],
         metavar="NAME",
         help="A request header the Envoy shim shows the sentinel, besides Inspect's own. May be repeated. A credential is never shown.",
+    )
+    parser.add_argument(
+        "--release",
+        choices=["whole", "early"],
+        default="whole",
+        help="How a streamed reply is passed on. whole, the default, holds every reply until the sentinel has judged it. early passes on the text and reasoning before the turn's first tool call as they arrive, and holds the rest of the turn until it has ended and is judged. The sentinel is given the whole turn either way.",
+    )
+    parser.add_argument(
+        "--keepalive",
+        type=float,
+        default=KEEPALIVE_SECONDS,
+        metavar="SECONDS",
+        help=f"Under --release early, how long a client may be sent nothing while a streamed reply is held, after which it is sent a keepalive that every provider SDK skips, so that something between them doesn't close a quiet connection. {KEEPALIVE_SECONDS:g} by default, and 0 for none. A keepalive sends the status, so a turn refused after one is refused with an error event in the stream.",
     )
     parser.add_argument(
         "--reject-status",
@@ -165,6 +180,8 @@ class ServerSettings(BaseModel):
     max_task_registrations: int | None = None
     max_body_bytes: int | None = None
     run_expiry: float | None = None
+    release: Literal["whole", "early"] | None = None
+    keepalive: float | None = None
 
 
 # each setting of the stanza, with the option that overrides it, and what it
@@ -195,6 +212,8 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "max_task_registrations",
             "max_body_bytes",
             "run_expiry",
+            "release",
+            "keepalive",
         )
     },
 }
@@ -318,6 +337,8 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         runtime_task_registration=not arguments.no_runtime_task_registration,
         task_expiry=arguments.task_expiry,
         max_task_registrations=arguments.max_task_registrations,
+        release=arguments.release,
+        keepalive=arguments.keepalive or None,
     )
 
 
@@ -339,7 +360,16 @@ def apps(
         evals = eval_routes(
             handler, max_body_bytes=arguments.max_body_bytes, results=results
         )
-        return [(Starlette(routes=[*proxy.routes, *evals]), arguments.port)]
+        # with the proxy app's lifespan, in which its reply streams run
+        return [
+            (
+                Starlette(
+                    routes=[*proxy.routes, *evals],
+                    lifespan=proxy.router.lifespan_context,
+                ),
+                arguments.port,
+            )
+        ]
     token = os.environ.get(TOKEN_VARIABLE, "")
     if not token:
         raise ValueError(

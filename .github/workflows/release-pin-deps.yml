@@ -1,32 +1,36 @@
-name: Pin inspect_ai for release
+name: Pin inspect_ai and inspect_scout for release
 
-# On the Release Please release PR, keep the `inspect_ai` floor at the
-# currently-shipped PyPI version:
+# On the Release Please release PR, keep the `inspect_ai` and `inspect_scout`
+# floors at the currently-shipped PyPI versions:
 #   - bump a stale floor (`inspect-ai>=OLD`) to the latest shipped version, so
 #     the declared minimum matches what the release build actually validated
 #     against (pip resolves the latest, so a stale floor could ship untested).
-#     The release PR is the one build that skips installing inspect_ai's
-#     `main` (build.yaml), so it tests against exactly that release;
+#     The release PR is the one build that skips installing inspect_ai's and
+#     inspect_scout's `main` (build.yaml), so it tests against exactly those
+#     releases;
 #   - rewrite a moving git ref (`inspect-ai @ git+...@main`) to
 #     `inspect-ai>=<latest>`, should one come back. `main` keeps a floor, and
-#     development tracks inspect_ai's `main` by installing it, not by naming it
-#     in pyproject.toml (CONTRIBUTING.md); a *published* sentinel must depend
-#     on a *released* inspect_ai (PyPI rejects direct-reference deps, and a git
-#     ref is not reproducible).
+#     development tracks inspect_ai's and inspect_scout's `main` by installing
+#     them, not by naming them in pyproject.toml (CONTRIBUTING.md); a
+#     *published* sentinel must depend on *released* packages (PyPI rejects
+#     direct-reference deps, and a git ref is not reproducible).
 #
 # The floor bump is squash-merged to `main` with the release PR, which is
-# harmless: development installs inspect_ai's `main` over it all the same.
+# harmless: development installs inspect_ai's and inspect_scout's `main` over
+# it all the same.
 #
-# Runs on release-PR events AND on a schedule: publishing a new inspect_ai to
-# PyPI produces no event in this repo, so the schedule is what turns "inspect
-# shipped the fix we need" into "the release PR re-pins and goes green" without
-# a human nudge. The scheduled path no-ops unless a release PR is open.
+# Runs on release-PR events AND on a schedule: publishing a new inspect_ai or
+# inspect_scout to PyPI produces no event in this repo, so the schedule is what
+# turns "inspect shipped the fix we need" into "the release PR re-pins and goes
+# green" without a human nudge. The scheduled path no-ops unless a release PR
+# is open.
 #
 # This is the companion to release-dep-guard.yml: the guard *blocks* a release
 # PR that still carries a git ref; this workflow *fixes* it automatically. If
-# sentinel genuinely needs an unreleased inspect_ai, pinning to the shipped
-# version makes the release PR's build/tests fail loudly — which is the signal
-# to cut an inspect_ai release first (and this schedule picks it up once cut).
+# sentinel genuinely needs an unreleased inspect_ai or inspect_scout, pinning to
+# the shipped version makes the release PR's build/tests fail loudly — which is
+# the signal to cut a release of that package first (and this schedule picks it
+# up once cut).
 
 on:
   pull_request:
@@ -83,7 +87,7 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'release-please--branches--main' }}
           token: ${{ steps.app-token.outputs.token }}
 
-      - name: Pin/bump inspect_ai to the shipped PyPI version
+      - name: Pin/bump inspect_ai and inspect_scout to the shipped PyPI versions
         if: steps.relpr.outputs.found == 'true'
         # -I keeps the checkout off sys.path: the release branch can carry
         # agent-landed commits, and a json.py or re.py at its root would
@@ -91,12 +95,6 @@ jobs:
         run: |
           python3 -I - <<'PY'
           import json, re, sys, urllib.request
-
-          with urllib.request.urlopen("https://pypi.org/pypi/inspect-ai/json", timeout=30) as r:
-              version = json.load(r)["info"]["version"]
-          if not version:
-              print("::error::Could not resolve a released inspect-ai version from PyPI")
-              sys.exit(1)
 
           def vtuple(v):
               try:
@@ -107,26 +105,30 @@ jobs:
           path = "pyproject.toml"
           src = open(path).read()
 
-          git_pat = re.compile(r'"inspect[-_]ai\s*@\s*git\+[^"]*"')
-          floor_pat = re.compile(r'"inspect[-_]ai>=([0-9.]+)"')
+          for package in ("inspect-ai", "inspect-scout"):
+              with urllib.request.urlopen(f"https://pypi.org/pypi/{package}/json", timeout=30) as r:
+                  version = json.load(r)["info"]["version"]
+              if not version:
+                  print(f"::error::Could not resolve a released {package} version from PyPI")
+                  sys.exit(1)
 
-          if git_pat.search(src):
-              new = git_pat.sub(f'"inspect-ai>={version}"', src)
-              action = f"Pinned inspect_ai git ref to >={version}"
-          else:
-              m = floor_pat.search(src)
-              new, action = src, None
-              if m:
-                  cur, latest = vtuple(m.group(1)), vtuple(version)
+              name = package.replace("-", "[-_]")
+              git_pat = re.compile(rf'"{name}\s*@\s*git\+[^"]*"')
+              floor_pat = re.compile(rf'"{name}>=([0-9.]+)"')
+
+              if git_pat.search(src):
+                  src = git_pat.sub(f'"{package}>={version}"', src)
+                  print(f"Pinned {package} git ref to >={version}")
+              else:
+                  m = floor_pat.search(src)
+                  cur, latest = (vtuple(m.group(1)), vtuple(version)) if m else (None, None)
                   if cur and latest and latest > cur:
-                      new = floor_pat.sub(f'"inspect-ai>={version}"', src)
-                      action = f"Bumped inspect_ai floor {m.group(1)} -> {version}"
+                      src = floor_pat.sub(f'"{package}>={version}"', src)
+                      print(f"Bumped {package} floor {m.group(1)} -> {version}")
+                  else:
+                      print(f"{package} pin already current (latest PyPI: {version})")
 
-          if action:
-              open(path, "w").write(new)
-              print(action)
-          else:
-              print(f"inspect_ai pin already current (latest PyPI: {version})")
+          open(path, "w").write(src)
           PY
 
       - name: Commit the pin if pyproject changed
@@ -139,5 +141,5 @@ jobs:
           git config user.name "meridian-release-bot[bot]"
           git config user.email "meridian-release-bot[bot]@users.noreply.github.com"
           git add pyproject.toml
-          git commit -m "chore: pin inspect_ai to the shipped release for publishing"
+          git commit -m "chore: pin inspect_ai and inspect_scout to the shipped releases for publishing"
           git push origin HEAD:release-please--branches--main
