@@ -133,8 +133,8 @@ Each monitor that calls a model makes one call per monitored step in each of the
 
 | Model | Default run (100 and 300 turns) | Smoke check (`--sizes 20`) |
 |---|---|---|
-| `openai/gpt-4o-mini` | about $1.57 | about $0.07 |
-| `anthropic/claude-haiku-5-5` | about $1.11 | about $0.05 |
+| `openai/gpt-4o-mini` | about $1.58 | about $0.07 |
+| `anthropic/claude-haiku-5-5` | about $1.12 | about $0.05 |
 | `openai/gpt-4.1` | about $21 | about $0.94 |
 | `anthropic/claude-sonnet-5-5` | about $22 | about $1.01 |
 
@@ -148,9 +148,9 @@ Each monitor that calls a model makes one call per monitored step in each of the
 
 **The real-model runs.** _To fill after the real runs: the models, inspect_sentinel and inspect_ai versions, each monitor's outcome on each haystack with its findings, and the measured spend._
 
-**The deterministic judge.** At inspect_sentinel 4e7c5ab with inspect_ai #5991 (c0e1e0f), every monitor is trusted on the 100- and 300-turn haystacks. On a 20-turn haystack every monitor is inconclusive: it has 23 steps, fewer than the minimum. Nothing differs:
+**The deterministic judge.** At inspect_sentinel fd419a4 with inspect_ai #5991 (c0e1e0f), the default run is trusted: every monitor is trusted on both the 100- and the 300-turn haystack, and the command exits 0. At 4e7c5ab, every monitor was inconclusive on a 20-turn haystack: it has 23 steps, fewer than the minimum. Nothing differs:
 
-- **Prompts.** Every judge prompt differs from live only by the `agent_messages` block, at every step.
+- **Prompts.** In both replays, every judge prompt differs from live only by the `agent_messages` block, at every step: 486 tool-call steps and 406 turns.
 - **Verdicts.** No step's verdict differs between any two of the four runs, and no step is unmatched.
 - **Needles.** Every needle is reached in every run, and flagged the same way live and in replay, for all four monitors.
 - **Human answers.** The person's rejection of each haystack's `sudo` command is given again in both replays.
