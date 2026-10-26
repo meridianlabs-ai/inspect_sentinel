@@ -181,8 +181,9 @@ def _model_events(transcript: Transcript) -> bool:
 
 
 def _origins(transcript: Transcript) -> bool:
-    return any(
-        isinstance(e, ModelEvent) and e.origin is not None for e in transcript.events
+    # whether every model call records where it was made
+    return all(
+        e.origin is not None for e in transcript.events if isinstance(e, ModelEvent)
     )
 
 

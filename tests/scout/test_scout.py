@@ -44,6 +44,7 @@ from inspect_ai.model import (
     ModelOutput,
     execute_tools,
     get_model,
+    model_origin,
 )
 from inspect_ai.solver import Generate, Solver, TaskState, generate, solver, use_tools
 from inspect_ai.tool import Tool, ToolCall, ToolCallView, ToolError, tool
@@ -2340,3 +2341,42 @@ def test_a_transcript_without_model_events_replays_from_its_messages(
     generates = [m for m in sample.messages if isinstance(m, ChatMessageAssistant)]
     assert len(found["replay"]) == len(generates)
     assert {r["metadata.turns"] for r in found["replay"]} == {"inferred"}
+
+
+@solver
+def asks_a_helper_then_answers() -> Solver:
+    """A helper's call outside the agent's turns, then the agent's own."""
+
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        with model_origin("helper"):
+            await get_model().generate([ChatMessageUser(content="Summarise the task.")])
+        return await generate(state)
+
+    return solve
+
+
+@pytest.mark.parametrize("helper_origin", [True, False])
+def test_a_log_with_a_call_that_records_no_origin_has_inferred_turns(
+    tmp_path: Path, helper_origin: bool
+) -> None:
+    [log] = eval(
+        Task(dataset=[Sample(input="go")], solver=asks_a_helper_then_answers()),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "run"),
+        display="none",
+    )
+    assert log.samples is not None
+    if not helper_origin:
+        # the helper's call alone records no origin, so is inferred
+        for event in log.samples[0].events:
+            if isinstance(event, ModelEvent) and event.origin == "helper":
+                event.origin = None
+    write_eval_log(log, str(tmp_path / "logs" / "log.eval"))
+
+    found = scanned(
+        tmp_path / "scans", tmp_path / "logs", replay=as_scanner(conversations())
+    )
+
+    assert {r["metadata.turns"] for r in found["replay"]} == {
+        "recorded" if helper_origin else "inferred"
+    }
