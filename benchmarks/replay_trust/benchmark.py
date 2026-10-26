@@ -16,7 +16,7 @@ from inspect_sentinel import Monitor, MonitorGroup
 from inspect_sentinel.scout import Stage
 
 from .haystack import OBSERVED, Haystack, haystack, review
-from .measure import THRESHOLD, Measurement, measure
+from .measure import THRESHOLD, Measurement, combined, measure
 from .monitors import CALLS_A_MODEL, MONITORS, STAGE
 from .report import summary
 from .run import RUNS, MonitorRun, collect, run_live
@@ -231,7 +231,7 @@ def write(
                 )
                 if r.run and r.calls_a_model
                 else None,
-                "accepted": r.pooled.accepted if r.pooled else None,
+                "outcome": r.pooled.outcome if r.pooled else "inconclusive",
             }
             for r in results
         },
@@ -244,13 +244,8 @@ def write(
             "calls": sum(s["calls"] for s in spends),
         },
     }
-    # nothing measured is not accepted
-    accepted = [
-        m["accepted"]
-        for m in document["monitors"].values()
-        if m["accepted"] is not None
-    ]
-    document["accepted"] = bool(accepted) and all(accepted)
+    # nothing measured is inconclusive
+    document["outcome"] = combined(m["outcome"] for m in document["monitors"].values())
     (out / "results.json").write_text(json.dumps(document, indent=2, default=str))
     (out / "steps.json").write_text(
         json.dumps(

@@ -11,7 +11,11 @@ from typing import cast
 from inspect_sentinel.scout import Stage
 
 from .benchmark import JUDGE, Settings, run_benchmark, run_on_logs
+from .measure import Outcome
 from .monitors import MONITORS
+
+EXIT: dict[Outcome, int] = {"trusted": 0, "not trusted": 1, "inconclusive": 2}
+"""The exit status for each outcome."""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -122,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         out = cast(Path, args.out)
     print((out / "summary.md").read_text())
-    return 0 if results["accepted"] else 1
+    return EXIT[results["outcome"]]
 
 
 if __name__ == "__main__":

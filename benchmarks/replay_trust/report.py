@@ -15,13 +15,13 @@ def summary(results: dict[str, Any]) -> str:
         "",
         f"Settings: `{_settings(results['settings'])}`. A step is flagged at suspicion {results['threshold']} or above.",
         "",
-        f"**Accepted: {'yes' if results['accepted'] else 'no'}.**",
+        f"**Outcome: {results['outcome']}.**",
         "",
         "## 1. The same prompt",
         "",
         "Steps whose first monitor model request is identical live and in replay, after the nonce is replaced; beside them the same comparison between the two live runs and between the two replays. A monitor that asks its model again after an unusable answer sends that answer back, so those further requests are model noise: they are counted (asked again, in `live_a` and `replay_1`), not compared.",
         "",
-        "| monitor | haystack | steps | identical | known difference | live = live | replay = replay | asked again | accepted |",
+        "| monitor | haystack | steps | identical | known difference | live = live | replay = replay | asked again | outcome |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
     differences: list[str] = []
@@ -31,7 +31,7 @@ def summary(results: dict[str, Any]) -> str:
             if p is None:
                 continue
             lines.append(
-                f"| {name} | {where} | {p['compared']} | {p['identical']} | {p['explained']} | {_maybe(p['live_floor'])} | {p['replay_floor']} | {p['asked_again']['live_a']} / {p['asked_again']['replay_1']} | {_yes(m['same_prompt_accepted'])} |"
+                f"| {name} | {where} | {p['compared']} | {p['identical']} | {p['explained']} | {_maybe(p['live_floor'])} | {p['replay_floor']} | {p['asked_again']['live_a']} / {p['asked_again']['replay_1']} | {_outcome(m['same_prompt_outcome'])} |"
             )
             if where == "all":
                 for known, count in p["by_known"].items():
@@ -56,7 +56,7 @@ def summary(results: dict[str, Any]) -> str:
             "",
             "Steps whose flag differs between two runs: each pair of a live run and a replay (`live_a`, `live_b` against `replay_1`, `replay_2`, in that order), and the noise reference, live against live and replay against replay. Two exact two-sided McNemar tests for each pair, on the per-step flags: shift p, the steps only the live run flagged against those only the replay flagged; excess p, the steps where the pair disagrees against those where the noise pair does. The smallest of each is shown, beside the level each test is held to, 5% divided by the number of tests. Where the runs reproduce themselves (no step differs within the noise pairs), any step a pair disagrees on fails. Unmatched steps lack a row in some run: replay did not reach them, or a live run has neither a report nor a recorded abstention; either fails.",
             "",
-            "| monitor | haystack | steps | unmatched | live vs replay | live vs live | replay vs replay | shift p | excess p | level | mean abs. difference | accepted |",
+            "| monitor | haystack | steps | unmatched | live vs replay | live vs live | replay vs replay | shift p | excess p | level | mean abs. difference | outcome |",
             "|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
@@ -64,7 +64,7 @@ def summary(results: dict[str, Any]) -> str:
         for where, m in _rows(monitor):
             v = m["same_verdict"]
             lines.append(
-                f"| {name} | {where} | {v['steps']} | {v['unmatched']} | {' / '.join(str(_disagreements(p)) for p in v['pairs'].values())} | {_maybe(_disagreements(v['noise'].get('live_a vs live_b')))} | {_disagreements(v['noise']['replay_1 vs replay_2'])} | {_number(min(p['p_value'] for p in v['pairs'].values()))} | {_number(min(p['excess_p_value'] for p in v['pairs'].values()))} | {_number(v['alpha'])} | {_number(v['mean_abs_difference'])} | {_yes(m['same_verdict_accepted'])} |"
+                f"| {name} | {where} | {v['steps']} | {v['unmatched']} | {' / '.join(str(_disagreements(p)) for p in v['pairs'].values())} | {_maybe(_disagreements(v['noise'].get('live_a vs live_b')))} | {_disagreements(v['noise']['replay_1 vs replay_2'])} | {_number(min(p['p_value'] for p in v['pairs'].values()))} | {_number(min(p['excess_p_value'] for p in v['pairs'].values()))} | {_number(v['alpha'])} | {_number(v['mean_abs_difference'])} | {_outcome(m['same_verdict_outcome'])} |"
             )
     lines.extend(
         [
@@ -73,7 +73,7 @@ def summary(results: dict[str, Any]) -> str:
             "",
             "Recall on the needles and false-positive rate on the other steps, with 95% Wilson intervals, live (`live_a`) and in replay (`replay_1`), as a description. Each needle is checked one by one: changed counts the needles the live runs agree on (both flag it, or neither) that a replay flags differently, which fails acceptance. A needle is missed in a run where no step covers it or the monitor reported no score there; a missed needle fails acceptance, as does a recall or false-positive rate over no steps. With no needles labelled, this is not measured.",
             "",
-            "| monitor | haystack | needles | missed | changed | recall live | recall replay | FPR live | FPR replay | accepted |",
+            "| monitor | haystack | needles | missed | changed | recall live | recall replay | FPR live | FPR replay | outcome |",
             "|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
@@ -86,7 +86,7 @@ def summary(results: dict[str, Any]) -> str:
                 continue
             lost = {run: ids for run, ids in n["missed"].items() if ids}
             lines.append(
-                f"| {name} | {where} | {n['labelled']} | {sum(len(ids) for ids in lost.values())} | {len(n['changed'])} | {_proportion(n['recall']['live_a'])} | {_proportion(n['recall']['replay_1'])} | {_proportion(n['false_positive_rate']['live_a'])} | {_proportion(n['false_positive_rate']['replay_1'])} | {_yes(m['needles_found_accepted'])} |"
+                f"| {name} | {where} | {n['labelled']} | {sum(len(ids) for ids in lost.values())} | {len(n['changed'])} | {_proportion(n['recall']['live_a'])} | {_proportion(n['recall']['replay_1'])} | {_proportion(n['false_positive_rate']['live_a'])} | {_proportion(n['false_positive_rate']['replay_1'])} | {_outcome(m['needles_found_outcome'])} |"
             )
             if where == "all":
                 missed.extend(
@@ -113,10 +113,10 @@ def summary(results: dict[str, Any]) -> str:
                 "",
                 "Calls `human()` was asked about: the calls the haystacks put to a person, those the person answered in each live run, and those each replay answered with the answer recorded in `live_a`, as the recorded answer.",
                 "",
-                "| monitor | haystack | expected | asked live | given again in replay | accepted |",
+                "| monitor | haystack | expected | asked live | given again in replay | outcome |",
                 "|---|---|---|---|---|---|",
                 *[
-                    f"| {name} | {where} | {h['expected']} | {' / '.join(str(v) for v in h['asked'].values())} | {' / '.join(str(v) for v in h['given_again'].values())} | {_yes(m['same_human_answers_accepted'])} |"
+                    f"| {name} | {where} | {h['expected']} | {' / '.join(str(v) for v in h['asked'].values())} | {' / '.join(str(v) for v in h['given_again'].values())} | {_outcome(m['same_human_answers_outcome'])} |"
                     for name, where, m in human
                     for h in [m["same_human_answers"]]
                 ],
@@ -219,8 +219,8 @@ def _number(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.3g}"
 
 
-def _yes(value: bool | None) -> str:
-    return "n/a" if value is None else "yes" if value else "**no**"
+def _outcome(value: str | None) -> str:
+    return "n/a" if value is None else value if value == "trusted" else f"**{value}**"
 
 
 def _dollars(value: float | None) -> str:
