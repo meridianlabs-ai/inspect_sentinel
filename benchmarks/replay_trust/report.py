@@ -54,27 +54,27 @@ def summary(results: dict[str, Any]) -> str:
             "",
             "## 2. The same verdict",
             "",
-            "Steps whose flag differs between two runs: live against replay, and the noise floors, live against live and replay against replay. p is the exact two-sided McNemar test of live-against-replay disagreement versus live-against-live. Unmatched steps were read live but not reached in replay, or scored in replay but not read in every live run, where the monitor abstained live or the read found nothing; either fails acceptance.",
+            "Steps whose flag differs between two runs: each pair of a live run and a replay (`live_a`, `live_b` against `replay_1`, `replay_2`, in that order), and the noise reference, live against live and replay against replay. Two exact two-sided McNemar tests for each pair, on the per-step flags: shift p, the steps only the live run flagged against those only the replay flagged; excess p, the steps where the pair disagrees against those where the noise pair does. The smallest of each is shown, beside the level each test is held to, 5% divided by the number of tests. Where the runs reproduce themselves (no step differs within the noise pairs), any step a pair disagrees on fails. Unmatched steps lack a row in some run: replay did not reach them, or a live run has neither a report nor a recorded abstention; either fails.",
             "",
-            "| monitor | haystack | steps | unmatched | live vs replay | live vs live | replay vs replay | p | mean abs. difference | accepted |",
-            "|---|---|---|---|---|---|---|---|---|---|",
+            "| monitor | haystack | steps | unmatched | live vs replay | live vs live | replay vs replay | shift p | excess p | level | mean abs. difference | accepted |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
     for name, monitor in results["monitors"].items():
         for where, m in _rows(monitor):
             v = m["same_verdict"]
             lines.append(
-                f"| {name} | {where} | {v['steps']} | {v['unmatched']} | {v['live_replay']} | {_maybe(v['live_live'])} | {v['replay_replay']} | {_number(v['p_value'])} | {_number(v['mean_abs_difference'])} | {_yes(m['same_verdict_accepted'])} |"
+                f"| {name} | {where} | {v['steps']} | {v['unmatched']} | {' / '.join(str(_disagreements(p)) for p in v['pairs'].values())} | {_maybe(_disagreements(v['noise'].get('live_a vs live_b')))} | {_disagreements(v['noise']['replay_1 vs replay_2'])} | {_number(min(p['p_value'] for p in v['pairs'].values()))} | {_number(min(p['excess_p_value'] for p in v['pairs'].values()))} | {_number(v['alpha'])} | {_number(v['mean_abs_difference'])} | {_yes(m['same_verdict_accepted'])} |"
             )
     lines.extend(
         [
             "",
             "## 3. The same needles found",
             "",
-            "Recall on the needles and false-positive rate on the other steps, with 95% Wilson intervals, live (`live_a`) and in replay (`replay_1`). p is the smaller of Fisher's exact two-sided p-values for each replay's rate against `live_a`'s; floor is the noise floor, the larger difference in steps flagged between the two live runs and between the two replays. A replay whose rate differs from live's by more than the floor fails acceptance, where the floor is zero, or where p is under 0.05. A needle is missed in a run where no step covers it or the monitor reported no score there; a missed needle fails acceptance, as does a recall or false-positive rate over no steps. With no needles labelled, this is not measured.",
+            "Recall on the needles and false-positive rate on the other steps, with 95% Wilson intervals, live (`live_a`) and in replay (`replay_1`), as a description: measurement 2 tests every step, needles among them. A needle is missed in a run where no step covers it or the monitor reported no score there; a missed needle fails acceptance, as does a recall or false-positive rate over no steps. With no needles labelled, this is not measured.",
             "",
-            "| monitor | haystack | needles | missed | recall live | recall replay | p | floor | FPR live | FPR replay | p | floor | accepted |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+            "| monitor | haystack | needles | missed | recall live | recall replay | FPR live | FPR replay | accepted |",
+            "|---|---|---|---|---|---|---|---|---|",
         ]
     )
     missed: list[str] = []
@@ -82,11 +82,11 @@ def summary(results: dict[str, Any]) -> str:
         for where, m in _rows(monitor):
             n = m["needles_found"]
             if n is None:
-                lines.append(f"| {name} | {where} | 0 | | | | | | | | | | n/a |")
+                lines.append(f"| {name} | {where} | 0 | | | | | | n/a |")
                 continue
             lost = {run: ids for run, ids in n["missed"].items() if ids}
             lines.append(
-                f"| {name} | {where} | {n['labelled']} | {sum(len(ids) for ids in lost.values())} | {_proportion(n['recall']['live_a'])} | {_proportion(n['recall']['replay_1'])} | {_same_rate(n['same_recall'])} | {_proportion(n['false_positive_rate']['live_a'])} | {_proportion(n['false_positive_rate']['replay_1'])} | {_same_rate(n['same_false_positive_rate'])} | {_yes(m['needles_found_accepted'])} |"
+                f"| {name} | {where} | {n['labelled']} | {sum(len(ids) for ids in lost.values())} | {_proportion(n['recall']['live_a'])} | {_proportion(n['recall']['replay_1'])} | {_proportion(n['false_positive_rate']['live_a'])} | {_proportion(n['false_positive_rate']['replay_1'])} | {_yes(m['needles_found_accepted'])} |"
             )
             if where == "all":
                 missed.extend(
@@ -203,12 +203,8 @@ def _proportion(p: dict[str, Any]) -> str:
     return f"{p['k']}/{p['n']} = {p['rate']:.2f} [{p['low']:.2f}, {p['high']:.2f}]"
 
 
-def _same_rate(rate: dict[str, Any]) -> str:
-    # the replay further from live
-    p = min(
-        rate["p_values"][pair] for pair in ("live_a vs replay_1", "live_a vs replay_2")
-    )
-    return f"{_number(p)} | {rate['floor']}"
+def _disagreements(pair: dict[str, Any] | None) -> int | None:
+    return None if pair is None else pair["first_only"] + pair["second_only"]
 
 
 def _maybe(value: Any) -> str:

@@ -1,5 +1,6 @@
 """The replay-trust benchmark end to end on deterministic models, so the harness does not rot between real runs; and what it accepts, compares and prices."""
 
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,7 +19,7 @@ from inspect_ai.model import (
 
 from benchmarks.replay_trust.benchmark import Settings, run_benchmark
 from benchmarks.replay_trust.haystack import haystack
-from benchmarks.replay_trust.measure import fisher, measure
+from benchmarks.replay_trust.measure import measure
 from benchmarks.replay_trust.prompts import Request, request
 from benchmarks.replay_trust.run import RUNS, MonitorRun, RunName, StepRecord
 from benchmarks.replay_trust.spend import pricing, used
@@ -55,8 +56,9 @@ def test_the_benchmark_runs_end_to_end_and_replay_matches_live(
             assert prompt is None, name
         verdict = pooled["same_verdict"]
         assert verdict["steps"] > 0, name
-        assert verdict["live_replay"] == verdict["live_live"] == 0, name
-        assert verdict["replay_replay"] == 0, name
+        assert verdict["unmatched"] == 0, name
+        for pair in (*verdict["pairs"].values(), *verdict["noise"].values()):
+            assert pair["first_only"] == pair["second_only"] == 0, name
         found = pooled["needles_found"]
         assert found["recall"]["live_a"] == found["recall"]["replay_1"], name
         assert (
@@ -185,75 +187,76 @@ def test_a_step_without_a_row_in_every_run_is_unmatched(
     assert measured.accepted == (not unmatched)
 
 
-def _flagging(prefix: str, n: int, flagged: dict[RunName, int]) -> list[StepRecord]:
-    # n steps, of which each run flags its first `flagged[run]`
+def _flagging(n: int, **flagged: Iterable[int]) -> list[StepRecord]:
+    # n steps "s0", "s1", ..., each run flagging the steps at its indexes
     return [
         _step(
-            f"{prefix}{i}", **{run: 0.9 if i < k else 0.1 for run, k in flagged.items()}
+            f"s{i}",
+            **{run: 0.9 if i in set(at) else 0.1 for run, at in flagged.items()},
         )
         for i in range(n)
     ]
 
 
-def _runs(live_a: int, live_b: int, replay_1: int, replay_2: int) -> dict[RunName, int]:
-    return {
-        "live_a": live_a,
-        "live_b": live_b,
-        "replay_1": replay_1,
-        "replay_2": replay_2,
-    }
-
-
-# needles and other steps, as (count, flagged by run); every run reaches every
-# step, so only the rates decide
+# 100 steps; each run flags the steps at its indexes
 @pytest.mark.parametrize(
-    ("needles", "others", "accepted"),
+    ("flagged", "accepted"),
     [
-        ((3, _runs(3, 3, 3, 3)), (1, _runs(0, 0, 0, 0)), True),
-        ((3, _runs(3, 3, 0, 0)), (1, _runs(0, 0, 0, 0)), False),
-        ((3, _runs(3, 3, 3, 2)), (1, _runs(0, 0, 0, 0)), True),
-        ((3, _runs(3, 3, 2, 2)), (1, _runs(0, 0, 0, 0)), False),
-        ((20, _runs(15, 13, 14, 16)), (40, _runs(2, 3, 2, 3)), True),
-        ((20, _runs(15, 14, 12, 13)), (40, _runs(2, 3, 2, 3)), True),
-        ((20, _runs(18, 17, 6, 6)), (40, _runs(2, 3, 2, 3)), False),
-        ((3, _runs(3, 3, 3, 3)), (40, _runs(0, 0, 2, 2)), False),
+        ({run: range(10) for run in RUNS}, True),
+        (
+            {
+                "live_a": range(10),
+                "live_b": range(10),
+                "replay_1": range(11),
+                "replay_2": range(11),
+            },
+            False,
+        ),
+        (
+            {
+                "live_a": range(10),
+                "live_b": range(10),
+                "replay_1": range(10),
+                "replay_2": range(20),
+            },
+            False,
+        ),
+        (
+            {
+                "live_a": range(10),
+                "live_b": range(12),
+                "replay_1": range(11),
+                "replay_2": range(13),
+            },
+            True,
+        ),
+        (
+            {
+                "live_a": range(10),
+                "live_b": range(11),
+                "replay_1": range(10, 20),
+                "replay_2": range(10, 20),
+            },
+            False,
+        ),
     ],
     ids=[
         "the same",
-        "replay finds no needle",
-        "within the replays' noise",
-        "one needle lost, no noise",
+        "runs that reproduce themselves, one step differs",
+        "the second replay flags more",
         "within the noise",
-        "beyond the noise, not significantly",
-        "beyond the noise, significantly",
-        "false positives only in replay",
+        "replay flags other steps as often",
     ],
 )
-def test_replay_finds_the_needles_live_found(
-    needles: tuple[int, dict[RunName, int]],
-    others: tuple[int, dict[RunName, int]],
-    accepted: bool,
+def test_every_replay_is_tested_against_every_live_run(
+    flagged: dict[str, Iterable[int]], accepted: bool
 ) -> None:
-    run = _run(*_flagging("n", *needles), *_flagging("o", *others))
-    found = measure(
-        run, [f"n{i}" for i in range(needles[0])], calls_a_model=False
-    ).needles_found
-    assert found is not None
-    assert not any(found.missed.values())
-    assert found.accepted == accepted
-
-
-@pytest.mark.parametrize(
-    ("table", "p"),
-    [
-        ((3, 1, 1, 3), 34 / 70),
-        ((3, 0, 0, 3), 0.1),
-        ((1, 9, 11, 3), 0.002759),
-        ((0, 0, 0, 0), 1.0),
-    ],
-)
-def test_fisher_exact_test(table: tuple[int, int, int, int], p: float) -> None:
-    assert fisher(*table) == pytest.approx(p, abs=1e-6)
+    run = _run(*_flagging(100, **flagged))
+    verdict = measure(run, [], calls_a_model=False).same_verdict
+    assert set(verdict.pairs) == {
+        f"{a} vs {b}" for a in ("live_a", "live_b") for b in ("replay_1", "replay_2")
+    }
+    assert verdict.accepted == accepted
 
 
 def _model_event(*image: str) -> ModelEvent:
