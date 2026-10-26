@@ -1,4 +1,4 @@
-"""The three measurements, per monitor and haystack, and the acceptance they are held to.
+"""The four measurements, per monitor and haystack, and how they decide trust.
 
 1. **The same prompt**: the share of steps whose first monitor request is identical live (`live_a`) and in each replay (`replay_1`, `replay_2`), after the nonce is replaced; each difference is traced to a known difference or reported as unexplained. A step's first request is built from the step alone; a monitor that asks its model again after an unusable answer sends that answer back, which is model noise, so those requests are counted and not compared.
 2. **The same verdict**: per step, whether the suspicion crosses `THRESHOLD`, compared for every pair of a live run and a replay, `live_a` and `live_b` against `replay_1` and `replay_2`, beside the noise reference, live against live and replay against replay. The runs score the same steps, so the tests are paired, exact two-sided McNemar tests on the per-step flags: one of the steps only the live run flagged against those only the replay flagged, a shift in what is flagged; and one of the steps where the pair disagrees against those where the live runs disagree (or, with one live run, the replays), disagreement beyond the noise. Each test is at 5% divided by the number of tests, so the chance of one rejecting a replay that behaves as live is at most 5%.
@@ -254,7 +254,7 @@ class SameVerdict:
     """Steps compared: those both replays reached at the stage."""
 
     unmatched: int
-    """Steps without a row in every run: not reached by both replays, a step replay lost or a key that did not match it; or with no row in a live run, where the read did not find what the monitor reported or the monitor abstained without recording it (`abstain()`). Read mode has no row where a monitor abstained, so an unrecorded abstention cannot be told from a missing report, and either fails acceptance."""
+    """Steps without a row in every run: not reached by both replays, a step replay lost or a key that did not match it; or with no row in a live run, where the read did not find what the monitor reported or the monitor abstained without recording it (`abstain()`). Read mode has no row where a monitor abstained, so an unrecorded abstention cannot be told from a missing report, and either is not trusted."""
 
     pairs: dict[str, PairedFlags]
     """Every pair of a live run and a replay, as `"live_a vs replay_1"`."""

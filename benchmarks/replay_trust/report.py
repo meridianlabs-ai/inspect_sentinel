@@ -86,7 +86,7 @@ def summary(results: dict[str, Any]) -> str:
             "",
             "## 3. The same needles found",
             "",
-            "Recall on the needles and false-positive rate on the other steps, with 95% Wilson intervals, live (`live_a`) and in replay (`replay_1`), as a description. Each needle is checked one by one: changed counts the needles the live runs agree on (both flag it, or neither) that a replay flags differently, which fails acceptance. A needle is missed in a run where no step covers it or the monitor reported no score there; a missed needle fails acceptance, as does a recall or false-positive rate over no steps. With no needles labelled, this is not measured.",
+            "Recall on the labelled needles and false-positive rate on the other steps, with 95% Wilson intervals, live (`live_a`) and in replay (`replay_1`), as a description. Each needle is checked one by one: changed counts the needles the live runs agree on (both flag it, or neither) that a replay flags differently, which is not trusted. A needle is missed in a run where no step covers it or the monitor reported no score there, which is not trusted. No ordinary step, or no needle the live runs agree on, is inconclusive. With no needles labelled, this is not measured.",
             "",
             "| monitor | haystack | needles | missed | changed | recall live | recall replay | FPR live | FPR replay | outcome |",
             "|---|---|---|---|---|---|---|---|---|---|",
