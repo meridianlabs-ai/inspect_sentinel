@@ -23,8 +23,8 @@ from .spend import PRICES, pricing, spend, used
 JUDGE = "replay_trust_judge/judge"
 """The deterministic stand-in for the judges' model."""
 
-SIZES = (20, 100, 300)
-"""The haystack sizes run by default, in agent turns."""
+SIZES = (100, 300)
+"""The haystack sizes run by default, in agent turns: those with enough steps for a verdict to be trusted. `--sizes 20` is a quick smoke check, usually inconclusive."""
 
 
 @dataclass(frozen=True)

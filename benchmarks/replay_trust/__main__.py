@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         nargs="+",
         default=list(SIZES),
-        help="Haystack sizes, in agent turns.",
+        help="Haystack sizes, in agent turns. 20 is a quick smoke check, usually inconclusive: its haystack has fewer steps than a verdict can be trusted on.",
     )
     haystacks.add_argument(
         "--samples", type=int, default=1, help="Haystacks of each size."
