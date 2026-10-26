@@ -2,21 +2,22 @@
 
 Live, a step's monitor calls are the `ModelEvent`s inside its `sentinel` span, and the `SentinelEvent` there names the step. In a replay through Scout, the scan's events are flat; `every_step_marked`, a step selector that selects every step, records an `InfoEvent` naming each step just before the step runs, so a step's calls are the model events after its mark. The replay runs one step at a time, so the marks cannot interleave.
 
-A request is rendered as text with `Host.score()`'s nonce replaced, since the nonce is fresh in every transcript by design, and without message ids, which are minted for each call.
+A request is rendered as text with `Host.score()`'s nonce replaced on its block markers and message headers, since the nonce is fresh in every transcript by design, and without message ids, which are minted for each call. The rendering compared holds every message's whole content: its text as lines, so a difference reads as a line diff, and every other field of every part, images, audio and documents with their data, as canonical JSON. The rendering shown shortens long values in those parts.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import tiktoken
 from inspect_ai.event import Event, ModelEvent, SentinelEvent, SpanBeginEvent
 from inspect_ai.log import EvalSample, transcript
-from inspect_ai.model import ChatMessage, ChatMessageAssistant
+from inspect_ai.model import ChatMessage, ChatMessageAssistant, Content, ModelUsage
 
 from inspect_sentinel import ReplayStep
 from inspect_sentinel.scout import step_selector
@@ -27,8 +28,12 @@ StepId = tuple[str, str]
 MARK = "replay_trust_step"
 """The `InfoEvent` source of the marks `every_step_marked` records."""
 
-# a nonce on a block marker or message header, as Host.score renders it
+# a nonce on a block marker, as Host.score renders it; once found, it is
+# replaced wherever it is in parentheses, as on every marker and header
 _NONCE = re.compile(r"\(([0-9a-f]{8})\)\]")
+
+# a value in a non-text content part longer than this is shortened when shown
+_SHOWN_LENGTH = 120
 
 # generation settings that govern the client, not what the model is sent;
 # a scan sets its own connections
@@ -49,16 +54,21 @@ class Request:
     """One request to the monitor's model."""
 
     text: str
-    """The request rendered for comparison: what the model is sent, configuration, tools and messages, with the nonce replaced, no message ids, and none of the settings that govern only the client, such as connections and timeouts."""
+    """The request rendered for comparison: what the model is sent, configuration, tools and messages with their whole content, with the nonce replaced, no message ids, and none of the settings that govern only the client, such as connections and timeouts."""
 
     tokens: int
     """The request's input tokens, counted with `o200k_base`: each message's text and the tools' JSON."""
 
-    used_input: int = 0
-    """The input tokens the provider reported, including any read from or written to its cache; 0 where it reported none."""
+    usage: ModelUsage | None = None
+    """What the provider reported the call used, its uncached input, cache reads and cache writes apart; None where it reported nothing."""
 
-    used_output: int = 0
-    """The output tokens the provider reported."""
+    shown: str | None = None
+    """The request rendered for display where that differs from `text`: long values in content that is not text are shortened."""
+
+    @property
+    def display(self) -> str:
+        """The request rendered for display."""
+        return self.text if self.shown is None else self.shown
 
 
 @step_selector
@@ -112,7 +122,22 @@ def replay_requests(events: Iterable[Mapping[str, Any]]) -> dict[StepId, list[Re
 
 
 def request(event: ModelEvent) -> Request:
-    """`event`'s request, rendered for comparison and counted."""
+    """`event`'s request, rendered for comparison and for display, and counted."""
+    text = _render(event, shorten=False)
+    shown = _render(event, shorten=True)
+    tokens = sum(len(_ENCODING.encode(m.text)) for m in event.input) + sum(
+        len(_ENCODING.encode(json.dumps(tool.model_dump(exclude_none=True))))
+        for tool in event.tools
+    )
+    return Request(
+        text=text,
+        tokens=tokens,
+        usage=event.output.usage,
+        shown=None if shown == text else shown,
+    )
+
+
+def _render(event: ModelEvent, *, shorten: bool) -> str:
     config = event.config.model_dump(exclude_none=True, exclude=_CLIENT_SIDE)
     lines = [
         f"config: {json.dumps(config, sort_keys=True)}",
@@ -124,41 +149,52 @@ def request(event: ModelEvent) -> Request:
         ],
     ]
     for index, message in enumerate(event.input):
-        lines.extend(_message(index, message))
+        lines.extend(_message(index, message, shorten))
     text = "\n".join(lines)
     for nonce in set(_NONCE.findall(text)):
-        text = text.replace(nonce, "NONCE")
-    tokens = sum(len(_ENCODING.encode(m.text)) for m in event.input) + sum(
-        len(_ENCODING.encode(json.dumps(tool.model_dump(exclude_none=True))))
-        for tool in event.tools
-    )
-    usage = event.output.usage
-    return Request(
-        text=text,
-        tokens=tokens,
-        used_input=(
-            usage.input_tokens
-            + (usage.input_tokens_cache_read or 0)
-            + (usage.input_tokens_cache_write or 0)
-        )
-        if usage
-        else 0,
-        used_output=usage.output_tokens if usage else 0,
-    )
+        text = text.replace(f"({nonce})", "(NONCE)")
+    return text
 
 
-def _message(index: int, message: ChatMessage) -> list[str]:
+def _message(index: int, message: ChatMessage, shorten: bool) -> list[str]:
     header = message.model_dump(
         exclude={"id", "content", "tool_calls", "source"}, exclude_none=True
     )
     lines = [f"--- message {index}: {json.dumps(header, sort_keys=True)}"]
-    lines.extend(message.text.splitlines())
+    if isinstance(message.content, str):
+        lines.extend(message.content.splitlines())
+    else:
+        for part, content in enumerate(message.content):
+            lines.extend(_part(part, content, shorten))
     if isinstance(message, ChatMessageAssistant):
         for call in message.tool_calls or []:
             lines.append(
                 f"tool call: {json.dumps({'id': call.id, 'function': call.function, 'arguments': call.arguments}, sort_keys=True)}"
             )
     return lines
+
+
+def _part(index: int, content: Content, shorten: bool) -> list[str]:
+    # a part as canonical JSON, with a text part's text after it as lines
+    fields = content.model_dump(exclude_none=True)
+    text = fields.pop("text", None) if content.type == "text" else None
+    if shorten:
+        fields = _shortened(fields)
+    lines = [f"content {index}: {json.dumps(fields, sort_keys=True)}"]
+    if isinstance(text, str):
+        lines.extend(text.splitlines())
+    return lines
+
+
+def _shortened(value: Any) -> Any:
+    if isinstance(value, str) and len(value) > _SHOWN_LENGTH:
+        digest = hashlib.sha256(value.encode()).hexdigest()[:12]
+        return f"<{len(value)} characters, sha256 {digest}>"
+    if isinstance(value, dict):
+        return {k: _shortened(v) for k, v in cast(dict[str, Any], value).items()}
+    if isinstance(value, list):
+        return [_shortened(v) for v in cast(list[Any], value)]
+    return value
 
 
 def _jsonable(value: Any) -> Any:

@@ -15,12 +15,12 @@ from typing import Any, cast
 from inspect_sentinel import Monitor, MonitorGroup
 from inspect_sentinel.scout import Stage
 
-from .haystack import Haystack, haystack
+from .haystack import OBSERVED, Haystack, haystack, review
 from .measure import THRESHOLD, Measurement, measure
 from .monitors import CALLS_A_MODEL, MONITORS, STAGE
 from .report import summary
 from .run import RUNS, MonitorRun, collect, run_live
-from .spend import PRICES, spend, used
+from .spend import PRICES, pricing, spend, used
 
 JUDGE = "replay_trust_judge/judge"
 """The deterministic stand-in for the judges' model."""
@@ -89,7 +89,14 @@ def run_benchmark(settings: Settings) -> dict[str, Any]:
             for run in ("a", "b")
         ]
         run = collect(
-            name, factory, cast(Stage, STAGE[name]), logs, settings.out / "scans", roles
+            name,
+            factory,
+            cast(Stage, STAGE[name]),
+            logs,
+            settings.out / "scans",
+            roles,
+            path=f"{OBSERVED}/{name}",
+            review=review,
         )
         results.append(measured(run, haystacks, name in CALLS_A_MODEL))
     return write(settings.out, results, haystacks, _settings_json(settings))
@@ -138,16 +145,24 @@ def run_on_logs(
 def measured(
     run: MonitorRun, haystacks: Sequence[Haystack], calls_a_model: bool
 ) -> MonitorResult:
-    """`run`'s measurements per haystack and pooled, against the haystacks' needles."""
-    needles = [n.call_id for h in haystacks for n in h.needles]
+    """`run`'s measurements per haystack and pooled, against the haystacks' needles and the calls their person was asked about."""
     result = MonitorResult(
         name=run.name, stage=run.stage, calls_a_model=calls_a_model, run=run
     )
     for h in haystacks:
         result.haystacks[h.id] = measure(
-            run, needles, samples=[h.id], calls_a_model=calls_a_model
+            run,
+            [n.call_id for n in h.needles],
+            samples=[h.id],
+            calls_a_model=calls_a_model,
+            asked=[h.reviewed],
         )
-    result.pooled = measure(run, needles, calls_a_model=calls_a_model)
+    result.pooled = measure(
+        run,
+        [n.call_id for h in haystacks for n in h.needles],
+        calls_a_model=calls_a_model,
+        asked=[h.reviewed for h in haystacks],
+    )
     return result
 
 
@@ -186,6 +201,7 @@ def write(
                 "turns": len(h.turns),
                 "needles": [asdict(n) for n in h.needles],
                 "retried_turn": h.retried_turn,
+                "reviewed": h.reviewed,
             }
             for h in haystacks
         },
@@ -220,7 +236,7 @@ def write(
             for r in results
         },
         "spend": {
-            "prices": [asdict(p) for p in PRICES],
+            "prices": [_price(p.model) for p in PRICES],
             "by_monitor_and_size": spends,
             "total": {
                 p.model: sum(s["dollars"][p.model] for s in spends) for p in PRICES
@@ -269,6 +285,17 @@ def load_factory(reference: str) -> Callable[[], Monitor | MonitorGroup]:
         Callable[[], Monitor | MonitorGroup],
         getattr(importlib.import_module(module), name),
     )
+
+
+def _price(model: str) -> dict[str, Any]:
+    found = pricing(model)
+    assert found is not None
+    return {
+        "model": model,
+        **found.cost.model_dump(),
+        "estimated": found.estimated,
+        "source": found.source,
+    }
 
 
 def _without_tokens(measurement: dict[str, Any]) -> dict[str, Any]:

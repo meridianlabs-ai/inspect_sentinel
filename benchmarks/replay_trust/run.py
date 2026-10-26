@@ -1,25 +1,26 @@
 """Run a monitor live twice and replay it twice through Scout, and gather what it reported and asked at each step.
 
-The live runs are evals of the haystacks with the monitor attached observe-only; read mode (`as_reader`) reads what it reported there. The replays are `as_scanner` scans of the first live run's log. Steps are matched across runs by a key that does not depend on the run: at a tool stage, the tool call's id (the step id); at a generate stage, the first tool call of the turn's output, since a generate's step id is minted by the run.
+The live runs are evals of the haystacks with the monitor attached observe-only beside the review a scripted person answers; read mode (`as_reader`) reads what the monitor reported there. The replays are `as_scanner` scans of the first live run's log: the monitor alone, and the review, whose `human()` is given the person's recorded answer again. Steps are matched across runs by a key that does not depend on the run: at a tool stage, the tool call's id (the step id); at a generate stage, the first tool call of the turn's output, since a generate's step id is minted by the run.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
 from inspect_ai import eval
-from inspect_ai.event import ModelEvent
+from inspect_ai.event import ModelEvent, SentinelEvent
 from inspect_ai.log import read_eval_log
 from inspect_scout import scan, scan_results_df, transcripts_from
 
-from inspect_sentinel import Monitor, MonitorGroup, observe_only
+from inspect_sentinel import Monitor, MonitorGroup, Sentinels
 from inspect_sentinel.scout import Stage, as_reader, as_scanner
 
-from .haystack import Haystack, haystack_task
+from .haystack import Haystack, haystack_sentinel, haystack_task, scripted_person
 from .prompts import (
     Request,
     StepId,
@@ -36,6 +37,9 @@ RUNS: tuple[RunName, ...] = ("live_a", "live_b", "replay_1", "replay_2")
 
 Key = tuple[str, str, str]
 """A step across runs: the sample, the stage, and the run-independent step key."""
+
+# the factory human() records its decisions under
+_HUMAN = "inspect_sentinel/human"
 
 
 @dataclass
@@ -61,6 +65,23 @@ class StepRecord:
     """The monitor model's requests at the step, by run."""
 
 
+@dataclass
+class Asked:
+    """A tool call `human()` was asked about, across the runs."""
+
+    sample: str
+    """The sample's id, with `#epoch` after a first epoch."""
+
+    call: str
+    """The tool call's id, its step id."""
+
+    answers: dict[RunName, str] = field(default_factory=lambda: {})
+    """The decision `human()` made, by run: as the person answered live, and as replay answered it."""
+
+    sources: dict[RunName, str] = field(default_factory=lambda: {})
+    """Where each replay's answer came from: `"recorded"` where it was the live answer given again, else `"unanswered"` or `"simulated"`."""
+
+
 @dataclass(frozen=True)
 class MonitorRun:
     """A monitor's steps across the four runs, at the stage it is measured at."""
@@ -80,6 +101,9 @@ class MonitorRun:
     scans: dict[str, str]
     """Each scan's location, by what it read or replayed."""
 
+    asked: list[Asked] | None = None
+    """The calls `human()` was asked about, in `live_a`'s order; None where the review was not replayed."""
+
 
 def run_live(
     haystacks: Sequence[Haystack],
@@ -90,15 +114,17 @@ def run_live(
     compact_at: int = 3000,
     max_connections: int | None = None,
 ) -> str:
-    """Run the haystacks once with `monitor` attached observe-only, and return the log's location."""
-    [log] = eval(
-        haystack_task(haystacks, observe_only(monitor), compact_at=compact_at),
-        model_roles=dict(model_roles),
-        log_dir=str(log_dir),
-        display="none",
-        max_connections=max_connections,
-        fail_on_error=True,
-    )
+    """Run the haystacks once with `monitor` attached observe-only beside the review, which the scripted person answers, and return the log's location."""
+    # with no display, inspect_ai asks the person at the terminal
+    with scripted_person(len(haystacks)):
+        [log] = eval(
+            haystack_task(haystacks, haystack_sentinel(monitor), compact_at=compact_at),
+            model_roles=dict(model_roles),
+            log_dir=str(log_dir),
+            display="none",
+            max_connections=max_connections,
+            fail_on_error=True,
+        )
     if log.status != "success":
         raise RuntimeError(f"The live run in {log_dir} did not succeed: {log.error}")
     return log.location
@@ -113,6 +139,7 @@ def collect(
     model_roles: Mapping[str, str],
     *,
     path: str | None = None,
+    review: Callable[[], Sentinels] | None = None,
 ) -> MonitorRun:
     """Read `monitor`'s live reports from `logs`, replay it twice over the first, and gather each step at `stage` across the runs.
 
@@ -124,6 +151,7 @@ def collect(
         scans: Where to write the scans.
         model_roles: The model roles for the replays, as the live runs had them.
         path: The monitor's instance path in the live sentinel, for read mode; `name` when None, as for a lone monitor.
+        review: Makes the part of the live sentinel that asks `human()`, with the instance paths it had live, to replay in each replay beside the monitor; the answers are not gathered when None.
     """
     if not 1 <= len(logs) <= 2:
         raise ValueError(f"collect() takes one or two live logs, got {len(logs)}.")
@@ -131,6 +159,12 @@ def collect(
     records: dict[Key, StepRecord] = {}
     order: list[Key] = []
     locations: dict[str, str] = {}
+    asked: dict[tuple[str, str], Asked] = {}
+
+    def ask(sample: str, call: str) -> Asked:
+        if (sample, call) not in asked:
+            asked[(sample, call)] = Asked(sample=sample, call=call)
+        return asked[(sample, call)]
 
     def record(
         sample: str, step: StepId, keys: Mapping[str, tuple[str, tuple[str, ...]]]
@@ -172,19 +206,45 @@ def collect(
                 found = record(sample_key(sample), step, keys[sample.uuid])
                 if found is not None:
                     found.requests[run] = requests
+            if review is not None:
+                for event in sample.events:
+                    if (
+                        isinstance(event, SentinelEvent)
+                        and event.factory == _HUMAN
+                        and event.kind == "decision"
+                        and event.status == "reported"
+                        and event.action is not None
+                    ):
+                        answered = ask(sample_key(sample), event.step_id)
+                        answered.answers[run] = event.action
 
     log_a = read[0]
     samples = {s.uuid: s for s in log_a.samples or []}
     keys = {s.uuid: generate_keys(s.events) for s in log_a.samples or []}
     for run in ("replay_1", "replay_2"):
         run = cast(RunName, run)
-        scanned = _scan(
-            {run: as_scanner(monitor(), stage=stage, steps=every_step_marked)},
-            logs[0],
-            scans / f"{name}-{run}",
-            model_roles,
-        )
+        scanners: dict[str, Any] = {
+            run: as_scanner(monitor(), stage=stage, steps=every_step_marked)
+        }
+        if review is not None:
+            # a person who was not asked live would get approve, which the
+            # scripted person never answers
+            scanners[f"{run}_review"] = as_scanner(
+                review(), stage="tool_call", human="approve"
+            )
+        scanned = _scan(scanners, logs[0], scans / f"{name}-{run}", model_roles)
         locations[run] = scanned
+        if review is not None:
+            for transcript_id, results, _ in _transcripts(scanned, f"{run}_review"):
+                sample = samples[transcript_id]
+                for result in results:
+                    source = result["metadata"].get("human")
+                    if source is not None:
+                        answered = ask(
+                            sample_key(sample), result["metadata"]["step_id"]
+                        )
+                        answered.answers[run] = str(result["answer"])
+                        answered.sources[run] = str(source)
         for transcript_id, results, events in _transcripts(scanned, run):
             sample = samples[transcript_id]
             for result in results:
@@ -203,6 +263,7 @@ def collect(
         steps=[records[k] for k in order],
         logs=tuple(logs),
         scans=locations,
+        asked=list(asked.values()) if review is not None else None,
     )
 
 
@@ -237,18 +298,45 @@ def generate_keys(events: Sequence[Any]) -> dict[str, tuple[str, tuple[str, ...]
 def _scan(
     scanners: Mapping[str, Any], log: str, scans: Path, model_roles: Mapping[str, str]
 ) -> str:
-    status = scan(
-        scanners=dict(scanners),
-        transcripts=transcripts_from(log),
-        scans=str(scans),
-        model_roles=dict(model_roles),
-        display="none",
-        max_processes=1,
-        fail_on_error=True,
-    )
+    # Scout ends a scan that raises as interrupted, with nothing in its status
+    # to say why; its log display logs the exception, so catch it there
+    interrupted = _Interrupted()
+    scout_logger = logging.getLogger("inspect_scout")
+    scout_logger.addHandler(interrupted)
+    try:
+        status = scan(
+            scanners=dict(scanners),
+            transcripts=transcripts_from(log),
+            scans=str(scans),
+            model_roles=dict(model_roles),
+            display="log",
+            max_processes=1,
+            fail_on_error=True,
+        )
+    finally:
+        scout_logger.removeHandler(interrupted)
     if not status.complete:
-        raise RuntimeError(f"The scan in {scans} did not complete.")
+        cause = interrupted.exception
+        raise RuntimeError(
+            f"The scan in {scans} did not complete: "
+            + (
+                f"Scout stopped it with {cause!r}."
+                if cause is not None
+                else f"{len(status.errors)} transcripts failed."
+            )
+        ) from cause
     return status.location
+
+
+class _Interrupted(logging.Handler):
+    # keeps the exception a Scout scan logs when it stops
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self.exception: BaseException | None = None
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.exc_info is not None and record.exc_info[1] is not None:
+            self.exception = record.exc_info[1]
 
 
 def _transcripts(
