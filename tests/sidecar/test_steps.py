@@ -235,7 +235,7 @@ def reports_histories() -> Protocol:
 
 @pytest.mark.anyio
 async def test_no_step_is_given_the_agent_messages() -> None:
-    # the caller's own list is not known behind a proxy, only what each
+    # the agent's own message list is not known behind a proxy, only what each
     # request carries, which is a step's `input`
     handler = Handler(reports_histories())
     await handler.request(request(then=ran("Oslo", "rain", "toolu_1")))

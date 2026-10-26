@@ -30,7 +30,7 @@ DROPPED_IDS = 1_000_000
 """How many ids of requests whose records were dropped are kept, so that a request can be told apart from one never seen."""
 
 NotJudged: TypeAlias = Literal[
-    "unreadable", "unregistered", "time_limit", "error", "provider_error"
+    "unreadable", "unregistered", "time_limit", "error", "provider_error", "cut_off"
 ]
 """Why a request or its reply was not judged."""
 

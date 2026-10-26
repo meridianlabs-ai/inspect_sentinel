@@ -102,6 +102,8 @@ Events also restore `input` exactly, from `ModelEvent.input`, and let `history`,
 
 ### Reconstructing `agent_messages` in replay
 
+*Superseded 2026-10-21 by inspect_ai #5986: `agent_messages` is the outermost agent's own list and is `None` in replay ([sentinel.md](sentinel.md#agent-messages)); #121 reconciles this plan.*
+
 Noted 2026-10-13 with the maintainer, alongside making `step.agent_messages` optional (`None` when the host can't provide the caller's list: replay from a log, proxy hosts, steps with no scaffold conversation).
 
 `agent_messages` is the scaffold's list *at that step*. An eval log holds only the list at the end of the sample (`sample.messages`) and, per model call, what the model was sent (`ModelEvent.input`, already `step.input`). For an append-only scaffold the step's history is a prefix of `sample.messages`, cut at the step's anchor (tool stages: the assistant message holding the call; generate stages: the last message of the call's input), found by message id.
