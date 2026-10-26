@@ -25,6 +25,7 @@ from .prompts import (
     Request,
     StepId,
     every_step_marked,
+    live_abstentions,
     live_requests,
     replay_requests,
     sample_key,
@@ -59,7 +60,7 @@ class StepRecord:
     """The tool call ids the step covers: its call at a tool stage, the turn's calls at a generate stage."""
 
     scores: dict[RunName, float | None] = field(default_factory=lambda: {})
-    """The monitor's suspicion at the step in each run it ran in; `None` where it abstained. A structured suspicion is its highest dimension."""
+    """The monitor's suspicion at the step in each run it ran in; `None` where it abstained, in replay, or live where it recorded its abstention with `abstain()`. A run with no entry has no row for the step. A structured suspicion is its highest dimension."""
 
     requests: dict[RunName, list[Request]] = field(default_factory=lambda: {})
     """The monitor model's requests at the step, by run."""
@@ -206,6 +207,11 @@ def collect(
                 found = record(sample_key(sample), step, keys[sample.uuid])
                 if found is not None:
                     found.requests[run] = requests
+            # a recorded abstention is a row, where read mode has none
+            for step in live_abstentions(sample.events, path or name):
+                found = record(sample_key(sample), step, keys[sample.uuid])
+                if found is not None and run not in found.scores:
+                    found.scores[run] = None
             if review is not None:
                 for event in sample.events:
                     if (

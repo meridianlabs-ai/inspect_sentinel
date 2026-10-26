@@ -5,7 +5,7 @@
 3. **The same needles found**: recall on the needles and the false-positive rate on the other steps, live and in replay, with 95% Wilson intervals. A needle is reached in a run where the monitor reported a score at a step that covers it. Each replay's rate is tested against `live_a`'s with Fisher's exact two-sided test at 5%, beside the noise floor: the difference in steps flagged between the two live runs and between the two replays.
 4. **The same human answers**: each call `human()` was asked about live is answered in each replay with the person's recorded answer.
 
-Acceptance: measurement 1 identical outside the known differences, over at least one step; measurement 2 over at least one step, every step read live matched to a replayed one and every step a replay scored read live, and not significantly worse than the floor; measurement 3, where needles are labelled, with at least one other step, every labelled needle reached in every run, and neither replay's recall nor false-positive rate differing from live's beyond the noise floor, where a floor of zero allows no difference and a floor above it allows a difference Fisher's test does not find significant; measurement 4, where the review ran, with every expected call asked in both live runs and its recorded answer given again in both replays. Nothing measured is never accepted.
+Acceptance: measurement 1 identical outside the known differences, over at least one step; measurement 2 over at least one step, every step with a row in every run, a live abstention recorded as one, and not significantly worse than the floor; measurement 3, where needles are labelled, with at least one other step, every labelled needle reached in every run, and neither replay's recall nor false-positive rate differing from live's beyond the noise floor, where a floor of zero allows no difference and a floor above it allows a difference Fisher's test does not find significant; measurement 4, where the review ran, with every expected call asked in both live runs and its recorded answer given again in both replays. Nothing measured is never accepted.
 """
 
 from __future__ import annotations
@@ -185,7 +185,7 @@ class SameVerdict:
     """Steps compared: those both replays reached at the stage."""
 
     unmatched: int
-    """Steps that do not match across the runs: read live (`live_a` or `live_b`) but not reached by both replays, a step replay lost or a key that did not match it; or scored by a replay but not read in every live run, where the monitor abstained live or the read did not find what it reported. Read mode records nothing where a monitor abstained, so the two cannot be told apart, and either fails acceptance."""
+    """Steps without a row in every run: not reached by both replays, a step replay lost or a key that did not match it; or with no row in a live run, where the read did not find what the monitor reported or the monitor abstained without recording it (`abstain()`). Read mode has no row where a monitor abstained, so an unrecorded abstention cannot be told from a missing report, and either fails acceptance."""
 
     live_replay: int
     """Steps whose flag differs between `live_a` and `replay_1`."""
@@ -489,25 +489,16 @@ def _flagged(step: StepRecord, run: RunName) -> bool:
 
 
 def _same_verdict(steps: Sequence[StepRecord], two_live: bool) -> SameVerdict:
-    # replay has a row at every step, so a live row with none is a step replay
-    # did not match. Read mode has no row where the monitor abstained live,
-    # and none where the read went wrong, as on the wrong path or stage, which
-    # look the same; so a step replay scored needs a row in every live run,
-    # and only a step every run abstained at is compared without one
+    # replay has a row at every step, abstaining or not; live, read mode has
+    # one where the monitor reported, and the benchmark adds one where it
+    # recorded an abstention, so a step with no live row is one the read did
+    # not find, as on the wrong path or stage, or an abstention the monitor
+    # did not record, which cannot be told apart
     lives: list[RunName] = ["live_a", "live_b"] if two_live else ["live_a"]
     replays: list[RunName] = ["replay_1", "replay_2"]
     reached = [s for s in steps if all(run in s.scores for run in replays)]
     unmatched = [
-        s
-        for s in steps
-        if (
-            any(run in s.scores for run in lives)
-            and not all(run in s.scores for run in replays)
-        )
-        or (
-            any(s.scores.get(run) is not None for run in replays)
-            and not all(run in s.scores for run in lives)
-        )
+        s for s in steps if not all(run in s.scores for run in (*lives, *replays))
     ]
 
     def disagree(a: RunName, b: RunName) -> list[bool]:

@@ -1,6 +1,6 @@
-"""The monitor model's requests at each step, live and in replay, rendered for comparison.
+"""The monitor model's requests at each step, live and in replay, rendered for comparison, and the steps a monitor recorded that it abstained at.
 
-Live, a step's monitor calls are the `ModelEvent`s inside its `sentinel` span, and the `SentinelEvent` there names the step. In a replay through Scout, the scan's events are flat; `every_step_marked`, a step selector that selects every step, records an `InfoEvent` naming each step just before the step runs, so a step's calls are the model events after its mark. The replay runs one step at a time, so the marks cannot interleave.
+Live, a step's monitor calls are the `ModelEvent`s inside its `sentinel` span, and the `SentinelEvent` there names the step. A monitor that abstains reports nothing, so read mode has no row for the step, as it has none where a read went wrong; the benchmark's monitors call `abstain()`, which records an `InfoEvent` in the step's span, so the two can be told apart. In a replay through Scout, the scan's events are flat; `every_step_marked`, a step selector that selects every step, records an `InfoEvent` naming each step just before the step runs, so a step's calls are the model events after its mark. The replay runs one step at a time, so the marks cannot interleave.
 
 A request is rendered as text with `Host.score()`'s nonce replaced where it writes it, on block markers, message headers, tool call lines and tags, since the nonce is fresh in every transcript by design; the same characters anywhere else, such as in the task, are compared as they are. It is rendered without message ids, which are minted for each call. The rendering compared holds every message's whole content: its text as lines, so a difference reads as a line diff, and every other field of every part, images, audio and documents with their data, as canonical JSON. The rendering shown shortens long values in those parts.
 """
@@ -15,11 +15,11 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import tiktoken
-from inspect_ai.event import Event, ModelEvent, SentinelEvent, SpanBeginEvent
+from inspect_ai.event import Event, InfoEvent, ModelEvent, SentinelEvent, SpanBeginEvent
 from inspect_ai.log import EvalSample, transcript
 from inspect_ai.model import ChatMessage, ChatMessageAssistant, Content, ModelUsage
 
-from inspect_sentinel import ReplayStep
+from inspect_sentinel import Context, ReplayStep
 from inspect_sentinel.scout import step_selector
 
 StepId = tuple[str, str]
@@ -27,6 +27,9 @@ StepId = tuple[str, str]
 
 MARK = "replay_trust_step"
 """The `InfoEvent` source of the marks `every_step_marked` records."""
+
+ABSTAINED = "replay_trust_abstained"
+"""The `InfoEvent` source of the abstentions `abstain()` records."""
 
 # the nonce on the request's first block marker, which the template writes
 # before anything the agent wrote
@@ -93,8 +96,38 @@ def every_step_marked(transcript_id: str, step: ReplayStep) -> bool:
     return True
 
 
+def abstain(context: Context) -> None:
+    """Record that the monitor running in `context` abstains at this step, and return None, so that read mode can tell its abstention from a report it did not find.
+
+    Call it as `return abstain(context)` where the monitor would return None.
+    """
+    transcript().info({"path": context.path}, source=ABSTAINED)
+
+
+def live_abstentions(events: Sequence[Event], path: str) -> set[StepId]:
+    """The steps in a sample's events where the monitor at `path` recorded that it abstained, with `abstain()`."""
+    return {
+        step
+        for step, event in _in_steps(events)
+        if isinstance(event, InfoEvent)
+        and event.source == ABSTAINED
+        and isinstance(event.data, dict)
+        and event.data.get("path") == path
+    }
+
+
 def live_requests(events: Sequence[Event]) -> dict[StepId, list[Request]]:
     """Each step's monitor requests in a sample's events: the model events inside its `sentinel` span."""
+    found: dict[StepId, list[Request]] = {}
+    for step, event in _in_steps(events):
+        if isinstance(event, ModelEvent):
+            found.setdefault(step, []).append(request(event))
+    return found
+
+
+def _in_steps(events: Sequence[Event]) -> list[tuple[StepId, Event]]:
+    # each event inside a step's `sentinel` span, with the step its
+    # `SentinelEvent` there names
     parents: dict[str, str | None] = {}
     sentinel_spans: set[str] = set()
     for event in events:
@@ -111,16 +144,16 @@ def live_requests(events: Sequence[Event]) -> dict[StepId, list[Request]]:
         return None
 
     steps: dict[str, StepId] = {}
-    calls: dict[str, list[Request]] = {}
+    inside: list[tuple[str, Event]] = []
     for event in events:
         span = sentinel_span(event.span_id)
         if span is None:
             continue
         if isinstance(event, SentinelEvent):
             steps[span] = (event.stage, event.step_id)
-        elif isinstance(event, ModelEvent):
-            calls.setdefault(span, []).append(request(event))
-    return {steps[span]: found for span, found in calls.items() if span in steps}
+        else:
+            inside.append((span, event))
+    return [(steps[span], event) for span, event in inside if span in steps]
 
 
 def replay_requests(events: Iterable[Mapping[str, Any]]) -> dict[StepId, list[Request]]:

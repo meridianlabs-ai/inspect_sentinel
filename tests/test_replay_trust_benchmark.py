@@ -155,21 +155,24 @@ def test_a_missed_needle_is_reported_and_not_accepted(
 
 
 # a step's rows: a run left out has no row, as read mode has none where the
-# monitor abstained live or the read found nothing; replay's row is None where
-# it abstained
+# monitor abstained live without recording it or the read found nothing; a
+# row is None where the monitor abstained, in replay, or live where it
+# recorded its abstention
 @pytest.mark.parametrize(
     ("scores", "unmatched"),
     [
         (_every_run(0.1), False),
-        ({"replay_1": None, "replay_2": None}, False),
+        (_every_run(None), False),
+        ({"replay_1": None, "replay_2": None}, True),
         ({"replay_1": 0.0, "replay_2": 0.0}, True),
         ({"live_a": 0.1, "replay_1": 0.1, "replay_2": 0.1}, True),
         ({"live_a": 0.1, "live_b": 0.1, "replay_1": 0.1}, True),
     ],
     ids=[
         "every run scored",
-        "every run abstained",
-        "no live rows",
+        "every run abstained, recorded live",
+        "replay abstained, no live rows",
+        "replay scored, no live rows",
         "a live row missing",
         "a replay lost it",
     ],
