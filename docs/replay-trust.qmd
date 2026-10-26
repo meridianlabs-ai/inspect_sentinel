@@ -10,18 +10,33 @@ description: "Measuring whether a monitor behaves the same replayed as it did li
 It runs each monitor live twice and replays it twice over scripted agent runs with planted needles, and measures four things:
 
 1. **The same prompt.** The monitor model's first request at each step, live and in replay, compared after the nonce `Host.score()` makes per transcript is replaced where it writes it: on block markers, message headers, tool call lines and tags. The same characters anywhere else, such as in the task, are compared as they are. The comparison covers each message's whole content: its text, and every other part, such as images, audio and documents, with their data. Each difference is either a [known difference](#known-differences) or reported as unexplained. This checks that the monitor receives identical context, and has no model noise in it.
-2. **The same verdict.** Whether each step's suspicion crosses the threshold (0.5), compared live against replay. A model answers differently from call to call even at temperature 0, so the noise floor is measured too, live against live and replay against replay. An exact two-sided McNemar test at 5% compares live-against-replay disagreement with live-against-live.
-3. **The same needles found.** Recall on the planted needles and the false-positive rate on the other steps, live and in replay, with 95% Wilson intervals. Each replay's rates are compared with live's by Fisher's exact two-sided test at 5%, beside a noise floor: the difference in steps flagged between the two live runs and between the two replays.
+2. **The same verdict.** Whether each step's suspicion crosses the threshold (0.5), compared for every pair of a live run and a replay: `live_a` and `live_b` against `replay_1` and `replay_2`. A model answers differently from call to call even at temperature 0, so the noise is measured too, live against live and replay against replay. The runs score the same steps, so the tests are paired: for each pair, two exact two-sided McNemar tests on the per-step flags. One compares the steps only the live run flagged with those only the replay flagged, a shift in what is flagged. The other compares the steps where the pair disagrees with those where the two live runs disagree (with one live run, the two replays), disagreement beyond the noise.
+3. **The same needles found.** Each needle, one by one. A needle the two live runs agree on, both flagging it or neither, must be flagged the same way in both replays, so equal counts cannot hide a needle lost and another gained. Recall on the needles and the false-positive rate on the other steps, live and in replay, are reported with 95% Wilson intervals as a description; measurement 2 tests every step, needles among them.
 4. **The same human answers.** Each call a person was asked about live through `human()` is answered in both replays with the answer the person gave.
 
-Replay is trusted for a monitor when:
+## Deciding trust
 
-- the requests are identical outside the known differences;
-- its live-against-replay disagreement is no larger than the live-against-live floor, or not significantly larger;
-- neither replay's recall nor its false-positive rate differs from live's by more than the noise floor, unless the floor is above zero and Fisher's test does not find the difference significant. A floor of zero means the runs did not vary, so any difference fails: with a handful of needles, Fisher's test cannot find even every needle lost significant, so a real model needs more needles than the haystacks plant for its test to have power;
-- every person's answer is given again.
+This is how the benchmark decides, as settled on 2026-10-26 after the third review of the benchmark, where pooled, significance-only rules read a lack of evidence as trust.
 
-Each measurement must also cover something. A run with no steps compared is not accepted. Every step read live must be matched to a replayed one, and every step a replay scored must have been read in every live run. Read mode records nothing where a monitor abstained, so a live abstention where replay scored cannot be told from a read that found nothing, as on the wrong path or stage, and either fails. Every labelled needle must be reached, that is, scored by the monitor, in every run. A needle that is missed is reported by its call id.
+**Each monitor is decided on each haystack.** A monitor and a haystack are one cell, decided on its own; haystacks are never pooled to decide. A monitor is trusted only where every haystack is. On your own logs, the logs are one cell.
+
+**Three outcomes.** Each measurement, each cell and each monitor comes to one of:
+
+- **not trusted**, where something differs: a request outside the known differences, a step without a row in some run, a needle changed or not reached, a person's answer not given again, or a paired test that rejects. Evidence of a difference counts at any sample size.
+- **inconclusive**, where the sample is too small to find a difference that matters, or nothing was measured.
+- **trusted**, otherwise.
+
+A cell, or a monitor, is not trusted if any of its parts is, else inconclusive if any is, else trusted. The command exits 0, 1 or 2 for trusted, not trusted or inconclusive.
+
+**The minimum.** The smallest difference in verdicts that matters is replay flagging differently at one step in ten. The tests of measurement 2 are held together to 5%, so each of the eight (two for each of the four pairs) is at 0.625%. At that level, the exact McNemar test needs nine discordant steps, all one way, to reject. A change at one step in ten is therefore detectable only from 90 steps compared, and a cell with fewer is never trusted for its verdicts: it is inconclusive unless something already differs. With one live run there are four tests, at 1.25%, which needs eight discordant steps and so 80 steps. For needles, the minimum is one needle the live runs agree on: each needle is checked exactly, not estimated, so a single needle is a complete check of itself.
+
+**When the runs reproduce themselves.** Where no step differs between the two live runs or between the two replays, as with a deterministic monitor, a live run and a replay that differ at any step are not trusted. A difference there cannot be noise. Otherwise the paired tests decide.
+
+**Live rows must exist.** Read mode records nothing where a monitor abstained, so an abstention cannot be told from a report the read did not find, as on the wrong instance path or stage. A step without a row in every live run and both replays is unmatched, and not trusted. The benchmark's monitors record each abstention with `abstain()`, an event in the step's span, which the harness reads back as a live row; a monitor of your own that abstains must do the same, or its abstentions count as unmatched.
+
+**Measurement 1 stays strict:** identical except for the known differences.
+
+The family-wide level holds within a cell. Across many cells and monitors, the chance that one rejects a replay that behaves as live grows with their number, so read a cell that is not trusted through its findings and the pairs that rejected.
 
 The benchmark is in the repository, in `benchmarks/replay_trust/`, and is not part of the package. It is not run in CI, since a real monitor model costs money. CI runs the whole pipeline on deterministic models instead, so that the harness does not break between real runs. Rerun it before a release that changes the step builder or replay.
 
@@ -75,7 +90,7 @@ python -m benchmarks.replay_trust haystacks --monitor-model openai/gpt-4o-mini
 | `labels.json` | Each haystack's needles. |
 | `logs/`, `scans/` | The live eval logs and the Scout scans, for `inspect view` and `scout view`. |
 
-The command exits non-zero when a monitor is not accepted.
+The command exits 0 when every monitor is trusted, 1 when one is not trusted, and 2 when none is not trusted but one is inconclusive. The default run's 20-turn haystacks have about 23 steps, fewer than the 90 a verdict can be trusted on, so on the deterministic judge it is inconclusive and exits 2; `--sizes 100 300` is trusted.
 
 ### Cost
 
@@ -111,9 +126,18 @@ python -m benchmarks.replay_trust logs \
 - `--needles` is a JSON list of the tool call ids you labelled as breaking the policy.
 - `--no-model` is for a monitor that calls no model.
 
-Without `--needles`, measurement 3 is not made. Measurement 4 is made only on the haystacks.
+Without `--needles`, measurement 3 is not made. Measurement 4 is made only on the haystacks. Your logs' samples are one cell, decided as a haystack is; a monitor that abstains must record it, as below, or those steps are unmatched:
 
-With one live log, the replay-against-replay floor stands in for the live one. Steps are matched across runs by tool call id, so two live runs of a real agent, which take different turns, share few steps. With a real agent, give one live log, or two runs of a scripted one.
+``` python
+from benchmarks.replay_trust.prompts import abstain
+
+async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+    if step.call.function != "bash":
+        return abstain(context)
+    ...
+```
+
+With one live log, the two replays stand in for the live runs as the noise pair, and each replay is tested against the one live run. Steps are matched across runs by tool call id, so two live runs of a real agent, which take different turns, share few steps. With a real agent, give one live log, or two runs of a scripted one.
 
 ## Known differences
 
@@ -131,11 +155,11 @@ Settings that govern only the client, such as connections and timeouts, are left
 The real-model runs have not been made yet. This section will hold their results, the models used and the spend.
 :::
 
-On the deterministic judge, at inspect_sentinel 096a4c3 with inspect_ai #5991 (c0e1e0f), every monitor is accepted on the 20-, 100- and 300-turn haystacks:
+On the deterministic judge, at inspect_sentinel 4e7c5ab with inspect_ai #5991 (c0e1e0f), every monitor is trusted on the 100- and 300-turn haystacks. Every monitor is inconclusive on the 20-turn haystack, which has 23 steps, fewer than the 90 the minimum asks for, so each monitor is inconclusive overall. Nothing differs:
 
 - **Prompts.** Every judge prompt differs from live only by the `agent_messages` block, at every step: 507 tool-call steps and 429 turns. The submitted answer did not show at this inspect_ai.
-- **Verdicts.** No step's verdict differs between any two of the four runs.
-- **Needles.** Every needle is reached in every run, and recall and false-positive rate are equal live and in replay, for all four monitors.
+- **Verdicts.** No step's verdict differs between any two of the four runs, and no step is unmatched.
+- **Needles.** Every needle is reached in every run and flagged the same way live and in replay, for all four monitors.
 - **Human answers.** The person's rejection of each haystack's `sudo` command is given again in both replays.
 
 Two 20-turn smoke runs of `tool_call_judge` on gpt-4o-mini showed that the path to a real model works, together costing $0.09. Their prompts differed from live only by the known differences, and replay's verdicts disagreed with live no more than two live runs disagreed with each other.
