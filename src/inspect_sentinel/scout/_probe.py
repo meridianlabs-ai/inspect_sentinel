@@ -44,14 +44,14 @@ def replay_check() -> MonitorGroup:
 
     It watches all four stages and never abstains: each observation has suspicion `0.0` and metadata holding a digest of each field of the step (`step`) and of `context.eval` (`eval`). Attach it to an eval observe-only (`observe_only(replay_check())`), then scan the logs with `as_scanner(replay_check())` and with `as_reader("replay_check")`, and hand the two scanners' results to `replay_check_differences()`: it lists each step, stage and field whose digest differs, and the steps only one scanner reported, so an empty table means replay handed the monitor what it saw live.
 
-    A field's digest is a hash of its JSON form, with message ids left out, since a log stores a message once by its content. `history` and `human_decisions` are digested by their length and their last element, and `context.eval` in two parts. The parts that cannot change within a sample (the task, ids, epoch, descriptions and the sample's input, usually the large part) are digested once per store, which is the sample's live and a unit's in replay, once the context is there, and kept in the probe's store, so the sample's store in the log holds that digest. The metadata, which a solver can change, is digested at every step. So the probe's work per step beyond the step's own input is in proportion to the metadata, and every digest is of the context the step was handed. It cannot see an edit inside those lists, such as a message the agent changed after sending it. `agent_messages` and `AfterToolCall.output`, which replay does not hold, and the view's `context` are left out.
+    A field's digest is a hash of its JSON form, with message ids left out, since a log stores a message once by its content. `history` and `human_decisions` are digested by their length and their last element, and `context.eval` in two parts. The parts that cannot change within a sample (the task, ids, epoch, descriptions and the sample's input, usually the large part) are digested once per store, which is the sample's, live and in replay, once the context is there, and kept in the probe's store, so the sample's store in the log holds that digest. The metadata, which a solver can change, is digested at every step. So the probe's work per step beyond the step's own input is in proportion to the metadata, and every digest is of the context the step was handed. It cannot see an edit inside those lists, such as a message the agent changed after sending it. `agent_messages` and `AfterToolCall.output`, which replay does not hold, and the view's `context` are left out.
     """
 
     def digest(context: Context, step: Step) -> Observation:
         # A host may build a new EvalContext for every step, as inspect_ai
         # does, so the digest of the parts that cannot change within a sample,
         # its input above all, is kept in the store, which is the sample's
-        # live and the unit's in replay. The metadata, which a solver can
+        # live and in replay. The metadata, which a solver can
         # change, is digested at every step.
         # An absent context is digested where it is found, never kept, since
         # a host can learn the sample later in the same run, as a sidecar does
