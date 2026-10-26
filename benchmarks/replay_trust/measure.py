@@ -1,13 +1,13 @@
 """The three measurements, per monitor and haystack, and the acceptance they are held to.
 
-1. **The same prompt**: the share of steps whose first monitor request is identical live (`live_a`) and in replay (`replay_1`), after the nonce is replaced; each difference is traced to a known difference or reported as unexplained. A step's first request is built from the step alone; a monitor that asks its model again after an unusable answer sends that answer back, which is model noise, so those requests are counted and not compared.
+1. **The same prompt**: the share of steps whose first monitor request is identical live (`live_a`) and in each replay (`replay_1`, `replay_2`), after the nonce is replaced; each difference is traced to a known difference or reported as unexplained. A step's first request is built from the step alone; a monitor that asks its model again after an unusable answer sends that answer back, which is model noise, so those requests are counted and not compared.
 2. **The same verdict**: per step, whether the suspicion crosses `THRESHOLD`, compared for every pair of a live run and a replay, `live_a` and `live_b` against `replay_1` and `replay_2`, beside the noise reference, live against live and replay against replay. The runs score the same steps, so the tests are paired, exact two-sided McNemar tests on the per-step flags: one of the steps only the live run flagged against those only the replay flagged, a shift in what is flagged; and one of the steps where the pair disagrees against those where the live runs disagree (or, with one live run, the replays), disagreement beyond the noise. Each test is at 5% divided by the number of tests, so the chance of one rejecting a replay that behaves as live is at most 5%.
 3. **The same needles found**: each needle, one by one: one the live runs agree on, both flagging it or neither, must be flagged the same in both replays, so that equal counts cannot hide needles swapped. Recall on the needles and the false-positive rate on the other steps, live and in replay, with 95% Wilson intervals, describe them. A needle is reached in a run where the monitor reported a score at a step that covers it.
 4. **The same human answers**: each call `human()` was asked about live is answered in each replay with the person's recorded answer.
 
 Each measurement, and the four together, comes to one of three outcomes: `trusted`, `not trusted`, or `inconclusive`, where the sample is too small to detect a difference that matters, or nothing was measured. Evidence of a difference makes it `not trusted` whatever the sample's size; a sample below the minimum is never `trusted`.
 
-- Measurement 1 is trusted where every request is identical outside the known differences, and not trusted where one is not.
+- Measurement 1 is trusted where every replay's request is identical to live's outside the known differences, and not trusted where one is not.
 - Measurement 2 is not trusted where a step lacks a row in some run (live, a step with neither a report nor a recorded abstention), where the runs reproduce themselves (no step differs live against live or replay against replay) and a live run and a replay differ at a step, or else where a paired test rejects. It is inconclusive below `minimum` steps: the steps at which a change at one step in ten (`TOLERANCE`), all one way, is enough for the tests to reject.
 - Measurement 3 is not trusted where a needle is not reached in some run or a needle the live runs agree on is flagged differently in a replay, and inconclusive with no ordinary step or no needle the live runs agree on. Each needle is checked exactly, not estimated, so one is enough.
 - Measurement 4 is not trusted where a call is not asked live or not answered again as recorded.
@@ -157,6 +157,9 @@ class PromptDifference:
     sample: str
     stage: str
     key: str
+    replay: str
+    """The replay whose request differs from `live_a`'s."""
+
     reason: str
     """`"differs"`, `"only live"` or `"only replay"`."""
 
@@ -172,13 +175,13 @@ class SamePrompt:
     """Measurement 1."""
 
     compared: int
-    """Steps with a request live or in replay."""
+    """Steps with a request live (`live_a`) or in either replay."""
 
     identical: int
-    """Of those, the steps whose requests are identical, in number and content."""
+    """Of those, the steps whose first request is identical live and in both replays."""
 
     explained: int
-    """Steps that differ in a way a known difference explains."""
+    """Steps that differ, live against a replay, only in ways a known difference explains."""
 
     live_floor: int | None
     """Steps whose requests are identical between the two live runs, of those compared there; None without a second live run."""
@@ -193,6 +196,7 @@ class SamePrompt:
     """The steps each known difference explains, by its name; a step can show several."""
 
     differences: list[PromptDifference]
+    """Each replay's differences from live, by step."""
 
     @property
     def findings(self) -> list[Finding]:
@@ -512,18 +516,22 @@ def measure(
 
 
 def _same_prompt(steps: Sequence[StepRecord], two_live: bool) -> SamePrompt:
-    compared = [s for s in steps if "live_a" in s.requests or "replay_1" in s.requests]
+    replays: list[RunName] = ["replay_1", "replay_2"]
+    compared = [
+        s for s in steps if any(run in s.requests for run in ("live_a", *replays))
+    ]
     identical = 0
     explained = 0
     differences: list[PromptDifference] = []
     for step in compared:
-        difference = _prompt_difference(step)
-        if difference is None:
+        found = [
+            d for run in replays if (d := _prompt_difference(step, run)) is not None
+        ]
+        differences.extend(found)
+        if not found:
             identical += 1
-            continue
-        if difference.known is not None:
+        elif all(d.known is not None for d in found):
             explained += 1
-        differences.append(difference)
     return SamePrompt(
         compared=len(compared),
         identical=identical,
@@ -543,24 +551,32 @@ def _same_prompt(steps: Sequence[StepRecord], two_live: bool) -> SamePrompt:
             for run in RUNS
         },
         by_known={
-            k.name: sum(1 for d in differences if d.known and k.name in d.known)
+            k.name: len(
+                {
+                    (d.sample, d.stage, d.key)
+                    for d in differences
+                    if d.known and k.name in d.known
+                }
+            )
             for k in KNOWN_DIFFERENCES
         },
         differences=differences,
     )
 
 
-def _prompt_difference(step: StepRecord) -> PromptDifference | None:
+def _prompt_difference(step: StepRecord, run: RunName) -> PromptDifference | None:
     live = _first(step, "live_a")
-    replay = _first(step, "replay_1")
+    replay = _first(step, run)
     if live == replay:
         return None
     if live is None or replay is None:
         reason = "only live" if live is not None else "only replay"
-        return PromptDifference(step.sample, step.stage, step.key, reason, None, [])
+        return PromptDifference(
+            step.sample, step.stage, step.key, run, reason, None, []
+        )
     live_shown, replay_shown = (
         _first(step, "live_a", True),
-        _first(step, "replay_1", True),
+        _first(step, run, True),
     )
     assert live_shown is not None and replay_shown is not None
     names: list[str] = []
@@ -582,7 +598,9 @@ def _prompt_difference(step: StepRecord) -> PromptDifference | None:
         )
     )[:24]
     known = "; ".join(names) if live == replay else None
-    return PromptDifference(step.sample, step.stage, step.key, "differs", known, diff)
+    return PromptDifference(
+        step.sample, step.stage, step.key, run, "differs", known, diff
+    )
 
 
 def _first(step: StepRecord, run: RunName, shown: bool = False) -> str | None:

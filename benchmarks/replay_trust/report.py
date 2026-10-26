@@ -35,7 +35,7 @@ def summary(results: dict[str, Any]) -> str:
         "",
         "## 1. The same prompt",
         "",
-        "Steps whose first monitor model request is identical live and in replay, after the nonce is replaced; beside them the same comparison between the two live runs and between the two replays. A monitor that asks its model again after an unusable answer sends that answer back, so those further requests are model noise: they are counted (asked again, in `live_a` and `replay_1`), not compared.",
+        "Steps whose first monitor model request is identical live (`live_a`) and in both replays, after the nonce is replaced; known difference counts the steps where every difference from live, in either replay, is a known one; beside them the same comparison between the two live runs and between the two replays. A monitor that asks its model again after an unusable answer sends that answer back, so those further requests are model noise: they are counted (asked again, in `live_a` and `replay_1`), not compared.",
         "",
         "| monitor | haystack | steps | identical | known difference | live = live | replay = replay | asked again | outcome |",
         "|---|---|---|---|---|---|---|---|---|",
@@ -56,7 +56,7 @@ def summary(results: dict[str, Any]) -> str:
                     )
             for d in (d for d in p["differences"] if d["known"] is None):
                 differences.append(
-                    f"- {name}, {d['sample']} {d['stage']} `{d['key']}`: {d['reason']}, {d['known'] or 'unexplained'}"
+                    f"- {name}, {d['sample']} {d['stage']} `{d['key']}`, {d['replay']}: {d['reason']}, {d['known'] or 'unexplained'}"
                 )
                 if d["diff"]:
                     differences.extend(

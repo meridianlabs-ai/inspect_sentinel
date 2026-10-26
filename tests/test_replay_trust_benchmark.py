@@ -455,6 +455,31 @@ def test_a_monitor_is_trusted_only_where_every_haystack_is(
     ) == outcomes
 
 
+# 100 steps every run scores the same, each with one request in every run;
+# the run named sends a changed request at one step
+@pytest.mark.parametrize(
+    ("changed", "outcome"),
+    [(None, "trusted"), ("replay_1", "not trusted"), ("replay_2", "not trusted")],
+)
+def test_both_replays_must_send_the_requests_live_sent(
+    changed: RunName | None, outcome: Outcome
+) -> None:
+    steps = _flagging(100, **{run: range(0) for run in RUNS})
+    for step in steps:
+        step.requests = {
+            run: [Request(text=f"step {step.key}", tokens=0)] for run in RUNS
+        }
+    if changed is not None:
+        steps[50].requests[changed] = [Request(text="changed context", tokens=0)]
+    measured = measure(_run(*steps), [], calls_a_model=True)
+    assert measured.same_prompt is not None
+    assert measured.same_prompt.outcome == outcome
+    assert [d.replay for d in measured.same_prompt.differences] == (
+        [changed] if changed else []
+    )
+    assert measured.outcome == outcome
+
+
 def _model_event(*image: str) -> ModelEvent:
     content: list[Content] = [
         ContentText(text="Look at this."),
