@@ -13,6 +13,7 @@ from inspect_ai import Task, eval
 from inspect_ai._sentinel._integration import EvalInfo, steps_from_events
 from inspect_ai.dataset import Sample
 from inspect_ai.event import (
+    Event,
     ModelEvent,
     SentinelEvent,
     SpanBeginEvent,
@@ -20,12 +21,17 @@ from inspect_ai.event import (
     TimelineEvent,
     TimelineSpan,
     ToolEvent,
+    timeline_build,
 )
-from inspect_ai.log import EvalLog, write_eval_log
+from inspect_ai.log import EvalLog, condense_events, write_eval_log
 from inspect_ai.model import (
+    ChatCompletionChoice,
     ChatMessage,
+    ChatMessageAssistant,
+    ChatMessageSystem,
     ChatMessageTool,
     ChatMessageUser,
+    GenerateConfig,
     ModelOutput,
     execute_tools,
     get_model,
@@ -42,6 +48,9 @@ from inspect_scout import (
     scan_resume,
     scanner,
     transcripts_from,
+)
+from inspect_scout._transcript.timeline import (  # pyright: ignore[reportPrivateUsage]
+    _walk_spans as scout_walk_spans,  # pyright: ignore[reportPrivateUsage]
 )
 
 from inspect_sentinel import (
@@ -74,6 +83,7 @@ from inspect_sentinel.scout import (
     steps_in,
 )
 from inspect_sentinel.scout._context import Contexts
+from inspect_sentinel.scout._steps import transcript_steps
 from tests._fakes import View
 
 Row = dict[str, Any]
@@ -1208,6 +1218,90 @@ def test_depth_counts_spans_that_make_model_calls_as_scout_does(tmp_path: Path) 
     assert seen(found["two"]) == [worker]
 
 
+@solver
+def a_helper_with_a_prompt_of_its_own() -> Solver:
+    """An agent's tool loop, and inside it a one-turn helper agent with a system prompt of its own."""
+
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        async with span("agent", type="agent"):
+            messages: list[ChatMessage] = [
+                ChatMessageSystem(content="You add numbers."),
+                ChatMessageUser(content="add"),
+            ]
+            output = await get_model().generate(messages, tools=[addition()])
+            messages.append(output.message)
+            messages.extend((await execute_tools(messages, [addition()])).messages)
+            async with span("helper", type="agent"):
+                await get_model().generate(
+                    [
+                        ChatMessageSystem(content="You summarise."),
+                        ChatMessageUser(content="summarise"),
+                    ]
+                )
+            state.output = await get_model().generate(messages, tools=[addition()])
+        return state
+
+    return solve
+
+
+def test_depth_reads_a_transcripts_model_inputs_as_scout_does(tmp_path: Path) -> None:
+    [log] = eval(
+        Task(dataset=[Sample(input="go")], solver=a_helper_with_a_prompt_of_its_own()),
+        model=get_model(
+            "mockllm/model",
+            custom_outputs=[
+                call(2),
+                ModelOutput.from_content("mockllm/model", "a summary"),
+                ModelOutput.from_content("mockllm/model", "done"),
+            ],
+        ),
+        log_dir=str(tmp_path / "logs"),
+        display="none",
+    )
+    assert log.samples is not None
+    sample = log.samples[0]
+    # no stored timeline, so depth= builds one from the transcript's events
+    assert not sample.timelines
+    spans = {e.name: e.id for e in sample.events if isinstance(e, SpanBeginEvent)}
+
+    def walked(events: list[Event]) -> set[str]:
+        return {s.id for s in scout_walk_spans(timeline_build(events).root, depth=2)}
+
+    # Scout's timeline tells the helper is a utility agent by its own system
+    # prompt, so llm_scanner(depth=) never reaches it; read without its model
+    # inputs, as condensed events hold them, the helper would be reached
+    assert walked(sample.events) == {spans["agent"]}
+    assert walked(condense_events(sample.events)[0]) == {
+        spans["agent"],
+        spans["helper"],
+    }
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        two=as_scanner(conversations(), depth=2),
+        all=as_scanner(conversations()),
+    )
+
+    def seen(found: list[Row]) -> set[str]:
+        return {r["metadata.metadata"]["conversation"] for r in found}
+
+    # Scout builds the timeline a scanner asks for where a log stores none; a
+    # transcript handed to the scanner without one has it built by depth=
+    handed = Transcript(
+        transcript_id=sample.uuid or "",
+        messages=sample.messages,
+        events=sample.events,
+    )
+    results = anyio.run(as_scanner(conversations(), depth=2), handed)
+    assert isinstance(results, list)
+    assert seen(found["all"]) == {spans["agent"], spans["helper"]}
+    assert seen(found["two"]) == {spans["agent"]}
+    assert {r.metadata["metadata"]["conversation"] for r in results if r.metadata} == {
+        spans["agent"]
+    }
+
+
 @tool
 def long_output() -> Tool:
     async def execute(x: int) -> str:
@@ -1501,6 +1595,64 @@ def test_a_transcript_reduction_does_work_in_proportion_to_its_steps(
     work(scanner, 1)
 
     assert work(scanner, 400) <= 2.2 * work(scanner, 200)
+
+
+def as_scout_reads(turns: int) -> Transcript:
+    # a transcript as Scout's read hands it to a scanner: each model event's
+    # input a list of the conversation's shared message objects
+    found = messages(turns)
+    events: list[Event] = []
+    for turn in range(turns):
+        made = found[1 + 2 * turn]
+        assert isinstance(made, ChatMessageAssistant)
+        events.append(
+            ModelEvent(
+                model="mockllm/model",
+                input=found[: 1 + 2 * turn],
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+                output=ModelOutput(
+                    model="mockllm/model",
+                    choices=[
+                        ChatCompletionChoice(message=made, stop_reason="tool_calls")
+                    ],
+                ),
+                origin="agent",
+            )
+        )
+    return Transcript(transcript_id="t", messages=found, events=events)
+
+
+def test_replay_pools_scouts_model_inputs_in_work_linear_in_their_entries() -> None:
+    # Scout's read holds n turns' model inputs as about n²/2 list entries, and
+    # pooling them reads each entry once: linear in the entries, so quadratic
+    # in turns, though nothing is decoded or copied again (design/pr-series.md,
+    # Deferred)
+    def pooled(turns: int) -> tuple[int, int]:
+        transcript = as_scout_reads(turns)
+        entries = sum(
+            len(e.input) for e in transcript.events if isinstance(e, ModelEvent)
+        )
+        calls = 0
+
+        def count(frame: Any, event: str, arg: Any) -> None:
+            nonlocal calls
+            if event in ("call", "c_call"):
+                calls += 1
+
+        sys.setprofile(count)
+        try:
+            transcript_steps(
+                transcript, EvalInfo(inspect_ai_version=None, sentinel=False), None
+            )
+        finally:
+            sys.setprofile(None)
+        return calls, entries
+
+    (small, small_entries), (large, large_entries) = pooled(200), pooled(400)
+    assert large_entries > 3.9 * small_entries
+    assert large / large_entries <= 1.05 * small / small_entries
 
 
 def test_transcripts_from_one_log_share_its_reads(

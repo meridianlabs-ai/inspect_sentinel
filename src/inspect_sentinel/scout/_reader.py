@@ -18,7 +18,7 @@ from ._scanner import Stage, within
 _EVENTS: list[Any] = ["model", "tool", "sentinel", "span_begin", "span_end"]
 
 
-@scanner(name="read", messages="all", events=_EVENTS, condensed=True)
+@scanner(name="read", messages="all", events=_EVENTS)
 def as_reader(path: str, *, stage: Stage | None = None) -> Scanner[Transcript]:
     """Read what a monitor or protocol reported in the runs it was attached to, as a transcript scanner: read mode.
 

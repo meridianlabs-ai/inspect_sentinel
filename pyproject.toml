@@ -77,11 +77,11 @@ envoy = ["inspect_sentinel[sidecar]", "grpcio>=1.74.0", "protobuf>=6.31.1"]
 # inspect-ai does, so each is installed only where it is wanted. The floors
 # are inspect-ai's own.
 anthropic = ["anthropic>=1.0.0"]
-# Replay through Inspect Scout (inspect_sentinel.scout), which asks Scout for
-# model events condensed. Scout is a runtime dependency already, for
-# step_as_str; this extra names the first Scout release that can condense
-# them (inspect_scout #729), which is not released yet.
-scout = ["inspect-scout>=0.6.0"]
+# Replay through Inspect Scout (inspect_sentinel.scout). Scout is a runtime
+# dependency already, for step_as_str; this extra names the first Scout
+# release that loads a scanner's timelines only when it asks for them, which
+# as_scanner(timeline=, depth=) does.
+scout = ["inspect-scout>=0.6.1"]
 openai = ["openai>=3.4.0"]
 dev = [
     "ruff",

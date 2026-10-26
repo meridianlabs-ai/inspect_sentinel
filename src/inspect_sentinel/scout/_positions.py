@@ -158,6 +158,4 @@ def _preceded(
 
 
 def _same_input(earlier: ModelEvent, later: ModelEvent) -> bool:
-    if earlier.input_refs is not None or later.input_refs is not None:
-        return earlier.input_refs == later.input_refs
     return earlier.input == later.input

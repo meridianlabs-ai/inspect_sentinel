@@ -146,7 +146,7 @@ def as_scanner(
     )
 
 
-@scanner(name="replay", messages="all", events=_EVENTS, condensed=True)
+@scanner(name="replay", messages="all", events=_EVENTS)
 def sentinel_replay(
     *,
     sentinel: str,

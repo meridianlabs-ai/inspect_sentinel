@@ -17,6 +17,7 @@ from inspect_ai.event import (
     TimelineSpan,
     timeline_build,
 )
+from inspect_ai.log import condense_events
 from inspect_scout import Transcript
 
 from inspect_sentinel import (
@@ -53,11 +54,15 @@ def transcript_steps(
         recorded = [e for e in transcript.events if isinstance(e, SentinelEvent)]
         return (_as_recorded(steps, recorded) if recorded else steps), "inferred"
     stored = _timeline(transcript, timeline) if timeline is not None else None
-    data = transcript.events_data
+    # Scout hands every model input expanded, a list of messages it shares
+    # between inputs; the driver reads inputs as ranges of a pool, so pool
+    # them once here. Condensing keeps each event's uuid, which citations and
+    # a stored timeline find events by.
+    events, data = condense_events(transcript.events)
     steps = steps_from_events(
         transcript.messages,
-        transcript.events,
-        data["messages"] if data is not None else [],
+        events,
+        data["messages"],
         sample_uuid=transcript.transcript_id,
         eval_info=eval_info,
         timeline=stored,
