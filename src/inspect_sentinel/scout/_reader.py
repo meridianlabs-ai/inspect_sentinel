@@ -19,14 +19,14 @@ _EVENTS: list[Any] = ["model", "tool", "sentinel", "span_begin", "span_end"]
 
 
 @scanner(name="read", messages="all", events=_EVENTS)
-def as_reader(path: str, *, stage: Stage | None = None) -> Scanner[Transcript]:
+def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcript]:
     """Read what a monitor or protocol reported in the runs it was attached to, as a transcript scanner: read mode.
 
     No inference runs. Each `SentinelEvent` the instance at `path` recorded with status `reported`, and each of its decisions recorded `superseded`, becomes one `Result` in the transcript's resultset, mapped as `as_scanner()` maps a replayed report and citing the step's model event or message the same way, so the two modes' rows join on transcript, `step_id` and `stage`. A superseded decision's metadata says so (`status`). A step the instance abstained at recorded nothing, so it has no result; a step that left no model event or tool result cites nothing. A failure recorded at or below `path`, at any stage, makes the transcript's result an error, as in replay, even where a protocol went on without the failed monitor.
 
     Args:
-        path: The instance's path: empty for the root protocol, else as `SentinelEvent.path` records it, such as `attempt/suspicion`.
-        stage: Only the steps at this stage; all stages when None. A tool call's two steps share its id, so give a stage to join with `as_scanner()`.
+        path: The instance's path, as `SentinelEvent.path` records it: empty for the root protocol (the default), else such as `attempt/suspicion`, or a lone monitor's name.
+        stage: Only the steps at this stage; all stages when None, each row carrying its stage, since a tool call's two steps share its id.
     """
 
     async def scan(transcript: Transcript) -> list[Result]:

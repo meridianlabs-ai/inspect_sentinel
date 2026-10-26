@@ -57,14 +57,26 @@ def test_author_facing_names_are_exported() -> None:
         "decide_final",
         "PortabilityError",
         "Escalations",
-        "ReplayReport",
         "HumanStandIn",
-        "replay_monitor",
-        "steps_from_messages",
     }
     assert expected <= set(inspect_sentinel.__all__)
     for name in expected:
         assert hasattr(inspect_sentinel, name)
+
+
+def test_the_replay_runner_is_internal() -> None:
+    # replay's public API is the Scout adapter's (decided 2026-10-26)
+    for name in (
+        "replay_monitor",
+        "ReplayReport",
+        "steps_from_messages",
+        "HumanFallback",
+        "HumanPolicy",
+        "HumanSource",
+        "Split",
+    ):
+        assert name not in inspect_sentinel.__all__
+        assert not hasattr(inspect_sentinel, name)
 
 
 def test_integration_names_are_not_exported() -> None:

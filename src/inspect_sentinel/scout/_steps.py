@@ -24,8 +24,11 @@ from inspect_sentinel import (
     BeforeGenerate,
     HumanAnswer,
     ReplayStep,
-    steps_from_messages,
 )
+
+# sentinel's own messages projection, internal since 2026-10-26: the adapter
+# is its only caller
+from inspect_sentinel._from_messages import steps_from_messages
 
 Turns: TypeAlias = Literal["recorded", "inferred", "stored"]
 
@@ -40,9 +43,11 @@ def transcript_steps(
     # events, the driver inspect_ai shares with live. One that does not, an
     # older Inspect log or another source, replays from its messages, each
     # assistant message taken for an agent turn, until turns can be inferred
-    # from its timeline (R7 PR 6).
+    # from its timeline (R7 PR 6). Each step gets its conversation's depth in
+    # the chosen timeline.
+    stored = _timeline(transcript, timeline) if timeline is not None else None
     if not _origins(transcript):
-        if timeline is not None:
+        if stored is not None:
             raise NotImplementedError(
                 f"as_scanner(timeline={timeline!r}) needs a log that records where each model call was made (ModelEvent.origin); replaying older logs by their timeline comes later."
             )
@@ -52,45 +57,53 @@ def transcript_steps(
             )
         )
         recorded = [e for e in transcript.events if isinstance(e, SentinelEvent)]
-        return (_as_recorded(steps, recorded) if recorded else steps), "inferred"
-    stored = _timeline(transcript, timeline) if timeline is not None else None
-    # Scout hands every model input expanded, a list of messages it shares
-    # between inputs; the driver reads inputs as ranges of a pool, so pool
-    # them once here. Condensing keeps each event's uuid, which citations and
-    # a stored timeline find events by.
-    events, data = condense_events(transcript.events)
-    steps = steps_from_events(
-        transcript.messages,
-        events,
-        data["messages"],
-        sample_uuid=transcript.transcript_id,
-        eval_info=eval_info,
-        timeline=stored,
-    )
-    return steps, "stored" if stored is not None else "recorded"
+        if recorded:
+            steps = _as_recorded(steps, recorded)
+        turns: Turns = "inferred"
+    else:
+        # Scout hands every model input expanded, a list of messages it shares
+        # between inputs; the driver reads inputs as ranges of a pool, so pool
+        # them once here. Condensing keeps each event's uuid, which citations
+        # and a stored timeline find events by.
+        events, data = condense_events(transcript.events)
+        steps = steps_from_events(
+            transcript.messages,
+            events,
+            data["messages"],
+            sample_uuid=transcript.transcript_id,
+            eval_info=eval_info,
+            timeline=stored,
+        )
+        turns = "stored" if stored is not None else "recorded"
+    depths = _depths(transcript, stored)
+    return [replace(s, depth=depths.get(s.step.conversation)) for s in steps], turns
 
 
-def within_depth(transcript: Transcript, timeline: str | None, depth: int) -> set[str]:
-    # the conversations with a model call in a span Scout's own walk reaches
-    # at this depth, as llm_scanner(depth=) selects them
+def _depths(transcript: Transcript, stored: Timeline | None) -> dict[str, int]:
+    # each conversation's depth: the shallowest level Scout's walk, as
+    # llm_scanner(depth=) walks, gives a span holding one of its model calls
     tree = (
-        _timeline(transcript, timeline)
-        if timeline is not None
+        stored
+        if stored is not None
         else transcript.timelines[0]
         if transcript.timelines
         else timeline_build(transcript.events)
     )
-    reached = {
-        item.event.uuid
-        for span in _walk_spans(tree.root, depth)
+    levels = {
+        item.event.uuid: level
+        for span, level in _walk_spans(tree.root, None)
         for item in span.content
-        if isinstance(item, TimelineEvent) and isinstance(item.event, ModelEvent)
+        if isinstance(item, TimelineEvent)
+        and isinstance(item.event, ModelEvent)
+        and item.event.uuid is not None
     }
     if not _origins(transcript):
         # the messages projection's steps are all in the transcript's own
-        return {transcript.transcript_id} if reached else set()
-    if timeline is not None:
-        conversations = _stored(tree)
+        conversations: dict[str | None, str] = dict.fromkeys(
+            levels, transcript.transcript_id
+        )
+    elif stored is not None:
+        conversations = _stored(stored)
     else:
         spans = Conversations(transcript.events, transcript.transcript_id)
         conversations = {
@@ -98,7 +111,12 @@ def within_depth(transcript: Transcript, timeline: str | None, depth: int) -> se
             for e in transcript.events
             if isinstance(e, ModelEvent) and e.uuid is not None
         }
-    return {conversations[u] for u in reached if u is not None and u in conversations}
+    depths: dict[str, int] = {}
+    for uuid, level in levels.items():
+        conversation = conversations.get(uuid)
+        if conversation is not None:
+            depths[conversation] = min(depths.get(conversation, level), level)
+    return depths
 
 
 class Conversations:
@@ -137,11 +155,12 @@ class Conversations:
 
 def _walk_spans(
     span: TimelineSpan, depth: int | None, scannable_depth: int = 0
-) -> Iterator[TimelineSpan]:
+) -> Iterator[tuple[TimelineSpan, int]]:
     # mirrors Scout's private `_walk_spans`, so `depth` counts levels as
     # `llm_scanner(depth=)` does: a span is scannable when it is not a utility
     # span and holds a model event of its own, and only scannable spans count
-    # a level; others are walked through. A test pins it to Scout's.
+    # a level; others are walked through. Each span comes with its level. A
+    # test pins it to Scout's.
     if depth is not None and depth <= 0:
         return
     if not span.utility and any(
@@ -151,7 +170,7 @@ def _walk_spans(
         scannable_depth += 1
         if depth is not None and scannable_depth > depth:
             return
-        yield span
+        yield span, scannable_depth
     for item in span.content:
         if isinstance(item, TimelineSpan):
             yield from _walk_spans(item, depth, scannable_depth)

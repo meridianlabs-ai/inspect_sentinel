@@ -69,7 +69,7 @@ def agent(span: str) -> SpanBeginEvent:
 
 
 async def read(stage: Stage, events: list[Event]) -> list[Result]:
-    scan: Any = as_reader("", stage=stage)
+    scan: Any = as_reader(stage=stage)
     return await scan(Transcript(transcript_id=SAMPLE, events=events))
 
 
@@ -241,7 +241,7 @@ async def test_a_decision_with_no_action_is_a_malformed_log() -> None:
         )
     ]
 
-    scan: Any = as_reader("", stage="tool_call")
+    scan: Any = as_reader(stage="tool_call")
     transcript = Transcript.model_construct(
         transcript_id=SAMPLE, events=events, messages=[], timelines=[]
     )

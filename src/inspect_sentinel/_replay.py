@@ -6,7 +6,6 @@ from copy import copy
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, cast
 
-import anyio
 from inspect_ai._util.logger import warn_once
 from inspect_ai._util.registry import (
     registry_info,
@@ -32,19 +31,16 @@ from ._validate import named_children
 
 logger = logging.getLogger(__name__)
 
-Split: TypeAlias = Literal["compaction", "conversation"] | None
-"""How a replay groups a transcript's steps into units, which run concurrently, each in order with its own store: `"compaction"`, a conversation's steps between two of its compactions; `"conversation"`, a conversation's steps; `None`, the whole transcript."""
-
 HumanStandIn: TypeAlias = Callable[
     [ReplayStep, Escalations, Sequence[str]], Awaitable[HumanAnswer]
 ]
 """A stand-in for the person `human()` asks, in a replay: handed the step, the escalations and the choices, as `Host.ask_human` is, and answering as the person would. An oracle built from labels, or a model."""
 
-HumanPolicy: TypeAlias = Literal["recorded", "fail_closed"] | HumanStandIn
-"""How a replay answers `human()`: `"recorded"`, the answer recorded at the step, else the fail-closed answer; `"fail_closed"`, the fail-closed answer always; or a `HumanStandIn`, asked where no answer is recorded."""
+HumanFallback: TypeAlias = Literal["approve", "reject", "terminate"] | HumanStandIn
+"""How a replay answers `human()` where no answer was recorded at the step: always with that answer, or by asking a `HumanStandIn`. A `human()` that does not offer the answer named gets `terminate`, which `human()` takes whatever it offers, as the answer a host gives when nobody can be asked."""
 
 HumanSource: TypeAlias = Literal["recorded", "unanswered", "simulated"]
-"""Where a replayed `human()` answer came from: the answer recorded at the step, the fail-closed answer given when no one can be asked, or a `HumanStandIn`."""
+"""Where a replayed `human()` answer came from: the answer recorded at the step, the fallback's fixed answer, or a `HumanStandIn`."""
 
 # where a step asked more than one human(), the least real answer says how the
 # step was decided
@@ -77,7 +73,10 @@ class ReplayReport:
     """The step's outcome, as `run_sentinel` returns it live: the root's decision, with an escalate that reached the root as the `terminate` it becomes. `None` when the root abstained or nothing watched the stage."""
 
     human: HumanSource | None
-    """Where the answers came from when the step reached `human()`: `"unanswered"` if any `human()` got the fail-closed answer, else `"simulated"` if a stand-in answered any, else `"recorded"`. `None` when no `human()` asked."""
+    """Where the answers came from when the step reached `human()`: `"unanswered"` if any `human()` got the fallback's fixed answer, else `"simulated"` if a stand-in answered any, else `"recorded"`. `None` when no `human()` asked."""
+
+    human_answer: str | None = None
+    """The fixed answer given where `human` is `"unanswered"`: the first a `human()` at the step got from the fallback. `None` otherwise."""
 
     @property
     def report(self) -> Reported[Report] | None:
@@ -94,18 +93,13 @@ async def replay_monitor(
     *,
     context: EvalContext | None = None,
     select: Callable[[ReplayStep], bool] | None = None,
-    human: HumanPolicy = "recorded",
-    split: Split = "compaction",
-    max_unit_steps: int | None = None,
-    max_units: int = 10,
+    human: HumanFallback = "reject",
 ) -> list[ReplayReport]:
     """Run a sentinel over steps rebuilt from a transcript, and return what it reported at each.
 
-    The same monitors and protocols run as in an eval, through the same runner, so a monitor runs the same code live and in replay. Steps come from `steps_from_messages()` for a message list, as in a monitor's unit tests, or from a log; `inspect_sentinel.scout.as_scanner()` runs this over a Scout scan.
+    The same monitors and protocols run as in an eval, through the same runner, so a monitor runs the same code live and in replay. The steps run in order, one at a time, with one `Store` and one recorder for the whole transcript, the scope they have live, so `Context.store_as()` state carries across compactions and conversations as it does in the eval. Only the steps at a stage the sentinel watches run, and each runs every stage the sentinel watches, as live.
 
-    The steps are grouped into units by `split`, units run concurrently, at most `max_units` at once, and a unit runs its steps in order with its own `Store`, so `Context.store_as()` state carries from step to step within a unit and starts fresh at each. Only the steps at a stage the sentinel watches run, and each runs every stage the sentinel watches, as live.
-
-    `human()` cannot ask a person in a replay. It is answered by the answer it gave at the step when the run was recorded, if any (`ReplayStep.recorded_answers`, by the asking instance's path), and otherwise by `human`: `"recorded"` gives the fail-closed answer a host gives when nobody can be asked, `reject` where it is offered and `terminate` otherwise; a stand-in is asked. `"fail_closed"` ignores recorded answers too. A recorded answer that is not among the choices the replayed `human()` offers counts as no answer. `ReplayReport.human` says which answered.
+    `human()` cannot ask a person in a replay. It is answered by the answer it gave at the step when the run was recorded, if any (`ReplayStep.recorded_answers`, by the asking instance's path), and otherwise by `human`: a fixed answer, or a stand-in, which is asked. A fixed answer the asking `human()` does not offer becomes `terminate`, as `reject` does after a tool runs or a model replies. A recorded answer that is not among the choices the replayed `human()` offers counts as no answer. `ReplayReport.human` says which answered.
 
     A monitor that raises is recorded as failed, in `ReplayReport.failed`, as live; a protocol or monitor error that the runner lets through fails the replay.
 
@@ -114,73 +108,53 @@ async def replay_monitor(
         steps: The steps, in the order they ran live.
         context: The sample the steps are from, as `Context.eval` gives it. None outside an eval.
         select: Which steps to run the sentinel at; all when None. The others are skipped, not run, so a monitor's state does not see them, and have no report. Bind it to the transcript the steps are from.
-        human: How to answer `human()`; see above.
-        split: How to group steps into units: by compaction segment (`ReplayStep.segment`), by conversation, or `None` for the whole transcript in one unit, which is the scope a store has live.
-        max_unit_steps: Split each unit further into runs of at most this many of the steps that run, each with a fresh store. A stateful monitor sees less at each cut.
-        max_units: How many units run at once.
+        human: How to answer `human()` where no answer was recorded; see above.
 
     Returns:
         One report per step `select` chose, in the order given.
 
     Raises:
-        ValueError: If two steps of one stage share an id, or `max_unit_steps` or `max_units` is less than 1.
+        ValueError: If two steps of one stage share an id.
     """
-    if max_unit_steps is not None and max_unit_steps < 1:
-        raise ValueError(f"max_unit_steps must be at least 1; got {max_unit_steps}.")
-    if max_units < 1:
-        raise ValueError(f"max_units must be at least 1; got {max_units}.")
     root, name, path = _root(sentinel)
     watched = watched_stages(root)
-    replayed = list(steps)
-    reports: list[ReplayReport | None] = [None] * len(replayed)
-    units: dict[object, list[int]] = {}
+    store = Store()
+    recorder = _Recorder()
+    host = _ReplayHost(context, human)
     seen: set[tuple[str, str]] = set()
-    chosen: list[int] = []
-    for index, replay_step in enumerate(replayed):
+    reports: list[ReplayReport] = []
+    for replay_step in steps:
         _check(replay_step, seen)
         if select is not None and not select(replay_step):
             continue
-        chosen.append(index)
         if type(replay_step.step) not in watched:
-            reports[index] = ReplayReport(
-                replay_step, name, path, (), (), (), None, None
+            reports.append(
+                ReplayReport(replay_step, name, path, (), (), (), None, None)
             )
             continue
-        units.setdefault(_unit(replay_step, split), []).append(index)
-
-    async def run_unit(indexes: list[int]) -> None:
-        async with limiter:
-            store = Store()
-            host = _ReplayHost(context, human)
-            for index in indexes:
-                replay_step = replayed[index]
-                recorder = _Recorder()
-                host.begin(replay_step)
-                decision = await run_sentinel(
-                    root,
-                    HostContext(host=host, recorder=recorder, store=store),
-                    replay_step.step,
-                )
-                reports[index] = ReplayReport(
-                    step=replay_step,
-                    name=name,
-                    path=path,
-                    reports=tuple(recorder.reports),
-                    failed=tuple(recorder.failures),
-                    superseded=tuple(recorder.supersessions),
-                    decision=decision,
-                    human=host.answered(),
-                )
-
-    limiter = anyio.CapacityLimiter(max_units)
-    try:
-        async with anyio.create_task_group() as tg:
-            for unit in units.values():
-                for run in _runs(unit, max_unit_steps):
-                    tg.start_soon(run_unit, run)
-    except BaseExceptionGroup as ex:
-        raise _first(ex) from None
-    return [cast(ReplayReport, reports[index]) for index in chosen]
+        host.begin(replay_step)
+        at = recorder.mark()
+        decision = await run_sentinel(
+            root,
+            HostContext(host=host, recorder=recorder, store=store),
+            replay_step.step,
+        )
+        recorded, failed, superseded = recorder.since(at)
+        source, answer = host.answered()
+        reports.append(
+            ReplayReport(
+                step=replay_step,
+                name=name,
+                path=path,
+                reports=recorded,
+                failed=failed,
+                superseded=superseded,
+                decision=decision,
+                human=source,
+                human_answer=answer,
+            )
+        )
+    return reports
 
 
 def _root(sentinel: Sentinels) -> tuple[Protocol, str, str]:
@@ -206,35 +180,28 @@ def _check(replay_step: ReplayStep, seen: set[tuple[str, str]]) -> None:
     seen.add(key)
 
 
-def _unit(replay_step: ReplayStep, split: Split) -> object:
-    if split == "compaction":
-        return replay_step.segment
-    if split == "conversation":
-        return replay_step.segment[0]
-    return None
-
-
-def _runs(unit: list[int], max_unit_steps: int | None) -> list[list[int]]:
-    if max_unit_steps is None:
-        return [unit]
-    return [unit[i : i + max_unit_steps] for i in range(0, len(unit), max_unit_steps)]
-
-
-def _first(group: BaseExceptionGroup[BaseException]) -> BaseException:
-    # a failed unit cancels the rest, so its error is the one to raise
-    for ex in group.exceptions:
-        if isinstance(ex, BaseExceptionGroup):
-            return _first(cast(BaseExceptionGroup[BaseException], ex))
-        if not isinstance(ex, anyio.get_cancelled_exc_class()):
-            return ex
-    return group
-
-
 class _Recorder:
+    # one for the whole transcript, as live; each step's records are the ones
+    # made since its mark
     def __init__(self) -> None:
         self.reports: list[Reported[Report]] = []
         self.failures: list[Failed] = []
         self.supersessions: list[Reported[Decision]] = []
+
+    def mark(self) -> tuple[int, int, int]:
+        return len(self.reports), len(self.failures), len(self.supersessions)
+
+    def since(
+        self, mark: tuple[int, int, int]
+    ) -> tuple[
+        tuple[Reported[Report], ...], tuple[Failed, ...], tuple[Reported[Decision], ...]
+    ]:
+        reports, failures, supersessions = mark
+        return (
+            tuple(self.reports[reports:]),
+            tuple(self.failures[failures:]),
+            tuple(self.supersessions[supersessions:]),
+        )
 
     def record(
         self, context: Context, factory: str, step: Step, reported: Reported[Report]
@@ -259,13 +226,13 @@ class _Recorder:
 
 
 class _ReplayHost:
-    # one per unit, whose steps run one at a time, so the step being replayed
-    # is the one begin() was last given
-    def __init__(self, eval: EvalContext | None, human: HumanPolicy) -> None:
+    # one per transcript, whose steps run one at a time, so the step being
+    # replayed is the one begin() was last given
+    def __init__(self, eval: EvalContext | None, human: HumanFallback) -> None:
         self._eval = eval
         self._human = human
         self._step: ReplayStep | None = None
-        self._sources: list[HumanSource] = []
+        self._sources: list[tuple[HumanSource, str]] = []
 
     @property
     def eval(self) -> EvalContext | None:
@@ -275,11 +242,13 @@ class _ReplayHost:
         self._step = step
         self._sources = []
 
-    def answered(self) -> HumanSource | None:
-        for source in _WEAKEST:
-            if source in self._sources:
-                return source
-        return None
+    def answered(self) -> tuple[HumanSource | None, str | None]:
+        # the least real source, and the fixed answer where it is the fallback's
+        for weakest in _WEAKEST:
+            for source, decision in self._sources:
+                if source == weakest:
+                    return source, decision if source == "unanswered" else None
+        return None, None
 
     async def generate(
         self,
@@ -331,19 +300,21 @@ class _ReplayHost:
             raise RuntimeError("The replay host was asked about a step it never began.")
         node = current_invocation()
         path = node.path if node is not None else ""
-        if self._human != "fail_closed":
-            recorded = replay_step.recorded_answers.get(path)
-            if recorded is not None and (
-                recorded.decision in choices or recorded.decision == "terminate"
-            ):
-                self._sources.append("recorded")
-                return recorded
+        recorded = replay_step.recorded_answers.get(path)
+        if recorded is not None and (
+            recorded.decision in choices or recorded.decision == "terminate"
+        ):
+            self._sources.append(("recorded", recorded.decision))
+            return recorded
         if not isinstance(self._human, str):
             answer = await self._human(replay_step, escalations, tuple(choices))
-            self._sources.append("simulated")
+            self._sources.append(("simulated", answer.decision))
             return answer
-        self._sources.append("unanswered")
+        # human() takes terminate whatever it offers, as the answer a host
+        # gives when nobody can be asked
+        decision = self._human if self._human in choices else "terminate"
+        self._sources.append(("unanswered", decision))
         return HumanAnswer(
-            decision="reject" if "reject" in choices else "terminate",
-            reason="No person can be asked in a replay, and no answer was recorded here; failing closed.",
+            decision=decision,
+            reason=f"No person can be asked in a replay, and no answer was recorded here; answered {decision!r} for the replay.",
         )

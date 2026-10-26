@@ -73,13 +73,23 @@ TREES = {
 @pytest.mark.parametrize("tree", TREES)
 def test_the_span_walk_is_scouts(tree: str, depth: int | None) -> None:
     root = TREES[tree]
-    ours = [s.id for s in _walk_spans(root, depth)]
+    ours = [s.id for s, _ in _walk_spans(root, depth)]
     assert ours == [s.id for s in scout_walk_spans(root, depth=depth)]
+
+
+@pytest.mark.parametrize("tree", TREES)
+def test_a_spans_level_is_the_least_depth_scout_reaches_it_at(tree: str) -> None:
+    root = TREES[tree]
+    reached = {
+        s.id: next(d for d in range(1, 5) if s in scout_walk_spans(root, depth=d))
+        for s in scout_walk_spans(root, depth=None)
+    }
+    assert {s.id: level for s, level in _walk_spans(root, None)} == reached
 
 
 def test_the_spans_walked_skip_utility_and_container_spans() -> None:
     # what the walk is pinned to: only spans that make model calls count
-    assert [s.id for s in _walk_spans(TREES["agents"], 1)] == [
+    assert [s.id for s, _ in _walk_spans(TREES["agents"], 1)] == [
         "inside_helper",
         "outer",
         "worker",

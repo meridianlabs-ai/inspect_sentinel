@@ -1,8 +1,7 @@
 from collections.abc import Sequence
 from dataclasses import replace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
-import anyio
 import pytest
 from inspect_ai.model import (
     ChatMessage,
@@ -31,12 +30,11 @@ from inspect_sentinel import (
     human,
     monitor,
     protocol,
-    replay_monitor,
     sequential,
-    steps_from_messages,
     threshold,
 )
-from inspect_sentinel._from_messages import Cut
+from inspect_sentinel._from_messages import Cut, steps_from_messages
+from inspect_sentinel._replay import replay_monitor
 from tests._fakes import View
 
 
@@ -192,59 +190,20 @@ def segmented(
     return steps
 
 
-@pytest.mark.parametrize(
-    "split,max_unit_steps,expected",
-    [
-        # two conversations of two segments with 2 and 1 tool calls each
-        ("compaction", None, [1, 2, 3, 4, 1, 2] * 2),
-        ("conversation", None, [1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6]),
-        (None, None, list(range(1, 13))),
-        ("conversation", 4, [1, 2, 3, 4, 1, 2, 1, 2, 3, 4, 1, 2]),
-    ],
-)
 @pytest.mark.anyio
-async def test_a_unit_keeps_its_store_from_step_to_step_and_the_next_starts_fresh(
-    split: Any, max_unit_steps: int | None, expected: list[int]
-) -> None:
+async def test_a_monitors_state_carries_across_compactions_and_conversations() -> None:
+    # two conversations of two compaction segments with 2 and 1 tool calls
+    # each: one store for the whole transcript, as live
     steps = segmented([2, 1], conversations=2)
 
-    reports = await replay_monitor(
-        counter(), steps, split=split, max_unit_steps=max_unit_steps
-    )
+    reports = await replay_monitor(counter(), steps)
 
     seen = [
         report.report.report.metadata["seen"]
         for report in reports
         if report.report is not None and report.report.report.metadata is not None
     ]
-    assert seen == expected
-
-
-@pytest.mark.anyio
-async def test_units_run_concurrently() -> None:
-    started = 0
-    all_started = anyio.Event()
-
-    @monitor
-    def replay_waits() -> Any:
-        async def before(context: Context, step: BeforeToolCall) -> Observation:
-            nonlocal started
-            started += 1
-            if started == 3:
-                all_started.set()
-            with anyio.fail_after(5):
-                await all_started.wait()
-            return Observation.score(0.0)
-
-        return before
-
-    # a sample with two compactions: three units, one tool call each
-    steps = [s for s in segmented([1, 1, 1]) if s.stage == "tool_call"]
-
-    reports = await replay_monitor(replay_waits(), steps, split="compaction")
-
-    assert started == 3
-    assert all(report.report is not None for report in reports)
+    assert seen == list(range(1, 13))
 
 
 @pytest.mark.anyio
@@ -328,33 +287,40 @@ def escalated_to_human() -> Any:
 
 
 @pytest.mark.parametrize(
-    "answers,policy,action,source",
+    "answers,policy,action,source,given",
     [
-        # no recorded answer: the fail-closed answer, not an unhandled escalation
-        ({}, "recorded", "reject", "unanswered"),
-        ({"human": HumanAnswer("approve", "fine")}, "recorded", "proceed", "recorded"),
-        (
-            {"human": HumanAnswer("terminate", "stop")},
-            "recorded",
-            "terminate",
-            "recorded",
-        ),
-        # recorded answers are ignored on request
+        # no recorded answer: the fixed answer, not an unhandled escalation
+        ({}, "reject", "reject", "unanswered", "reject"),
+        ({}, "approve", "proceed", "unanswered", "approve"),
+        ({}, "terminate", "terminate", "unanswered", "terminate"),
+        # a recorded answer is always given first
         (
             {"human": HumanAnswer("approve", "fine")},
-            "fail_closed",
             "reject",
-            "unanswered",
+            "proceed",
+            "recorded",
+            None,
+        ),
+        (
+            {"human": HumanAnswer("terminate", "stop")},
+            "approve",
+            "terminate",
+            "recorded",
+            None,
         ),
         # a recorded answer at another instance's path is not this one's
-        ({"other": HumanAnswer("approve")}, "recorded", "reject", "unanswered"),
+        ({"other": HumanAnswer("approve")}, "reject", "reject", "unanswered", "reject"),
         # an answer the replayed human() does not offer counts as none
-        ({"human": HumanAnswer("modify")}, "recorded", "reject", "unanswered"),
+        ({"human": HumanAnswer("modify")}, "reject", "reject", "unanswered", "reject"),
     ],
 )
 @pytest.mark.anyio
-async def test_human_is_answered_by_the_recorded_answer_else_fails_closed(
-    answers: dict[str, HumanAnswer], policy: Any, action: str, source: str
+async def test_human_is_answered_by_the_recorded_answer_else_by_the_fixed_one(
+    answers: dict[str, HumanAnswer],
+    policy: Any,
+    action: str,
+    source: str,
+    given: str | None,
 ) -> None:
     step = next(s for s in segmented([1]) if s.stage == "tool_call")
     answered = ReplayStep(step.id, step.stage, step.step, step.segment, answers)
@@ -362,7 +328,46 @@ async def test_human_is_answered_by_the_recorded_answer_else_fails_closed(
     [report] = await replay_monitor(escalated_to_human(), [answered], human=policy)
 
     assert report.decision is not None and report.decision.action == action
-    assert report.human == source
+    assert (report.human, report.human_answer) == (source, given)
+
+
+@pytest.mark.parametrize(
+    "stage,choices,policy",
+    [
+        # reject is not offered once the tool has run
+        ("tool_result", None, "reject"),
+        # nor where human() was configured without it
+        ("tool_call", ["approve", "terminate"], "reject"),
+        ("tool_call", ["reject", "terminate"], "approve"),
+        # human() takes terminate even where it was configured without it, as
+        # the answer a host gives when nobody can be asked
+        ("tool_call", ["approve", "reject"], "terminate"),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_fixed_answer_human_does_not_offer_becomes_terminate(
+    stage: Literal["tool_call", "tool_result"], choices: list[str] | None, policy: str
+) -> None:
+    @monitor
+    def flags_results() -> Any:
+        async def after(context: Context, step: AfterToolCall) -> Observation:
+            return Observation.score(1.0, "flagged")
+
+        return MonitorGroup(after)
+
+    flagger = flag() if stage == "tool_call" else flags_results()
+    sentinel = sequential(
+        [
+            threshold(flagger, escalate_at=0.5),
+            human(stages=[stage], choices=choices),
+        ]
+    )
+    step = next(s for s in segmented([1]) if s.stage == stage)
+
+    [report] = await replay_monitor(sentinel, [step], human=cast(Any, policy))
+
+    assert report.decision is not None and report.decision.action == "terminate"
+    assert (report.human, report.human_answer) == ("unanswered", "terminate")
 
 
 @pytest.mark.anyio
@@ -429,20 +434,13 @@ async def test_two_steps_of_one_stage_with_one_id_are_refused() -> None:
         await replay_monitor(counter(), [step, step])
 
 
-@pytest.mark.parametrize("kwargs", [{"max_units": 0}, {"max_unit_steps": 0}])
-@pytest.mark.anyio
-async def test_unit_limits_must_be_positive(kwargs: dict[str, Any]) -> None:
-    with pytest.raises(ValueError, match="at least 1"):
-        await replay_monitor(counter(), [], **kwargs)
-
-
 @pytest.mark.anyio
 async def test_a_step_not_selected_is_not_run_and_its_state_is_not_kept() -> None:
     steps = segmented([3])
     chosen = {steps[2].id, steps[3].id}
 
     reports = await replay_monitor(
-        counter(), steps, select=lambda step: step.id in chosen, split=None
+        counter(), steps, select=lambda step: step.id in chosen
     )
 
     assert [(r.step.stage, r.step.id) for r in reports] == [
@@ -491,12 +489,12 @@ async def approves_all(
     "answers,policy,source",
     [
         # one human() answered as recorded, the other got nobody
-        ({"first": HumanAnswer("approve")}, "recorded", "unanswered"),
+        ({"first": HumanAnswer("approve")}, "reject", "unanswered"),
         # one answered as recorded, the other by the stand-in
         ({"first": HumanAnswer("approve")}, approves_all, "simulated"),
         (
             {"first": HumanAnswer("approve"), "second": HumanAnswer("approve")},
-            "recorded",
+            "reject",
             "recorded",
         ),
     ],

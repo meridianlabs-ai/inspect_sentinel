@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, cast
 
-from pydantic import BaseModel, PrivateAttr
+from inspect_sentinel import HumanStandIn, ReplayStep
 
-from inspect_sentinel import HumanPolicy, HumanStandIn, ReplayStep
+# sentinel's own replay runner, internal since 2026-10-26: the adapter is its
+# only caller
+from inspect_sentinel._replay import HumanFallback
 
 from ._sources import import_source, source_file
 
+if TYPE_CHECKING:
+    from pandas import DataFrame  # pyright: ignore[reportMissingTypeStubs]
+
 StepSelector: TypeAlias = Callable[[str, ReplayStep], bool]
 """Which steps of a transcript a scan runs the sentinel at: handed the transcript's id and a step, true to run it."""
+
+StepTable: TypeAlias = (
+    "DataFrame | Iterable[tuple[str, str]] | Iterable[Mapping[str, str]]"
+)
+"""A label table of the steps a scan runs the sentinel at: a pandas `DataFrame` with `transcript_id` and `step_id` columns, or a results dataframe from `scan_results_df()`, whose step ids are in `metadata.step_id`; or rows of `(transcript_id, step_id)` pairs, or of mappings with those keys."""
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -19,30 +29,19 @@ _KINDS = {"step_selector": "a step selector", "human_stand_in": "a human stand-i
 _registered: dict[str, dict[str, Callable[..., Any]]] = {kind: {} for kind in _KINDS}
 
 
-class StepsIn(BaseModel):
-    """A step selector from a label table: true for the steps whose transcript id and step id it lists. `steps_in()` builds one."""
-
-    keys: list[tuple[str, str]]
-    """The `(transcript_id, step_id)` pairs selected."""
-
-    _selected: frozenset[tuple[str, str]] = PrivateAttr(
-        default_factory=frozenset[tuple[str, str]]
-    )
-
-    def model_post_init(self, context: Any) -> None:
-        self._selected = frozenset(self.keys)
+class Table:
+    # a label table as a selector, with the transcripts it lists, so a scan
+    # skips a transcript it does not list before rebuilding its steps
+    def __init__(self, pairs: Iterable[tuple[str, str]]) -> None:
+        self.pairs = frozenset(pairs)
+        self.transcripts = frozenset(t for t, _ in self.pairs)
 
     def __call__(self, transcript_id: str, step: ReplayStep) -> bool:
-        """Whether the table lists the step."""
-        return (transcript_id, step.id) in self._selected
+        return (transcript_id, step.id) in self.pairs
 
 
-def steps_in(labels: Any) -> StepsIn:
-    """A step selector for `as_scanner(steps=...)` that runs the sentinel at the steps a label table lists.
-
-    Args:
-        labels: The table: a pandas `DataFrame` with `transcript_id` and `step_id` columns, or a results dataframe from `scan_results_df()`, whose step ids are in `metadata.step_id`; or rows of `(transcript_id, step_id)` pairs or of mappings with those keys.
-    """
+def table_pairs(labels: Any) -> list[list[str]]:
+    # a label table's (transcript_id, step_id) pairs, as a scan records them
     columns = getattr(labels, "columns", None)
     if columns is not None:
         names = set(cast(Iterable[str], columns))
@@ -58,7 +57,7 @@ def steps_in(labels: Any) -> StepsIn:
         )
     else:
         pairs = (_pair(row) for row in cast(Iterable[object], labels))
-    return StepsIn(keys=sorted({(str(t), str(s)) for t, s in pairs}))
+    return [[t, s] for t, s in sorted({(str(t), str(s)) for t, s in pairs})]
 
 
 # where a results dataframe from scan_results_df() keeps each step's id
@@ -76,7 +75,7 @@ def _pair(row: object) -> tuple[object, object]:
 def step_selector(selector: F) -> F:
     """Register a step selector, so a scan that uses it can run in Scout's worker processes and be resumed in another process.
 
-    A selector is a function `(transcript_id, step) -> bool` defined at module level, in a module or in the script that runs the scan. A scan records its module, name and file, and finds it again by importing the module, or loading the file. One defined in a notebook, REPL or `python -c` has no file to load, so `as_scanner()` refuses it.
+    A selector is a function `(transcript_id, step) -> bool` defined at module level, in a module or in the script that runs the scan. A scan records its module, name and file, and finds it again by importing the module, or loading the file. One defined in a notebook, REPL or `python -c` has no file to load, so `as_scanner()` refuses it: put it in a `.py` file next to the notebook and import it from there.
 
     Args:
         selector: The selector.
@@ -117,14 +116,14 @@ def callback_ref(kind: str, callback: object, parameter: str) -> dict[str, str |
     decorator = "@step_selector" if kind == "step_selector" else "@human_stand_in"
     if getattr(callback, _NAME, None) != kind:
         raise TypeError(
-            f"as_scanner({parameter}=...) takes {_KINDS[kind]} registered with {decorator}, so the scan can record it and find it again in another process; {callback!r} is not registered. replay_monitor() takes any callable."
+            f"as_scanner({parameter}=...) takes {_KINDS[kind]} registered with {decorator}, so the scan can record it and find it again in another process; {callback!r} is not registered."
         )
     module: str = getattr(callback, "__module__", "")
     qualname: str = getattr(callback, "__qualname__", "")
     file = source_file(module)
     if module == "__main__" and file is None:
         raise TypeError(
-            f"as_scanner({parameter}=...) cannot record {qualname!r}: it was defined in a notebook, REPL or `python -c`, which another process cannot load, and a scan runs in Scout's worker processes and resumes in new ones. Define it in a module or a script."
+            f"as_scanner({parameter}=...) cannot record {qualname!r}: it was defined in a notebook, REPL or `python -c`, which another process cannot load, and a scan runs in Scout's worker processes and resumes in new ones. Define it in a module or a script; from a notebook, put it in a .py file next to the notebook and import it."
         )
     return {"module": module, "qualname": qualname, "file": file}
 
@@ -152,29 +151,32 @@ def callback_from(kind: str, ref: Mapping[str, str | None]) -> Callable[..., Any
     return cast(Callable[..., Any], callback)
 
 
+# the fixed answers as_scanner(human=) takes
+ANSWERS = ("approve", "reject", "terminate")
+
+
 def selector_from(steps: object) -> StepSelector | None:
     if steps is None:
         return None
-    if isinstance(steps, StepsIn):
-        return steps
     if isinstance(steps, Mapping):
         recorded = cast(Mapping[str, Any], steps)
-        if "keys" in recorded:
-            return StepsIn.model_validate(recorded)
+        if "table" in recorded:
+            pairs = cast(list[list[str]], recorded["table"])
+            return Table((t, s) for t, s in pairs)
         return cast(StepSelector, callback_from("step_selector", recorded))
     raise TypeError(
-        f"steps must be a label selector or a registered selector; got {steps!r}."
+        f"steps must be a recorded label table or a registered selector; got {steps!r}."
     )
 
 
-def stand_in_from(human: object) -> HumanPolicy:
-    if human == "recorded" or human == "fail_closed":
-        return cast(HumanPolicy, human)
+def stand_in_from(human: object) -> HumanFallback:
+    if human in ANSWERS:
+        return cast(HumanFallback, human)
     if isinstance(human, Mapping):
         return cast(
             HumanStandIn,
             callback_from("human_stand_in", cast(Mapping[str, str | None], human)),
         )
     raise TypeError(
-        f"human must be 'recorded', 'fail_closed' or a registered stand-in; got {human!r}."
+        f"human must be one of {', '.join(repr(a) for a in ANSWERS)} or a registered stand-in; got {human!r}."
     )

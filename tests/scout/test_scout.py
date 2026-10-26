@@ -38,6 +38,7 @@ from inspect_ai.model import (
 )
 from inspect_ai.solver import Generate, Solver, TaskState, generate, solver, use_tools
 from inspect_ai.tool import Tool, ToolError, tool
+from inspect_ai.util import StoreModel
 from inspect_ai.util._span import span
 from inspect_scout import (
     Result,
@@ -69,18 +70,18 @@ from inspect_sentinel import (
     monitor,
     observe_only,
     protocol,
-    replay_monitor,
     sequential,
     threshold,
 )
+from inspect_sentinel._replay import replay_monitor
 from inspect_sentinel.scout import (
     Stage,
     as_reader,
     as_scanner,
-    fidelity_probe,
     human_stand_in,
+    replay_check,
+    replay_check_differences,
     step_selector,
-    steps_in,
 )
 from inspect_sentinel.scout._context import Contexts
 from inspect_sentinel.scout._steps import transcript_steps
@@ -224,10 +225,11 @@ def test_importing_inspect_sentinel_does_not_load_scout() -> None:
     assert loaded.stdout.strip() == "False"
 
 
-def test_the_scout_adapter_imports_nothing_private_but_inspect_ais_boundary() -> None:
-    # so it can move to inspect_scout unchanged: inspect_ai's _integration is
-    # its designated boundary for sentinel, and its registry lookup is the one
-    # private name besides (design call 1)
+def test_the_scout_adapter_imports_only_the_private_names_it_is_allowed() -> None:
+    # inspect_ai's _integration is its designated boundary for sentinel, and
+    # its registry lookup is the one private name besides (design call 1);
+    # from sentinel, the replay runner and the messages projection, internal
+    # since 2026-10-26 with the adapter as their only caller (design call 23)
     private: dict[str, set[str]] = {}
     sentinel: set[str] = set()
     for source in SCOUT.glob("*.py"):
@@ -246,7 +248,12 @@ def test_the_scout_adapter_imports_nothing_private_but_inspect_ais_boundary() ->
                     or any(name.startswith("_") for name in names)
                 ):
                     private.setdefault(module, set()).update(names)
-    assert sentinel == {"inspect_sentinel", "inspect_sentinel.config"}
+    assert sentinel == {
+        "inspect_sentinel",
+        "inspect_sentinel.config",
+        "inspect_sentinel._replay",
+        "inspect_sentinel._from_messages",
+    }
     assert private == {
         "inspect_ai._sentinel._integration": {
             "EvalInfo",
@@ -254,6 +261,24 @@ def test_the_scout_adapter_imports_nothing_private_but_inspect_ais_boundary() ->
             "steps_from_events",
         },
         "inspect_ai._util.registry": {"registry_lookup"},
+        "inspect_sentinel._replay": {"HumanFallback", "ReplayReport", "replay_monitor"},
+        "inspect_sentinel._from_messages": {"steps_from_messages"},
+    }
+
+
+def test_the_scout_adapter_exports_the_replay_api() -> None:
+    import inspect_sentinel.scout
+
+    assert set(inspect_sentinel.scout.__all__) == {
+        "Stage",
+        "StepSelector",
+        "StepTable",
+        "as_reader",
+        "as_scanner",
+        "human_stand_in",
+        "replay_check",
+        "replay_check_differences",
+        "step_selector",
     }
 
 
@@ -271,7 +296,7 @@ def test_replay_and_read_agree_through_scout(tmp_path: Path, stage: Stage) -> No
     run(
         tmp_path / "logs",
         [[call(1), call(2)], [call(3)], [call(4)]],
-        observe_only(fidelity_probe()),
+        observe_only(replay_check()),
         samples,
         helpers=[call(5, f"sub{i}") for i in range(3)],
         metadata={"difficulty": "hard"},
@@ -280,8 +305,8 @@ def test_replay_and_read_agree_through_scout(tmp_path: Path, stage: Stage) -> No
     found = scanned(
         tmp_path / "scans",
         tmp_path / "logs",
-        replay=as_scanner(fidelity_probe(), stage=stage),
-        read=as_reader("fidelity_probe", stage=stage),
+        replay=as_scanner(replay_check(), stage=stage),
+        read=as_reader("replay_check", stage=stage),
     )
 
     replayed = keyed(found["replay"], "metadata.metadata")
@@ -354,7 +379,7 @@ def test_a_transcript_reduces_to_its_highest_score_citing_the_step(
     found = scanned(
         tmp_path / "scans",
         tmp_path / "logs",
-        t=as_scanner(by_argument(), unit="transcript"),
+        t=as_scanner(by_argument(), results="transcript"),
     )
 
     [row] = found["t"]
@@ -379,7 +404,7 @@ def test_failure_count_scanned_at_one_stage_keeps_its_live_scores(
     found = scanned(
         tmp_path / "scans",
         tmp_path / "logs",
-        replay=as_scanner(failure_count(), stage="tool_call", split=None),
+        replay=as_scanner(failure_count(), stage="tool_call"),
         read=as_reader("failure_count", stage="tool_call"),
     )
 
@@ -409,7 +434,7 @@ def test_the_reader_cites_each_step_and_a_step_with_no_event_cites_nothing(
     found = scanned(
         tmp_path / "scans",
         tmp_path / "logs",
-        read=as_reader("", stage="model_input"),
+        read=as_reader(stage="model_input"),
     )
 
     first, second = found["read"]
@@ -428,14 +453,14 @@ def test_the_reader_cites_each_step_and_a_step_with_no_event_cites_nothing(
 def test_the_reader_cites_a_generates_output_and_a_calls_result(
     tmp_path: Path, stage: Stage, cites: str
 ) -> None:
-    log = run(tmp_path / "logs", [[call(1)]], observe_only(fidelity_probe()))
+    log = run(tmp_path / "logs", [[call(1)]], observe_only(replay_check()))
     assert log.samples is not None
     messages = {m.id for m in log.samples[0].messages}
 
     found = scanned(
         tmp_path / "scans",
         tmp_path / "logs",
-        read=as_reader("fidelity_probe", stage=stage),
+        read=as_reader("replay_check", stage=stage),
     )
 
     for row in found["read"]:
@@ -479,24 +504,41 @@ def test_an_escalation_with_no_recorded_answer_fails_closed(tmp_path: Path) -> N
 
     [row] = found["s"]
     assert (row["answer"], row["value"]) == ("reject", True)
-    assert row["metadata.human"] == "unanswered"
+    assert (row["metadata.human"], row["metadata.human_answer"]) == (
+        "unanswered",
+        "reject",
+    )
     assert row["metadata.turns"] == "recorded"
 
 
-def test_steps_are_selected_by_transcript_as_well_as_step(tmp_path: Path) -> None:
+def test_steps_are_selected_by_transcript_as_well_as_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # two transcripts share a tool call id; a label names the call in one
     log = run(tmp_path / "logs", [[call(1, "shared")], [call(2, "shared")]], None)
     assert log.samples is not None
     labelled = log.samples[1].uuid
     labels = pandas.DataFrame([{"transcript_id": labelled, "step_id": "shared"}])
+    from inspect_sentinel.scout import _scanner
+
+    built: list[str] = []
+    rebuild = _scanner.transcript_steps
+
+    def counted(transcript: Transcript, *args: Any) -> Any:
+        built.append(transcript.transcript_id)
+        return rebuild(transcript, *args)
+
+    monkeypatch.setattr(_scanner, "transcript_steps", counted)
 
     found = scanned(
         tmp_path / "scans",
         tmp_path / "logs",
-        s=as_scanner(by_argument(), steps=steps_in(labels)),
+        s=as_scanner(by_argument(), steps=labels),
     )
 
     assert keyed(found["s"], "value") == {(labelled, "shared"): 0.2}
+    # a transcript the table does not list is not rebuilt
+    assert built == [labelled]
 
 
 @human_stand_in
@@ -520,7 +562,9 @@ def breaks_while(marker: str) -> MonitorGroup:
 def test_a_resumed_scan_gives_the_rows_a_whole_scan_gives(tmp_path: Path) -> None:
     log = run(tmp_path / "logs", [[call(9, "a"), call(8, "b")], [call(7, "c")]], None)
     assert log.samples is not None
-    labels = [(s.uuid, "a") for s in log.samples] + [(log.samples[1].uuid, "c")]
+    labels = [(s.uuid or "", "a") for s in log.samples] + [
+        (log.samples[1].uuid or "", "c")
+    ]
     marker = tmp_path / "marker"
 
     def scanner() -> Any:
@@ -530,7 +574,7 @@ def test_a_resumed_scan_gives_the_rows_a_whole_scan_gives(tmp_path: Path) -> Non
                 human(stages=["tool_call"]),
             ]
         )
-        return as_scanner(sentinel, steps=steps_in(labels), human=approves)
+        return as_scanner(sentinel, steps=labels, human=approves)
 
     whole = scanned(tmp_path / "whole", tmp_path / "logs", s=scanner())
     marker.touch()
@@ -575,12 +619,11 @@ def test_a_scan_takes_only_what_it_can_record(
 @pytest.mark.parametrize(
     "sentinel,kwargs,error",
     [
-        (lambda: fidelity_probe(), {}, "pass stage="),
-        (lambda: fidelity_probe(), {"stage": "nowhere"}, "does not watch"),
-        (lambda: [by_argument(), fidelity_probe()], {}, "one monitor at a time"),
+        (lambda: replay_check(), {"stage": "nowhere"}, "does not watch"),
+        (lambda: [by_argument(), replay_check()], {}, "one monitor at a time"),
     ],
 )
-def test_a_scan_needs_one_subject_at_one_stage(
+def test_a_scan_needs_one_subject_at_a_stage_it_watches(
     sentinel: Any, kwargs: dict[str, Any], error: str
 ) -> None:
     with pytest.raises(ValueError, match=error):
@@ -703,14 +746,14 @@ def test_depth_and_labels_choose_a_sub_agents_steps(tmp_path: Path) -> None:
         for e in sample.events
         if isinstance(e, ModelEvent) and e.span_id == spans["inner"]
     )
-    labels = [(sample.uuid, inner)]
+    labels = [(sample.uuid or "", inner or "")]
 
     found = scanned(
         tmp_path / "scans",
         tmp_path / "logs",
         top=as_scanner(conversations(), depth=1),
         all=as_scanner(conversations()),
-        labelled=as_scanner(conversations(), steps=steps_in(labels)),
+        labelled=as_scanner(conversations(), steps=labels),
     )
 
     def seen(rows: list[Row]) -> list[str]:
@@ -718,6 +761,7 @@ def test_depth_and_labels_choose_a_sub_agents_steps(tmp_path: Path) -> None:
 
     assert seen(found["top"]) == [spans["outer"]]
     assert seen(found["all"]) == [spans["outer"], spans["inner"]]
+    assert [r["metadata.depth"] for r in found["all"]] == [1, 2]
     assert seen(found["labelled"]) == [spans["inner"]]
 
 
@@ -752,23 +796,38 @@ def test_the_probe_reads_only_the_tip_of_each_conversation_list() -> None:
     )
     replayed = ReplayStep("c", "tool_call", step, ("c", 0))
 
-    anyio.run(replay_monitor, fidelity_probe(), [replayed])
+    anyio.run(replay_monitor, replay_check(), [replayed])
 
     assert decisions.reads <= 2 and history.reads <= 2
 
 
-def test_a_scanned_step_carries_its_stage_and_turns(tmp_path: Path) -> None:
-    log = run(tmp_path / "logs", [[call(1)]], observe_only(fidelity_probe()))
+def test_a_scan_gives_rows_at_every_watched_stage_unless_one_is_named(
+    tmp_path: Path,
+) -> None:
+    log = run(tmp_path / "logs", [[call(1)]], observe_only(replay_check()))
     assert log.samples is not None
     recorded = [e for e in log.samples[0].events if isinstance(e, SentinelEvent)]
 
     found = scanned(
         tmp_path / "scans",
         tmp_path / "logs",
-        s=as_scanner(fidelity_probe(), stage="tool_result"),
+        every=as_scanner(replay_check()),
+        named=as_scanner(replay_check(), stage="tool_result"),
+        tools=as_scanner(by_argument()),
     )
 
-    [row] = found["s"]
+    # two generates, the call's two steps
+    assert sorted(r["metadata.stage"] for r in found["every"]) == [
+        "model_input",
+        "model_input",
+        "model_output",
+        "model_output",
+        "tool_call",
+        "tool_result",
+    ]
+    # a monitor that watches one stage gives rows at it only
+    assert [r["metadata.stage"] for r in found["tools"]] == ["tool_call"]
+    [row] = found["named"]
     assert (row["metadata.stage"], row["metadata.turns"]) == ("tool_result", "recorded")
     assert row["metadata.step_id"] in {e.step_id for e in recorded}
     assert row["value"] == 0.0
@@ -939,16 +998,16 @@ def test_a_scan_in_worker_processes_gives_the_rows_one_process_gives(
         None,
     )
     assert log.samples is not None
-    labels = [(s.uuid, "a") for s in log.samples] + [
-        (log.samples[1].uuid, "c"),
-        (log.samples[2].uuid, "d"),
+    labels = [(s.uuid or "", "a") for s in log.samples] + [
+        (log.samples[1].uuid or "", "c"),
+        (log.samples[2].uuid or "", "d"),
     ]
 
     def scanner() -> Any:
         sentinel = sequential(
             [threshold(by_argument(), escalate_at=0.5), human(stages=["tool_call"])]
         )
-        return as_scanner(sentinel, steps=steps_in(labels), human=approves)
+        return as_scanner(sentinel, steps=labels, human=approves)
 
     one, single = scan_rows(tmp_path / "logs", tmp_path / "one", 1, s=scanner())
     many, workers = scan_rows(
@@ -1063,7 +1122,7 @@ def test_a_failure_a_protocol_went_on_without_fails_both_modes(tmp_path: Path) -
     status = scan(
         scanners={
             "replay": as_scanner(sentinel()),
-            "read": as_reader("", stage="tool_call"),
+            "read": as_reader(stage="tool_call"),
         },
         transcripts=transcripts_from(str(tmp_path / "logs")),
         scans=str(tmp_path / "scans"),
@@ -1108,7 +1167,7 @@ def test_loading_inspect_ai_entry_points_does_not_load_scout(
 def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
     tmp_path: Path,
 ) -> None:
-    log = run(tmp_path / "run", [[call(9, "a")]], observe_only(fidelity_probe()))
+    log = run(tmp_path / "run", [[call(9, "a")]], observe_only(replay_check()))
     assert log.samples is not None
     sample = log.samples[0]
     # as an inspect_ai of that time wrote it: no origins, and the generate
@@ -1147,8 +1206,8 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
     found = scanned(
         tmp_path / "scans",
         tmp_path / "logs",
-        replay=as_scanner(fidelity_probe(), stage="model_input"),
-        read=as_reader("fidelity_probe", stage="model_input"),
+        replay=as_scanner(replay_check(), stage="model_input"),
+        read=as_reader("replay_check", stage="model_input"),
         human=as_scanner(escalating),
     )
 
@@ -1315,7 +1374,29 @@ def long_output() -> Tool:
     return execute
 
 
-def test_compaction_chooses_the_latest_segments(tmp_path: Path) -> None:
+class Counted(StoreModel):
+    steps: int = 0
+
+
+@monitor
+def counts_calls() -> MonitorGroup:
+    # how many tool calls the monitor's store has seen, this one included
+    async def tool_call(context: Context, step: BeforeToolCall) -> Observation:
+        counted = context.store_as(Counted)
+        counted.steps += 1
+        return Observation(suspicion=0.0, metadata={"steps": counted.steps})
+
+    return MonitorGroup(tool_call)
+
+
+@step_selector
+def after_four_compactions(transcript_id: str, step: ReplayStep) -> bool:
+    return step.segment[1] >= 4
+
+
+def test_state_carries_across_compactions_and_a_selector_picks_segments(
+    tmp_path: Path,
+) -> None:
     from inspect_ai.agent import react
     from inspect_ai.model import CompactionTrim
 
@@ -1338,19 +1419,18 @@ def test_compaction_chooses_the_latest_segments(tmp_path: Path) -> None:
     found = scanned(
         tmp_path / "scans",
         tmp_path / "logs",
-        all=as_scanner(fidelity_probe(), stage="tool_call"),
-        last=as_scanner(fidelity_probe(), stage="tool_call", compaction="last"),
-        two=as_scanner(fidelity_probe(), stage="tool_call", compaction=2),
+        all=as_scanner(counts_calls()),
+        latest=as_scanner(counts_calls(), steps=after_four_compactions),
     )
 
-    # five segments: three calls before the first compaction, one after each
-    assert [len(found[n]) for n in ("all", "last", "two")] == [7, 1, 2]
+    def counts(rows: list[Row]) -> list[int]:
+        return [r["metadata.metadata"]["steps"] for r in rows]
 
-
-@pytest.mark.parametrize("compaction", [0, -1])
-def test_compaction_takes_at_least_one_segment(compaction: int) -> None:
-    with pytest.raises(ValueError, match="compaction"):
-        as_scanner(by_argument(), compaction=compaction)
+    # five segments: three calls before the first compaction, one after each;
+    # one store for the whole sample, as live, so the count runs across them
+    assert counts(found["all"]) == list(range(1, 8))
+    # the steps not chosen are not run, so the store sees only the last
+    assert counts(found["latest"]) == [1]
 
 
 def test_a_protocol_reduces_to_its_strongest_decision(tmp_path: Path) -> None:
@@ -1359,7 +1439,7 @@ def test_a_protocol_reduces_to_its_strongest_decision(tmp_path: Path) -> None:
     found = scanned(
         tmp_path / "scans",
         tmp_path / "logs",
-        t=as_scanner(threshold(by_argument(), reject_at=0.5), unit="transcript"),
+        t=as_scanner(threshold(by_argument(), reject_at=0.5), results="transcript"),
     )
 
     [row] = found["t"]
@@ -1381,7 +1461,7 @@ def test_a_label_names_one_transcripts_sub_agent_step_of_a_shared_call_id(
     found = scanned(
         tmp_path / "scans",
         tmp_path / "logs",
-        s=as_scanner(by_argument(), steps=steps_in([(labelled, "shared")])),
+        s=as_scanner(by_argument(), steps=[(labelled or "", "shared")]),
     )
 
     assert keyed(found["s"], "value") == {(labelled, "shared"): 0.6}
@@ -1590,7 +1670,7 @@ def work(scanner: Any, turns: int) -> int:
 def test_a_transcript_reduction_does_work_in_proportion_to_its_steps(
     sentinel: Any,
 ) -> None:
-    scanner = as_scanner(sentinel(), unit="transcript")
+    scanner = as_scanner(sentinel(), results="transcript")
     # the first transcript rebuilds the sentinel, once per process
     work(scanner, 1)
 
@@ -1738,14 +1818,14 @@ def test_the_probe_digests_a_samples_context_once_live_and_in_replay(
     run(
         tmp_path / "logs",
         [[call(1), call(2), call(3)], [call(4)]],
-        observe_only(fidelity_probe()),
+        observe_only(replay_check()),
         samples,
     )
     live = forms
     forms = 0
     # replayed: two transcripts at once, each one unit
     status = scan(
-        scanners={"s": as_scanner(fidelity_probe(), stage="tool_call", split=None)},
+        scanners={"s": as_scanner(replay_check(), stage="tool_call")},
         transcripts=transcripts_from(str(tmp_path / "logs")),
         scans=str(tmp_path / "scans"),
         display="none",
@@ -1773,7 +1853,7 @@ def test_a_results_frame_selects_the_steps_it_holds(tmp_path: Path) -> None:
     found = scanned(
         tmp_path / "again",
         tmp_path / "logs",
-        s=as_scanner(by_argument(), steps=steps_in(flagged)),
+        s=as_scanner(by_argument(), steps=flagged),
     )
 
     assert {step for _, step in keyed(found["s"], "value")} == {"a", "c"}
@@ -1782,13 +1862,13 @@ def test_a_results_frame_selects_the_steps_it_holds(tmp_path: Path) -> None:
 def test_a_scan_resumes_after_an_eval_loaded_the_entry_points(
     tmp_path: Path,
 ) -> None:
-    run(tmp_path / "logs", [[call(9, "a")]], observe_only(fidelity_probe()))
+    run(tmp_path / "logs", [[call(9, "a")]], observe_only(replay_check()))
     marker = tmp_path / "marker"
     marker.touch()
     first = scan(
         scanners={
             "replay": as_scanner(breaks_while(str(marker))),
-            "read": as_reader("fidelity_probe", stage="tool_call"),
+            "read": as_reader("replay_check", stage="tool_call"),
         },
         transcripts=transcripts_from(str(tmp_path / "logs")),
         scans=str(tmp_path / "scans"),
@@ -1893,7 +1973,7 @@ def test_the_probe_digests_the_context_each_step_is_handed(tmp_path: Path) -> No
         Task(
             dataset=[Sample(input="go", metadata={"phase": "initial"})],
             solver=changes_its_metadata(),
-            sentinel=observe_only([fidelity_probe(), records_contexts(str(handed))]),
+            sentinel=observe_only([replay_check(), records_contexts(str(handed))]),
         ),
         model="mockllm/model",
         log_dir=str(tmp_path / "logs"),
@@ -1904,11 +1984,62 @@ def test_the_probe_digests_the_context_each_step_is_handed(tmp_path: Path) -> No
     recorded = [
         cast(dict[str, Any], e.metadata)["eval"]
         for e in log.samples[0].events
-        if isinstance(e, SentinelEvent) and e.path == "fidelity_probe"
+        if isinstance(e, SentinelEvent) and e.path == "replay_check"
     ]
 
     assert recorded == handed.read_text().split()
     assert len(set(recorded)) == 2
+
+
+def test_replay_check_differences_lists_what_replay_did_not_hand_over(
+    tmp_path: Path,
+) -> None:
+    # replay hands every step the sample's final metadata, so the first
+    # generate's steps, which ran before the solver changed it, differ
+    [log] = eval(
+        Task(
+            dataset=[Sample(input="go", metadata={"phase": "initial"})],
+            solver=changes_its_metadata(),
+            sentinel=observe_only(replay_check()),
+        ),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "logs"),
+        display="none",
+    )
+    status = scan(
+        scanners={
+            "replayed": as_scanner(replay_check()),
+            "recorded": as_reader("replay_check"),
+        },
+        transcripts=transcripts_from(str(tmp_path / "logs")),
+        scans=str(tmp_path / "scans"),
+        display="none",
+        max_processes=1,
+    )
+    frames: Any = scan_results_df(status.location).scanners
+    replayed, recorded = frames["replayed"], frames["recorded"]
+
+    differences: Any = replay_check_differences(replayed, recorded)
+
+    assert log.samples is not None
+    uuid = log.samples[0].uuid
+    first = cast(list[Row], replayed.to_dict("records"))[0]["metadata.step_id"]
+    assert [
+        (r["transcript_id"], r["step_id"], r["stage"], r["field"], r["reason"])
+        for r in cast(list[Row], differences.to_dict("records"))
+    ] == [
+        (uuid, first, "model_input", "eval", "differs"),
+        (uuid, first, "model_output", "eval", "differs"),
+    ]
+    assert all(differences["replayed"] != differences["recorded"])
+    # a step one side lacks
+    later = recorded[recorded["metadata.step_id"] != first]
+    lacking: Any = replay_check_differences(replayed, later)
+    assert set(zip(lacking["stage"], lacking["reason"], strict=True)) == {
+        ("model_input", "only replayed"),
+        ("model_output", "only replayed"),
+    }
+    assert replay_check_differences(replayed, replayed).empty
 
 
 @monitor
@@ -1932,7 +2063,7 @@ async def test_the_probe_digests_a_context_a_sidecar_learns_late() -> None:
     from inspect_sentinel.sidecar._registration import SampleFacts, TaskFacts
     from tests.sidecar._traffic import inspect_headers, request
 
-    handler = Handler(observe_only([fidelity_probe(), hands_over()]))
+    handler = Handler(observe_only([replay_check(), hands_over()]))
     task = TaskFacts(
         task="philadelphia",
         task_description="File the weather report.",
@@ -1954,7 +2085,7 @@ async def test_the_probe_digests_a_context_a_sidecar_learns_late() -> None:
         return {
             r.path: cast(Any, r.detail).report.metadata["eval"]
             for r in records
-            if r.kind == "record" and r.path in ("fidelity_probe", "hands_over")
+            if r.kind == "record" and r.path in ("replay_check", "hands_over")
         }
 
     # the run's first request comes before its task is registered
@@ -1962,6 +2093,6 @@ async def test_the_probe_digests_a_context_a_sidecar_learns_late() -> None:
     await handler.register_task("eval_789", task)
     after = await digests("b")
 
-    assert before["fidelity_probe"] == before["hands_over"]
-    assert after["fidelity_probe"] == after["hands_over"]
+    assert before["replay_check"] == before["hands_over"]
+    assert after["replay_check"] == after["hands_over"]
     assert before["hands_over"] != after["hands_over"]

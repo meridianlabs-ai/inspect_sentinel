@@ -36,6 +36,9 @@ class ReplayStep:
     )
     """The answers a person gave through `human()` at this step when it ran, keyed by the path of the `human()` instance that asked, for the replay host to give again when the same instance asks. Empty when none were recorded. It is the replay's own record and never part of `step`, so monitors and protocols do not see it. Read-only: a copy of the mapping given."""
 
+    depth: int | None = None
+    """How deep the step's conversation is in the transcript's timeline, counted as Inspect Scout's `llm_scanner(depth=)` counts: only spans that make model calls of their own and are not utility spans count a level, so 1 is the outermost such span on each branch. It is the shallowest level of any span holding one of the conversation's model calls. `None` where none of them is in such a span, such as a lone call Scout's timeline leaves out of every span, or where the step's builder had no timeline."""
+
     def __post_init__(self) -> None:
         expected = _STAGES[type(self.step)]
         if self.stage != expected:
