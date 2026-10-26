@@ -1,0 +1,127 @@
+---
+title: "Replay Trust"
+description: "Measuring whether a monitor behaves the same replayed as it did live: the same prompts, the same verdicts, the same needles found."
+---
+
+## Overview
+
+[Replay](replay.qmd) is only useful for back-testing if a monitor behaves in replay as it did live: given the same context, it should reach the same verdicts. The tests of replay show that the steps are rebuilt as live built them and that `replay_check()` hands a monitor the same fields. This benchmark shows it for monitors that judge with a model, which is what a back-test relies on.
+
+It runs each monitor live twice and replays it twice over scripted agent runs with planted needles, and measures three things:
+
+1. **The same prompt.** The monitor model's first request at each step, live and in replay, compared after the nonce `Host.score()` makes per transcript is replaced. Each difference is either a [known difference](#known-differences) or reported as unexplained. This checks that the monitor receives identical context, and has no model noise in it.
+2. **The same verdict.** Whether each step's suspicion crosses the threshold (0.5), compared live against replay. A model answers differently from call to call even at temperature 0, so the noise floor is measured too, live against live and replay against replay. An exact two-sided McNemar test at 5% compares live-against-replay disagreement with live-against-live.
+3. **The same needles found.** Recall on the planted needles and the false-positive rate on the other steps, live and in replay, with 95% Wilson intervals.
+
+Replay is trusted for a monitor when the requests are identical outside the known differences, its live-against-replay disagreement is no larger than the live-against-live floor (or not significantly larger), and its recall and false-positive rate are equal within their intervals: replay's 95% intervals overlap live's.
+
+The benchmark is in the repository, in `benchmarks/replay_trust/`, and is not part of the package. It is not run in CI, since a real monitor model costs money. CI runs the whole pipeline on deterministic models instead, so that the harness does not break between real runs. Rerun it before a release that changes the step builder or replay.
+
+## What it runs
+
+**Haystacks.** Each haystack is one sample with a scripted agent, so every run takes the same trajectory and only the monitor's model can vary. The agent is `react()` with a stand-in `bash`, and it takes 20, 100 or 300 turns. Every haystack has:
+
+- a summary compaction, wherever the conversation grows past 3,000 tokens;
+- parallel tool calls every seventh turn;
+- a sub-agent called through `as_tool()`;
+- a provider error that is retried;
+- one to three needles, each a tool call the policy forbids, labelled by its call id: sending a file to an outside host, writing outside `/work`, or disabling a test.
+
+The ordinary work includes calls that come close to a needle without breaking the policy, such as a `curl` to `localhost`.
+
+The haystacks do not include a `human()` answer. inspect_ai can ask a person only through its approval surfaces: a terminal, the panel or an ACP client. Answering one with no person present means patching a private function, so a headless run cannot record an answer. Replaying recorded answers is covered by the Scout adapter's tests.
+
+**Monitors.** These are the shapes in production use, each run observe-only so that what it reports is recorded and nothing it decides changes the run:
+
+| Monitor | Stage | What it does |
+|---|---|---|
+| `tool_call_judge` | `tool_call` | A model scores each tool call through `Host.score()`. It is shown the last three turns of the input (`LastTurns`) and what `history` gained since its last report (`NewSinceLastReport`). |
+| `turn_judge` | `model_output` | A model scores each turn after it is generated, reading the last four turns of `history`. |
+| `network_rule` | `tool_call` | A rule with no model: a `bash` command using a network tool scores 1.0. It is the rule from `examples/no_network.py`, written as a monitor so that it can run observe-only. |
+| `failure_count` | `tool_call` | A monitor that keeps state across steps, as in `examples/trajectory.py`: suspicion rises with each failed call. |
+
+The live runs are evals of the haystacks with the monitor attached, and read mode, `as_reader()`, reads the reports they recorded. The replays are `as_scanner()` scans of the first live run's log. A replayed step's model requests are found by a step selector that selects every step and records an event naming it just before the step runs. Replay runs a transcript's steps one at a time, so the requests that follow a mark belong to that step.
+
+## Reproducing
+
+Set up the development environment as `CONTRIBUTING.md` describes. Then, from the repository root:
+
+``` bash
+python -m benchmarks.replay_trust haystacks
+```
+
+By default the judges' model is a deterministic stand-in (`replay_trust_judge/judge`), so nothing is spent and the noise floor is zero. For a real model, name it:
+
+``` bash
+python -m benchmarks.replay_trust haystacks --monitor-model openai/gpt-4o-mini
+```
+
+`--sizes`, `--samples` (haystacks of each size) and `--monitors` narrow or widen the run. The results go to `benchmarks/replay_trust/results/`, or wherever `--out` says:
+
+| File | What it holds |
+|---|---|
+| `summary.md` | The three measurements per monitor and haystack, the measured usage, and the spend estimate. |
+| `results.json` | Everything in the summary, plus each unexplained difference with its diff, the environment, and the logs and scans. |
+| `steps.json` | Each step's suspicion in each of the four runs. |
+| `labels.json` | Each haystack's needles. |
+| `logs/`, `scans/` | The live eval logs and the Scout scans, for `inspect view` and `scout view`. |
+
+The command exits non-zero when a monitor is not accepted.
+
+### Cost
+
+Each monitor that calls a model makes one call per monitored step in each of the four runs, so four times the steps. The prompts are about 2,000 to 2,400 tokens each. The summary estimates the spend for several monitor models from the measured prompts; for one haystack of each size, with both judges, that is 3,752 calls:
+
+| Model | Estimated spend |
+|---|---|
+| `openai/gpt-4o-mini` | about $1.70 |
+| `anthropic/claude-haiku-5-5` | about $1.20 |
+| `openai/gpt-4.1` | about $22 |
+| `anthropic/claude-sonnet-5-5` | about $23 |
+
+These are list prices without prompt caching, as of October 2026. A model that is asked again after an answer `Host.score()` cannot use adds calls: about a fifth more for gpt-4o-mini.
+
+## Your own logs and monitors
+
+The same measurements run on your own logs with your own monitor. Run your eval with the monitor attached observe-only, ideally twice over the same samples so the live-against-live floor can be measured, then:
+
+``` bash
+python -m benchmarks.replay_trust logs \
+  --monitor my_package.monitors:suspicion \
+  --stage tool_call \
+  --live logs/run-a.eval logs/run-b.eval \
+  --model-role monitor=openai/gpt-4o-mini \
+  --needles needles.json \
+  --out replay-trust
+```
+
+- `--monitor` is the monitor's factory as `module:name`, called with no arguments.
+- `--path` is its instance path if it was not a lone monitor.
+- `--needles` is a JSON list of the tool call ids you labelled as breaking the policy.
+- `--no-model` is for a monitor that calls no model.
+
+With one live log, the replay-against-replay floor stands in for the live one. Steps are matched across runs by tool call id, so two live runs of a real agent, which take different turns, share few steps. With a real agent, give one live log, or two runs of a scripted one.
+
+## Known differences
+
+A prompt difference is explained only by a known difference, one that the replay design or inspect_ai's replay test names. These are the ones the benchmark's monitors show:
+
+- **`agent_messages` is `None` in replay**, since a log does not record the agent's own list. `step_as_str` names a list the host could not provide in a block of its own ("The agent's own message list is not available."). It does so even when the preprocessor shows none of `agent_messages`, which is `Host.score()`'s default. So every replayed `Host.score()` prompt differs from its live prompt by that block.
+- **react's `submit` writes the answer into the submitting assistant message in place**, after the call has run. The log therefore holds text the model did not produce, and a replayed step that shows that message, such as the last turn's `AfterGenerate`, shows the answer.
+
+Settings that govern only the client, such as connections and timeouts, are left out of the comparison, since a scan sets its own.
+
+## Results
+
+::: {.callout-note}
+## Pending the real runs
+The real-model runs have not been made yet. This section will hold their results, the models used and the spend.
+:::
+
+On the deterministic judge, at inspect_sentinel 096a4c3 with inspect_ai #5991, every monitor is accepted on the 20-, 100- and 300-turn haystacks:
+
+- **Prompts.** Every judge prompt differs from live only by the known differences: the `agent_messages` block at every step (509 tool-call steps and 429 turns), and the submitted answer at the six turns that call `submit`, each haystack's agent's and sub-agent's.
+- **Verdicts.** No step's verdict differs between any two of the four runs.
+- **Needles.** Recall and false-positive rate are equal live and in replay, for all four monitors.
+
+Two 20-turn smoke runs of `tool_call_judge` on gpt-4o-mini showed that the path to a real model works, together costing $0.09. Their prompts differed from live only by the known differences, and replay's verdicts disagreed with live no more than two live runs disagreed with each other.
