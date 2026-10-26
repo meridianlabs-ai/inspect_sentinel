@@ -18,6 +18,7 @@ from inspect_ai.model import (
     ModelUsage,
 )
 
+from benchmarks.replay_trust.__main__ import NOT_RUN, main
 from benchmarks.replay_trust.benchmark import Settings, measured, run_benchmark
 from benchmarks.replay_trust.haystack import Haystack, Needle, haystack
 from benchmarks.replay_trust.measure import Outcome, measure
@@ -491,6 +492,29 @@ def test_recall_counts_needles_not_the_steps_covering_them() -> None:
     found = measure(run, ["n0", "n1", "n2"], calls_a_model=False).needles_found
     assert found is not None
     assert {(p.k, p.n) for p in found.recall.values()} == {(2, 3)}
+
+
+def test_a_missing_api_key_is_reported_and_the_run_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    status = main(
+        [
+            "haystacks",
+            "--monitor-model",
+            "anthropic/claude-haiku-5-5",
+            "--monitors",
+            "network_rule",
+            "--sizes",
+            "20",
+            "--out",
+            str(tmp_path),
+        ]
+    )
+    assert status == NOT_RUN
+    assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
 
 
 def _model_event(*image: str) -> ModelEvent:

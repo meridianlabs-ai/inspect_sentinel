@@ -22,7 +22,7 @@ python -m benchmarks.replay_trust haystacks --monitor-model openai/gpt-4o-mini
 
 `--sizes`, `--samples` (haystacks of each size) and `--monitors` narrow or widen the run. `--sizes 20` is a quick smoke check of the whole path. It is usually inconclusive, since a 20-turn haystack has about 23 steps, fewer than the 90 a verdict can be trusted on.
 
-The command exits 0 when every monitor is trusted, 1 when one is not trusted, and 2 when none is not trusted but one is inconclusive. The results go to `benchmarks/replay_trust/results/`, or wherever `--out` says:
+The command exits 0 when every monitor is trusted, 1 when one is not trusted, and 2 when none is not trusted but one is inconclusive. It exits 3, with the reason on standard error, when it cannot run at all, such as without the monitor model's API key. The results go to `benchmarks/replay_trust/results/`, or wherever `--out` says:
 
 | File | What it holds |
 |---|---|
