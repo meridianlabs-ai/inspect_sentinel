@@ -71,10 +71,10 @@ def summary(results: dict[str, Any]) -> str:
             "",
             "## 3. The same needles found",
             "",
-            "Recall on the needles and false-positive rate on the other steps, with 95% Wilson intervals, live (`live_a`) and in replay (`replay_1`). A needle is missed in a run where no step covers it or the monitor reported no score there; a missed needle fails acceptance, as does a recall or false-positive rate over no steps. With no needles labelled, this is not measured.",
+            "Recall on the needles and false-positive rate on the other steps, with 95% Wilson intervals, live (`live_a`) and in replay (`replay_1`). p is the smaller of Fisher's exact two-sided p-values for each replay's rate against `live_a`'s; floor is the noise floor, the larger difference in steps flagged between the two live runs and between the two replays. A replay whose rate differs from live's by more than the floor fails acceptance, where the floor is zero, or where p is under 0.05. A needle is missed in a run where no step covers it or the monitor reported no score there; a missed needle fails acceptance, as does a recall or false-positive rate over no steps. With no needles labelled, this is not measured.",
             "",
-            "| monitor | haystack | needles | missed | recall live | recall replay | FPR live | FPR replay | accepted |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| monitor | haystack | needles | missed | recall live | recall replay | p | floor | FPR live | FPR replay | p | floor | accepted |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
     missed: list[str] = []
@@ -82,11 +82,11 @@ def summary(results: dict[str, Any]) -> str:
         for where, m in _rows(monitor):
             n = m["needles_found"]
             if n is None:
-                lines.append(f"| {name} | {where} | 0 | | | | | | n/a |")
+                lines.append(f"| {name} | {where} | 0 | | | | | | | | | | n/a |")
                 continue
             lost = {run: ids for run, ids in n["missed"].items() if ids}
             lines.append(
-                f"| {name} | {where} | {n['labelled']} | {sum(len(ids) for ids in lost.values())} | {_proportion(n['recall']['live_a'])} | {_proportion(n['recall']['replay_1'])} | {_proportion(n['false_positive_rate']['live_a'])} | {_proportion(n['false_positive_rate']['replay_1'])} | {_yes(m['needles_found_accepted'])} |"
+                f"| {name} | {where} | {n['labelled']} | {sum(len(ids) for ids in lost.values())} | {_proportion(n['recall']['live_a'])} | {_proportion(n['recall']['replay_1'])} | {_same_rate(n['same_recall'])} | {_proportion(n['false_positive_rate']['live_a'])} | {_proportion(n['false_positive_rate']['replay_1'])} | {_same_rate(n['same_false_positive_rate'])} | {_yes(m['needles_found_accepted'])} |"
             )
             if where == "all":
                 missed.extend(
@@ -201,6 +201,14 @@ def _proportion(p: dict[str, Any]) -> str:
     if p["rate"] is None:
         return f"{p['k']}/{p['n']}"
     return f"{p['k']}/{p['n']} = {p['rate']:.2f} [{p['low']:.2f}, {p['high']:.2f}]"
+
+
+def _same_rate(rate: dict[str, Any]) -> str:
+    # the replay further from live
+    p = min(
+        rate["p_values"][pair] for pair in ("live_a vs replay_1", "live_a vs replay_2")
+    )
+    return f"{_number(p)} | {rate['floor']}"
 
 
 def _maybe(value: Any) -> str:

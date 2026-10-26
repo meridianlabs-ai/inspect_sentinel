@@ -18,7 +18,7 @@ from inspect_ai.model import (
 
 from benchmarks.replay_trust.benchmark import Settings, run_benchmark
 from benchmarks.replay_trust.haystack import haystack
-from benchmarks.replay_trust.measure import measure
+from benchmarks.replay_trust.measure import fisher, measure
 from benchmarks.replay_trust.prompts import Request, request
 from benchmarks.replay_trust.run import RUNS, MonitorRun, RunName, StepRecord
 from benchmarks.replay_trust.spend import pricing, used
@@ -152,6 +152,77 @@ def test_a_missed_needle_is_reported_and_not_accepted(
     assert {r for r, ids in found.missed.items() if ids} == missed
     assert all(ids == ["needle"] for r, ids in found.missed.items() if r in missed)
     assert found.accepted == (not missed)
+
+
+def _flagging(prefix: str, n: int, flagged: dict[RunName, int]) -> list[StepRecord]:
+    # n steps, of which each run flags its first `flagged[run]`
+    return [
+        _step(
+            f"{prefix}{i}", **{run: 0.9 if i < k else 0.1 for run, k in flagged.items()}
+        )
+        for i in range(n)
+    ]
+
+
+def _runs(live_a: int, live_b: int, replay_1: int, replay_2: int) -> dict[RunName, int]:
+    return {
+        "live_a": live_a,
+        "live_b": live_b,
+        "replay_1": replay_1,
+        "replay_2": replay_2,
+    }
+
+
+# needles and other steps, as (count, flagged by run); every run reaches every
+# step, so only the rates decide
+@pytest.mark.parametrize(
+    ("needles", "others", "accepted"),
+    [
+        ((3, _runs(3, 3, 3, 3)), (1, _runs(0, 0, 0, 0)), True),
+        ((3, _runs(3, 3, 0, 0)), (1, _runs(0, 0, 0, 0)), False),
+        ((3, _runs(3, 3, 3, 2)), (1, _runs(0, 0, 0, 0)), True),
+        ((3, _runs(3, 3, 2, 2)), (1, _runs(0, 0, 0, 0)), False),
+        ((20, _runs(15, 13, 14, 16)), (40, _runs(2, 3, 2, 3)), True),
+        ((20, _runs(15, 14, 12, 13)), (40, _runs(2, 3, 2, 3)), True),
+        ((20, _runs(18, 17, 6, 6)), (40, _runs(2, 3, 2, 3)), False),
+        ((3, _runs(3, 3, 3, 3)), (40, _runs(0, 0, 2, 2)), False),
+    ],
+    ids=[
+        "the same",
+        "replay finds no needle",
+        "within the replays' noise",
+        "one needle lost, no noise",
+        "within the noise",
+        "beyond the noise, not significantly",
+        "beyond the noise, significantly",
+        "false positives only in replay",
+    ],
+)
+def test_replay_finds_the_needles_live_found(
+    needles: tuple[int, dict[RunName, int]],
+    others: tuple[int, dict[RunName, int]],
+    accepted: bool,
+) -> None:
+    run = _run(*_flagging("n", *needles), *_flagging("o", *others))
+    found = measure(
+        run, [f"n{i}" for i in range(needles[0])], calls_a_model=False
+    ).needles_found
+    assert found is not None
+    assert not any(found.missed.values())
+    assert found.accepted == accepted
+
+
+@pytest.mark.parametrize(
+    ("table", "p"),
+    [
+        ((3, 1, 1, 3), 34 / 70),
+        ((3, 0, 0, 3), 0.1),
+        ((1, 9, 11, 3), 0.002759),
+        ((0, 0, 0, 0), 1.0),
+    ],
+)
+def test_fisher_exact_test(table: tuple[int, int, int, int], p: float) -> None:
+    assert fisher(*table) == pytest.approx(p, abs=1e-6)
 
 
 def _model_event(*image: str) -> ModelEvent:
