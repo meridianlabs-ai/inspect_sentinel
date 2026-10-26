@@ -109,15 +109,21 @@ def _every_run(score: float | None) -> dict[str, float | None]:
 
 @pytest.mark.parametrize("calls_a_model", [True, False])
 def test_an_empty_run_is_not_accepted(calls_a_model: bool) -> None:
-    measured = measure(_run(), [], calls_a_model=calls_a_model, asked=[])
+    measured = measure(_run(), ["needle"], calls_a_model=calls_a_model, asked=["sudo"])
     assert not measured.accepted
     assert not measured.same_verdict.accepted
+    assert measured.needles_found is not None
     assert not measured.needles_found.accepted
     assert measured.same_human_answers is not None
     assert not measured.same_human_answers.accepted
     if calls_a_model:
         assert measured.same_prompt is not None
         assert not measured.same_prompt.accepted
+    # with no needles labelled, measurement 3 is not made, and the run is
+    # still not accepted
+    unlabelled = measure(_run(), [], calls_a_model=calls_a_model)
+    assert unlabelled.needles_found is None
+    assert not unlabelled.accepted
 
 
 # a needle each run must reach; "other" is an ordinary step every run scored
@@ -142,6 +148,7 @@ def test_a_missed_needle_is_reported_and_not_accepted(
 ) -> None:
     run = _run(_step("other", **_every_run(0.1)), *steps)
     found = measure(run, ["needle"], calls_a_model=False).needles_found
+    assert found is not None
     assert {r for r, ids in found.missed.items() if ids} == missed
     assert all(ids == ["needle"] for r, ids in found.missed.items() if r in missed)
     assert found.accepted == (not missed)

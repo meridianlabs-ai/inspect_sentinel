@@ -5,7 +5,7 @@
 3. **The same needles found**: recall on the needles and the false-positive rate on the other steps, live and in replay, with 95% Wilson intervals. A needle is reached in a run where the monitor reported a score at a step that covers it.
 4. **The same human answers**: each call `human()` was asked about live is answered in each replay with the person's recorded answer.
 
-Acceptance: measurement 1 identical outside the known differences, over at least one step; measurement 2 over at least one step, every step read live matched to a replayed one, and not significantly worse than the floor; measurement 3 with at least one needle and one other step, every labelled needle reached in every run, and recall and false-positive rate equal within their intervals, which overlap live's; measurement 4, where the review ran, with every expected call asked in both live runs and its recorded answer given again in both replays. Nothing measured is never accepted.
+Acceptance: measurement 1 identical outside the known differences, over at least one step; measurement 2 over at least one step, every step read live matched to a replayed one, and not significantly worse than the floor; measurement 3, where needles are labelled, with at least one other step, every labelled needle reached in every run, and recall and false-positive rate equal within their intervals, which overlap live's; measurement 4, where the review ran, with every expected call asked in both live runs and its recorded answer given again in both replays. Nothing measured is never accepted.
 """
 
 from __future__ import annotations
@@ -275,13 +275,15 @@ class SameHumanAnswers:
 
 @dataclass(frozen=True)
 class Measurement:
-    """The three measurements for one monitor over one set of steps."""
+    """The measurements for one monitor over one set of steps."""
 
     same_prompt: SamePrompt | None
     """None for a monitor that does not call a model."""
 
     same_verdict: SameVerdict
-    needles_found: NeedlesFound
+    needles_found: NeedlesFound | None
+    """None where no needles were labelled."""
+
     same_human_answers: SameHumanAnswers | None
     """None where `human()` was not measured."""
 
@@ -296,7 +298,7 @@ class Measurement:
         return (
             (self.same_prompt is None or self.same_prompt.accepted)
             and self.same_verdict.accepted
-            and self.needles_found.accepted
+            and (self.needles_found is None or self.needles_found.accepted)
             and (self.same_human_answers is None or self.same_human_answers.accepted)
         )
 
@@ -308,7 +310,9 @@ class Measurement:
             if self.same_prompt is None
             else self.same_prompt.accepted,
             "same_verdict_accepted": self.same_verdict.accepted,
-            "needles_found_accepted": self.needles_found.accepted,
+            "needles_found_accepted": None
+            if self.needles_found is None
+            else self.needles_found.accepted,
             "same_human_answers_accepted": None
             if self.same_human_answers is None
             else self.same_human_answers.accepted,
@@ -327,7 +331,7 @@ def measure(
 
     Args:
         run: The monitor's steps across the runs.
-        needles: The tool call ids labelled as needles, in the samples measured. A step is a needle when it covers one.
+        needles: The tool call ids labelled as needles, in the samples measured. A step is a needle when it covers one. Measurement 3 is not made when there are none.
         samples: The samples to measure; all when None.
         calls_a_model: Whether the monitor calls a model, so its prompts are compared.
         asked: The tool call ids put to a person in the samples measured, for measurement 4; it is not made when None.
@@ -338,7 +342,7 @@ def measure(
     return Measurement(
         same_prompt=_same_prompt(steps, two_live) if calls_a_model else None,
         same_verdict=_same_verdict(steps, two_live),
-        needles_found=_needles_found(steps, labelled, two_live),
+        needles_found=_needles_found(steps, labelled, two_live) if labelled else None,
         same_human_answers=None
         if asked is None
         else _same_human_answers(

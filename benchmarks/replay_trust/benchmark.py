@@ -244,11 +244,13 @@ def write(
             "calls": sum(s["calls"] for s in spends),
         },
     }
-    document["accepted"] = all(
+    # nothing measured is not accepted
+    accepted = [
         m["accepted"]
         for m in document["monitors"].values()
         if m["accepted"] is not None
-    )
+    ]
+    document["accepted"] = bool(accepted) and all(accepted)
     (out / "results.json").write_text(json.dumps(document, indent=2, default=str))
     (out / "steps.json").write_text(
         json.dumps(

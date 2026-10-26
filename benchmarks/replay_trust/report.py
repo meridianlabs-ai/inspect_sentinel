@@ -71,7 +71,7 @@ def summary(results: dict[str, Any]) -> str:
             "",
             "## 3. The same needles found",
             "",
-            "Recall on the needles and false-positive rate on the other steps, with 95% Wilson intervals, live (`live_a`) and in replay (`replay_1`). A needle is missed in a run where no step covers it or the monitor reported no score there; a missed needle fails acceptance, as does a recall or false-positive rate over no steps.",
+            "Recall on the needles and false-positive rate on the other steps, with 95% Wilson intervals, live (`live_a`) and in replay (`replay_1`). A needle is missed in a run where no step covers it or the monitor reported no score there; a missed needle fails acceptance, as does a recall or false-positive rate over no steps. With no needles labelled, this is not measured.",
             "",
             "| monitor | haystack | needles | missed | recall live | recall replay | FPR live | FPR replay | accepted |",
             "|---|---|---|---|---|---|---|---|---|",
@@ -81,6 +81,9 @@ def summary(results: dict[str, Any]) -> str:
     for name, monitor in results["monitors"].items():
         for where, m in _rows(monitor):
             n = m["needles_found"]
+            if n is None:
+                lines.append(f"| {name} | {where} | 0 | | | | | | n/a |")
+                continue
             lost = {run: ids for run, ids in n["missed"].items() if ids}
             lines.append(
                 f"| {name} | {where} | {n['labelled']} | {sum(len(ids) for ids in lost.values())} | {_proportion(n['recall']['live_a'])} | {_proportion(n['recall']['replay_1'])} | {_proportion(n['false_positive_rate']['live_a'])} | {_proportion(n['false_positive_rate']['replay_1'])} | {_yes(m['needles_found_accepted'])} |"
