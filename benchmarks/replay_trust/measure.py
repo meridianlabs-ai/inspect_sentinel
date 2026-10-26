@@ -324,7 +324,7 @@ class NeedlesFound:
     """Measurement 3."""
 
     recall: dict[str, Proportion]
-    """Needles flagged, of the needles, by run."""
+    """Labelled needles flagged, of the labelled needles, by run: a needle is flagged where a step covering it is, so a turn covering two needles flags both."""
 
     false_positive_rate: dict[str, Proportion]
     """Other steps flagged, of the other steps, by run."""
@@ -703,10 +703,6 @@ def _needles_found(
     negative = [
         s for s in steps if "replay_1" in s.scores and not needles & set(s.calls)
     ]
-    recall = {
-        run: proportion(sum(_flagged(s, run) for s in positive), len(positive))
-        for run in runs
-    }
     false_positive_rate = {
         run: proportion(sum(_flagged(s, run) for s in negative), len(negative))
         for run in runs
@@ -718,6 +714,11 @@ def _needles_found(
             for run in runs
         }
         for needle in sorted(needles)
+    }
+    # by needle, not by step: a turn at a generate stage can cover several
+    recall = {
+        run: proportion(sum(by[run] for by in flagged.values()), len(flagged))
+        for run in runs
     }
     agreed = [n for n, by in flagged.items() if len({by[run] for run in lives}) == 1]
     return NeedlesFound(

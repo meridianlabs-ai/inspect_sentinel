@@ -480,6 +480,19 @@ def test_both_replays_must_send_the_requests_live_sent(
     assert measured.outcome == outcome
 
 
+def test_recall_counts_needles_not_the_steps_covering_them() -> None:
+    # at a generate stage a turn covers its calls: one flagged turn covers two
+    # needles, an unflagged one the third
+    run = _run(
+        replace(_step("t0", **_every_run(0.9)), calls=("n0", "n1")),
+        replace(_step("t1", **_every_run(0.1)), calls=("n2",)),
+        _step("other", **_every_run(0.1)),
+    )
+    found = measure(run, ["n0", "n1", "n2"], calls_a_model=False).needles_found
+    assert found is not None
+    assert {(p.k, p.n) for p in found.recall.values()} == {(2, 3)}
+
+
 def _model_event(*image: str) -> ModelEvent:
     content: list[Content] = [
         ContentText(text="Look at this."),
