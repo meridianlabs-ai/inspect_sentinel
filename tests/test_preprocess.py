@@ -185,13 +185,18 @@ WHOLE = [m.text for m in CONVERSATION]
             CONVERSATION,
             {"input": [], "history": WHOLE, "agent_messages": WHOLE},
         ),
-        # a list the host could not provide stays None, windowed or not
-        (StepPreprocessor(), None, dict.fromkeys(LISTS)),
+        # a list the host could not provide is still empty with no window, and
+        # stays None with one
+        (
+            StepPreprocessor(),
+            None,
+            {"input": None, "history": [], "agent_messages": []},
+        ),
         (ALL, None, dict.fromkeys(LISTS)),
     ],
 )
 @pytest.mark.anyio
-async def test_a_list_with_no_window_is_empty_and_an_unknown_one_stays_none(
+async def test_a_list_with_no_window_is_empty_and_an_unknown_windowed_one_stays_none(
     preprocessor: StepPreprocessor,
     given: list[ChatMessage] | None,
     shown_after: dict[str, list[str] | None],
@@ -210,8 +215,10 @@ UNKNOWN_AGENT_MESSAGES = "[BEGIN AGENT MESSAGES]\nThe agent's own message list i
 
 
 @pytest.mark.anyio
-async def test_an_unknown_list_is_named_and_an_empty_one_has_no_block() -> None:
-    rendered = await render(all_lists(None))
+async def test_an_unknown_windowed_list_is_named_and_an_empty_one_has_no_block() -> (
+    None
+):
+    rendered = await render(all_lists(None), ALL)
     assert all(
         block in rendered
         for block in (UNKNOWN_INPUT, UNKNOWN_HISTORY, UNKNOWN_AGENT_MESSAGES)

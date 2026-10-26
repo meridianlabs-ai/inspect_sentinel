@@ -85,6 +85,25 @@ async def test_a_string_is_one_score() -> None:
     assert "[BEGIN HISTORY" not in prompt(host)
 
 
+@pytest.mark.anyio
+async def test_the_default_prompt_leaves_out_the_agents_lists_known_or_not() -> None:
+    # so a default prompt in replay, where they are None, is the same as live
+    store = Store()
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)] * 2)
+    listed: list[ChatMessage] = [ChatMessageUser(content="clean up", id="user")]
+    for messages in (listed, None):
+        step = replace(
+            before_tool_call("bash", cmd="ls"),
+            history=messages,
+            agent_messages=messages,
+        )
+        with in_step(host=host, store=store) as context:
+            await context.host.score(step, "Safe?")
+    assert prompt(host, 0) == prompt(host, 1)
+    assert "[BEGIN AGENT MESSAGES" not in prompt(host)
+    assert "[BEGIN HISTORY" not in prompt(host)
+
+
 @pytest.mark.parametrize(
     "instructions, policy, shown, hidden",
     [
