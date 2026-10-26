@@ -154,6 +154,34 @@ def test_a_missed_needle_is_reported_and_not_accepted(
     assert found.accepted == (not missed)
 
 
+# a step's rows: a run left out has no row, as read mode has none where the
+# monitor abstained live or the read found nothing; replay's row is None where
+# it abstained
+@pytest.mark.parametrize(
+    ("scores", "unmatched"),
+    [
+        (_every_run(0.1), False),
+        ({"replay_1": None, "replay_2": None}, False),
+        ({"replay_1": 0.0, "replay_2": 0.0}, True),
+        ({"live_a": 0.1, "replay_1": 0.1, "replay_2": 0.1}, True),
+        ({"live_a": 0.1, "live_b": 0.1, "replay_1": 0.1}, True),
+    ],
+    ids=[
+        "every run scored",
+        "every run abstained",
+        "no live rows",
+        "a live row missing",
+        "a replay lost it",
+    ],
+)
+def test_a_step_without_a_row_in_every_run_is_unmatched(
+    scores: dict[str, float | None], unmatched: bool
+) -> None:
+    measured = measure(_run(_step("step", **scores)), [], calls_a_model=False)
+    assert measured.same_verdict.unmatched == int(unmatched)
+    assert measured.accepted == (not unmatched)
+
+
 def _flagging(prefix: str, n: int, flagged: dict[RunName, int]) -> list[StepRecord]:
     # n steps, of which each run flags its first `flagged[run]`
     return [

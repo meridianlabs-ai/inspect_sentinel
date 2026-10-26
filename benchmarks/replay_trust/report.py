@@ -54,17 +54,17 @@ def summary(results: dict[str, Any]) -> str:
             "",
             "## 2. The same verdict",
             "",
-            "Steps whose flag differs between two runs: live against replay, and the noise floors, live against live and replay against replay. p is the exact two-sided McNemar test of live-against-replay disagreement versus live-against-live. Unmatched steps were read live but not reached in replay, which fails acceptance; abstained live are steps replay scored where `live_a` reported nothing, counted as not flagged live.",
+            "Steps whose flag differs between two runs: live against replay, and the noise floors, live against live and replay against replay. p is the exact two-sided McNemar test of live-against-replay disagreement versus live-against-live. Unmatched steps were read live but not reached in replay, or scored in replay but not read in every live run, where the monitor abstained live or the read found nothing; either fails acceptance.",
             "",
-            "| monitor | haystack | steps | unmatched | abstained live | live vs replay | live vs live | replay vs replay | p | mean abs. difference | accepted |",
-            "|---|---|---|---|---|---|---|---|---|---|---|",
+            "| monitor | haystack | steps | unmatched | live vs replay | live vs live | replay vs replay | p | mean abs. difference | accepted |",
+            "|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
     for name, monitor in results["monitors"].items():
         for where, m in _rows(monitor):
             v = m["same_verdict"]
             lines.append(
-                f"| {name} | {where} | {v['steps']} | {v['unmatched']} | {v['abstained_live']} | {v['live_replay']} | {_maybe(v['live_live'])} | {v['replay_replay']} | {_number(v['p_value'])} | {_number(v['mean_abs_difference'])} | {_yes(m['same_verdict_accepted'])} |"
+                f"| {name} | {where} | {v['steps']} | {v['unmatched']} | {v['live_replay']} | {_maybe(v['live_live'])} | {v['replay_replay']} | {_number(v['p_value'])} | {_number(v['mean_abs_difference'])} | {_yes(m['same_verdict_accepted'])} |"
             )
     lines.extend(
         [

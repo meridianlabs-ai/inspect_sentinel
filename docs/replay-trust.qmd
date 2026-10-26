@@ -21,7 +21,7 @@ Replay is trusted for a monitor when:
 - neither replay's recall nor its false-positive rate differs from live's by more than the noise floor, unless the floor is above zero and Fisher's test does not find the difference significant. A floor of zero means the runs did not vary, so any difference fails: with a handful of needles, Fisher's test cannot find even every needle lost significant, so a real model needs more needles than the haystacks plant for its test to have power;
 - every person's answer is given again.
 
-Each measurement must also cover something. A run with no steps compared is not accepted. Every step read live must be matched to a replayed one, and every labelled needle must be reached, that is, scored by the monitor, in every run. A needle that is missed is reported by its call id.
+Each measurement must also cover something. A run with no steps compared is not accepted. Every step read live must be matched to a replayed one, and every step a replay scored must have been read in every live run. Read mode records nothing where a monitor abstained, so a live abstention where replay scored cannot be told from a read that found nothing, as on the wrong path or stage, and either fails. Every labelled needle must be reached, that is, scored by the monitor, in every run. A needle that is missed is reported by its call id.
 
 The benchmark is in the repository, in `benchmarks/replay_trust/`, and is not part of the package. It is not run in CI, since a real monitor model costs money. CI runs the whole pipeline on deterministic models instead, so that the harness does not break between real runs. Rerun it before a release that changes the step builder or replay.
 
