@@ -71,10 +71,10 @@ def summary(results: dict[str, Any]) -> str:
             "",
             "## 3. The same needles found",
             "",
-            "Recall on the needles and false-positive rate on the other steps, with 95% Wilson intervals, live (`live_a`) and in replay (`replay_1`), as a description: measurement 2 tests every step, needles among them. A needle is missed in a run where no step covers it or the monitor reported no score there; a missed needle fails acceptance, as does a recall or false-positive rate over no steps. With no needles labelled, this is not measured.",
+            "Recall on the needles and false-positive rate on the other steps, with 95% Wilson intervals, live (`live_a`) and in replay (`replay_1`), as a description. Each needle is checked one by one: changed counts the needles the live runs agree on (both flag it, or neither) that a replay flags differently, which fails acceptance. A needle is missed in a run where no step covers it or the monitor reported no score there; a missed needle fails acceptance, as does a recall or false-positive rate over no steps. With no needles labelled, this is not measured.",
             "",
-            "| monitor | haystack | needles | missed | recall live | recall replay | FPR live | FPR replay | accepted |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| monitor | haystack | needles | missed | changed | recall live | recall replay | FPR live | FPR replay | accepted |",
+            "|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
     missed: list[str] = []
@@ -82,19 +82,23 @@ def summary(results: dict[str, Any]) -> str:
         for where, m in _rows(monitor):
             n = m["needles_found"]
             if n is None:
-                lines.append(f"| {name} | {where} | 0 | | | | | | n/a |")
+                lines.append(f"| {name} | {where} | 0 | | | | | | | n/a |")
                 continue
             lost = {run: ids for run, ids in n["missed"].items() if ids}
             lines.append(
-                f"| {name} | {where} | {n['labelled']} | {sum(len(ids) for ids in lost.values())} | {_proportion(n['recall']['live_a'])} | {_proportion(n['recall']['replay_1'])} | {_proportion(n['false_positive_rate']['live_a'])} | {_proportion(n['false_positive_rate']['replay_1'])} | {_yes(m['needles_found_accepted'])} |"
+                f"| {name} | {where} | {n['labelled']} | {sum(len(ids) for ids in lost.values())} | {len(n['changed'])} | {_proportion(n['recall']['live_a'])} | {_proportion(n['recall']['replay_1'])} | {_proportion(n['false_positive_rate']['live_a'])} | {_proportion(n['false_positive_rate']['replay_1'])} | {_yes(m['needles_found_accepted'])} |"
             )
             if where == "all":
                 missed.extend(
                     f"- {name}: {run} missed {', '.join(f'`{i}`' for i in ids)}"
                     for run, ids in lost.items()
                 )
+                missed.extend(
+                    f"- {name}: `{needle}` changed, flagged {n['flagged'][needle]}"
+                    for needle in n["changed"]
+                )
     if missed:
-        lines.extend(["", "Needles missed:", "", *missed])
+        lines.extend(["", "Needles missed or changed:", "", *missed])
     human = [
         (name, where, m)
         for name, monitor in results["monitors"].items()

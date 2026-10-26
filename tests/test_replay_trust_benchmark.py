@@ -259,6 +259,61 @@ def test_every_replay_is_tested_against_every_live_run(
     assert verdict.accepted == accepted
 
 
+# three needles, n0 to n2, and one ordinary step no run flags; each run flags
+# the needles at its indexes
+@pytest.mark.parametrize(
+    ("flagged", "changed"),
+    [
+        ({run: range(3) for run in RUNS}, []),
+        (
+            {"live_a": range(3), "live_b": range(2), "replay_1": [], "replay_2": []},
+            ["n0", "n1"],
+        ),
+        (
+            {
+                "live_a": range(3),
+                "live_b": range(3),
+                "replay_1": [],
+                "replay_2": range(3),
+            },
+            ["n0", "n1", "n2"],
+        ),
+        (
+            {
+                "live_a": [0, 1],
+                "live_b": [0, 1],
+                "replay_1": [1, 2],
+                "replay_2": [1, 2],
+            },
+            ["n0", "n2"],
+        ),
+        ({"live_a": [0], "live_b": [1], "replay_1": [1], "replay_2": [0]}, []),
+    ],
+    ids=[
+        "the same",
+        "replay misses the needles both live runs found",
+        "one replay misses every needle",
+        "the same count, other needles",
+        "the live runs disagree on every needle",
+    ],
+)
+def test_each_needle_is_checked_one_by_one(
+    flagged: dict[str, Iterable[int]], changed: list[str]
+) -> None:
+    needles = [
+        _step(
+            f"n{i}",
+            **{run: 0.9 if i in set(at) else 0.1 for run, at in flagged.items()},
+        )
+        for i in range(3)
+    ]
+    run = _run(*needles, _step("other", **_every_run(0.1)))
+    found = measure(run, ["n0", "n1", "n2"], calls_a_model=False).needles_found
+    assert found is not None
+    assert found.changed == changed
+    assert found.accepted == (not changed)
+
+
 def _model_event(*image: str) -> ModelEvent:
     content: list[Content] = [
         ContentText(text="Look at this."),
