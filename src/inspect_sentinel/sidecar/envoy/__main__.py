@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from .._http import MAX_BODY_BYTES
+from .._exchange import MAX_BODY_BYTES
 from ._config import CA_FILE, ENVOY_VERSION, MESSAGE_TIMEOUT, envoy_yaml
 
 

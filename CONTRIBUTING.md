@@ -2,6 +2,12 @@
 
 Thanks for your interest in contributing. Bug reports, doc fixes, and core changes are all welcome.
 
+## Start with an issue
+
+Open an issue before you write code, and wait for a maintainer to say on the issue that we want the change. Then open a PR that links the issue (`Fixes #NNN`). This applies whoever filed the issue. Maintainers may open PRs directly, and trivial documentation fixes, such as typos and broken links, are welcome without an issue.
+
+Reviewing a PR takes much longer than agreeing on a direction in an issue. Starting with an issue spends review time on work we have agreed we want, and spares you writing code we can't merge.
+
 ## Development setup
 
 Inspect Sentinel uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, and requires Python 3.11+. Use uv 0.9.15 or later. Scout keeps its viewer files in Git LFS, and sentinel doesn't use them. From 0.9.15, uv leaves them out of a git install, but an older uv on a machine with Git LFS installed downloads them, and a failed download fails the whole install. With an older uv, set `GIT_LFS_SKIP_SMUDGE=1` for the install.
@@ -64,7 +70,7 @@ See [`AGENTS.md`](AGENTS.md) for the full conventions used in this repo.
 
 ## Building the docs
 
-Docs live in `docs/` and are built with [Quarto](https://quarto.org). The Quarto CLI and the doc-build dependencies are in the `doc` extra, which `dev` includes:
+Docs live in `docs/` and are built with [Quarto](https://quarto.org). The Quarto CLI and the doc-build dependencies are in the `doc` extra. `dev` leaves it out, so CI doesn't install them. `make docs` installs the `doc` extra and renders the docs to `docs/_site/`. To run Quarto yourself:
 
 ```bash
 uv pip install -e ".[doc]"

@@ -168,5 +168,7 @@ jobs:
       - name: Build the LiteLLM guardrail
         run: uv build src/proxies/litellm --out-dir dist-litellm
       - name: Verify the LiteLLM guardrail
+        # LiteLLM pinned, as in the litellm-guardrail job: the wheel alone
+        # would take the newest release
         run: |
-          uv run --no-project --with dist-litellm/*.whl python -c "import inspect_sentinel_litellm; print('Guardrail imported successfully')"
+          uv run --no-project --with dist-litellm/*.whl --with "litellm[proxy]==1.105.0" python -c "import inspect_sentinel_litellm; print('Guardrail imported successfully')"

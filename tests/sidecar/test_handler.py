@@ -231,6 +231,11 @@ async def test_a_failing_protocol_is_not_swallowed() -> None:
         await handler.reply(reply(message(weather("Tokyo"))))
 
 
+def test_replies_are_held_whole_unless_early_release_is_asked_for() -> None:
+    assert Handler(weather_rule()).release == "whole"
+    assert Handler(weather_rule(), release="early").release == "early"
+
+
 @protocol
 def takes(seconds: float) -> Protocol:
     """Wait before rejecting a call, as a monitor that asks a slow model does."""

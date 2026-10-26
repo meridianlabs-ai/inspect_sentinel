@@ -34,6 +34,10 @@ class UnreadableError(Exception):
     """A request or reply couldn't be read into Inspect's types, so it can't be judged."""
 
 
+class TooLargeError(UnreadableError):
+    """A reply was larger than the sidecar holds, so it wasn't read. Its message says so and quotes nothing of the reply, so the client may be told it."""
+
+
 async def read_request(
     provider: str,
     body: bytes,
@@ -713,7 +717,7 @@ class StreamEvent:
 
 
 # a line end, kept by the split
-_LINE_END_KEPT = re.compile(r"(\r\n|\r|\n)")
+LINE_END_KEPT = re.compile(r"(\r\n|\r|\n)")
 
 
 def written_events(body: bytes) -> list[StreamEvent]:
@@ -727,7 +731,7 @@ def written_events(body: bytes) -> list[StreamEvent]:
     except UnicodeDecodeError as ex:
         raise UnreadableError("The reply stream is not UTF-8.") from ex
     # each line with the line end after it, the last with none
-    parts = _LINE_END_KEPT.split(text)
+    parts = LINE_END_KEPT.split(text)
     lines = list(zip(parts[::2], [*parts[1::2], ""], strict=True))
     events: list[StreamEvent] = []
     held: list[tuple[str, str]] = []
@@ -735,14 +739,15 @@ def written_events(body: bytes) -> list[StreamEvent]:
         held.append((line, end))
         # a blank line ends an event, and so does the end of the stream
         if not line and any(written for written, _ in held[:-1]):
-            events.append(_event(held))
+            events.append(stream_event(held))
             held = []
     if held:
-        events.append(_event(held))
+        events.append(stream_event(held))
     return events
 
 
-def _event(lines: list[tuple[str, str]]) -> StreamEvent:
+def stream_event(lines: list[tuple[str, str]]) -> StreamEvent:
+    """An event of a reply stream from its lines, each with the line end after it."""
     payload = "\n".join(
         line[5:].lstrip(" ") for line, _ in lines if line.startswith("data:")
     )
