@@ -842,10 +842,10 @@ def threshold(
         ("escalate", thresholds(escalate_at)),
     ]
 
-    async def decide(context: Context, step: Step, escalations: Escalations) -> Decision | None:
+    async def decide(context: Context, step: Step, escalations: Escalations) -> Decision:
         observations = await run_monitors(monitors, context, step)
         if not observations:
-            return None
+            return Decision.proceed("no monitor reported")
         for action, limits in levels:
             if crossed := crossing(observations, limits):
                 return Decision(
