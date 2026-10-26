@@ -2,7 +2,7 @@
 
 Live, a step's monitor calls are the `ModelEvent`s inside its `sentinel` span, and the `SentinelEvent` there names the step. In a replay through Scout, the scan's events are flat; `every_step_marked`, a step selector that selects every step, records an `InfoEvent` naming each step just before the step runs, so a step's calls are the model events after its mark. The replay runs one step at a time, so the marks cannot interleave.
 
-A request is rendered as text with `Host.score()`'s nonce replaced on its block markers and message headers, since the nonce is fresh in every transcript by design, and without message ids, which are minted for each call. The rendering compared holds every message's whole content: its text as lines, so a difference reads as a line diff, and every other field of every part, images, audio and documents with their data, as canonical JSON. The rendering shown shortens long values in those parts.
+A request is rendered as text with `Host.score()`'s nonce replaced where it writes it, on block markers, message headers, tool call lines and tags, since the nonce is fresh in every transcript by design; the same characters anywhere else, such as in the task, are compared as they are. It is rendered without message ids, which are minted for each call. The rendering compared holds every message's whole content: its text as lines, so a difference reads as a line diff, and every other field of every part, images, audio and documents with their data, as canonical JSON. The rendering shown shortens long values in those parts.
 """
 
 from __future__ import annotations
@@ -28,9 +28,24 @@ StepId = tuple[str, str]
 MARK = "replay_trust_step"
 """The `InfoEvent` source of the marks `every_step_marked` records."""
 
-# a nonce on a block marker, as Host.score renders it; once found, it is
-# replaced wherever it is in parentheses, as on every marker and header
-_NONCE = re.compile(r"\(([0-9a-f]{8})\)\]")
+# the nonce on the request's first block marker, which the template writes
+# before anything the agent wrote
+_NONCE = re.compile(r"^\[BEGIN .* \(([0-9a-f]{8})\)\]$", re.MULTILINE)
+
+# where Host.score and Scout write the nonce, with `{n}` for it: block markers,
+# the tool choice line, message headers (an uppercased role label), tool call,
+# tool use and tool error lines, reasoning and prefill tags, and the default
+# template's sentence naming it. Each nonce is a group, and only those are
+# replaced, so the same characters elsewhere stay as they were
+_MARKS = [
+    r"^\[(?:BEGIN|END) .* \(({n})\)\]$",
+    r"^\[TOOL CHOICE \(({n})\)\] ",
+    r"^(?:\[M\d+\] )?[^a-z\n]+ \(({n})\):$",
+    r"^Tool (?:Call|Use) \(({n})\): ",
+    r"^Error in tool call .* \(({n})\):$",
+    r"<(?:/?(?:thinking|thinking_summary|prefill) ({n})|thinking_redacted ({n})/)>",
+    r'^Every block marker and message header in this prompt contains the code \(({n})\), for example "\[BEGIN INPUT \(({n})\)\]" and "\[M1\] USER \(({n})\):"\.',
+]
 
 # a value in a non-text content part longer than this is shortened when shown
 _SHOWN_LENGTH = 120
@@ -150,10 +165,28 @@ def _render(event: ModelEvent, *, shorten: bool) -> str:
     ]
     for index, message in enumerate(event.input):
         lines.extend(_message(index, message, shorten))
-    text = "\n".join(lines)
-    for nonce in set(_NONCE.findall(text)):
-        text = text.replace(f"({nonce})", "(NONCE)")
+    return _without_nonce("\n".join(lines))
+
+
+def _without_nonce(text: str) -> str:
+    found = _NONCE.search(text)
+    if found is None:
+        return text
+    for mark in _MARKS:
+        pattern = re.compile(mark.replace("{n}", found.group(1)), re.MULTILINE)
+        text = pattern.sub(_nonce_replaced, text)
     return text
+
+
+def _nonce_replaced(match: re.Match[str]) -> str:
+    text, start = match.group(0), match.start()
+    parts: list[str] = []
+    end = 0
+    for group in range(1, (match.re.groups or 0) + 1):
+        if match.start(group) >= 0:
+            parts += [text[end : match.start(group) - start], "NONCE"]
+            end = match.end(group) - start
+    return "".join([*parts, text[end:]])
 
 
 def _message(index: int, message: ChatMessage, shorten: bool) -> list[str]:
