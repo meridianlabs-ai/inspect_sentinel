@@ -156,7 +156,7 @@ def th_rewrites() -> Protocol:
     ) -> Decision | None:
         return Decision(
             action="modify",
-            modified=ToolCall(id="call_1", function="bash", arguments={"cmd": "ls"}),
+            modified=ToolCall(id="call_1", function="bash", arguments={"cmd": "ls -a"}),
         )
 
     return decide
@@ -352,7 +352,9 @@ async def test_a_proceeding_threshold_lets_a_concurrent_rewrite_through(
     )
     decision = await run_sentinel(resolve_sentinel(spec), host_context(), before_step())
     assert decision is not None and decision.action == "modify"
-    assert decision.modified is not None
+    assert decision.modified == ToolCall(
+        id="call_1", function="bash", arguments={"cmd": "ls -a"}
+    )
 
 
 @pytest.mark.anyio

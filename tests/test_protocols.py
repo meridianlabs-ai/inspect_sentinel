@@ -216,7 +216,8 @@ async def test_concurrent_lets_only_another_modify_contest_a_modify(
     assert decision is not None
     assert (decision.action, decision.explanation) == (action, explanation)
     # an honoured modify keeps its rewrite, and a rejected one drops it
-    assert (decision.modified is not None) == (action == "modify")
+    rewrite = ToolCall(id="call_1", function="bash", arguments={"cmd": "echo hi"})
+    assert decision.modified == (rewrite if action == "modify" else None)
 
 
 @pytest.mark.parametrize(
