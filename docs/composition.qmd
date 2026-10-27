@@ -16,7 +16,7 @@ How several monitors and protocols combine into one sentinel. Covers what a list
 
 - What `Task(sentinel=...)` resolves to: a lone protocol, or a list or mapping with at least one protocol; monitors alone are an error naming `observe_only()`
 - Instance names, mapping keys and paths (`llm/suspicion`)
-- `concurrent()`: every child runs; the strongest decision wins (`terminate` > `reject` > `modify` > `escalate` > `proceed`)
+- `concurrent()`: every child runs; the strongest decision wins (`terminate` > `reject` > `modify` > `escalate` > `proceed`). A `modify` beside a `proceed` or an `escalate` is honoured, and the protocols that proceeded do not check the rewritten call, as for a lone modifier; two `modify`s conflict, so the layer rejects the call, naming the modifiers
 - `observe_only()`: recording scores with nothing acting on them, and collecting a benign distribution; the only way to run monitors with no protocol
 - `resample()` (planned)
 - Nesting compositions

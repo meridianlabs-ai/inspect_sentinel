@@ -1064,7 +1064,7 @@ The functions of one [`ProtocolGroup`](#one-function-one-stage) run in one call 
 
 Three properties fall out of writing it as ordinary code. A monitor in a `sequential` is recorded and falls through, since an observation cannot be "the first decision" — ordered composition is Decision-shaped in substance. A `sequential` whose every deciding link escalated returns the last escalate, so it passes up to the layer above as concurrent's does, and if it reaches the root `run_sentinel` returns a `terminate` explained as an unhandled escalation in its place, which `human()` or `handle_escalation()` at the end of the chain prevents; one where only monitors participated returns `proceed`. The [approval adapter](#a-protocol-layer-for-approval-too) keeps approval's fail-closed `reject` on its own path, so existing approval users see no change, and a `sequential` that wants fail-closed ends with a rejecting monitor, as approval lists end with `auto` today. And sequential dispatch stops being a violation of the independence rule, because the loop is a named, shipped protocol whose mode the transcript shows.
 
-**`concurrent()`** is the concurrent composition, and it is also what a top-level list or mapping containing a protocol resolves to (see [Configuration](#configuration)). In outline, leaving out per-instance vote counting and group labels:
+**`concurrent()`** is the concurrent composition, and it is also what a top-level list or mapping containing a protocol resolves to (see [Configuration](#configuration)). In outline, leaving out group labels:
 
 ``` python
 @protocol
@@ -1080,9 +1080,10 @@ def concurrent(children: Sentinels) -> Protocol:
             return strongest.report
         own = strongest.report.explanation
         update: dict[str, object] = {}
-        contesting = [d for d in voters if d is not strongest and d.report.action != "escalate"]
-        if strongest.report.action == "modify" and contesting:    # others decided about the call as it stood
-            rewrite = f"{strongest.name} modified the call but {len(contesting)} other vote(s) also decided"
+        contesting = [d for d in voters if d is not strongest and d.report.action == "modify"]
+        if strongest.report.action == "modify" and contesting:    # two rewrites conflict
+            others = ", ".join(d.name for d in contesting)
+            rewrite = f"{strongest.name} modified the call but so did {others}"
             own = f"{rewrite}: {own}" if own else rewrite
             update = {"action": "reject", "modified": None}
         summary = "; ".join(f"{d.name}: {d.report.action}" for d in voters)
@@ -1092,7 +1093,9 @@ def concurrent(children: Sentinels) -> Protocol:
     return run
 ```
 
-That settles the `modify` question this document previously left open: concurrent children cannot see each other's rewrites, so a `modify` when another child decided anything but `escalate` is a rejection naming the modifier, keeping the modifier's `audit`, `metadata` and explanation. Votes count by instance, so another function of the modifier's own [multi-function](#one-function-one-stage) instance contests its `modify` only by modifying too, and the explanation labels each such function's vote `name.function`. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own. Re-approving modified arguments is more machinery than the decision is worth for now, and #5423 reached the same answer independently. The name pairs with `sequential`: both say how the children run and leave the decision rule to the docs. `strictest` and `all_of` were the alternatives; the first named only the recommendation half of the reduction (observations aggregate by max, not strictness) and the second named what the configuration means rather than its shape.
+That settles the `modify` question this document previously left open: concurrent children cannot see each other's rewrites, so two rewrites conflict, and a `modify` beside another `modify` is a rejection naming the modifiers, keeping the first modifier's `audit`, `metadata` and explanation. Another `modify` contests it whichever instance it comes from, another function of the modifier's own [multi-function](#one-function-one-stage) instance included, and the explanation labels each such function's vote `name.function`. A `proceed` or an `escalate` beside it does not contest it, so the rewrite is honoured, and a `reject` or `terminate` outranks it anyway. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own. Re-approving modified arguments is more machinery than the decision is worth for now, so the rewritten call is not checked again by the protocols that proceeded, as it is not for a lone modifier.
+
+Until 2026-10-26 a `proceed` contested a `modify` too: a `modify` when another child decided anything but `escalate` became a rejection, because the others had approved the call as it stood and nobody had approved the rewrite (#5423 reached the same answer independently). Reversed by the maintainer on 2026-10-26. A peer with no objection to the original call should not make the layer stricter than having no peer at all: a lone modifier's rewrite is honoured unchecked, and adding a peer that proceeds turned that fix into a block. It also meant that a `threshold()` whose monitors did not report, which sentinel #153 makes vote `proceed`, blocked a sibling's rewrite. The accepted cost is that the protocols that proceeded do not see the rewrite, the same as for a lone modifier. The name pairs with `sequential`: both say how the children run and leave the decision rule to the docs. `strictest` and `all_of` were the alternatives; the first named only the recommendation half of the reduction (observations aggregate by max, not strictness) and the second named what the configuration means rather than its shape.
 
 **Concurrent is the default, and ordered is one explicit word.** The argument for making ordered the default is that many people will want a chain, which is true. The argument against is that ordered-by-default silences monitors, and silencing is a safety failure while concurrency's cost is latency and tokens. A default should fail safe, and changing one later is a silent semantic change for everyone. So a list with a protocol in it is `concurrent`, and ordered composition is `sequential(...)`. The mistake the wrong default would produce most often — a `human()` in a concurrent group, prompting on every call — is not an error, since asking about every call can be intended; the docs recommend `sequential()` for asking only on escalation.
 
@@ -1473,7 +1476,7 @@ Then the protocol reconciles the two halves with its thresholds and budget, subj
 
 Three LLM monitors in sequence triple the added latency at every step, which argues for an anyio task group with `tg_collect()`'s semantics (not `asyncio.gather`, per AGENTS.md). TraceGuard gives a stronger reason: **independence is the point**. Its 95%-versus-0% result against a colluding monitor comes from fragmenting evaluation so no single model sees the whole assessment, which requires monitors that cannot observe each other's conclusions.
 
-So concurrent dispatch is the default, and the cost is that `modify` becomes incoherent — a concurrent child cannot see another's rewrite. Settled in `concurrent()`: a `modify` is honoured only when it was the only decision; when more than one child decided, it becomes a `reject` naming the modifier. Last-wins in configuration order and "two is an error" were the alternatives; the rejection is chosen because the other children approved the *original* arguments and nothing has approved the modified ones. A `sequential` has no such problem, since only one link decides.
+So concurrent dispatch is the default, and the cost is that `modify` becomes incoherent — a concurrent child cannot see another's rewrite. Settled in `concurrent()`: two rewrites conflict, so a `modify` beside another `modify` becomes a `reject` naming the modifiers, while a `modify` beside a `proceed` or an `escalate` is honoured, unchecked by the children that proceeded, as a lone modifier's is. Last-wins in configuration order and "two is an error" were the alternatives to the rejection. Until 2026-10-26 any other decision but `escalate` turned a `modify` into a `reject`, because the other children approved the *original* arguments and nothing approved the modified ones; the maintainer reversed that on 2026-10-26, since a peer that proceeds has no objection to the call and should not make the layer stricter than no peer at all ([Two compositions](#two-compositions-concurrent-and-ordered)). A `sequential` has no such problem, since only one link decides.
 
 ### A second axis: concurrent with the *agent*
 
@@ -1812,7 +1815,7 @@ That proposal will not land as written; the group has agreed to build on sentine
 | named chains, and the name in the log | instance names from the mapping; `SentinelEvent.path` |
 | a summary event when several chains participated | the top-level `concurrent` layer's own event |
 | `terminate` cancels the other chains | `run_protocols` |
-| `modify` with several participants is a rejection naming the chain | `concurrent()` |
+| `modify` with several participants is a rejection naming the chain | `concurrent()`, for two rewrites; since 2026-10-26 a `proceed` beside a `modify` no longer contests it |
 | an uncovered call rejects, as a lone policy list does today | on the approval adapter path only; a `sequential` that nothing covers is `proceed`, matching review |
 | concurrent by default (their open question 1) | yes |
 
@@ -1875,7 +1878,8 @@ whether the protocol layer lands first (it is not a layer — monitors and
 protocols are two registry types, and a protocol is what acts); whether proxy portability is a
 goal or an observation, which now lives only in `sentinel-deployment.md`;
 whether `modify` composes (settled in [`concurrent()`](#two-compositions-concurrent-and-ordered):
-a `modify` with more than one participant is a rejection naming the modifier);
+a `modify` beside another `modify` is a rejection naming the modifiers, and
+since 2026-10-26 one beside a `proceed` is honoured);
 what happens in a mixed configuration with no protocol (there is no such
 configuration — a list containing a protocol resolves to `concurrent`, which
 honours decisions and records observations, and a list of monitors only is
