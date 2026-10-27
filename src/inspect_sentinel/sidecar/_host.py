@@ -5,13 +5,20 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
-from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput, get_model
+from inspect_ai.model import (
+    ChatMessage,
+    GenerateConfig,
+    Model,
+    ModelOutput,
+    get_model,
+)
 from inspect_ai.tool import ToolChoice, ToolInfo
 
 from .._context import Context, EvalContext
 from .._host import HostNative, HumanAnswer
 from .._report import Decision, Escalations, Failed, Report, Reported
 from .._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
+from ._inspect_ai import get_model_input_budget
 
 logger = logging.getLogger(__name__)
 
@@ -60,18 +67,45 @@ class SidecarHost:
             tool_choice: Which of `tools` the model may or must call.
             config: Generation configuration.
         """
+        return await self._resolve(model, role).generate(
+            input,
+            tools=tools or [],
+            tool_choice=tool_choice,
+            config=config or GenerateConfig(),
+        )
+
+    async def input_budget(
+        self,
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int:
+        """The input budget of the role's model if the sidecar has one configured, otherwise of `model`; resolved as `generate` resolves it."""
+        return get_model_input_budget(self._resolve(model, role), config)
+
+    async def count_tokens(
+        self,
+        input: str | list[ChatMessage],
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int:
+        """The token count of `input` for the role's model if the sidecar has one configured, otherwise for `model`; resolved as `generate` resolves it."""
+        return await self._resolve(model, role).count_tokens(input, config)
+
+    def _resolve(self, model: str | None, role: str | None) -> Model:
+        # the model a host call names, the way `generate` resolves it: the
+        # role's configured model wins, otherwise `model`; with neither it
+        # raises, since a sidecar has no agent's model to fall back on
         asked = role if role is not None else ("monitor" if model is None else None)
         resolved = self._roles.get(asked) if asked is not None else None
         if resolved is None and model is None:
             raise ValueError(
                 f"The sidecar has no model for role {asked!r}. Configure one, or pass model= to generate()."
             )
-        return await get_model(resolved if resolved is not None else model).generate(
-            input,
-            tools=tools or [],
-            tool_choice=tool_choice,
-            config=config or GenerateConfig(),
-        )
+        return get_model(resolved if resolved is not None else model)
 
     async def ask_human(
         self, step: Step, escalations: Escalations, choices: Sequence[str]
@@ -137,6 +171,29 @@ class RunHost:
             tools=tools,
             tool_choice=tool_choice,
             config=config,
+        )
+
+    async def input_budget(
+        self,
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int:
+        """As the sidecar's host reads the input budget."""
+        return await self._host.input_budget(model=model, role=role, config=config)
+
+    async def count_tokens(
+        self,
+        input: str | list[ChatMessage],
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int:
+        """As the sidecar's host counts tokens."""
+        return await self._host.count_tokens(
+            input, model=model, role=role, config=config
         )
 
     async def ask_human(

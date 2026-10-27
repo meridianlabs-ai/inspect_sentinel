@@ -57,6 +57,27 @@ class HostNative(TypingProtocol):
         """As `Host.generate`."""
         ...
 
+    async def input_budget(
+        self,
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int:
+        """As `Host.input_budget`."""
+        ...
+
+    async def count_tokens(
+        self,
+        input: str | list[ChatMessage],
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int:
+        """As `Host.count_tokens`."""
+        ...
+
     async def ask_human(
         self, step: Step, escalations: Escalations, choices: Sequence[str]
     ) -> HumanAnswer:
@@ -116,6 +137,42 @@ class Host(HostNative):
             config=config,
         )
 
+    async def input_budget(
+        self,
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int:
+        """How many input tokens a `generate` with the same `model`, `role` and `config` may send: the resolved model's context window minus the output tokens inspect_ai reserves for the reply. An unknown model falls back to 128k, with a warning. `Host.score` reads it to decide whether a prompt fits.
+
+        Args:
+            model: A model name, as for `generate`.
+            role: A model role, as for `generate`.
+            config: Generation configuration, as for `generate`; its `max_tokens` sets the reply reserve.
+        """
+        return await self._native.input_budget(model=model, role=role, config=config)
+
+    async def count_tokens(
+        self,
+        input: str | list[ChatMessage],
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int:
+        """The resolved model's token count for `input`, the same count a `generate` with this `model`, `role` and `config` would send. `Host.score` counts a prompt against `input_budget` with it.
+
+        Args:
+            input: A prompt string or a list of chat messages.
+            model: A model name, as for `generate`.
+            role: A model role, as for `generate`.
+            config: Generation configuration, as for `generate`.
+        """
+        return await self._native.count_tokens(
+            input, model=model, role=role, config=config
+        )
+
     async def score(
         self,
         step: S,
@@ -136,6 +193,8 @@ class Host(HostNative):
         The model is asked through `generate`, with the same `model`, `role` and `config`. It is sent a prompt built from `template`, and answers by calling an answer tool whose arguments are checked, so a missing or out-of-range score, or a reply with no answer (or no reply at all), goes back to the model to correct. When the model gives no valid answer within three attempts, `score` raises, and the runner records the monitor as failed. A reply the provider refuses (stop reason `content_filter`) is asked again without using an attempt, up to `retry_refusals` times, after which `score` raises. Call it while the monitor or protocol runs, since it keeps the sample's nonce in the sample store; outside a step it raises `RuntimeError`.
 
         What the model is shown of the step is set by `preprocessor`: by default all of the model's input, without system messages, and the step itself; pass a `StepPreprocessor` to window the conversations (`input_window=LastTurns(6)`, `NewSinceLastReport(context)`, `history_window=AllMessages()`), leave parts out, or change the step with a `transform`.
+
+        The prompt is fitted to the monitor model's context window. The host reads the model's input budget (its context window minus the output reserve; an unknown model falls back to 128k) through `input_budget`, and counts the prompt through `count_tokens`; a prompt fits when the count is within 95% of the budget. A prompt that fits is sent unchanged. One that does not has the oldest shown messages cut from its message lists, HISTORY first, then AGENT MESSAGES, then INPUT, until it fits. Each list that loses messages gains one marker line in its place (`[N earlier messages left out to fit the context window (nonce)]`); the marker is not a numbered message, so the kept messages keep their numbers and cites. When messages are cut, `Observation.metadata` records the count per list, as `{"left_out": {"history": 3, "input": 2}}`. When the fixed part of the prompt (the instructions, policy, task, dimensions, the step's own blocks and the answer tool) does not fit even with every shown message cut, `score` raises. A head cut keeps the last message of each list it does not empty, so an incremental `NewSinceLastReport` window stays correct: a message the cut removed is not shown at a later step either. When the model's reply stops on `model_length`, `score` raises at once, naming the stop reason, since the prompt already fits the input budget and a correction would only lengthen it.
 
         The default template opens with `instructions` and a paragraph on the nonce, then shows the model `policy`, the task and the step, asks it to score the step from 0.0 to 1.0 against `dimensions`, and asks for an explanation. Templates are Jinja templates. A custom one uses the same variables, and must include `{{ step }}` and `{{ answer_format }}`:
 

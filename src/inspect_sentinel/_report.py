@@ -46,10 +46,14 @@ class Observation(BaseModel):
         explanation: str | None = None,
         *,
         references: Sequence[Reference] = (),
+        metadata: dict[str, Any] | None = None,
     ) -> Observation:
         """An observation that sets `suspicion` to the given score."""
         return cls(
-            suspicion=suspicion, explanation=explanation, references=list(references)
+            suspicion=suspicion,
+            explanation=explanation,
+            references=list(references),
+            metadata=metadata,
         )
 
     @classmethod

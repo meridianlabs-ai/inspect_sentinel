@@ -16,12 +16,19 @@ from inspect_ai.tool import ToolCall
 from inspect_ai.util import Store
 
 from inspect_sentinel import (
+    AllMessages,
+    BeforeToolCall,
+    Context,
     Host,
     LastTurns,
+    NewSinceLastReport,
     Observation,
     Step,
     StepPreprocessor,
 )
+from inspect_sentinel._decorators import monitor
+from inspect_sentinel._runner import run_monitors
+from inspect_sentinel._types import Monitor
 
 from ._fakes import (
     FakeHost,
@@ -536,3 +543,151 @@ async def test_the_agents_text_is_not_read_as_a_template_variable() -> None:
 async def test_scoring_outside_a_step_raises() -> None:
     with pytest.raises(RuntimeError, match="outside a step"):
         await Host(FakeHost()).score(before_tool_call("bash", cmd="ls"), "Safe?")
+
+
+# each cuttable message is far larger than the fixed part, so a budget that
+# counts characters cuts a known number of them (FakeHost counts one token per
+# character)
+PAD = "a" * 5000
+
+
+def messages(prefix: str, n: int) -> list[ChatMessage]:
+    return [
+        ChatMessageUser(content=f"{prefix}{i} {PAD}", id=f"{prefix}{i}")
+        for i in range(n)
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_prompt_that_fits_is_sent_unchanged_with_no_metadata() -> None:
+    host = FakeHost(eval=EVAL, outputs=[answer(explanation="fine", suspicion=0.0)])
+    observation = await score(host, before_tool_call("bash", cmd="ls"), "Safe?")
+    assert observation.metadata is None
+    assert "left out to fit the context window" not in prompt(host)
+    # the budget is read once and the full prompt is counted once
+    assert host.budgets == [(None, None)]
+    assert len(host.counted) == 1
+
+
+@pytest.mark.anyio
+async def test_a_long_input_keeps_the_newest_messages_and_marks_the_cut() -> None:
+    step = replace(before_tool_call("bash", cmd="ls"), input=messages("M", 5))
+    host = FakeHost(
+        outputs=[answer(explanation="see [M1]", suspicion=0.3)], budget=8421
+    )
+    observation = await score(host, step, "Is it safe?")
+    p, n = prompt(host), nonce(host)
+    assert f"[4 earlier messages left out to fit the context window ({n})]" in p
+    assert "M4 " in p
+    assert not any(f"M{i} " in p for i in range(4))
+    assert observation.metadata == {"left_out": {"input": 4}}
+    # the kept message keeps its number and id, so its cite still resolves
+    assert f"[M1] USER ({n}):" in p
+    assert [reference.id for reference in observation.references] == ["M4"]
+
+
+@pytest.mark.anyio
+async def test_the_cut_takes_history_then_agent_messages_then_input() -> None:
+    step = replace(
+        before_tool_call("bash", cmd="ls"),
+        history=messages("H", 2),
+        agent_messages=messages("A", 2),
+        input=messages("I", 2),
+    )
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=17895)
+    observation = await score(
+        host,
+        step,
+        "Safe?",
+        preprocessor=StepPreprocessor(
+            history_window=AllMessages(), agent_messages_window=AllMessages()
+        ),
+    )
+    p, n = prompt(host), nonce(host)
+    assert observation.metadata == {"left_out": {"history": 2, "agent_messages": 1}}
+    # HISTORY loses both, AGENT MESSAGES loses its oldest, INPUT keeps both
+    assert f"[2 earlier messages left out to fit the context window ({n})]" in p
+    assert f"[1 earlier messages left out to fit the context window ({n})]" in p
+    assert all(kept in p for kept in ("A1 ", "I0 ", "I1 "))
+    assert not any(gone in p for gone in ("H0 ", "H1 ", "A0 "))
+
+
+@pytest.mark.anyio
+async def test_a_fixed_part_too_big_raises_and_names_the_parts() -> None:
+    step = replace(before_tool_call("bash", cmd="ls"), input=messages("M", 2))
+    host = FakeHost(eval=EVAL, outputs=[], budget=10)
+    with pytest.raises(RuntimeError) as raised:
+        await score(host, step, "Safe?", policy="Stay in /work.")
+    message = str(raised.value)
+    assert all(
+        part in message
+        for part in (
+            "the instructions",
+            "the policy",
+            "the task",
+            "the dimensions",
+            "the step's CALL",
+            "the answer tool",
+        )
+    )
+    assert "role 'monitor'" in message
+    assert "budget of 10" in message
+    # it raised before asking the model
+    assert host.inputs == []
+
+
+@monitor
+def windowed() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        return await context.host.score(
+            step,
+            "Safe?",
+            preprocessor=StepPreprocessor(input_window=NewSinceLastReport(context)),
+        )
+
+    return check
+
+
+@pytest.mark.anyio
+async def test_a_cut_does_not_bring_cut_messages_back_at_a_later_step() -> None:
+    store = Store()
+    first = messages("M", 5)
+    step1 = replace(before_tool_call("bash", cmd="ls"), input=first, conversation="c")
+    # the whole INPUT is cut to fit, yet the mark records the last message, so
+    # the cut messages are not shown again at the next step
+    host1 = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=3158)
+    with in_step(host=host1, store=store) as context:
+        reported = (await run_monitors({"j": windowed()}, context, step1)).succeeded
+    assert reported[0].report.metadata == {"left_out": {"input": 5}}
+    assert "5 earlier messages left out" in host1.inputs[0][0].text
+
+    later = [*first, ChatMessageUser(content=f"M5 {PAD}", id="m5")]
+    step2 = replace(before_tool_call("bash", cmd="ls"), input=later, conversation="c")
+    host2 = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
+    with in_step(host=host2, store=store) as context:
+        await run_monitors({"j": windowed()}, context, step2)
+    p2 = host2.inputs[0][0].text
+    assert "M5 " in p2
+    assert not any(f"M{i} " in p2 for i in range(5))
+    assert "left out to fit the context window" not in p2
+
+
+def length_capped() -> ModelOutput:
+    return ModelOutput(
+        model="fake",
+        choices=[
+            ChatCompletionChoice(
+                message=ChatMessageAssistant(content="partial"),
+                stop_reason="model_length",
+            )
+        ],
+    )
+
+
+@pytest.mark.anyio
+async def test_a_model_length_reply_raises_at_once_naming_the_stop_reason() -> None:
+    host = FakeHost(outputs=[length_capped(), valid()])
+    with pytest.raises(RuntimeError, match="model_length"):
+        await score(host, before_tool_call("bash", cmd="ls"), "Safe?")
+    # it raised on the first reply, with no retry or correction
+    assert len(host.inputs) == 1
