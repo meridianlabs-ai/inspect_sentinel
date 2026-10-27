@@ -231,7 +231,7 @@ scan(
 The typical workflow:
 
 1.  Replay the monitor over a corpus and review what it flags in Scout View.
-2.  Label steps as should-flag or should-not-flag directly from the results view, building a validation set with dev and test splits. Each step has a stable id (the tool call id, or the message id), so labels apply to replayed steps and to the `SentinelEvent`s an eval recorded.
+2.  Label steps as should-flag or should-not-flag directly from the results view, building a validation set with dev and test splits. Each step has a stable id (the tool call id, or the generate's id, its first `ModelEvent`'s uuid), so labels apply to replayed steps and to the `SentinelEvent`s an eval recorded.
 3.  Validate using precision, recall, F1, and balanced accuracy over the dev split. Change the prompt, bump the version, re-scan, compare.
 4.  Calibrate by replaying an `Observation` monitor over known-benign transcripts. The score column of the results is the benign distribution, so a budget (e.g. "audit the top 1%") becomes a threshold by percentile.
 
