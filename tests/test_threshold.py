@@ -4,6 +4,7 @@ from typing import Any, Literal, cast
 
 import pytest
 from inspect_ai.scorer import Reference
+from inspect_ai.tool import ToolCall
 
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol, step_types
@@ -144,6 +145,19 @@ def th_rule(action: Action | None = None) -> Protocol:
         context: Context, step: Step, escalations: Escalations
     ) -> Decision | None:
         return None if action is None else Decision(action=action)
+
+    return decide
+
+
+@protocol
+def th_rewrites() -> Protocol:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
+        return Decision(
+            action="modify",
+            modified=ToolCall(id="call_1", function="bash", arguments={"cmd": "ls"}),
+        )
 
     return decide
 
@@ -311,12 +325,35 @@ async def test_where_an_abstention_proceeded_no_monitor_reporting_still_does(
     spec: Callable[[], Protocol | ProtocolGroup], action: Action
 ) -> None:
     # outside a sequential an abstaining threshold already let the step
-    # proceed, and proceed is the weakest decision, so the outcome is the same;
-    # a host proceeds when the sentinel returns no decision
+    # proceed, and proceed is the weakest decision, so the outcome is the same
+    # except beside a rewrite; a host proceeds when the sentinel returns no
+    # decision
     decision = await run_sentinel(
         resolve_sentinel(spec()), host_context(), before_step()
     )
     assert (decision.action if decision else "proceed") == action
+
+
+@pytest.mark.parametrize(
+    "monitor",
+    [th_silent(), th_graded(0.1)],
+    ids=["no_monitor_reported", "below_escalate_at"],
+)
+@pytest.mark.anyio
+async def test_a_proceeding_threshold_blocks_a_concurrent_rewrite(
+    monitor: Monitor,
+) -> None:
+    # a threshold whose monitors didn't report votes proceed, as one whose
+    # scores are low does, and a proceed vote contests a sibling's modify
+    spec = concurrent(
+        {
+            "gate": threshold([monitor], escalate_at=0.5),
+            "rewrite": th_rewrites(),
+        }
+    )
+    decision = await run_sentinel(resolve_sentinel(spec), host_context(), before_step())
+    assert decision is not None and decision.action == "reject"
+    assert decision.modified is None
 
 
 @pytest.mark.anyio
