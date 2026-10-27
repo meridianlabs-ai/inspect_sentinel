@@ -139,8 +139,9 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 - **`agent_messages` is `None` in replay**: it is the outermost agent's own list, which the log does not record (decided 2026-10-21).
 - **Scout runs the replay.** Each transcript replays as one sequential pass, its steps in order with one store, the live scope; Scout parallelizes across transcripts and processes (decided 2026-10-26). Each transcript's step results are a resultset, each citing its step's message or event. Replay reads Scout's expanded events and rebuilds the message pool with `condense_events()`.
 - **A chosen subset of steps** through `as_scanner(steps=...)`, a table or a registered selector. A `human()` with no recorded answer gets the answer `as_scanner(human=)` names, `reject` by default.
-- **Logs from before Sentinel** get `ApprovalEvent`s from human approvers as `human_decisions`; they and transcripts Scout imports from other frameworks get their turns from the timeline (PR 6).
+- **Logs from before Sentinel** get `ApprovalEvent`s from inspect_ai's built-in `"human"` approver as `human_decisions`; they and transcripts Scout imports from other frameworks get their turns from the timeline, with a continuity rule that replay's log driver applies (PR 6).
 - **Read mode is checked against replay** end to end with the public `replay_check()`, so a user can check their own logs.
+- **Replay is shown to be trusted** for monitors that judge with a model by an internal benchmark (PR 7): live twice against replay twice, decided per monitor and haystack. Its first run with a real monitor model, gpt-4o-mini, was trusted.
 
 *Superseded history.* The first assessment (2026-10-13) found replay designed only in part: no `ApprovalEvent`s for pre-Sentinel logs, no step subsets, and compaction segments run concurrently with a per-segment store. The plan of 2026-10-19 and 2026-10-20 recorded agent turns and `conversation` on events before R7-D4 reduced them to `origin`, ran a transcript's compaction segments concurrently with optional further splits, and rebuilt `agent_messages` in replay; all three were replaced by the decisions above.
 
