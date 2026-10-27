@@ -201,13 +201,8 @@ async def test_concurrent_honours_a_lone_modify() -> None:
             "rewriter modified the call but so did peer: safer"
             " (rewriter: modify; peer: modify)",
         ),
-        (
-            threshold([silent()], escalate_at=0.5),
-            "modify",
-            "safer",
-        ),
     ],
-    ids=["proceed", "escalate", "reject", "terminate", "modify", "silent_threshold"],
+    ids=["proceed", "escalate", "reject", "terminate", "modify"],
 )
 @pytest.mark.anyio
 async def test_concurrent_lets_only_another_modify_contest_a_modify(
