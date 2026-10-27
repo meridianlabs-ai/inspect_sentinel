@@ -38,7 +38,7 @@ from inspect_ai.model import (
 )
 from inspect_ai.scorer import Reference
 from inspect_ai.solver import Generate, Solver, TaskState, generate, solver, use_tools
-from inspect_ai.tool import Tool, ToolError, tool
+from inspect_ai.tool import Tool, ToolCall, ToolError, tool
 from inspect_ai.util import StoreModel
 from inspect_ai.util._span import span
 from inspect_scout import (
@@ -57,6 +57,7 @@ from inspect_scout._transcript.timeline import (  # pyright: ignore[reportPrivat
 
 from inspect_sentinel import (
     AfterGenerate,
+    AfterToolCall,
     BeforeGenerate,
     BeforeToolCall,
     Context,
@@ -444,6 +445,60 @@ def test_every_reference_has_a_cite_label_its_explanation_mentions(
         for r in found["read"]
         if r["metadata.stage"] == "tool_call"
     }
+
+
+def test_parallel_calls_cite_their_own_tool_messages(tmp_path: Path) -> None:
+    both = call(1, "a")
+    assert both.message.tool_calls is not None
+    both.message.tool_calls.append(
+        ToolCall(id="b", function="addition", arguments={"x": 2, "y": 1})
+    )
+    log = run(tmp_path / "logs", [[both]], None)
+    assert log.samples is not None
+    answers = {
+        m.tool_call_id: m.id
+        for m in log.samples[0].messages
+        if isinstance(m, ChatMessageTool)
+    }
+
+    found = scanned(tmp_path / "scans", tmp_path / "logs", s=as_scanner(by_argument()))
+
+    cited = {
+        r["metadata.step_id"]: [(c["id"], c["cite"]) for c in references(r, "message")]
+        for r in found["s"]
+    }
+    assert {step: ids for step, [(ids, _)] in cited.items()} == answers
+    assert len({cite for [(_, cite)] in cited.values()}) == 2
+
+
+def test_a_transcript_of_messages_alone_cites_messages() -> None:
+    handed = Transcript(
+        transcript_id="handed",
+        messages=[
+            ChatMessageUser(id="u", content="add"),
+            ChatMessageAssistant(
+                id="a",
+                content="",
+                tool_calls=[
+                    ToolCall(id="c", function="addition", arguments={"x": 9, "y": 1})
+                ],
+            ),
+            ChatMessageTool(
+                id="t", content="10", tool_call_id="c", function="addition"
+            ),
+            ChatMessageAssistant(id="d", content="done"),
+        ],
+        events=[],
+    )
+
+    results = anyio.run(as_scanner(by_argument()), handed)
+    assert isinstance(results, list)
+    [row] = results
+
+    assert [(r.type, r.id, r.cite) for r in row.references] == [
+        ("message", "t", "[M3]")
+    ]
+    assert row.explanation == "Step [M3]"
 
 
 def test_failure_count_scanned_at_one_stage_keeps_its_live_scores(
@@ -1629,6 +1684,93 @@ def test_state_carries_across_compactions_and_a_selector_picks_segments(
     assert counts(found["latest"]) == [1]
 
 
+@monitor
+def cites_its_message() -> MonitorGroup:
+    # at every stage, a report citing the step's own message, which for a
+    # sub-agent's step is not among the transcript's messages
+    def cite(message: str | None) -> Observation:
+        return Observation.score(
+            0.5, "its message", references=[Reference(type="message", id=message or "")]
+        )
+
+    async def before_generate(context: Context, step: BeforeGenerate) -> Observation:
+        return cite(step.input[-1].id)
+
+    async def after_generate(context: Context, step: AfterGenerate) -> Observation:
+        return cite(step.output.message.id)
+
+    async def before_call(context: Context, step: BeforeToolCall) -> Observation:
+        return cite(step.message_id)
+
+    async def after_call(context: Context, step: AfterToolCall) -> Observation:
+        return cite(step.result.id)
+
+    return MonitorGroup(before_generate, after_generate, before_call, after_call)
+
+
+def test_every_reference_resolves_through_a_sub_agent_and_a_compaction(
+    tmp_path: Path,
+) -> None:
+    from inspect_ai.agent import as_tool, react
+    from inspect_ai.event import CompactionEvent
+    from inspect_ai.model import CompactionTrim
+
+    def calls(name: str, arguments: dict[str, Any]) -> ModelOutput:
+        return ModelOutput.for_tool_call("mockllm/model", name, arguments)
+
+    researcher = react(
+        name="researcher", description="Looks things up.", tools=[long_output()]
+    )
+    outputs = [
+        calls("researcher", {"input": "look"}),
+        calls("long_output", {"x": 0}),
+        calls("submit", {"answer": "found"}),
+        *[calls("long_output", {"x": i}) for i in range(1, 5)],
+        calls("submit", {"answer": "done"}),
+    ]
+    [log] = eval(
+        Task(
+            dataset=[Sample(input="go")],
+            solver=react(
+                tools=[long_output(), as_tool(researcher)],
+                compaction=CompactionTrim(threshold=700),
+            ),
+            sentinel=observe_only(cites_its_message()),
+        ),
+        model=get_model("mockllm/model", custom_outputs=outputs),
+        log_dir=str(tmp_path / "logs"),
+        display="none",
+    )
+    assert log.samples is not None
+    sample = log.samples[0]
+    assert any(isinstance(e, CompactionEvent) for e in sample.events)
+    held = {
+        "message": {m.id for m in sample.messages},
+        "event": {e.uuid for e in sample.events},
+    }
+    tool_events = {e.uuid for e in sample.events if isinstance(e, ToolEvent)}
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        step=as_scanner(cites_its_message()),
+        transcript=as_scanner(cites_its_message(), results="transcript"),
+        read=as_reader("cites_its_message"),
+    )
+
+    cited: list[dict[str, Any]] = []
+    for name, rows in found.items():
+        for row in rows:
+            for kind in ("message", "event"):
+                for reference in references(row, kind):
+                    assert reference["id"] in held[kind], (name, reference)
+                    assert reference["cite"] in row["explanation"]
+                    cited.append(reference)
+    # the sub-agent's tool messages are cited by their tool events
+    assert any(r["type"] == "event" and r["id"] in tool_events for r in cited)
+    assert {r["type"] for r in cited} == {"message", "event"}
+
+
 def test_a_protocol_reduces_to_its_strongest_decision(tmp_path: Path) -> None:
     run(tmp_path / "logs", [[call(2), call(9), call(3)]], None)
 
@@ -2093,7 +2235,7 @@ def test_a_scan_resumes_after_an_eval_loaded_the_entry_points(
     assert [r["value"] for r in found["read"]] == [0.0]
 
 
-def test_a_stored_timeline_cites_a_sub_agents_tool_message(tmp_path: Path) -> None:
+def test_a_stored_timeline_cites_a_sub_agents_tool_event(tmp_path: Path) -> None:
     log = run(tmp_path / "run", [[call(1, "main")]], None, helpers=[call(5, "helper")])
     assert log.samples is not None
     sample = log.samples[0]
@@ -2124,12 +2266,17 @@ def test_a_stored_timeline_cites_a_sub_agents_tool_message(tmp_path: Path) -> No
         s=as_scanner(by_argument(), timeline="target"),
     )
 
+    # the helper's tool message is not in the transcript, so its tool event
     cited = {
-        r["metadata.step_id"]: [ref["id"] for ref in references(r, "message")]
+        r["metadata.step_id"]: [
+            (ref["type"], ref["id"])
+            for ref in [*references(r, "message"), *references(r, "event")]
+        ]
         for r in found["s"]
     }
     assert cited == {
-        call_id: [tools[call_id].message_id] for call_id in ("helper", "main")
+        "helper": [("event", tools["helper"].uuid)],
+        "main": [("message", tools["main"].message_id)],
     }
 
 

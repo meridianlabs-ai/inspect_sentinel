@@ -8,7 +8,7 @@ from inspect_ai.event import (
     SpanBeginEvent,
     SpanEndEvent,
 )
-from inspect_ai.model import ChatMessageUser, GenerateConfig, ModelOutput
+from inspect_ai.model import ChatMessage, ChatMessageUser, GenerateConfig, ModelOutput
 from inspect_scout import Result, Transcript
 
 from inspect_sentinel import MonitorFailedError
@@ -69,8 +69,16 @@ def agent(span: str) -> SpanBeginEvent:
 
 
 async def read(stage: Stage, events: list[Event]) -> list[Result]:
+    # the transcript's messages are its generates' outputs, as a run's are
+    messages: list[ChatMessage] = [
+        e.output.message
+        for e in events
+        if isinstance(e, ModelEvent) and e.output.choices
+    ]
     scan: Any = as_reader(stage=stage)
-    return await scan(Transcript(transcript_id=SAMPLE, events=events))
+    return await scan(
+        Transcript(transcript_id=SAMPLE, events=events, messages=messages)
+    )
 
 
 def cited(results: list[Result]) -> dict[str, list[str]]:

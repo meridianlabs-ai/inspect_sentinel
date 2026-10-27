@@ -42,18 +42,19 @@ def step_result(
     metadata: dict[str, Any],
 ) -> Result:
     meta: dict[str, Any] = {"step_id": step_id, "stage": stage, **metadata}
-    found = [citation] if citation is not None else []
+    step = cites.resolved(citation) if citation is not None else None
+    found = [step] if step is not None else []
     if report is None:
         references = cites.labelled(found)
         return Result(
             value=None,
-            explanation=_explained(None, citation is not None, references),
+            explanation=_explained(None, step is not None, references),
             label=label,
             metadata=meta,
             references=references,
         )
     references = cites.labelled([*found, *report.references])
-    explanation = _explained(report.explanation, citation is not None, references)
+    explanation = _explained(report.explanation, step is not None, references)
     if report.metadata is not None:
         meta["metadata"] = report.metadata
     if isinstance(report, Observation):
@@ -101,7 +102,7 @@ def _mentioning(text: str, references: list[Reference], lead: str) -> str:
 
 
 class Cites:
-    """Cite labels for a transcript's references, as Scout's scanners write them: `[M<n>]` for the transcript's nth message and `[E<n>]` for its nth event, so a label names one reference across every result of the transcript."""
+    """Cite labels for a transcript's references, as Scout's scanners write them: `[M<n>]` for the transcript's nth message and `[E<n>]` for its nth event, so a label names one reference across every result of the transcript. Every reference resolves: a message the transcript does not hold, such as a sub-agent's, is cited by the event that recorded it, and one no event recorded is dropped."""
 
     def __init__(self, transcript: Transcript) -> None:
         self._messages = {
@@ -110,36 +111,49 @@ class Cites:
         self._events = {
             e.uuid: n for n, e in enumerate(transcript.events, 1) if e.uuid is not None
         }
-        # an id the transcript does not hold, such as a report's citation of
-        # what its monitor was handed, numbered after everything it does
-        self._others: dict[tuple[str, str], int] = {}
-        self._next = {
-            "message": len(transcript.messages),
-            "event": len(transcript.events),
-        }
+        # each message an event recorded, by id: a tool message by its tool
+        # event, a reply by the model event whose output it is
+        self._recorded: dict[str, str] = {}
+        for event in transcript.events:
+            if event.uuid is None:
+                continue
+            if isinstance(event, ToolEvent):
+                message = event.message_id
+            elif isinstance(event, ModelEvent) and event.output.choices:
+                message = event.output.message.id
+            else:
+                continue
+            if message is not None:
+                self._recorded.setdefault(message, event.uuid)
+
+    def resolved(self, reference: Reference) -> Reference | None:
+        # the reference as something the transcript holds, or None
+        if reference.type == "event":
+            return reference if reference.id in self._events else None
+        if reference.id in self._messages:
+            return reference
+        event = self._recorded.get(reference.id)
+        return Reference(type="event", id=event) if event is not None else None
 
     def labelled(self, references: Iterable[Reference]) -> list[Reference]:
-        # each reference once by what it cites, in order, with a cite label: a
-        # report's own where it gave one, else the reference's position
+        # each reference that resolves, once by what it cites, in order, with
+        # a cite label: a report's own where it gave one, else the position
         found: dict[tuple[str, str], Reference] = {}
         for reference in references:
-            key = (reference.type, reference.id)
-            if key not in found or (reference.cite and not found[key].cite):
-                found[key] = reference
+            resolved = self.resolved(reference)
+            if resolved is None:
+                continue
+            key = (resolved.type, resolved.id)
+            if key not in found or (resolved.cite and not found[key].cite):
+                found[key] = resolved
         return [r if r.cite else self._label(r) for r in found.values()]
 
     def _label(self, reference: Reference) -> Reference:
-        kind = reference.type
-        known = self._messages if kind == "message" else self._events
-        n = known.get(reference.id)
-        if n is None:
-            key = (kind, reference.id)
-            n = self._others.get(key)
-            if n is None:
-                self._next[kind] += 1
-                n = self._others[key] = self._next[kind]
-        prefix = "M" if kind == "message" else "E"
-        return reference.model_copy(update={"cite": f"[{prefix}{n}]"})
+        if reference.type == "message":
+            label = f"[M{self._messages[reference.id]}]"
+        else:
+            label = f"[E{self._events[reference.id]}]"
+        return reference.model_copy(update={"cite": label})
 
 
 def child_report(reported: Reported[Report]) -> dict[str, Any]:
@@ -214,7 +228,12 @@ class Citations:
             return Reference(type="message", id=last) if last else None
         if isinstance(step, AfterGenerate):
             message = step.output.message.id if step.output.choices else None
-            return Reference(type="message", id=message) if message else None
+            if message:
+                return Reference(type="message", id=message)
+            # an output with no message: its generate's event
+            if replay_step.id in self._events:
+                return Reference(type="event", id=replay_step.id)
+            return None
         return self._call(step)
 
     def _call(self, step: BeforeToolCall | AfterToolCall) -> Reference | None:
@@ -224,8 +243,7 @@ class Citations:
         # reuse call ids
         tools = self._tools.get((step.call.id, step.conversation), [])
         if len(tools) == 1:
-            found = tools[0].message_id
-            return Reference(type="message", id=found) if found else None
+            return _tool_reference(tools[0])
         if tools:
             return None
         if isinstance(step, AfterToolCall):
@@ -238,6 +256,13 @@ class Citations:
         positions, ids = answers
         after = bisect_right(positions, self._positions.get(step.message_id, -1))
         return Reference(type="message", id=ids[after]) if after < len(ids) else None
+
+
+def _tool_reference(tool: ToolEvent) -> Reference | None:
+    # the call's tool message, else, where none was recorded, its tool event
+    if tool.message_id:
+        return Reference(type="message", id=tool.message_id)
+    return Reference(type="event", id=tool.uuid) if tool.uuid else None
 
 
 def transcript_result(results: list[Result], label: str) -> Result:
