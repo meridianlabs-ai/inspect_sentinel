@@ -30,7 +30,13 @@ from inspect_sentinel.config import (
 )
 
 from ._context import Contexts
-from ._results import Citations, child_report, step_result, transcript_result
+from ._results import (
+    Citations,
+    Cites,
+    child_report,
+    step_result,
+    transcript_result,
+)
 from ._select import (
     ANSWERS,
     StepSelector,
@@ -63,7 +69,7 @@ TIMELINE_NEEDED_ATTR = "___scanner_timeline_needed___"
 # what the log driver reads: model and tool events for the steps, compactions
 # for their segments, approvals and sentinel events for earlier decisions and
 # recorded answers, and spans for conversations and each step's cut
-_EVENTS: list[Any] = [
+EVENTS: list[Any] = [
     "model",
     "tool",
     "compaction",
@@ -86,7 +92,7 @@ def as_scanner(
 ) -> Scanner[Transcript]:
     """Replay a monitor or protocol over each transcript a Scout scan reads, as a transcript scanner.
 
-    Each transcript's steps are rebuilt as the sentinel would have been handed them live, the sentinel runs over them through the same runner as an eval, and each step at a stage it watches becomes one `Result` in the transcript's resultset, so `scan_results_df(..., rows="results")` gives one row per step and stage. A result's metadata holds the step's `step_id`, `stage` and `depth`, how the transcript's agent turns were established (`turns`: `"recorded"` from the log, `"inferred"`, or `"stored"` from a stored timeline) and, when the step reached `human()`, where the answer came from (`human`) and, where it was `human=`'s fixed answer, that answer (`human_answer`). Its references cite the step's model event or message first, then what the report cites.
+    Each transcript's steps are rebuilt as the sentinel would have been handed them live, the sentinel runs over them through the same runner as an eval, and each step at a stage it watches becomes one `Result` in the transcript's resultset, so `scan_results_df(..., rows="results")` gives one row per step and stage. A result's metadata holds the step's `step_id`, `stage` and `depth`, how the transcript's agent turns were established (`turns`: `"recorded"` from the log, `"inferred"`, or `"stored"` from a stored timeline) and, when the step reached `human()`, where the answer came from (`human`) and, where it was `human=`'s fixed answer, that answer (`human_answer`). Its references cite the step's model event or message first, then what the report cites. Each has a cite label, `[M<n>]` for the transcript's nth message or `[E<n>]` for its nth event, unless the report gave its own, and the explanation leads with the step's (`Step [E12]: ...`) and names any other it does not hold, so Scout View links them.
 
     For a monitor, a result's `value` is its suspicion, a number or a dict by dimension, `None` where it abstained, and the observation's own metadata is under `metadata`. For a protocol, it is the root's decision: `value` is whether the step was flagged (`reject`, `modify` or `terminate`; `escalate` declines to decide, so it is not), `answer` the action, and the metadata holds `audit`, `modified` and the children's reports. A monitor that raises, anywhere in the sentinel, makes the transcript's result an error, even where a protocol went on without it.
 
@@ -136,7 +142,7 @@ def as_scanner(
     )
 
 
-@scanner(name="replay", messages="all", events=_EVENTS)
+@scanner(name="replay", messages="all", events=EVENTS)
 def sentinel_replay(
     *,
     sentinel: str,
@@ -178,6 +184,7 @@ def sentinel_replay(
             warned = True
             logger.warning(unused)
         citations = Citations(transcript, timeline)
+        cites = Cites(transcript)
         found: list[Result] = []
         label = ""
         for report in reports:
@@ -188,7 +195,7 @@ def sentinel_replay(
                 raise MonitorFailedError(failed)
             label = report.path or report.name
             if report.step.stage in stages:
-                found.append(_result(report, citations, turns))
+                found.append(_result(report, citations, cites, turns))
         if results == "transcript":
             return transcript_result(found, label)
         return found
@@ -262,7 +269,9 @@ def within(path: str, scanned: str) -> bool:
     return scanned == "" or path == scanned or path.startswith(scanned + "/")
 
 
-def _result(report: ReplayReport, citations: Citations, turns: str) -> Result:
+def _result(
+    report: ReplayReport, citations: Citations, cites: Cites, turns: str
+) -> Result:
     reported = report.report
     metadata: dict[str, Any] = {"depth": report.step.depth, "turns": turns}
     if report.human is not None:
@@ -280,6 +289,7 @@ def _result(report: ReplayReport, citations: Citations, turns: str) -> Result:
         label=report.path or report.name,
         report=reported.report if reported is not None else None,
         citation=citations.cite(report.step),
+        cites=cites,
         children=children,
         metadata=metadata,
     )

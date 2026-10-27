@@ -36,6 +36,7 @@ from inspect_ai.model import (
     execute_tools,
     get_model,
 )
+from inspect_ai.scorer import Reference
 from inspect_ai.solver import Generate, Solver, TaskState, generate, solver, use_tools
 from inspect_ai.tool import Tool, ToolError, tool
 from inspect_ai.util import StoreModel
@@ -386,6 +387,63 @@ def test_a_transcript_reduces_to_its_highest_score_citing_the_step(
     assert row["value"] == 0.5
     [set_by] = json.loads(row["metadata"])["set_by"]
     assert set_by["stage"] == "tool_call"
+
+
+@monitor
+def citing() -> MonitorGroup:
+    # each generate alike, and each call by its argument, citing the assistant
+    # message that made it
+    async def before_generate(context: Context, step: BeforeGenerate) -> Observation:
+        return Observation.score(0.1, "a generate")
+
+    async def before_call(context: Context, step: BeforeToolCall) -> Observation:
+        return Observation.score(
+            min(1.0, int(step.call.arguments["x"]) / 10),
+            "by its argument",
+            references=[Reference(type="message", id=step.message_id)],
+        )
+
+    return MonitorGroup(before_generate, before_call)
+
+
+def test_every_reference_has_a_cite_label_its_explanation_mentions(
+    tmp_path: Path,
+) -> None:
+    # two calls tie for the highest score, so two steps set the transcript's
+    run(tmp_path / "logs", [[call(5), call(2), call(5)]], observe_only(citing()))
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        step=as_scanner(citing()),
+        transcript=as_scanner(citing(), results="transcript"),
+        read=as_reader("citing"),
+    )
+
+    kinds: set[str] = set()
+    for name, rows in found.items():
+        for row in rows:
+            cited = [*references(row, "message"), *references(row, "event")]
+            assert cited, (name, row["metadata.step_id"])
+            # a step's row leads with the step's own label
+            if name != "transcript":
+                assert row["explanation"].startswith(f"Step {cited[0]['cite']}: ")
+            for reference in cited:
+                assert reference["cite"] in row["explanation"], (name, reference)
+                kinds.add(reference["type"])
+    assert kinds == {"message", "event"}
+    # the first step's call and the message it cites, and the other's call
+    [reduced] = found["transcript"]
+    assert len(references(reduced, "message")) == 3
+    assert {
+        (r["metadata.step_id"], r["explanation"])
+        for r in found["step"]
+        if r["metadata.stage"] == "tool_call"
+    } == {
+        (r["metadata.step_id"], r["explanation"])
+        for r in found["read"]
+        if r["metadata.stage"] == "tool_call"
+    }
 
 
 def test_failure_count_scanned_at_one_stage_keeps_its_live_scores(
@@ -2066,10 +2124,12 @@ def test_a_stored_timeline_cites_a_sub_agents_tool_message(tmp_path: Path) -> No
         s=as_scanner(by_argument(), timeline="target"),
     )
 
-    cited = {r["metadata.step_id"]: references(r, "message") for r in found["s"]}
+    cited = {
+        r["metadata.step_id"]: [ref["id"] for ref in references(r, "message")]
+        for r in found["s"]
+    }
     assert cited == {
-        call_id: [{"type": "message", "id": tools[call_id].message_id}]
-        for call_id in ("helper", "main")
+        call_id: [tools[call_id].message_id] for call_id in ("helper", "main")
     }
 
 

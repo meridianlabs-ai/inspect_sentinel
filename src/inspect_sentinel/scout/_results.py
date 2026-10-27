@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from bisect import bisect_right
+from collections.abc import Iterable
 from typing import Any
 
 from inspect_ai.event import ModelEvent, SentinelEvent, ToolEvent
@@ -36,20 +37,29 @@ def step_result(
     label: str,
     report: Report | None,
     citation: Reference | None,
+    cites: Cites,
     children: list[dict[str, Any]],
     metadata: dict[str, Any],
 ) -> Result:
     meta: dict[str, Any] = {"step_id": step_id, "stage": stage, **metadata}
-    references = [citation] if citation is not None else []
+    found = [citation] if citation is not None else []
     if report is None:
-        return Result(value=None, label=label, metadata=meta, references=references)
-    references.extend(r for r in report.references if r not in references)
+        references = cites.labelled(found)
+        return Result(
+            value=None,
+            explanation=_explained(None, citation is not None, references),
+            label=label,
+            metadata=meta,
+            references=references,
+        )
+    references = cites.labelled([*found, *report.references])
+    explanation = _explained(report.explanation, citation is not None, references)
     if report.metadata is not None:
         meta["metadata"] = report.metadata
     if isinstance(report, Observation):
         return Result(
             value=_suspicion(report),
-            explanation=report.explanation,
+            explanation=explanation,
             label=label,
             metadata=meta,
             references=references,
@@ -62,11 +72,74 @@ def step_result(
     return Result(
         value=report.action in FLAGGED,
         answer=report.action,
-        explanation=report.explanation,
+        explanation=explanation,
         label=label,
         metadata=meta,
         references=references,
     )
+
+
+def _explained(
+    explanation: str | None, cited: bool, references: list[Reference]
+) -> str | None:
+    # Scout View links a reference only where its cite label is in the
+    # explanation: lead with the step's own, and name any other the report's
+    # explanation does not
+    text = explanation or ""
+    if cited:
+        step = references[0].cite
+        text = f"Step {step}: {text}" if text else f"Step {step}"
+    return _mentioning(text, references, "Also cites") or None
+
+
+def _mentioning(text: str, references: list[Reference], lead: str) -> str:
+    missing = [r.cite for r in references if r.cite is not None and r.cite not in text]
+    if not missing:
+        return text
+    also = f"{lead} {', '.join(missing)}."
+    return f"{text}\n\n{also}" if text else also
+
+
+class Cites:
+    """Cite labels for a transcript's references, as Scout's scanners write them: `[M<n>]` for the transcript's nth message and `[E<n>]` for its nth event, so a label names one reference across every result of the transcript."""
+
+    def __init__(self, transcript: Transcript) -> None:
+        self._messages = {
+            m.id: n for n, m in enumerate(transcript.messages, 1) if m.id is not None
+        }
+        self._events = {
+            e.uuid: n for n, e in enumerate(transcript.events, 1) if e.uuid is not None
+        }
+        # an id the transcript does not hold, such as a report's citation of
+        # what its monitor was handed, numbered after everything it does
+        self._others: dict[tuple[str, str], int] = {}
+        self._next = {
+            "message": len(transcript.messages),
+            "event": len(transcript.events),
+        }
+
+    def labelled(self, references: Iterable[Reference]) -> list[Reference]:
+        # each reference once by what it cites, in order, with a cite label: a
+        # report's own where it gave one, else the reference's position
+        found: dict[tuple[str, str], Reference] = {}
+        for reference in references:
+            key = (reference.type, reference.id)
+            if key not in found or (reference.cite and not found[key].cite):
+                found[key] = reference
+        return [r if r.cite else self._label(r) for r in found.values()]
+
+    def _label(self, reference: Reference) -> Reference:
+        kind = reference.type
+        known = self._messages if kind == "message" else self._events
+        n = known.get(reference.id)
+        if n is None:
+            key = (kind, reference.id)
+            n = self._others.get(key)
+            if n is None:
+                self._next[kind] += 1
+                n = self._others[key] = self._next[kind]
+        prefix = "M" if kind == "message" else "E"
+        return reference.model_copy(update={"cite": f"[{prefix}{n}]"})
 
 
 def child_report(reported: Reported[Report]) -> dict[str, Any]:
@@ -168,7 +241,7 @@ class Citations:
 
 
 def transcript_result(results: list[Result], label: str) -> Result:
-    """The step results reduced to one: the highest suspicion, per dimension when structured, or the strongest decision, citing the steps that set it."""
+    """The step results reduced to one: the highest suspicion, per dimension when structured, or the strongest decision, citing the steps that set it and what the first of them cites. The explanation is the first step's, naming the others by their cite labels."""
     reported = [r for r in results if r.value is not None]
     if not reported:
         return Result(value=None, label=label, metadata={"steps": len(results)})
@@ -182,13 +255,14 @@ def _strongest(results: list[Result], label: str, steps: int) -> Result:
         (r.answer for r in results if r.answer is not None), key=_PRECEDENCE.index
     )
     setting = [r for r in results if r.answer == action]
+    references = _cited(setting)
     return Result(
         value=action in FLAGGED,
         answer=action,
-        explanation=setting[0].explanation,
+        explanation=_set_by(setting[0].explanation, references),
         label=label,
         metadata=_reduced(setting, steps),
-        references=_cited(setting),
+        references=references,
     )
 
 
@@ -211,13 +285,19 @@ def _highest(results: list[Result], label: str, steps: int) -> Result:
         top = max(_score(r) for r in results)
         setting = [r for r in results if _score(r) == top]
         value = top
+    references = _cited(setting)
     return Result(
         value=value,
-        explanation=setting[0].explanation,
+        explanation=_set_by(setting[0].explanation, references),
         label=label,
         metadata=_reduced(setting, steps),
-        references=_cited(setting),
+        references=references,
     )
+
+
+def _set_by(explanation: str | None, references: list[Reference]) -> str | None:
+    # the first step's explanation, naming the other steps that set the result
+    return _mentioning(explanation or "", references, "Also set at") or None
 
 
 def _score(result: Result) -> float:
@@ -242,12 +322,13 @@ def _reduced(setting: list[Result], steps: int) -> dict[str, Any]:
 
 
 def _cited(setting: list[Result]) -> list[Reference]:
-    # each step's citation once, in order, found by its fields rather than by
-    # comparing it with every one kept
+    # the first step's references, whose labels its explanation holds, then
+    # each other step's citation, each once, in order, found by its fields
+    # rather than by comparing it with every one kept
     cited: list[Reference] = []
     seen: set[tuple[str, str, str | None]] = set()
-    for result in setting:
-        for reference in result.references[:1]:
+    for index, result in enumerate(setting):
+        for reference in result.references if index == 0 else result.references[:1]:
             key = (reference.type, reference.id, reference.cite)
             if key not in seen:
                 seen.add(key)
