@@ -156,7 +156,7 @@ def th_rewrites() -> Protocol:
     ) -> Decision | None:
         return Decision(
             action="modify",
-            modified=ToolCall(id="call_1", function="bash", arguments={"cmd": "ls"}),
+            modified=ToolCall(id="call_1", function="bash", arguments={"cmd": "ls -a"}),
         )
 
     return decide
@@ -325,9 +325,8 @@ async def test_where_an_abstention_proceeded_no_monitor_reporting_still_does(
     spec: Callable[[], Protocol | ProtocolGroup], action: Action
 ) -> None:
     # outside a sequential an abstaining threshold already let the step
-    # proceed, and proceed is the weakest decision, so the outcome is the same
-    # except beside a rewrite; a host proceeds when the sentinel returns no
-    # decision
+    # proceed, and proceed is the weakest decision, so the outcome is the same;
+    # a host proceeds when the sentinel returns no decision
     decision = await run_sentinel(
         resolve_sentinel(spec()), host_context(), before_step()
     )
@@ -340,11 +339,11 @@ async def test_where_an_abstention_proceeded_no_monitor_reporting_still_does(
     ids=["no_monitor_reported", "below_escalate_at"],
 )
 @pytest.mark.anyio
-async def test_a_proceeding_threshold_blocks_a_concurrent_rewrite(
+async def test_a_proceeding_threshold_lets_a_concurrent_rewrite_through(
     monitor: Monitor,
 ) -> None:
     # a threshold whose monitors didn't report votes proceed, as one whose
-    # scores are low does, and a proceed vote contests a sibling's modify
+    # scores are low does, and a proceed vote does not contest a sibling's modify
     spec = concurrent(
         {
             "gate": threshold([monitor], escalate_at=0.5),
@@ -352,8 +351,10 @@ async def test_a_proceeding_threshold_blocks_a_concurrent_rewrite(
         }
     )
     decision = await run_sentinel(resolve_sentinel(spec), host_context(), before_step())
-    assert decision is not None and decision.action == "reject"
-    assert decision.modified is None
+    assert decision is not None and decision.action == "modify"
+    assert decision.modified == ToolCall(
+        id="call_1", function="bash", arguments={"cmd": "ls -a"}
+    )
 
 
 @pytest.mark.anyio

@@ -801,7 +801,7 @@ An `escalate` that reaches the root has nobody to hand it to and is treated as a
 | Decides | strongest decision | first non-`escalate` |
 | monitor children | recorded; the observations are available to a parent | recorded; fall through |
 | `escalate` | outranks `proceed`, below `modify`; all-escalate is `escalate` | handed to the next link's protocols as `escalations`; all-escalate is `escalate` |
-| `modify` | honoured only if it was the only decision; otherwise `reject` naming the modifier | honoured; only one link decides |
+| `modify` | honoured unless another protocol also modified; two rewrites are a `reject` naming the modifiers | honoured; only one link decides |
 | `terminate` | cancels the other children | ends the loop |
 | Use for | independent guards that must all be satisfied | a cheap rule ahead of an expensive judge; a human at the end |
 
@@ -896,12 +896,12 @@ These rules describe the concurrent composition, which `concurrent()` implements
 - **Every child configured for a stage runs.** No child is skipped because another already formed a view. `sequential()` is the explicit exception.
 - **Every report is recorded,** including the ones that lost.
 - **Aggregate suspicion by max.** Per-dimension max when scores are structured. Weighted combinations and requiring agreement are protocol policy.
-- **Aggregate decisions by strength:** `terminate` > `reject` > `modify` > `escalate` > `proceed`. A peer's `proceed` cannot override an `escalate`, and when `escalate` is the strongest decision the layer escalates. `Decisions.strongest()` returns `None` only when no protocol decided. An `escalate` does not contest a `modify`. One ordering covers all four stages.
+- **Aggregate decisions by strength:** `terminate` > `reject` > `modify` > `escalate` > `proceed`. A peer's `proceed` cannot override an `escalate`, and when `escalate` is the strongest decision the layer escalates. `Decisions.strongest()` returns `None` only when no protocol decided. A `proceed` or an `escalate` does not contest a `modify`. One ordering covers all four stages.
 - **`terminate` and `decide_final()` cancel siblings.** Nothing outranks `terminate` and the sample is ending; `decide_final()` has ended the step. `run_protocols` and `run_children` do this, and a cancelled child is recorded as cancelled rather than left indistinguishable from one that abstained.
 - **Child decisions are advisory to the parent.** A parent protocol may honour or override them, and the log records both; see [Transcript](#transcript).
 - **A final decision is not a vote.** A child that calls `decide_final()` ends the step before any protocol above it combines anything, and each layer above is recorded as bypassed.
 - **Run children concurrently.** Sequential dispatch triples latency with three LLM monitors, and it lets a colluding monitor see the others' conclusions. TraceGuard's result (95% safety versus 0%) depends on independence. The runner fans out on an anyio task group with `tg_collect()`'s semantics; never `asyncio.gather`.
-- **A `modify` with more than one participant is a rejection.** Concurrent children cannot see each other's rewrites, and the others approved the original arguments. `concurrent()` returns `reject` with an explanation naming the modifier. A `modify` that was the only decision is honoured.
+- **Two `modify`s are a rejection.** Concurrent children cannot see each other's rewrites, so two rewrites conflict: `concurrent()` returns `reject` with an explanation naming the modifiers, whether they are different instances or functions of one. A `modify` beside a `proceed` or an `escalate` is honoured, and the protocols that proceeded do not check the rewritten call, as for a lone modifier. Until 2026-10-26 a `proceed` contested a `modify` too, since the others approved only the original arguments; reversed because a peer with no objection to the call should not make the layer stricter than no peer at all.
 - **Decide on the protocol whether monitors block the agent or run alongside it.** Blocking costs latency. Running alongside means the agent may spend tokens or take a step before a violation is caught. This is a deployment judgement, so the knob belongs on the protocol, not the monitor.
 
 ### The top level
@@ -946,7 +946,7 @@ threshold(
 
 - **Key by `"<monitor>.<dimension>"`, `"<dimension>"`, the monitor's instance name, or `"*"`.** A qualified key applies to one monitor's dimension (the instance name, as in `Reported.name`), a bare key to that dimension from every monitor, an instance name to a monitor reporting a single number, and `"*"` to anything unlisted. The most specific key wins: qualified, then bare, then `"*"`. A score no key covers never triggers. A key containing `.` is always qualified, by the longest instance name that prefixes it, and is an error if none does; it never also matches a bare dimension, so a dimension containing `.` is keyed through its monitor.
 - **A number is shorthand for `{"*": number}`.** A float threshold behaves exactly as it did before mappings existed.
-- **Each threshold is a floor.** At or above `escalate_at` the step is at least escalated, at or above `reject_at` at least rejected, at or above `terminate_at` the sample ends; the strongest action any score reaches decides, else `proceed`. When no monitor reported at the step it also decides `proceed`, explained as `no monitor reported`, rather than abstaining, so a `human()` after it in a `sequential()` is asked only when it escalates. In a `concurrent()` that `proceed` contests a sibling's `modify`, which becomes a `reject`, as a low-scoring threshold's does. A failed monitor is not an abstention and fails the sample.
+- **Each threshold is a floor.** At or above `escalate_at` the step is at least escalated, at or above `reject_at` at least rejected, at or above `terminate_at` the sample ends; the strongest action any score reaches decides, else `proceed`. When no monitor reported at the step it also decides `proceed`, explained as `no monitor reported`, rather than abstaining, so a `human()` after it in a `sequential()` is asked only when it escalates. In a `concurrent()` that `proceed` does not contest a sibling's `modify`, as a low-scoring threshold's does not, so the rewrite takes effect. A failed monitor is not an abstention and fails the sample.
 - **A threshold that can never apply is a configuration error.** It is dead when a stronger action's threshold is at or below it for every score it covers, as `escalate_at=0.9` beside `terminate_at=0.8`; the error names both. A key one mapping lists and another does not is not dead. Configuration also checks well-formed keys, qualified keys naming a configured monitor, and finite values.
 - **Stages.** It runs at each stage its monitors watch, monitors of different stages each thresholded at their own, so a proposed-action monitor and a tool-result monitor combine in one `threshold`. With `reject_at` every monitor must watch only `BeforeToolCall`, since a reject is not legal after a call.
 - **An escalation is answered by what follows it** in a `sequential()`, a `human()` or `handle_escalation()`: `sequential([threshold(monitors, escalate_at=0.6, terminate_at=0.9), human(stages=["tool_call"])])`. One that reaches the root unanswered ends the sample.
@@ -1223,7 +1223,7 @@ Issue #5423 proposed that `approval` and `review` accept a dict of named policy 
 | named chains, and the name in the log | mapping keys as instance names; `SentinelEvent.path` |
 | a summary event when several chains participated | the top-level `concurrent` event |
 | `terminate` cancels the other chains | `run_protocols` |
-| `modify` with several participants is a rejection naming the chain | `concurrent()` |
+| `modify` with several participants is a rejection naming the chain | `concurrent()`, for two rewrites; a `proceed` beside a `modify` does not contest it |
 | an uncovered call rejects, as a lone policy list does | on the approval adapter path only; a `sequential` returns `proceed`, matching review |
 | concurrent by default | yes |
 
