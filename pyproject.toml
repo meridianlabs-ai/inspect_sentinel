@@ -27,7 +27,7 @@ dependencies = [
     # leaves that install in place. Only the Release Please release PR skips
     # it, so a release is tested against PyPI, after release-pin-deps.yml
     # raises this floor to the latest inspect_ai release.
-    "inspect-ai>=0.3.283",
+    "inspect-ai>=0.3.285",
     # step_as_str, and so Host.score, renders with Scout's messages_as_str and
     # message_numbering, until message rendering moves from Scout into
     # inspect_ai (design/pr-series.md). Development tracks Scout's `main` the
