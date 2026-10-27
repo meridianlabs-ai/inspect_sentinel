@@ -873,6 +873,10 @@ def test_only_an_eval_log_transcript_has_a_log_header(tmp_path: Path) -> None:
     assert versioned is not None and versioned.inspect_ai_version is not None
     assert unversioned == EvalInfo(inspect_ai_version=None, sentinel=False)
     assert imported is None
+    # an eval log without a source has a header that cannot be read, rather
+    # than none
+    with pytest.raises(ValueError, match="'t' is from an eval log but has no"):
+        anyio.run(Contexts().eval_info, transcript("eval_log", None))
 
 
 @scanner(messages="all")

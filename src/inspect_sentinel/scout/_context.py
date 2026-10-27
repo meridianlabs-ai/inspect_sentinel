@@ -45,9 +45,14 @@ class Contexts:
     async def eval_info(self, transcript: Transcript) -> EvalInfo | None:
         # what the log driver reads from the log's header; a transcript
         # imported from another source has none
-        if transcript.source_type == "eval_log" and transcript.source_uri:
-            return EvalInfo.from_eval((await self._header(transcript.source_uri)).eval)
-        return None
+        if transcript.source_type != "eval_log":
+            return None
+        if not transcript.source_uri:
+            raise ValueError(
+                f"Transcript {transcript.transcript_id!r} is from an eval log but "
+                "has no source_uri, so its log header cannot be read."
+            )
+        return EvalInfo.from_eval((await self._header(transcript.source_uri)).eval)
 
     async def _header(self, log: str) -> EvalLog:
         header = self._headers.get(log)
