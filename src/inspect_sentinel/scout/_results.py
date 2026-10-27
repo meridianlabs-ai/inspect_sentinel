@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from bisect import bisect_right
 from collections.abc import Iterable
 from typing import Any
@@ -45,7 +46,7 @@ def step_result(
     step = cites.resolved(citation) if citation is not None else None
     found = [step] if step is not None else []
     if report is None:
-        references = cites.labelled(found)
+        references, _ = cites.labelled(found)
         return Result(
             value=None,
             explanation=_explained(None, step is not None, references),
@@ -53,8 +54,10 @@ def step_result(
             metadata=meta,
             references=references,
         )
-    references = cites.labelled([*found, *report.references])
-    explanation = _explained(report.explanation, step is not None, references)
+    references, renamed = cites.labelled([*found, *report.references])
+    explanation = _explained(
+        _relabelled(report.explanation, renamed), step is not None, references
+    )
     if report.metadata is not None:
         meta["metadata"] = report.metadata
     if isinstance(report, Observation):
@@ -94,11 +97,44 @@ def _explained(
 
 
 def _mentioning(text: str, references: list[Reference], lead: str) -> str:
-    missing = [r.cite for r in references if r.cite is not None and r.cite not in text]
+    # the labels the text holds, read once, as Scout View finds them
+    held = {
+        m.group(0)
+        for b in _BRACKETS.finditer(text)
+        for m in _ORDINAL.finditer(b.group(0))
+    }
+    missing = [
+        r.cite
+        for r in references
+        if r.cite is not None and _ordinal(r.cite) not in held
+    ]
     if not missing:
         return text
     also = f"{lead} {', '.join(missing)}."
     return f"{text}\n\n{also}" if text else also
+
+
+# Scout View links each label inside a bracket expression, such as [M1] or
+# [M1, E3]; a bracket with no bracket inside it, so each character is read
+# from one opening bracket at most
+_BRACKETS = re.compile(r"\[[^\[\]]*\]")
+_ORDINAL = re.compile(r"\b[ME]\d+\b")
+
+
+def _ordinal(cite: str) -> str:
+    return cite.removeprefix("[").removesuffix("]")
+
+
+def _relabelled(text: str | None, renamed: dict[str, str]) -> str | None:
+    # the report's own labels, as the labels its references now have
+    if text is None or not renamed:
+        return text
+    return _BRACKETS.sub(
+        lambda b: _ORDINAL.sub(
+            lambda m: renamed.get(m.group(0), m.group(0)), b.group(0)
+        ),
+        text,
+    )
 
 
 class Cites:
@@ -135,18 +171,27 @@ class Cites:
         event = self._recorded.get(reference.id)
         return Reference(type="event", id=event) if event is not None else None
 
-    def labelled(self, references: Iterable[Reference]) -> list[Reference]:
-        # each reference that resolves, once by what it cites, in order, with
-        # a cite label: a report's own where it gave one, else the position
+    def labelled(
+        self, references: Iterable[Reference]
+    ) -> tuple[list[Reference], dict[str, str]]:
+        # each reference that resolves, once by what it cites, in order,
+        # labelled by its position, so one label is one reference across the
+        # transcript; and each label a report gave its own reference, as the
+        # label that reference now has
         found: dict[tuple[str, str], Reference] = {}
+        renamed: dict[str, str] = {}
         for reference in references:
             resolved = self.resolved(reference)
             if resolved is None:
                 continue
             key = (resolved.type, resolved.id)
-            if key not in found or (resolved.cite and not found[key].cite):
-                found[key] = resolved
-        return [r if r.cite else self._label(r) for r in found.values()]
+            labelled = found.get(key)
+            if labelled is None:
+                labelled = found[key] = self._label(resolved)
+            if reference.cite:
+                assert labelled.cite is not None
+                renamed.setdefault(_ordinal(reference.cite), _ordinal(labelled.cite))
+        return list(found.values()), renamed
 
     def _label(self, reference: Reference) -> Reference:
         if reference.type == "message":

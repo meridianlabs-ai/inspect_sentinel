@@ -471,8 +471,9 @@ def test_parallel_calls_cite_their_own_tool_messages(tmp_path: Path) -> None:
     assert len({cite for [(_, cite)] in cited.values()}) == 2
 
 
-def test_a_transcript_of_messages_alone_cites_messages() -> None:
-    handed = Transcript(
+def handed_call() -> Transcript:
+    # four messages: the request [M1], a call [M2], its result [M3], a reply [M4]
+    return Transcript(
         transcript_id="handed",
         messages=[
             ChatMessageUser(id="u", content="add"),
@@ -490,6 +491,66 @@ def test_a_transcript_of_messages_alone_cites_messages() -> None:
         ],
         events=[],
     )
+
+
+@monitor
+def numbers_its_own() -> MonitorGroup:
+    # cites the request and the call with labels of its own numbering, one of
+    # which is the label of the step's citation, the call's result
+    async def before_call(context: Context, step: BeforeToolCall) -> Observation:
+        return Observation.score(
+            0.5,
+            "saw [M3], then [M1, M3]",
+            references=[
+                Reference(type="message", id="u", cite="[M3]"),
+                Reference(type="message", id="a", cite="[M1]"),
+            ],
+        )
+
+    return MonitorGroup(before_call)
+
+
+def test_a_label_names_one_reference_and_a_reports_own_labels_follow() -> None:
+    results = anyio.run(as_scanner(numbers_its_own()), handed_call())
+    assert isinstance(results, list)
+    [row] = results
+
+    assert [(r.id, r.cite) for r in row.references] == [
+        ("t", "[M3]"),
+        ("u", "[M1]"),
+        ("a", "[M2]"),
+    ]
+    # the report's text points where it meant, by the labels its references have
+    assert row.explanation == "Step [M3]: saw [M1], then [M2, M1]"
+
+
+class Searched(str):
+    # an explanation that counts the substring searches made of it
+    searches = 0
+
+    def __contains__(self, key: object) -> bool:
+        self.searches += 1
+        return super().__contains__(cast(str, key))
+
+
+def test_an_explanations_labels_are_read_once_not_per_reference() -> None:
+    from inspect_sentinel.scout._results import _mentioning
+
+    labelled = [
+        Reference(type="message", id=f"m{n}", cite=f"[M{n}]") for n in range(1, 1001)
+    ]
+    # every odd label alone, and two even ones in one bracket, as Scout links
+    text = Searched(" ".join(f"[M{n}]" for n in range(1, 1001, 2)) + " [M2, M4]")
+
+    shown = _mentioning(text, labelled, "Also cites")
+
+    assert text.searches == 0
+    missing = [f"[M{n}]" for n in range(6, 1001, 2)]
+    assert shown == f"{text}\n\nAlso cites {', '.join(missing)}."
+
+
+def test_a_transcript_of_messages_alone_cites_messages() -> None:
+    handed = handed_call()
 
     results = anyio.run(as_scanner(by_argument()), handed)
     assert isinstance(results, list)
@@ -1341,49 +1402,51 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
     )
 
 
+UNUSED = "The log has human() answers under 'triage/human', but this sentinel's human() is at 'human'; they were not used, and human= answered in their place. A recorded answer is given only to the human() at the path that recorded it."
+
+
 @pytest.mark.parametrize(
-    ("recorded_at", "source", "warnings"),
+    ("recorded_at", "sources", "warnings"),
     [
-        ("human", "recorded", []),
-        (
-            "triage/human",
-            "unanswered",
-            [
-                "The log has human() answers under 'triage/human', but this sentinel's human() is at 'human'; they were not used, and human= answered in their place. A recorded answer is given only to the human() at the path that recorded it."
-            ],
-        ),
+        (("human", "human"), ("recorded", "recorded"), []),
+        (("triage/human", "triage/human"), ("unanswered", "unanswered"), [UNUSED]),
+        # the paths cross: each is asked at one step and recorded at the other
+        (("triage/human", "human"), ("unanswered", "recorded"), [UNUSED]),
     ],
+    ids=["matching", "elsewhere", "crossed"],
 )
 def test_answers_recorded_under_another_human_path_are_unused_with_one_warning(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
-    recorded_at: str,
-    source: str,
+    recorded_at: tuple[str, str],
+    sources: tuple[str, str],
     warnings: list[str],
 ) -> None:
-    log = run(tmp_path / "run", [[call(9, "a")], [call(9, "b")]], None)
+    calls = [["a1", "a2"], ["b1", "b2"]]
+    log = run(tmp_path / "run", [[call(9, c) for c in ids] for ids in calls], None)
     assert log.samples is not None
     # an older log, whose answers each step carries as recorded, in which a
-    # person answered both calls through a human() at recorded_at
-    for sample in log.samples:
+    # person answered each transcript's two calls through a human() at the
+    # two paths of recorded_at
+    for sample, ids in zip(log.samples, calls, strict=True):
         for event in sample.events:
             if isinstance(event, ModelEvent):
                 event.origin = None
-        call_id = "a" if sample.id == 0 else "b"
-        sample.events.append(
-            SentinelEvent(
-                factory="inspect_sentinel/human",
-                path=recorded_at,
-                function="tool_call",
-                step_id=call_id,
-                conversation=sample.uuid or "",
-                stage="tool_call",
-                kind="decision",
-                status="reported",
-                action="proceed",
-                explanation="fine",
+        for call_id, path in zip(ids, recorded_at, strict=True):
+            sample.events.append(
+                SentinelEvent(
+                    factory="inspect_sentinel/human",
+                    path=path,
+                    function="tool_call",
+                    step_id=call_id,
+                    conversation=sample.uuid or "",
+                    stage="tool_call",
+                    kind="decision",
+                    status="reported",
+                    action="proceed",
+                    explanation="fine",
+                )
             )
-        )
     write_eval_log(log, str(tmp_path / "logs" / "old.eval"))
     sentinel = sequential(
         [threshold(by_argument(), escalate_at=0.5), human(stages=["tool_call"])]
@@ -1392,7 +1455,11 @@ def test_answers_recorded_under_another_human_path_are_unused_with_one_warning(
     with caplog.at_level("WARNING", logger="inspect_sentinel.scout"):
         found = scanned(tmp_path / "scans", tmp_path / "logs", s=as_scanner(sentinel))
 
-    assert [row["metadata.human"] for row in found["s"]] == [source, source]
+    assert keyed(found["s"], "metadata.human") == {
+        (sample.uuid, call_id): source
+        for sample, ids in zip(log.samples, calls, strict=True)
+        for call_id, source in zip(ids, sources, strict=True)
+    }
     assert [
         r.getMessage() for r in caplog.records if r.name.startswith("inspect_sentinel")
     ] == warnings
