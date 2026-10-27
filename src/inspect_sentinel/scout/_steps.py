@@ -35,7 +35,7 @@ _HUMAN = "inspect_sentinel/human"
 
 
 def transcript_steps(
-    transcript: Transcript, eval_info: EvalInfo, timeline: str | None
+    transcript: Transcript, eval_info: EvalInfo | None, timeline: str | None
 ) -> tuple[list[ReplayStep], Turns]:
     # A transcript with model events replays from them, through the driver
     # inspect_ai shares with live: by the origins its log records, else with

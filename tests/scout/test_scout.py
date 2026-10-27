@@ -846,6 +846,35 @@ def test_a_scan_gives_rows_at_every_watched_stage_unless_one_is_named(
     assert row["value"] == 0.0
 
 
+def test_only_an_eval_log_transcript_has_a_log_header(tmp_path: Path) -> None:
+    # the log driver takes a transcript with no header for one imported from
+    # another source; an Inspect log is one with or without a version in its
+    # header
+    log = run(tmp_path / "logs", [[call(1)]], None)
+    log.eval.packages = {}
+    write_eval_log(log, str(tmp_path / "old" / "old.eval"))
+
+    def transcript(source_type: str, uri: str | None) -> Transcript:
+        return Transcript(
+            transcript_id="t", source_type=source_type, source_uri=uri, messages=[]
+        )
+
+    async def headers() -> list[EvalInfo | None]:
+        contexts = Contexts()
+        return [
+            await contexts.eval_info(transcript("eval_log", log.location)),
+            await contexts.eval_info(
+                transcript("eval_log", str(tmp_path / "old" / "old.eval"))
+            ),
+            await contexts.eval_info(transcript("claude_code", None)),
+        ]
+
+    versioned, unversioned, imported = anyio.run(headers)
+    assert versioned is not None and versioned.inspect_ai_version is not None
+    assert unversioned == EvalInfo(inspect_ai_version=None, sentinel=False)
+    assert imported is None
+
+
 @scanner(messages="all")
 def sample_identity() -> Scanner[Transcript]:
     # the sample a transcript's context is read from, as the replay scanner
@@ -1832,9 +1861,7 @@ def test_replay_pools_scouts_model_inputs_in_work_linear_in_their_entries() -> N
 
         sys.setprofile(count)
         try:
-            transcript_steps(
-                transcript, EvalInfo(inspect_ai_version=None, sentinel=False), None
-            )
+            transcript_steps(transcript, None, None)
         finally:
             sys.setprofile(None)
         return calls, entries

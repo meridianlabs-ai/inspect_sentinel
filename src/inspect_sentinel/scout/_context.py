@@ -42,11 +42,12 @@ class Contexts:
             return await self._from_log(transcript, transcript.source_uri)
         return _from_info(transcript)
 
-    async def eval_info(self, transcript: Transcript) -> EvalInfo:
-        # what the log driver reads from the log's header
+    async def eval_info(self, transcript: Transcript) -> EvalInfo | None:
+        # what the log driver reads from the log's header; a transcript
+        # imported from another source has none
         if transcript.source_type == "eval_log" and transcript.source_uri:
             return EvalInfo.from_eval((await self._header(transcript.source_uri)).eval)
-        return EvalInfo(inspect_ai_version=None, sentinel=False)
+        return None
 
     async def _header(self, log: str) -> EvalLog:
         header = self._headers.get(log)
