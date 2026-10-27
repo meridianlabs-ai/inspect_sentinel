@@ -103,7 +103,7 @@ class SidecarHost:
         resolved = self._roles.get(asked) if asked is not None else None
         if resolved is None and model is None:
             raise ValueError(
-                f"The sidecar has no model for role {asked!r}. Configure one, or pass model= to generate()."
+                f"The sidecar has no model for role {asked!r}. Configure one, or pass model=."
             )
         return get_model(resolved if resolved is not None else model)
 

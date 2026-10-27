@@ -309,14 +309,18 @@ async def _generate(
             tool_choice="auto",
             config=config,
         )
-        # the prompt fits the input budget, so a model_length reply means the
-        # model stopped on its own output limit; a correction would only make
-        # the prompt longer, so raise at once
+        # a model_length reply means the request exceeded the model's context
+        # window, although the prompt fit the input budget as counted: the count
+        # leaves out the answer tool, and a provider can count more tokens than
+        # count_tokens. A correction would only make the prompt longer, so raise
+        # at once
         if output.choices and output.stop_reason == "model_length":
             raise RuntimeError(
                 "The monitor model stopped with stop reason 'model_length': "
-                "its reply reached the model's output limit before it answered. "
-                "Raise the reply reserve with config=GenerateConfig(max_tokens=...)."
+                "the request exceeded the model's context window, although the "
+                "prompt fit the input budget as counted (the count leaves out "
+                "the answer tool, and a provider can count more tokens than "
+                "count_tokens)."
             )
         if not output.choices or output.stop_reason != "content_filter":
             return output
