@@ -20,7 +20,7 @@ class ReplayStep:
     """
 
     id: str
-    """The step id, as `SentinelEvent.step_id` records it live, such as the tool call id at a tool stage. Unique within a transcript for a stage, so a label made against it serves replay and the live record alike."""
+    """The step id, as `SentinelEvent.step_id` records it live: the tool call id at a tool stage, and the generate's id (the `uuid` of its first `ModelEvent`) at both generate stages. Unique within a transcript for a stage, so a label made against it serves replay and the live record alike."""
 
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
     """The stage of `step`, as `SentinelEvent.stage` records it: `model_input` for a `BeforeGenerate`, `model_output` for an `AfterGenerate`, `tool_call` for a `BeforeToolCall` and `tool_result` for an `AfterToolCall`."""

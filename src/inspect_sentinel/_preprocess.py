@@ -94,7 +94,7 @@ Window: TypeAlias = AllMessages | LastTurns | LastMessages | NewSinceLastReport
 class StepPreprocessor(Generic[S]):
     """What a monitor shows a model about a step.
 
-    `preprocess_step()` applies it, in this order: the windows to `input`, `history` and `agent_messages`, then the omissions to every message the step holds, then `transform`, which sees the result. By default `input` is shown whole, while `history` and `agent_messages` are omitted. A scaffold may keep hidden instructions out of its own list but send them in `input` and `history`. To omit the request lists and show the agent's own list, use `StepPreprocessor(input_window=None, history_window=None, agent_messages_window=AllMessages())`; this requires the conversation-owning scaffold to be the outermost `@agent` agent function. Other stage content remains: every stage renders the request's tools and tool choice while `input` is known (a tool stage's are the producing request's); `AfterGenerate` renders the reply, including reasoning by default before the scaffold has curated it; both tool stages render the assistant text and call; and `AfterToolCall` renders the result. Strict blindness also needs a stage-specific `transform` or a custom prompt that curates these surfaces; a transform can clear `tools` and `tool_choice`.
+    `preprocess_step()` applies it, in this order: the windows to `input`, `history` and `agent_messages`, then the omissions to every message the step holds, then `transform`, which sees the result. By default `input` is shown whole, while `history` and `agent_messages` are omitted, even when the host could not provide them, so a default prompt is the same live and in replay. A scaffold may keep hidden instructions out of its own list but send them in `input` and `history`. To omit the request lists and show the agent's own list, use `StepPreprocessor(input_window=None, history_window=None, agent_messages_window=AllMessages())`; this requires the conversation-owning scaffold to be the outermost `@agent` agent function. Other stage content remains: every stage renders the request's tools and tool choice while `input` is known (a tool stage's are the producing request's); `AfterGenerate` renders the reply, including reasoning by default before the scaffold has curated it; both tool stages render the assistant text and call; and `AfterToolCall` renders the result. Strict blindness also needs a stage-specific `transform` or a custom prompt that curates these surfaces; a transform can clear `tools` and `tool_choice`.
     """
 
     input_window: Window | None = field(default_factory=AllMessages)
@@ -127,7 +127,7 @@ async def preprocess_step(
 ) -> S:
     """`step`, thinned as `preprocessor` says (`StepPreprocessor()` when None).
 
-    Each window cuts its list as it is. A list with no window becomes `[]`; a list the host could not provide stays None. The omissions apply to `input`, `history`, `agent_messages`, a tool call's result and a generate's reply.
+    Each window cuts its list as it is. A list with no window becomes `[]`, even one the host could not provide; a windowed list the host could not provide stays None. The omissions apply to `input`, `history`, `agent_messages`, a tool call's result and a generate's reply.
 
     Args:
         step: The step a monitor was given.
@@ -143,10 +143,12 @@ async def preprocess_step(
         messages: Sequence[ChatMessage] | None,
         window: Window | None,
     ) -> list[ChatMessage] | None:
-        if messages is None:
-            return None
+        # a list with no window is left out even when the host could not provide
+        # it, so a default prompt is the same live and in replay
         if window is None:
             return []
+        if messages is None:
+            return None
         return _omitted(_cut(step, source, messages, window), p)
 
     thinned = replace(
@@ -180,7 +182,7 @@ async def step_as_str(
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
-    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At every stage: `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the outermost running agent function's own message list, which its scaffold may curate), then the model request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`; at a tool stage, the request that produced the call. Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant's text and the call) and, after the call, `RESULT`. A list the host could not provide (None) is named in its block; at a tool stage whose input is not known, the tools and tool choice are left out. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.
+    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At every stage: `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the outermost running agent function's own message list, which its scaffold may curate), then the model request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`; at a tool stage, the request that produced the call. Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant's text and the call) and, after the call, `RESULT`. A list the host could not provide (None) is named in its block (`preprocess_step()` leaves a list with no window empty, so only a windowed one is named); at a tool stage whose input is not known, the tools and tool choice are left out. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.
 
     Args:
         step: The step to render, usually from `preprocess_step()`.
