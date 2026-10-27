@@ -106,7 +106,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 | R4 | earlier decisions in the conversation | live: met by `step.human_decisions` (2026-10-14, `human()` decisions only); replay: planned to build (R7 PRs 3 and 6, 2026-10-19), including `ApprovalEvent`s in logs from before Sentinel |
 | R5 | escalate or terminate on scores, without reject | not met |
 | R6 | a root escalate does not proceed | decided 2026-10-10 (terminates); not built |
-| R7 | replay over existing logs | not met; planned to build 2026-10-19, in progress as R7 PRs 1–3 and 5–7 (PR 4 dropped 2026-10-26); every R7 decision taken by Charles by 2026-10-26 ([sentinel-development.md](sentinel-development.md), "Replay over logs (R7)") |
+| R7 | replay over existing logs | not met; planned to build 2026-10-19, in progress as R7 PRs 1–3 and 5–7 (PR 4 dropped 2026-10-26); every R7 decision taken by Charles by 2026-10-26 ([sentinel-development.md](sentinel-development.md), "Replay over logs (R7)"); the step types replay needs built 2026-10-20 (R7 PR 2: `ReplayStep`, read-only step sequences, `AfterToolCall.output` optional) |
 | R8 | monitor-safe message rendering | partly met, in Scout; the move to inspect_ai is not started |
 | 8.1 | agent text cannot forge structure | partly met |
 | 8.2 | actions-only view | not met |

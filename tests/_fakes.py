@@ -1,7 +1,7 @@
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, TypeVar, overload
 
 from inspect_ai.model import (
     ChatMessage,
@@ -28,6 +28,36 @@ from inspect_sentinel._step import (
     BeforeToolCall,
     Step,
 )
+
+T = TypeVar("T")
+
+
+class View(Sequence[T]):
+    # a read-only view of a host's list, as a step may hold one, counting the
+    # items read through it
+    def __init__(self, items: Sequence[T]) -> None:
+        self._items = list(items)
+        self.reads = 0
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    @overload
+    def __getitem__(self, index: int) -> T: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> Sequence[T]: ...
+
+    def __getitem__(self, index: int | slice) -> T | Sequence[T]:
+        if isinstance(index, slice):
+            return [self[i] for i in range(*index.indices(len(self)))]
+        item = self._items[index]
+        self.reads += 1
+        return item
+
+
+# the forms a step's sequence fields can take
+SEQUENCES: list[Any] = [list, tuple, View]
 
 
 class Asked(NamedTuple):

@@ -21,6 +21,7 @@ def test_author_facing_names_are_exported() -> None:
         "AfterToolCall",
         "Truncation",
         "Step",
+        "ReplayStep",
         "Observation",
         "Decision",
         "Suspicion",

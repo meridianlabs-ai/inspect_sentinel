@@ -145,10 +145,10 @@ Each takes a single frozen dataclass rather than positional arguments, following
 class BeforeGenerate:
     model: str
     conversation: str           # links this agent's steps across compactions
-    input: list[ChatMessage]    # exactly what the model is sent
-    agent_messages: list[ChatMessage] | None  # the outermost running agent function's own list, read live at every stage; None without one
-    history: list[ChatMessage] | None = field(default=None, kw_only=True)  # every message this agent instance has sent, in order sent; None when the host cannot produce it
-    human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)  # human() decisions at earlier steps of this conversation
+    input: Sequence[ChatMessage]  # exactly what the model is sent
+    agent_messages: Sequence[ChatMessage] | None  # the outermost running agent function's own list, read live at every stage; None without one
+    history: Sequence[ChatMessage] | None = field(default=None, kw_only=True)  # every message this agent instance has sent, in order sent; None when the host cannot produce it
+    human_decisions: Sequence[HumanDecision] | None = field(default=None, kw_only=True)  # human() decisions at earlier steps of this conversation
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -158,10 +158,10 @@ class BeforeGenerate:
 class AfterGenerate:
     model: str
     conversation: str
-    input: list[ChatMessage]    # exactly what the model was sent
-    agent_messages: list[ChatMessage] | None
-    history: list[ChatMessage] | None = field(default=None, kw_only=True)  # includes input
-    human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
+    input: Sequence[ChatMessage]  # exactly what the model was sent
+    agent_messages: Sequence[ChatMessage] | None
+    history: Sequence[ChatMessage] | None = field(default=None, kw_only=True)  # includes input
+    human_decisions: Sequence[HumanDecision] | None = field(default=None, kw_only=True)
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -175,11 +175,11 @@ class BeforeToolCall:
     message_id: str             # id of the assistant message that made the call
     call: ToolCall              # the call as it will execute
     view: ToolCallView
-    input: list[ChatMessage] | None  # the request that produced the call; None without one
-    agent_messages: list[ChatMessage] | None  # the same live agent list as at generate stages; None without one
-    history: list[ChatMessage] | None = field(default=None, kw_only=True)  # as for BeforeGenerate
-    human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
-    tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
+    input: Sequence[ChatMessage] | None  # the request that produced the call; None without one
+    agent_messages: Sequence[ChatMessage] | None  # the same live agent list as at generate stages; None without one
+    history: Sequence[ChatMessage] | None = field(default=None, kw_only=True)  # as for BeforeGenerate
+    human_decisions: Sequence[HumanDecision] | None = field(default=None, kw_only=True)
+    tools: Sequence[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
     tool_choice: ToolChoice | None = None  # that request's tool choice; None exactly when input is
 
 
@@ -190,13 +190,13 @@ class AfterToolCall:
     message_id: str
     call: ToolCall              # the call as executed (after any `modify`)
     result: ChatMessageTool     # what the model will see, after truncation
-    output: ToolResult          # the tool's untruncated return value
+    output: ToolResult | None  # the tool's untruncated return value; None where the host can't see it (a proxy, a replay)
     view: ToolCallView
-    input: list[ChatMessage] | None  # the request that produced the call; None without one
-    agent_messages: list[ChatMessage] | None
-    history: list[ChatMessage] | None = field(default=None, kw_only=True)
-    human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
-    tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
+    input: Sequence[ChatMessage] | None  # the request that produced the call; None without one
+    agent_messages: Sequence[ChatMessage] | None
+    history: Sequence[ChatMessage] | None = field(default=None, kw_only=True)
+    human_decisions: Sequence[HumanDecision] | None = field(default=None, kw_only=True)
+    tools: Sequence[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
     tool_choice: ToolChoice | None = None  # that request's tool choice; None exactly when input is
     truncated: Truncation | Literal[False] | None = None  # the host's cut; False: not cut; None: can't tell
 
@@ -220,7 +220,19 @@ def human_decision_for(step: Step, call_id: str) -> HumanDecision | None: ...  #
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall
 """The union, for code that handles any stage — a protocol, or a dispatcher."""
+
+
+
+@dataclass(frozen=True)
+class ReplayStep:               # a step rebuilt from a stored transcript (sentinel-development.md, R7)
+    id: str                     # as SentinelEvent.step_id
+    stage: Literal["model_input", "model_output", "tool_call", "tool_result"]  # as SentinelEvent.stage
+    step: Step
+    segment: tuple[str, int]    # the conversation, and how many of its compactions came before
+    recorded_answers: Mapping[str, HumanAnswer] = field(default_factory=dict)  # the step's own recorded human() answers, by instance path; never on the step (R7-D4)
 ```
+
+`input`, `history`, `agent_messages` and `human_decisions` at every stage, and `tools` at the tool stages, are read-only `Sequence`s, so a host can hand each step a view of the conversation's lists cut at the step rather than a copy, which would make building the steps of a conversation quadratic in its length; a monitor that wants a list calls `list()` on one, at its own cost (R7-D6, decided 2026-10-19 in [sentinel-development.md](sentinel-development.md); the generate stages' `input` added 2026-10-20, since replay builds it as a view over the log's stored ranges). The generate stages' `tools` stay a `list`: they do not grow with the conversation. `AfterToolCall.output` is `None` where the host cannot see the tool's untruncated return value: beside a proxy, which sees only the result the model is sent, and in a replay from a log, which records only that result. Both were built with R7 PR 2, as was `ReplayStep`.
 
 Which model calls the generate stages check, where the hook sits, and what each action means there are worked through in [generate-stages.md](generate-stages.md).
 
