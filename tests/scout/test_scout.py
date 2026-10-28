@@ -1053,6 +1053,39 @@ def test_only_an_eval_log_transcript_has_a_log_header(tmp_path: Path) -> None:
         anyio.run(Contexts().eval_info, transcript("eval_log", None))
 
 
+def test_a_transcript_imported_from_another_source_replays_from_its_messages(
+    tmp_path: Path,
+) -> None:
+    # until replay joins on stable message ids, a transcript with no log
+    # header replays from its messages though it has model events, as one
+    # without them does (decided by Charles 2026-10-27)
+    log = run(tmp_path / "logs", [[call(9, "a"), call(9, "b")]], None)
+    assert log.samples is not None
+    sample = log.samples[0]
+
+    def steps(source_type: str, events: Sequence[Event]) -> list[tuple[str, str, str]]:
+        transcript = Transcript(
+            transcript_id=sample.uuid or "",
+            source_type=source_type,
+            source_uri=log.location if source_type == "eval_log" else None,
+            messages=sample.messages,
+            events=list(events),
+        )
+        results = anyio.run(as_scanner(replay_check()), transcript)
+        assert isinstance(results, list)
+        return [
+            (r.metadata["step_id"], r.metadata["stage"], r.metadata["turns"])
+            for r in results
+            if r.metadata
+        ]
+
+    without = [e for e in sample.events if not isinstance(e, ModelEvent)]
+    imported = steps("claude_code", sample.events)
+    assert imported == steps("claude_code", without)
+    assert {turns for _, _, turns in imported} == {"inferred"}
+    assert {turns for _, _, turns in steps("eval_log", sample.events)} == {"recorded"}
+
+
 @scanner(messages="all")
 def sample_identity() -> Scanner[Transcript]:
     # the sample a transcript's context is read from, as the replay scanner
@@ -1484,18 +1517,27 @@ def test_answers_recorded_under_another_human_path_are_unused_with_one_warning(
     warnings: list[str],
 ) -> None:
     calls = [["a1", "a2"], ["b1", "b2"]]
-    log = run(tmp_path / "run", [[call(9, c) for c in ids] for ids in calls], None)
+    log = run(
+        tmp_path / "run",
+        [[call(9, c) for c in ids] for ids in calls],
+        observe_only(replay_check()),
+    )
     assert log.samples is not None
-    # an older log, whose answers each step carries as recorded, in which a
-    # person answered each transcript's two calls through a human() at the
-    # two paths of recorded_at
+    # a person answered each transcript's two calls through a human() at the
+    # two paths of recorded_at, as a sentinel recorded it: in the sentinel
+    # span of the call's tool_call step
     for sample, ids in zip(log.samples, calls, strict=True):
-        for event in sample.events:
-            if isinstance(event, ModelEvent):
-                event.origin = None
         for call_id, path in zip(ids, recorded_at, strict=True):
-            sample.events.append(
+            at, step = next(
+                (i, e)
+                for i, e in enumerate(sample.events)
+                if isinstance(e, SentinelEvent)
+                and (e.stage, e.step_id) == ("tool_call", call_id)
+            )
+            sample.events.insert(
+                at + 1,
                 SentinelEvent(
+                    span_id=step.span_id,
                     factory="inspect_sentinel/human",
                     path=path,
                     function="tool_call",
@@ -1506,7 +1548,7 @@ def test_answers_recorded_under_another_human_path_are_unused_with_one_warning(
                     status="reported",
                     action="proceed",
                     explanation="fine",
-                )
+                ),
             )
     write_eval_log(log, str(tmp_path / "logs" / "old.eval"))
     sentinel = sequential(
@@ -1646,6 +1688,8 @@ def test_depth_reads_a_transcripts_model_inputs_as_scout_does(tmp_path: Path) ->
     # the same holds for a transcript handed to the scanner directly
     handed = Transcript(
         transcript_id=sample.uuid or "",
+        source_type="eval_log",
+        source_uri=log.location,
         messages=sample.messages,
         events=sample.events,
     )
@@ -1703,6 +1747,8 @@ def test_depth_without_timeline_is_the_span_trees_whatever_is_stored(
     # a transcript handed to the scanner directly, with its stored timeline
     handed = Transcript(
         transcript_id=sample.uuid or "",
+        source_type="eval_log",
+        source_uri=str(tmp_path / "logs" / "stored.eval"),
         messages=sample.messages,
         events=sample.events,
         timelines=sample.timelines,
@@ -2189,7 +2235,9 @@ def test_replay_pools_scouts_model_inputs_in_work_linear_in_their_entries() -> N
 
         sys.setprofile(count)
         try:
-            transcript_steps(transcript, None, None)
+            transcript_steps(
+                transcript, EvalInfo(inspect_ai_version=None, sentinel=False), None
+            )
         finally:
             sys.setprofile(None)
         return calls, entries
