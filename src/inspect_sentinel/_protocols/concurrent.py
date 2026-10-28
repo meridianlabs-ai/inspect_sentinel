@@ -16,7 +16,7 @@ def concurrent(
 ) -> Protocol:
     """Run every child at once; the strictest decision wins.
 
-    What a list containing a protocol resolves to. Monitors are recorded in the transcript, a monitor that raises recorded as failed and logged as a warning while the others go on; protocols vote by `terminate > reject > modify > escalate > proceed`, the first in configuration order winning a tie, so a peer's `proceed` does not override an `escalate` and the layer escalates when that is the strongest vote. A `modify` when another protocol also decided anything but `escalate` becomes a `reject` naming the modifier, since the others decided about the call as it stood; votes count by instance, so another function of the modifier's own instance contests it only by also modifying; the rejection carries the modifier's `audit` and `metadata`, and its explanation leads with the modifier's. When more than one protocol decided and not all of them proceeded, the layer's explanation lists each one's decision after the winner's own, labelling a function of a `ProtocolGroup` or `MonitorGroup` `name.function`. A child that calls `decide_final()` ends the step and no vote is taken. Its protocol children are handed no escalations, even inside a `sequential()`: escalations do not cross layers.
+    What a list containing a protocol resolves to. Monitors are recorded in the transcript, a monitor that raises recorded as failed and logged as a warning while the others go on; protocols vote by `terminate > reject > modify > escalate > proceed`, the first in configuration order winning a tie, so a peer's `proceed` does not override an `escalate` and the layer escalates when that is the strongest vote. A `modify` is honoured beside a `proceed` or an `escalate`, so a peer with no objection to the call does not turn a rewrite into a block; the rewritten call is not checked again by the protocols that proceeded, as with a lone modifier. Only another `modify` contests it, from any instance or from another function of the modifier's own: two rewrites conflict, so the layer returns a `reject` naming the modifiers, carrying the first modifier's `audit` and `metadata`, its explanation leading with that modifier's. A `reject` or `terminate` outranks a `modify` anyway. When more than one protocol decided and not all of them proceeded, the layer's explanation lists each one's decision after the winner's own, labelling a function of a `ProtocolGroup` or `MonitorGroup` `name.function`. A child that calls `decide_final()` ends the step and no vote is taken. Its protocol children are handed no escalations, even inside a `sequential()`: escalations do not cross layers.
 
     Args:
         children: A monitor, protocol or group, or several, to run together.
@@ -48,19 +48,14 @@ def concurrent(
         own = strongest.report.explanation
         update: dict[str, object] = {}
         if strongest.report.action == "modify":
-            # an escalate does not contest, and a function of the modifier's own
-            # instance contests only by modifying
+            # only another rewrite contests a modify: a proceed had no objection
+            # to the call, and an escalate declined to decide
             contesting = [
-                d
-                for d in voters
-                if d is not strongest
-                and d.report.action != "escalate"
-                and (d.path != strongest.path or d.report.action == "modify")
+                d for d in voters if d is not strongest and d.report.action == "modify"
             ]
-            others = {d.path for d in contesting if d.path != strongest.path}
-            count = len(others) + sum(d.path == strongest.path for d in contesting)
             if contesting:
-                rewrite = f"{label(strongest)} modified the call but {count} other vote(s) also decided"
+                others = ", ".join(label(d) for d in contesting)
+                rewrite = f"{label(strongest)} modified the call but so did {others}"
                 own = f"{rewrite}: {own}" if own else rewrite
                 update = {"action": "reject", "modified": None}
         summary = "; ".join(f"{label(d)}: {d.report.action}" for d in voters)
