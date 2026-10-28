@@ -46,6 +46,7 @@ from inspect_ai.model import (
     get_model,
     model_origin,
 )
+from inspect_ai.scorer import Reference
 from inspect_ai.solver import Generate, Solver, TaskState, generate, solver, use_tools
 from inspect_ai.tool import Tool, ToolCall, ToolCallView, ToolError, tool
 from inspect_ai.util import StoreModel
@@ -66,6 +67,7 @@ from inspect_scout._transcript.timeline import (  # pyright: ignore[reportPrivat
 
 from inspect_sentinel import (
     AfterGenerate,
+    AfterToolCall,
     BeforeGenerate,
     BeforeToolCall,
     Context,
@@ -396,6 +398,178 @@ def test_a_transcript_reduces_to_its_highest_score_citing_the_step(
     assert row["value"] == 0.5
     [set_by] = json.loads(row["metadata"])["set_by"]
     assert set_by["stage"] == "tool_call"
+
+
+@monitor
+def citing() -> MonitorGroup:
+    # each generate alike, and each call by its argument, citing the assistant
+    # message that made it
+    async def before_generate(context: Context, step: BeforeGenerate) -> Observation:
+        return Observation.score(0.1, "a generate")
+
+    async def before_call(context: Context, step: BeforeToolCall) -> Observation:
+        return Observation.score(
+            min(1.0, int(step.call.arguments["x"]) / 10),
+            "by its argument",
+            references=[Reference(type="message", id=step.message_id)],
+        )
+
+    return MonitorGroup(before_generate, before_call)
+
+
+def test_every_reference_has_a_cite_label_its_explanation_mentions(
+    tmp_path: Path,
+) -> None:
+    # two calls tie for the highest score, so two steps set the transcript's
+    run(tmp_path / "logs", [[call(5), call(2), call(5)]], observe_only(citing()))
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        step=as_scanner(citing()),
+        transcript=as_scanner(citing(), results="transcript"),
+        read=as_reader("citing"),
+    )
+
+    kinds: set[str] = set()
+    for name, rows in found.items():
+        for row in rows:
+            cited = [*references(row, "message"), *references(row, "event")]
+            assert cited, (name, row["metadata.step_id"])
+            # a step's row leads with the step's own label
+            if name != "transcript":
+                assert row["explanation"].startswith(f"Step {cited[0]['cite']}: ")
+            for reference in cited:
+                assert reference["cite"] in row["explanation"], (name, reference)
+                kinds.add(reference["type"])
+    assert kinds == {"message", "event"}
+    # the first step's call and the message it cites, and the other's call
+    [reduced] = found["transcript"]
+    assert len(references(reduced, "message")) == 3
+    assert {
+        (r["metadata.step_id"], r["explanation"])
+        for r in found["step"]
+        if r["metadata.stage"] == "tool_call"
+    } == {
+        (r["metadata.step_id"], r["explanation"])
+        for r in found["read"]
+        if r["metadata.stage"] == "tool_call"
+    }
+
+
+def test_parallel_calls_cite_their_own_tool_messages(tmp_path: Path) -> None:
+    both = call(1, "a")
+    assert both.message.tool_calls is not None
+    both.message.tool_calls.append(
+        ToolCall(id="b", function="addition", arguments={"x": 2, "y": 1})
+    )
+    log = run(tmp_path / "logs", [[both]], None)
+    assert log.samples is not None
+    answers = {
+        m.tool_call_id: m.id
+        for m in log.samples[0].messages
+        if isinstance(m, ChatMessageTool)
+    }
+
+    found = scanned(tmp_path / "scans", tmp_path / "logs", s=as_scanner(by_argument()))
+
+    cited = {
+        r["metadata.step_id"]: [(c["id"], c["cite"]) for c in references(r, "message")]
+        for r in found["s"]
+    }
+    assert {step: ids for step, [(ids, _)] in cited.items()} == answers
+    assert len({cite for [(_, cite)] in cited.values()}) == 2
+
+
+def handed_call() -> Transcript:
+    # four messages: the request [M1], a call [M2], its result [M3], a reply [M4]
+    return Transcript(
+        transcript_id="handed",
+        messages=[
+            ChatMessageUser(id="u", content="add"),
+            ChatMessageAssistant(
+                id="a",
+                content="",
+                tool_calls=[
+                    ToolCall(id="c", function="addition", arguments={"x": 9, "y": 1})
+                ],
+            ),
+            ChatMessageTool(
+                id="t", content="10", tool_call_id="c", function="addition"
+            ),
+            ChatMessageAssistant(id="d", content="done"),
+        ],
+        events=[],
+    )
+
+
+@monitor
+def numbers_its_own() -> MonitorGroup:
+    # cites the request and the call with labels of its own numbering, one of
+    # which is the label of the step's citation, the call's result
+    async def before_call(context: Context, step: BeforeToolCall) -> Observation:
+        return Observation.score(
+            0.5,
+            "saw [M3], then [M1, M3]",
+            references=[
+                Reference(type="message", id="u", cite="[M3]"),
+                Reference(type="message", id="a", cite="[M1]"),
+            ],
+        )
+
+    return MonitorGroup(before_call)
+
+
+def test_a_label_names_one_reference_and_a_reports_own_labels_follow() -> None:
+    results = anyio.run(as_scanner(numbers_its_own()), handed_call())
+    assert isinstance(results, list)
+    [row] = results
+
+    assert [(r.id, r.cite) for r in row.references] == [
+        ("t", "[M3]"),
+        ("u", "[M1]"),
+        ("a", "[M2]"),
+    ]
+    # the report's text points where it meant, by the labels its references have
+    assert row.explanation == "Step [M3]: saw [M1], then [M2, M1]"
+
+
+class Searched(str):
+    # an explanation that counts the substring searches made of it
+    searches = 0
+
+    def __contains__(self, key: object) -> bool:
+        self.searches += 1
+        return super().__contains__(cast(str, key))
+
+
+def test_an_explanations_labels_are_read_once_not_per_reference() -> None:
+    from inspect_sentinel.scout._results import _mentioning
+
+    labelled = [
+        Reference(type="message", id=f"m{n}", cite=f"[M{n}]") for n in range(1, 1001)
+    ]
+    # every odd label alone, and two even ones in one bracket, as Scout links
+    text = Searched(" ".join(f"[M{n}]" for n in range(1, 1001, 2)) + " [M2, M4]")
+
+    shown = _mentioning(text, labelled, "Also cites")
+
+    assert text.searches == 0
+    missing = [f"[M{n}]" for n in range(6, 1001, 2)]
+    assert shown == f"{text}\n\nAlso cites {', '.join(missing)}."
+
+
+def test_a_transcript_of_messages_alone_cites_messages() -> None:
+    handed = handed_call()
+
+    results = anyio.run(as_scanner(by_argument()), handed)
+    assert isinstance(results, list)
+    [row] = results
+
+    assert [(r.type, r.id, r.cite) for r in row.references] == [
+        ("message", "t", "[M3]")
+    ]
+    assert row.explanation == "Step [M3]"
 
 
 def test_failure_count_scanned_at_one_stage_keeps_its_live_scores(
@@ -1289,6 +1463,69 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
     )
 
 
+UNUSED = "The log has human() answers under 'triage/human', but this sentinel's human() is at 'human'; they were not used, and human= answered in their place. A recorded answer is given only to the human() at the path that recorded it."
+
+
+@pytest.mark.parametrize(
+    ("recorded_at", "sources", "warnings"),
+    [
+        (("human", "human"), ("recorded", "recorded"), []),
+        (("triage/human", "triage/human"), ("unanswered", "unanswered"), [UNUSED]),
+        # the paths cross: each is asked at one step and recorded at the other
+        (("triage/human", "human"), ("unanswered", "recorded"), [UNUSED]),
+    ],
+    ids=["matching", "elsewhere", "crossed"],
+)
+def test_answers_recorded_under_another_human_path_are_unused_with_one_warning(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    recorded_at: tuple[str, str],
+    sources: tuple[str, str],
+    warnings: list[str],
+) -> None:
+    calls = [["a1", "a2"], ["b1", "b2"]]
+    log = run(tmp_path / "run", [[call(9, c) for c in ids] for ids in calls], None)
+    assert log.samples is not None
+    # an older log, whose answers each step carries as recorded, in which a
+    # person answered each transcript's two calls through a human() at the
+    # two paths of recorded_at
+    for sample, ids in zip(log.samples, calls, strict=True):
+        for event in sample.events:
+            if isinstance(event, ModelEvent):
+                event.origin = None
+        for call_id, path in zip(ids, recorded_at, strict=True):
+            sample.events.append(
+                SentinelEvent(
+                    factory="inspect_sentinel/human",
+                    path=path,
+                    function="tool_call",
+                    step_id=call_id,
+                    conversation=sample.uuid or "",
+                    stage="tool_call",
+                    kind="decision",
+                    status="reported",
+                    action="proceed",
+                    explanation="fine",
+                )
+            )
+    write_eval_log(log, str(tmp_path / "logs" / "old.eval"))
+    sentinel = sequential(
+        [threshold(by_argument(), escalate_at=0.5), human(stages=["tool_call"])]
+    )
+
+    with caplog.at_level("WARNING", logger="inspect_sentinel.scout"):
+        found = scanned(tmp_path / "scans", tmp_path / "logs", s=as_scanner(sentinel))
+
+    assert keyed(found["s"], "metadata.human") == {
+        (sample.uuid, call_id): source
+        for sample, ids in zip(log.samples, calls, strict=True)
+        for call_id, source in zip(ids, sources, strict=True)
+    }
+    assert [
+        r.getMessage() for r in caplog.records if r.name.startswith("inspect_sentinel")
+    ] == warnings
+
+
 @solver
 def own_calls_and_an_agent() -> Solver:
     """The sample's own generate, then one in a top-level agent."""
@@ -1573,6 +1810,93 @@ def test_state_carries_across_compactions_and_a_selector_picks_segments(
     assert counts(found["all"]) == list(range(1, 8))
     # the steps not chosen are not run, so the store sees only the last
     assert counts(found["latest"]) == [1]
+
+
+@monitor
+def cites_its_message() -> MonitorGroup:
+    # at every stage, a report citing the step's own message, which for a
+    # sub-agent's step is not among the transcript's messages
+    def cite(message: str | None) -> Observation:
+        return Observation.score(
+            0.5, "its message", references=[Reference(type="message", id=message or "")]
+        )
+
+    async def before_generate(context: Context, step: BeforeGenerate) -> Observation:
+        return cite(step.input[-1].id)
+
+    async def after_generate(context: Context, step: AfterGenerate) -> Observation:
+        return cite(step.output.message.id)
+
+    async def before_call(context: Context, step: BeforeToolCall) -> Observation:
+        return cite(step.message_id)
+
+    async def after_call(context: Context, step: AfterToolCall) -> Observation:
+        return cite(step.result.id)
+
+    return MonitorGroup(before_generate, after_generate, before_call, after_call)
+
+
+def test_every_reference_resolves_through_a_sub_agent_and_a_compaction(
+    tmp_path: Path,
+) -> None:
+    from inspect_ai.agent import as_tool, react
+    from inspect_ai.event import CompactionEvent
+    from inspect_ai.model import CompactionTrim
+
+    def calls(name: str, arguments: dict[str, Any]) -> ModelOutput:
+        return ModelOutput.for_tool_call("mockllm/model", name, arguments)
+
+    researcher = react(
+        name="researcher", description="Looks things up.", tools=[long_output()]
+    )
+    outputs = [
+        calls("researcher", {"input": "look"}),
+        calls("long_output", {"x": 0}),
+        calls("submit", {"answer": "found"}),
+        *[calls("long_output", {"x": i}) for i in range(1, 5)],
+        calls("submit", {"answer": "done"}),
+    ]
+    [log] = eval(
+        Task(
+            dataset=[Sample(input="go")],
+            solver=react(
+                tools=[long_output(), as_tool(researcher)],
+                compaction=CompactionTrim(threshold=700),
+            ),
+            sentinel=observe_only(cites_its_message()),
+        ),
+        model=get_model("mockllm/model", custom_outputs=outputs),
+        log_dir=str(tmp_path / "logs"),
+        display="none",
+    )
+    assert log.samples is not None
+    sample = log.samples[0]
+    assert any(isinstance(e, CompactionEvent) for e in sample.events)
+    held = {
+        "message": {m.id for m in sample.messages},
+        "event": {e.uuid for e in sample.events},
+    }
+    tool_events = {e.uuid for e in sample.events if isinstance(e, ToolEvent)}
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        step=as_scanner(cites_its_message()),
+        transcript=as_scanner(cites_its_message(), results="transcript"),
+        read=as_reader("cites_its_message"),
+    )
+
+    cited: list[dict[str, Any]] = []
+    for name, rows in found.items():
+        for row in rows:
+            for kind in ("message", "event"):
+                for reference in references(row, kind):
+                    assert reference["id"] in held[kind], (name, reference)
+                    assert reference["cite"] in row["explanation"]
+                    cited.append(reference)
+    # the sub-agent's tool messages are cited by their tool events
+    assert any(r["type"] == "event" and r["id"] in tool_events for r in cited)
+    assert {r["type"] for r in cited} == {"message", "event"}
 
 
 def test_a_protocol_reduces_to_its_strongest_decision(tmp_path: Path) -> None:
@@ -2037,7 +2361,7 @@ def test_a_scan_resumes_after_an_eval_loaded_the_entry_points(
     assert [r["value"] for r in found["read"]] == [0.0]
 
 
-def test_a_stored_timeline_cites_a_sub_agents_tool_message(tmp_path: Path) -> None:
+def test_a_stored_timeline_cites_a_sub_agents_tool_event(tmp_path: Path) -> None:
     log = run(tmp_path / "run", [[call(1, "main")]], None, helpers=[call(5, "helper")])
     assert log.samples is not None
     sample = log.samples[0]
@@ -2068,10 +2392,17 @@ def test_a_stored_timeline_cites_a_sub_agents_tool_message(tmp_path: Path) -> No
         s=as_scanner(by_argument(), timeline="target"),
     )
 
-    cited = {r["metadata.step_id"]: references(r, "message") for r in found["s"]}
+    # the helper's tool message is not in the transcript, so its tool event
+    cited = {
+        r["metadata.step_id"]: [
+            (ref["type"], ref["id"])
+            for ref in [*references(r, "message"), *references(r, "event")]
+        ]
+        for r in found["s"]
+    }
     assert cited == {
-        call_id: [{"type": "message", "id": tools[call_id].message_id}]
-        for call_id in ("helper", "main")
+        "helper": [("event", tools["helper"].uuid)],
+        "main": [("message", tools["main"].message_id)],
     }
 
 

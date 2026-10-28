@@ -196,18 +196,36 @@ async def test_concurrent_honours_a_lone_modify() -> None:
     assert decision.modified is not None
 
 
+@pytest.mark.parametrize(
+    ("peer", "action", "explanation"),
+    [
+        (says("proceed"), "modify", "safer (rewriter: modify; peer: proceed)"),
+        (says("escalate"), "modify", "safer (rewriter: modify; peer: escalate)"),
+        (says("reject"), "reject", "rewriter: modify; peer: reject"),
+        (says("terminate"), "terminate", "rewriter: modify; peer: terminate"),
+        (
+            rewrites(),
+            "reject",
+            "rewriter modified the call but so did peer: safer"
+            " (rewriter: modify; peer: modify)",
+        ),
+    ],
+    ids=["proceed", "escalate", "reject", "terminate", "modify"],
+)
 @pytest.mark.anyio
-async def test_concurrent_turns_a_contested_modify_into_a_reject() -> None:
+async def test_concurrent_lets_only_another_modify_contest_a_modify(
+    peer: Protocol, action: Action, explanation: str
+) -> None:
     decision = await _run(
-        concurrent({"rewriter": rewrites("safer"), "approver": says("proceed")}),
+        concurrent({"rewriter": rewrites("safer"), "peer": peer}),
         before_step(),
         ListRecorder(),
     )
-    assert decision is not None and decision.action == "reject"
-    assert decision.explanation == (
-        "rewriter modified the call but 1 other vote(s) also decided: safer"
-        " (rewriter: modify; approver: proceed)"
-    )
+    assert decision is not None
+    assert (decision.action, decision.explanation) == (action, explanation)
+    # an honoured modify keeps its rewrite, and a rejected one drops it
+    rewrite = ToolCall(id="call_1", function="bash", arguments={"cmd": "echo hi"})
+    assert decision.modified == (rewrite if action == "modify" else None)
 
 
 @pytest.mark.parametrize(
@@ -292,24 +310,6 @@ async def test_a_panel_of_advisory_votes_has_the_last_word(
         "panel/v2",
     ]
     assert recorder.bypassed_layers == [("", "wrapper")]
-
-
-@pytest.mark.anyio
-async def test_concurrent_honours_a_modify_the_others_only_escalated_against() -> None:
-    decision = await _run(
-        concurrent({"rewriter": rewrites(), "abstainer": says("escalate")}),
-        before_step(),
-        ListRecorder(),
-    )
-    assert decision is not None and decision.action == "modify"
-
-
-@pytest.mark.anyio
-async def test_concurrent_turns_two_modifies_into_a_reject() -> None:
-    decision = await _run(
-        concurrent({"a": rewrites(), "b": rewrites()}), before_step(), ListRecorder()
-    )
-    assert decision is not None and decision.action == "reject"
 
 
 @pytest.mark.anyio
@@ -483,14 +483,19 @@ def _edits(first: Action, second: Action) -> ProtocolGroup:
         (
             lambda: [_edits("modify", "modify")],
             "reject",
-            "edits.rewrite modified the call but 1 other vote(s) also decided"
+            "edits.rewrite modified the call but so did edits.audit"
             " (edits.rewrite: modify; edits.audit: modify)",
         ),
         (
             lambda: {"e": _edits("modify", "proceed"), "ok": says("proceed")},
+            "modify",
+            "e.rewrite: modify; e.audit: proceed; ok: proceed",
+        ),
+        (
+            lambda: {"e": _edits("modify", "proceed"), "other": rewrites()},
             "reject",
-            "e.rewrite modified the call but 1 other vote(s) also decided"
-            " (e.rewrite: modify; e.audit: proceed; ok: proceed)",
+            "e.rewrite modified the call but so did other"
+            " (e.rewrite: modify; e.audit: proceed; other: modify)",
         ),
     ],
 )

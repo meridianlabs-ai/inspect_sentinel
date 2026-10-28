@@ -26,7 +26,7 @@ def threshold(
 ) -> Protocol | ProtocolGroup:
     """Act on suspicion scores: each threshold is a floor, so at or above `escalate_at` the step is at least escalated, at or above `reject_at` at least rejected, and at or above `terminate_at` the sample is ended.
 
-    The decision is the strongest action whose threshold any score reaches, `terminate` over `reject` over `escalate`, and `proceed` when none is reached; the protocol abstains when no monitor reported. Give at least one threshold; to record scores without acting on them, use `observe_only()`. An escalation needs a `human()` or `handle_escalation()` after it in a `sequential()`, as in `sequential([threshold(monitors, escalate_at=0.6, terminate_at=0.9), human(stages=["tool_call"])])`; one that reaches the root with nothing to handle it ends the sample.
+    The decision is the strongest action whose threshold any score reaches, `terminate` over `reject` over `escalate`, and `proceed` when none is reached. When no monitor reported at a step it also decides `proceed`, explained as "no monitor reported", rather than abstaining. Give at least one threshold; to record scores without acting on them, use `observe_only()`. An escalation needs a `human()` or `handle_escalation()` after it in a `sequential()`, as in `sequential([threshold(monitors, escalate_at=0.6, terminate_at=0.9), human(stages=["tool_call"])])`; one that reaches the root with nothing to handle it ends the sample. Since `threshold` always decides at a stage it runs, it ends the chain there unless it escalates, so the person is asked only when it escalates, not about the steps its monitors skip; a link after it that is a fallback, such as another `threshold` or a rule, no longer runs at those steps either. Its `proceed` is a vote like any other, and a `proceed` does not contest a `modify`, so in a `concurrent()` beside a protocol that modifies the call the rewrite takes effect, whether its monitors scored low or did not report, and the threshold does not check the rewritten call.
 
     A threshold is one number for every score, or a mapping that sets one per dimension. In a mapping, `"<monitor>.<dimension>"` applies to one dimension of one monitor (the monitor's instance name, as in `Reported.name`), a bare `"<dimension>"` applies to that dimension from every monitor, a monitor reporting a single number is keyed by its instance name, and `"*"` applies to anything unlisted. The most specific key wins: qualified, then bare, then `"*"`. A score no key covers never triggers. A number is shorthand for `{"*": number}`. A key containing `.` is always `"<monitor>.<dimension>"`, qualified by the longest monitor instance name that prefixes it, and is an error if none does: it is never also a bare dimension, so with monitors `a` and `a.b` the key `"a.b.c"` is dimension `c` of `a.b`, and a dimension containing `.` is keyed through its monitor. A threshold that can never apply, because a stronger action's threshold is at or below it for every score it covers, is a configuration error: `escalate_at=0.9` beside `terminate_at=0.8` would never escalate. A key that one mapping lists and another does not is not such a conflict.
 
@@ -80,10 +80,13 @@ def threshold(
                 )
             watched |= member.accepted
 
-    async def decide(context: Context, step: Step) -> Decision | None:
+    async def decide(context: Context, step: Step) -> Decision:
         observations = await run_monitors(snapshot, context, step)
+        # a failed monitor raises here; proceeding when none reported keeps a
+        # human() after it in a sequential() from being asked about the steps
+        # its monitors skip
         if not observations:
-            return None
+            return Decision.proceed("no monitor reported")
         for level in levels:
             crossing = _crossing(observations, level.thresholds)
             if crossing is not None:
@@ -99,28 +102,28 @@ def threshold(
         context: Context,
         step: BeforeToolCall,
         escalations: Escalations,
-    ) -> Decision | None:
+    ) -> Decision:
         return await decide(context, step)
 
     async def tool_result(
         context: Context,
         step: AfterToolCall,
         escalations: Escalations,
-    ) -> Decision | None:
+    ) -> Decision:
         return await decide(context, step)
 
     async def model_input(
         context: Context,
         step: BeforeGenerate,
         escalations: Escalations,
-    ) -> Decision | None:
+    ) -> Decision:
         return await decide(context, step)
 
     async def model_output(
         context: Context,
         step: AfterGenerate,
         escalations: Escalations,
-    ) -> Decision | None:
+    ) -> Decision:
         return await decide(context, step)
 
     # one function per stage its monitors watch, so a stage is added by adding
