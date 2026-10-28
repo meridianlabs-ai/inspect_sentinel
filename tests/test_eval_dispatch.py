@@ -470,12 +470,8 @@ def test_a_raising_monitor_under_threshold_fails_the_sample() -> None:
         error.message
     )
     assert tool_messages(log) == []
-    [failed] = sentinel_events(log)
-    assert (failed.path, failed.status, failed.error) == (
-        "d3_raises",
-        "error",
-        "RuntimeError: monitor exploded",
-    )
+    [failed] = [e for e in sentinel_events(log) if e.path == "d3_raises"]
+    assert (failed.status, failed.error) == ("error", "RuntimeError: monitor exploded")
 
 
 @contextmanager

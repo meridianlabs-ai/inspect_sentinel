@@ -78,6 +78,9 @@ class ReplayReport:
     human_answer: str | None = None
     """The fixed answer given where `human` is `"unanswered"`: the first a `human()` at the step got from the fallback. `None` otherwise."""
 
+    human_paths: tuple[str, ...] = ()
+    """The paths of the `human()` instances that asked at the step, in the order they asked."""
+
     @property
     def report(self) -> Reported[Report] | None:
         """The replayed sentinel's own report at the step, at `path`: the root protocol's decision, or a lone monitor's observation (its last, if several of its functions watch the stage). `None` when it abstained or did not watch the stage."""
@@ -140,7 +143,7 @@ async def replay_monitor(
             replay_step.step,
         )
         recorded, failed, superseded = recorder.since(at)
-        source, answer = host.answered()
+        source, answer, asked = host.answered()
         reports.append(
             ReplayReport(
                 step=replay_step,
@@ -152,6 +155,7 @@ async def replay_monitor(
                 decision=decision,
                 human=source,
                 human_answer=answer,
+                human_paths=asked,
             )
         )
     return reports
@@ -233,6 +237,7 @@ class _ReplayHost:
         self._human = human
         self._step: ReplayStep | None = None
         self._sources: list[tuple[HumanSource, str]] = []
+        self._asked: list[str] = []
 
     @property
     def eval(self) -> EvalContext | None:
@@ -241,14 +246,18 @@ class _ReplayHost:
     def begin(self, step: ReplayStep) -> None:
         self._step = step
         self._sources = []
+        self._asked = []
 
-    def answered(self) -> tuple[HumanSource | None, str | None]:
-        # the least real source, and the fixed answer where it is the fallback's
+    def answered(self) -> tuple[HumanSource | None, str | None, tuple[str, ...]]:
+        # the least real source, the fixed answer where it is the fallback's,
+        # and the human() instances that asked
+        asked = tuple(self._asked)
         for weakest in _WEAKEST:
             for source, decision in self._sources:
                 if source == weakest:
-                    return source, decision if source == "unanswered" else None
-        return None, None
+                    fixed = decision if source == "unanswered" else None
+                    return source, fixed, asked
+        return None, None, asked
 
     async def generate(
         self,
@@ -300,6 +309,7 @@ class _ReplayHost:
             raise RuntimeError("The replay host was asked about a step it never began.")
         node = current_invocation()
         path = node.path if node is not None else ""
+        self._asked.append(path)
         recorded = replay_step.recorded_answers.get(path)
         if recorded is not None and (
             recorded.decision in choices or recorded.decision == "terminate"

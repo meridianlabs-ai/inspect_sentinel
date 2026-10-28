@@ -12,13 +12,12 @@ from inspect_scout import Result, Scanner, Transcript, scanner
 from inspect_sentinel import Decision, Failed, MonitorFailedError, Observation, Report
 
 from ._positions import Positions
-from ._results import step_result
-from ._scanner import Stage, within
-
-_EVENTS: list[Any] = ["model", "tool", "sentinel", "span_begin", "span_end"]
+from ._results import Cites, step_result
+from ._scanner import EVENTS, Stage, within
 
 
-@scanner(name="read", messages="all", events=_EVENTS)
+# the replay scanner's events, so a cite label numbers the same event in both
+@scanner(name="read", messages="all", events=EVENTS)
 def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcript]:
     """Read what a monitor or protocol reported in the runs it was attached to, as a transcript scanner: read mode.
 
@@ -31,6 +30,7 @@ def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcri
 
     async def scan(transcript: Transcript) -> list[Result]:
         positions = Positions(transcript.events, transcript.transcript_id)
+        cites = Cites(transcript)
         children: dict[tuple[str, str], list[SentinelEvent]] = {}
         for event in transcript.events:
             if isinstance(event, SentinelEvent) and _below(event.path, path):
@@ -77,6 +77,7 @@ def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcri
                     label=path or _name(event),
                     report=report,
                     citation=positions.cite(event, index),
+                    cites=cites,
                     children=shown,
                     metadata={"status": "superseded"} if superseded else {},
                 )

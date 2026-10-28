@@ -85,14 +85,20 @@ class Positions:
                     message = event.step_id
                 else:
                     message = None
-                return Reference(type="message", id=message) if message else None
+                if message:
+                    return Reference(type="message", id=message)
+                # an output with no message: its generate's event
+                return Reference(type="event", id=event.step_id) if first else None
             case "tool_call":
                 tool = self._tool(event.step_id, end, after=True)
             case _:
                 tool = self._tool(event.step_id, begin, after=False)
-        if tool is None or tool.message_id is None:
+        if tool is None:
             return None
-        return Reference(type="message", id=tool.message_id)
+        # the call's tool message, else, where none was recorded, its tool event
+        if tool.message_id:
+            return Reference(type="message", id=tool.message_id)
+        return Reference(type="event", id=tool.uuid) if tool.uuid else None
 
     def _attempt(
         self, event: ModelEvent, retrying: dict[str | None, tuple[str, ModelEvent]]
