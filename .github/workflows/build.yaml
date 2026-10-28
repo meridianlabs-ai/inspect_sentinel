@@ -67,9 +67,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The tags give the install a version past the last release, which
-          # inspect_ai checks when a task has a sentinel; a shallow clone
-          # installs as 0.1.dev1
           fetch-depth: 0
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
