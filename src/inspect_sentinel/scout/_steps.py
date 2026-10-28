@@ -20,11 +20,7 @@ from inspect_ai.event import (
 from inspect_ai.log import condense_events
 from inspect_scout import Transcript
 
-from inspect_sentinel import (
-    BeforeGenerate,
-    HumanAnswer,
-    ReplayStep,
-)
+from inspect_sentinel import BeforeGenerate, HumanAnswer, ReplayStep
 
 # sentinel's own messages projection, internal since 2026-10-26: the adapter
 # is its only caller
@@ -33,24 +29,26 @@ from inspect_sentinel._from_messages import steps_from_messages
 Turns: TypeAlias = Literal["recorded", "inferred", "stored"]
 
 _AGENT = "agent"
+# the registry name inspect_ai's built-in human approver records
+_HUMAN_APPROVER = "human"
 _HUMAN = "inspect_sentinel/human"
 
 
 def transcript_steps(
-    transcript: Transcript, eval_info: EvalInfo, timeline: str | None
+    transcript: Transcript, eval_info: EvalInfo | None, timeline: str | None
 ) -> tuple[list[ReplayStep], Turns]:
-    # A log that records where each model call was made replays from its
-    # events, the driver inspect_ai shares with live. One that does not, an
-    # older Inspect log or another source, replays from its messages, each
-    # assistant message taken for an agent turn, until turns can be inferred
-    # from its timeline (R7 PR 6). Each step gets its conversation's depth in
-    # the chosen timeline.
+    # A transcript from an Inspect log with model events replays from them,
+    # through the driver inspect_ai shares with live: by the origins its log
+    # records, else with turns inferred from its timeline (older Inspect
+    # logs). One imported from another source, which has no log header, or
+    # one with no model events replays from its messages, each assistant
+    # message taken for an agent turn (imports: decided by Charles
+    # 2026-10-27, until replay joins on stable message ids). Each step gets
+    # its conversation's depth in the chosen timeline.
     stored = _timeline(transcript, timeline) if timeline is not None else None
-    if not _origins(transcript):
-        if stored is not None:
-            raise NotImplementedError(
-                f"as_scanner(timeline={timeline!r}) needs a log that records where each model call was made (ModelEvent.origin); replaying older logs by their timeline comes later."
-            )
+    turns: Turns
+    header = eval_info if _model_events(transcript) else None
+    if header is None:
         steps = list(
             steps_from_messages(
                 transcript.messages, conversation=transcript.transcript_id
@@ -59,7 +57,7 @@ def transcript_steps(
         recorded = [e for e in transcript.events if isinstance(e, SentinelEvent)]
         if recorded:
             steps = _as_recorded(steps, recorded)
-        turns: Turns = "inferred"
+        turns = "inferred"
     else:
         # Scout hands every model input expanded, a list of messages it shares
         # between inputs; the driver reads inputs as ranges of a pool, so pool
@@ -71,15 +69,26 @@ def transcript_steps(
             events,
             data["messages"],
             sample_uuid=transcript.transcript_id,
-            eval_info=eval_info,
+            eval_info=header,
             timeline=stored,
+            # in a log from an eval that ran no sentinel, the decisions of
+            # inspect_ai's built-in human approver, and no other, are a
+            # person's
+            human_approvers=(_HUMAN_APPROVER,),
         )
-        turns = "stored" if stored is not None else "recorded"
-    depths = _depths(transcript, stored)
+        if stored is not None:
+            turns = "stored"
+        elif _origins(transcript):
+            turns = "recorded"
+        else:
+            turns = "inferred"
+    depths = _depths(transcript, stored, header is None)
     return [replace(s, depth=depths.get(s.step.conversation)) for s in steps], turns
 
 
-def _depths(transcript: Transcript, stored: Timeline | None) -> dict[str, int]:
+def _depths(
+    transcript: Transcript, stored: Timeline | None, from_messages: bool
+) -> dict[str, int]:
     # each conversation's depth: the shallowest level Scout's walk, as
     # llm_scanner(depth=) walks, gives a span holding one of its model calls,
     # in the timeline the conversations come from: the stored one chosen,
@@ -93,7 +102,7 @@ def _depths(transcript: Transcript, stored: Timeline | None) -> dict[str, int]:
         and isinstance(item.event, ModelEvent)
         and item.event.uuid is not None
     }
-    if not _origins(transcript):
+    if from_messages:
         # the messages projection's steps are all in the transcript's own
         conversations: dict[str | None, str] = dict.fromkeys(
             levels, transcript.transcript_id
@@ -172,18 +181,23 @@ def _walk_spans(
             yield from _walk_spans(item, depth, scannable_depth)
 
 
+def _model_events(transcript: Transcript) -> bool:
+    return any(isinstance(e, ModelEvent) for e in transcript.events)
+
+
 def _origins(transcript: Transcript) -> bool:
-    return any(
-        isinstance(e, ModelEvent) and e.origin is not None for e in transcript.events
+    # whether every model call records where it was made
+    return all(
+        e.origin is not None for e in transcript.events if isinstance(e, ModelEvent)
     )
 
 
 def _as_recorded(
     steps: list[ReplayStep], recorded: list[SentinelEvent]
 ) -> list[ReplayStep]:
-    # A log from before recorded origins that ran a sentinel: key each
-    # generate's model_input step as live did then, by its last input
-    # message's id with a count on repeats, so its rows join read mode's, and
+    # A transcript with no model events that ran a sentinel, which then keyed
+    # each generate's model_input step by its last input message's id: key
+    # them so, with a count on repeats, so its rows join read mode's, and
     # give each step the human() answers recorded at it.
     answers: dict[tuple[str, str], dict[str, HumanAnswer]] = {}
     for event in recorded:

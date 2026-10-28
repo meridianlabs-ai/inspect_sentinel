@@ -11,6 +11,15 @@ import anyio
 import pytest
 from inspect_ai import Task, eval
 from inspect_ai._sentinel._integration import EvalInfo, steps_from_events
+from inspect_ai.approval import (
+    Approval,
+    ApprovalPolicy,
+    Approver,
+    approver,
+    human_approver,
+)
+from inspect_ai.approval._human import acp as acp_module
+from inspect_ai.approval._human import approver as approver_module
 from inspect_ai.dataset import Sample
 from inspect_ai.event import (
     Event,
@@ -35,10 +44,11 @@ from inspect_ai.model import (
     ModelOutput,
     execute_tools,
     get_model,
+    model_origin,
 )
 from inspect_ai.scorer import Reference
 from inspect_ai.solver import Generate, Solver, TaskState, generate, solver, use_tools
-from inspect_ai.tool import Tool, ToolCall, ToolError, tool
+from inspect_ai.tool import Tool, ToolCall, ToolCallView, ToolError, tool
 from inspect_ai.util import StoreModel
 from inspect_ai.util._span import span
 from inspect_scout import (
@@ -836,8 +846,9 @@ def two_branches() -> Solver:
     return solve
 
 
+@pytest.mark.parametrize("origins", [True, False])
 def test_a_petri_shaped_log_replays_one_conversation_per_branch(
-    tmp_path: Path,
+    tmp_path: Path, origins: bool
 ) -> None:
     # Petri stores a "target" timeline whose branches are the rolled-back
     # attempts, which the span tree alone puts in one conversation
@@ -847,6 +858,8 @@ def test_a_petri_shaped_log_replays_one_conversation_per_branch(
         log_dir=str(tmp_path / "run"),
         display="none",
     )
+    if not origins:
+        without_origins(log)
     assert log.samples is not None
     sample = log.samples[0]
     spans = {e.name: e.id for e in sample.events if isinstance(e, SpanBeginEvent)}
@@ -1005,6 +1018,72 @@ def test_a_scan_gives_rows_at_every_watched_stage_unless_one_is_named(
     assert (row["metadata.stage"], row["metadata.turns"]) == ("tool_result", "recorded")
     assert row["metadata.step_id"] in {e.step_id for e in recorded}
     assert row["value"] == 0.0
+
+
+def test_only_an_eval_log_transcript_has_a_log_header(tmp_path: Path) -> None:
+    # the log driver takes a transcript with no header for one imported from
+    # another source; an Inspect log is one with or without a version in its
+    # header
+    log = run(tmp_path / "logs", [[call(1)]], None)
+    log.eval.packages = {}
+    write_eval_log(log, str(tmp_path / "old" / "old.eval"))
+
+    def transcript(source_type: str, uri: str | None) -> Transcript:
+        return Transcript(
+            transcript_id="t", source_type=source_type, source_uri=uri, messages=[]
+        )
+
+    async def headers() -> list[EvalInfo | None]:
+        contexts = Contexts()
+        return [
+            await contexts.eval_info(transcript("eval_log", log.location)),
+            await contexts.eval_info(
+                transcript("eval_log", str(tmp_path / "old" / "old.eval"))
+            ),
+            await contexts.eval_info(transcript("claude_code", None)),
+        ]
+
+    versioned, unversioned, imported = anyio.run(headers)
+    assert versioned is not None and versioned.inspect_ai_version is not None
+    assert unversioned == EvalInfo(inspect_ai_version=None, sentinel=False)
+    assert imported is None
+    # an eval log without a source has a header that cannot be read, rather
+    # than none
+    with pytest.raises(ValueError, match="'t' is from an eval log but has no"):
+        anyio.run(Contexts().eval_info, transcript("eval_log", None))
+
+
+def test_a_transcript_imported_from_another_source_replays_from_its_messages(
+    tmp_path: Path,
+) -> None:
+    # until replay joins on stable message ids, a transcript with no log
+    # header replays from its messages though it has model events, as one
+    # without them does (decided by Charles 2026-10-27)
+    log = run(tmp_path / "logs", [[call(9, "a"), call(9, "b")]], None)
+    assert log.samples is not None
+    sample = log.samples[0]
+
+    def steps(source_type: str, events: Sequence[Event]) -> list[tuple[str, str, str]]:
+        transcript = Transcript(
+            transcript_id=sample.uuid or "",
+            source_type=source_type,
+            source_uri=log.location if source_type == "eval_log" else None,
+            messages=sample.messages,
+            events=list(events),
+        )
+        results = anyio.run(as_scanner(replay_check()), transcript)
+        assert isinstance(results, list)
+        return [
+            (r.metadata["step_id"], r.metadata["stage"], r.metadata["turns"])
+            for r in results
+            if r.metadata
+        ]
+
+    without = [e for e in sample.events if not isinstance(e, ModelEvent)]
+    imported = steps("claude_code", sample.events)
+    assert imported == steps("claude_code", without)
+    assert {turns for _, _, turns in imported} == {"inferred"}
+    assert {turns for _, _, turns in steps("eval_log", sample.events)} == {"recorded"}
 
 
 @scanner(messages="all")
@@ -1338,14 +1417,16 @@ def test_loading_inspect_ai_entry_points_does_not_load_scout(
     assert done.stdout.split()[-1] == "False"
 
 
+@pytest.mark.parametrize("model_events", [True, False])
 def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
-    tmp_path: Path,
+    tmp_path: Path, model_events: bool
 ) -> None:
     log = run(tmp_path / "run", [[call(9, "a")]], observe_only(replay_check()))
     assert log.samples is not None
     sample = log.samples[0]
     # as an inspect_ai of that time wrote it: no origins, and the generate
-    # stages keyed by the last input message's id and the output message's
+    # stages keyed by the last input message's id and the output message's;
+    # without model events, it replays from its messages
     turns = {e.uuid: e for e in sample.events if isinstance(e, ModelEvent) and e.uuid}
     for event in sample.events:
         if isinstance(event, ModelEvent):
@@ -1357,9 +1438,17 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
                 if event.stage == "model_input"
                 else turn.output.message.id or ""
             )
-    # a person rejected the call through human(), as a sentinel recorded it
-    sample.events.append(
+    # a person rejected the call through human(), as a sentinel recorded it:
+    # in the sentinel span of the call's tool_call step
+    at, step = next(
+        (i, e)
+        for i, e in enumerate(sample.events)
+        if isinstance(e, SentinelEvent) and (e.stage, e.step_id) == ("tool_call", "a")
+    )
+    sample.events.insert(
+        at + 1,
         SentinelEvent(
+            span_id=step.span_id,
             factory="inspect_sentinel/human",
             path="human",
             function="tool_call",
@@ -1370,8 +1459,10 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
             status="reported",
             action="reject",
             explanation="not that",
-        )
+        ),
     )
+    if not model_events:
+        sample.events = [e for e in sample.events if not isinstance(e, ModelEvent)]
     write_eval_log(log, str(tmp_path / "logs" / "old.eval"))
     escalating = sequential(
         [threshold(by_argument(), escalate_at=0.5), human(stages=["tool_call"])]
@@ -1393,7 +1484,10 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
         assert cited == {
             k: references(r, kind) for k, r in by_key(found["read"]).items()
         }
-    assert all(references(r, "event") for r in found["read"])
+    if model_events:
+        # read mode cites the step's model event, which a transcript without
+        # them does not have
+        assert all(references(r, "event") for r in found["read"])
     [row] = found["human"]
     assert (row["answer"], row["metadata.human"], row["metadata.turns"]) == (
         "reject",
@@ -1423,18 +1517,27 @@ def test_answers_recorded_under_another_human_path_are_unused_with_one_warning(
     warnings: list[str],
 ) -> None:
     calls = [["a1", "a2"], ["b1", "b2"]]
-    log = run(tmp_path / "run", [[call(9, c) for c in ids] for ids in calls], None)
+    log = run(
+        tmp_path / "run",
+        [[call(9, c) for c in ids] for ids in calls],
+        observe_only(replay_check()),
+    )
     assert log.samples is not None
-    # an older log, whose answers each step carries as recorded, in which a
-    # person answered each transcript's two calls through a human() at the
-    # two paths of recorded_at
+    # a person answered each transcript's two calls through a human() at the
+    # two paths of recorded_at, as a sentinel recorded it: in the sentinel
+    # span of the call's tool_call step
     for sample, ids in zip(log.samples, calls, strict=True):
-        for event in sample.events:
-            if isinstance(event, ModelEvent):
-                event.origin = None
         for call_id, path in zip(ids, recorded_at, strict=True):
-            sample.events.append(
+            at, step = next(
+                (i, e)
+                for i, e in enumerate(sample.events)
+                if isinstance(e, SentinelEvent)
+                and (e.stage, e.step_id) == ("tool_call", call_id)
+            )
+            sample.events.insert(
+                at + 1,
                 SentinelEvent(
+                    span_id=step.span_id,
                     factory="inspect_sentinel/human",
                     path=path,
                     function="tool_call",
@@ -1445,7 +1548,7 @@ def test_answers_recorded_under_another_human_path_are_unused_with_one_warning(
                     status="reported",
                     action="proceed",
                     explanation="fine",
-                )
+                ),
             )
     write_eval_log(log, str(tmp_path / "logs" / "old.eval"))
     sentinel = sequential(
@@ -1585,6 +1688,8 @@ def test_depth_reads_a_transcripts_model_inputs_as_scout_does(tmp_path: Path) ->
     # the same holds for a transcript handed to the scanner directly
     handed = Transcript(
         transcript_id=sample.uuid or "",
+        source_type="eval_log",
+        source_uri=log.location,
         messages=sample.messages,
         events=sample.events,
     )
@@ -1642,6 +1747,8 @@ def test_depth_without_timeline_is_the_span_trees_whatever_is_stored(
     # a transcript handed to the scanner directly, with its stored timeline
     handed = Transcript(
         transcript_id=sample.uuid or "",
+        source_type="eval_log",
+        source_uri=str(tmp_path / "logs" / "stored.eval"),
         messages=sample.messages,
         events=sample.events,
         timelines=sample.timelines,
@@ -2508,3 +2615,178 @@ async def test_the_probe_digests_a_context_a_sidecar_learns_late() -> None:
     assert before["replay_check"] == before["hands_over"]
     assert after["replay_check"] == after["hands_over"]
     assert before["hands_over"] != after["hands_over"]
+
+
+# logs that do not record where each model call was made (R7 PR 6)
+
+
+def without_origins(log: EvalLog) -> EvalLog:
+    # as an inspect_ai from before ModelEvent.origin wrote it
+    for sample in log.samples or []:
+        for event in sample.events:
+            if isinstance(event, ModelEvent):
+                event.origin = None
+    return log
+
+
+@pytest.mark.parametrize(
+    "stage", ["model_input", "model_output", "tool_call", "tool_result"]
+)
+def test_a_log_without_origins_replays_as_one_with_them(
+    tmp_path: Path, stage: Stage
+) -> None:
+    log = run(
+        tmp_path / "run",
+        [[call(1), call(2)], [call(3)]],
+        observe_only(replay_check()),
+        helpers=[call(5, f"sub{i}") for i in range(2)],
+    )
+    write_eval_log(log, str(tmp_path / "recorded" / "log.eval"))
+    write_eval_log(without_origins(log), str(tmp_path / "inferred" / "log.eval"))
+
+    found = {
+        name: scanned(
+            tmp_path / f"scans-{name}",
+            tmp_path / name,
+            replay=as_scanner(replay_check(), stage=stage),
+        )["replay"]
+        for name in ("recorded", "inferred")
+    }
+
+    recorded = keyed(found["recorded"], "metadata.metadata")
+    inferred = keyed(found["inferred"], "metadata.metadata")
+    assert recorded and inferred == recorded
+    assert {r["metadata.turns"] for r in found["recorded"]} == {"recorded"}
+    assert {r["metadata.turns"] for r in found["inferred"]} == {"inferred"}
+
+
+@monitor
+def decisions_so_far() -> MonitorGroup:
+    # the human() decisions a generate is handed
+    async def model_input(context: Context, step: BeforeGenerate) -> Observation:
+        return Observation(
+            suspicion=0.0,
+            metadata={
+                "decisions": [
+                    [d.decided.name, d.decided.report.action]
+                    for d in step.human_decisions or []
+                ]
+            },
+        )
+
+    return MonitorGroup(model_input)
+
+
+@approver(name="team_review")
+def team_review() -> Approver:
+    async def approve(
+        message: str, call: ToolCall, view: ToolCallView, history: list[ChatMessage]
+    ) -> Approval:
+        return Approval(decision="reject", explanation="not ours")
+
+    return approve
+
+
+@pytest.mark.parametrize("person", ["human", "team_review"])
+def test_only_the_built_in_human_approver_is_a_person_in_a_log_without_a_sentinel(
+    tmp_path: Path, person: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def acp(**kwargs: object) -> Approval | None:
+        return None
+
+    async def panel(
+        message: str,
+        call: ToolCall,
+        view: ToolCallView,
+        history: object,
+        choices: list[str],
+    ) -> Approval:
+        return Approval(decision="reject", explanation="not that")
+
+    monkeypatch.setattr(acp_module, "request_human_approval_via_acp", acp)
+    monkeypatch.setattr(approver_module, "panel_approval", panel)
+    [log] = eval(
+        Task(
+            dataset=[Sample(input="add")],
+            solver=[use_tools(addition()), generate()],
+            approval=[
+                ApprovalPolicy(
+                    human_approver() if person == "human" else team_review(), "*"
+                )
+            ],
+        ),
+        model=get_model(
+            "mockllm/model",
+            custom_outputs=[call(1), ModelOutput.from_content("mockllm/model", "done")],
+        ),
+        log_dir=str(tmp_path / "run"),
+        display="none",
+    )
+    assert log.status == "success", log.error
+    write_eval_log(without_origins(log), str(tmp_path / "logs" / "log.eval"))
+
+    found = scanned(
+        tmp_path / "scans", tmp_path / "logs", replay=as_scanner(decisions_so_far())
+    )
+
+    last = found["replay"][-1]["metadata.metadata"]["decisions"]
+    assert last == ([["human", "reject"]] if person == "human" else [])
+
+
+def test_a_transcript_without_model_events_replays_from_its_messages(
+    tmp_path: Path,
+) -> None:
+    log = run(tmp_path / "run", [[call(1), call(2)]], None)
+    assert log.samples is not None
+    sample = log.samples[0]
+    sample.events = [e for e in sample.events if not isinstance(e, ModelEvent)]
+    write_eval_log(log, str(tmp_path / "logs" / "log.eval"))
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        replay=as_scanner(conversations()),
+    )
+
+    generates = [m for m in sample.messages if isinstance(m, ChatMessageAssistant)]
+    assert len(found["replay"]) == len(generates)
+    assert {r["metadata.turns"] for r in found["replay"]} == {"inferred"}
+
+
+@solver
+def asks_a_helper_then_answers() -> Solver:
+    """A helper's call outside the agent's turns, then the agent's own."""
+
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        with model_origin("helper"):
+            await get_model().generate([ChatMessageUser(content="Summarise the task.")])
+        return await generate(state)
+
+    return solve
+
+
+@pytest.mark.parametrize("helper_origin", [True, False])
+def test_a_log_with_a_call_that_records_no_origin_has_inferred_turns(
+    tmp_path: Path, helper_origin: bool
+) -> None:
+    [log] = eval(
+        Task(dataset=[Sample(input="go")], solver=asks_a_helper_then_answers()),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "run"),
+        display="none",
+    )
+    assert log.samples is not None
+    if not helper_origin:
+        # the helper's call alone records no origin, so is inferred
+        for event in log.samples[0].events:
+            if isinstance(event, ModelEvent) and event.origin == "helper":
+                event.origin = None
+    write_eval_log(log, str(tmp_path / "logs" / "log.eval"))
+
+    found = scanned(
+        tmp_path / "scans", tmp_path / "logs", replay=as_scanner(conversations())
+    )
+
+    assert {r["metadata.turns"] for r in found["replay"]} == {
+        "recorded" if helper_origin else "inferred"
+    }
