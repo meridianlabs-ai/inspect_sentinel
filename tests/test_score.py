@@ -581,7 +581,7 @@ async def test_a_long_input_keeps_the_newest_messages_and_marks_the_cut() -> Non
     assert "M4 " in p
     assert not any(f"M{i} " in p for i in range(4))
     assert observation.metadata == {"left_out": {"input": 4}}
-    # the kept message keeps its number and id, so its cite still resolves
+    # the kept message is renumbered to [M1], so the cite [M1] still resolves to it
     assert f"[M1] USER ({n}):" in p
     assert [reference.id for reference in observation.references] == ["M4"]
 

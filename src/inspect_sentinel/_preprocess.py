@@ -252,9 +252,9 @@ async def render_step(
         source: _Source, messages: Sequence[ChatMessage] | None, unknown: str
     ) -> str:
         # a head cut drops the oldest messages of a shown list and names the
-        # count in one marker line before the kept ones; the marker is not a
-        # numbered message, so the kept messages keep their ids, numbers and
-        # cites
+        # count in one marker line before the kept ones; the marker takes no
+        # message number, so the render renumbers the kept messages from the
+        # top, and each cite still resolves to the kept message it names
         if messages is None:
             return unknown
         dropped = cut.get(source, 0)
