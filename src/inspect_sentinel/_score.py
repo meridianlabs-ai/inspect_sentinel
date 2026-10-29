@@ -24,6 +24,7 @@ from ._preprocess import (
     StepPreprocessor,
     cuttable,
     head_cut,
+    keeps_newest_input,
     preprocess_step,
     render_step,
 )
@@ -357,8 +358,10 @@ async def _fit(
     if await count(content) <= limit:
         return content, extract_refs, {}
 
-    # the fixed part alone, with every shown message cut: when even that does
-    # not fit, no head cut can, so name the parts and raise
+    # the fixed part alone, with every cuttable message cut: when even that does
+    # not fit, no head cut can, so name the parts and raise. Before a generate,
+    # the fixed part includes the newest INPUT message, the request being
+    # judged, so a step the model is not shown is never scored
     total = cuttable(step)
     content, extract_refs = await render(head_cut(step, total))
     fixed = await count(content)
@@ -407,10 +410,17 @@ def _too_big(
         parts.append("the task")
     parts.append("the dimensions")
     parts.extend(_step_parts(step))
+    if keeps_newest_input(step):
+        parts.append("the newest INPUT message")
     parts.append("the answer tool")
+    left_out = (
+        "every other HISTORY, AGENT MESSAGES and INPUT message"
+        if keeps_newest_input(step)
+        else "every HISTORY, AGENT MESSAGES and INPUT message"
+    )
     return (
         f"The fixed part of the score prompt does not fit the input budget for {target}, "
-        f"even with every HISTORY, AGENT MESSAGES and INPUT message left out: it counts "
+        f"even with {left_out} left out: it counts "
         f"{count} tokens, over the budget of {budget} ({limit} with the 5% safety margin). "
         f"The fixed part is {_and_list(parts)}. Shorten it or raise the model's context window."
     )

@@ -32,6 +32,7 @@ from inspect_sentinel._types import Monitor
 
 from ._fakes import (
     FakeHost,
+    before_generate_step,
     before_tool_call,
     eval_context,
     in_step,
@@ -634,6 +635,39 @@ async def test_a_fixed_part_too_big_raises_and_names_the_parts() -> None:
     assert "budget of 10" in message
     # it raised before asking the model
     assert host.inputs == []
+
+
+@pytest.mark.anyio
+async def test_before_a_generate_a_newest_input_message_too_big_raises() -> None:
+    # the newest INPUT message is the request being judged, so a cut never
+    # leaves it out: when it cannot fit, score raises rather than score a step
+    # the model was not shown
+    step = replace(before_generate_step(), input=messages("I", 3))
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=4000)
+    with pytest.raises(RuntimeError) as raised:
+        await score(host, step, "Safe?")
+    message = str(raised.value)
+    assert "the newest INPUT message" in message
+    assert "budget of 4000" in message
+    # it raised before asking the model
+    assert host.inputs == []
+
+
+@pytest.mark.anyio
+async def test_before_a_generate_the_cut_keeps_the_newest_input_message() -> None:
+    step = replace(
+        before_generate_step(), history=messages("H", 2), input=messages("I", 4)
+    )
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=8421)
+    observation = await score(
+        host, step, "Safe?", preprocessor=StepPreprocessor(history_window=AllMessages())
+    )
+    p, n = prompt(host), nonce(host)
+    # the older messages are cut, HISTORY first, and the newest INPUT message stays
+    assert observation.metadata == {"left_out": {"history": 2, "input": 3}}
+    assert f"[3 earlier messages left out to fit the context window ({n})]" in p
+    assert "I3 " in p
+    assert not any(gone in p for gone in ("H0 ", "H1 ", "I0 ", "I1 ", "I2 "))
 
 
 @monitor

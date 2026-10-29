@@ -204,16 +204,30 @@ def _shown(step: Step, source: _Source) -> Sequence[ChatMessage]:
     return messages or []
 
 
+def _cuttable_in(step: Step, source: _Source) -> int:
+    shown = len(_shown(step, source))
+    # before a generate, the newest INPUT message is the request being judged,
+    # so a cut keeps it: a step the model is not shown cannot be scored
+    if source == "input" and isinstance(step, BeforeGenerate):
+        return max(shown - 1, 0)
+    return shown
+
+
+def keeps_newest_input(step: Step) -> bool:
+    """Whether a head cut keeps the newest INPUT message as part of the fixed part of the prompt: before a generate, when `input` shows a message."""
+    return isinstance(step, BeforeGenerate) and bool(_shown(step, "input"))
+
+
 def cuttable(step: Step) -> int:
-    """How many messages a head cut could drop from the step's shown lists."""
-    return sum(len(_shown(step, source)) for source in _CUT_ORDER)
+    """How many messages a head cut could drop from the step's shown lists. Before a generate, the newest INPUT message is not cuttable."""
+    return sum(_cuttable_in(step, source) for source in _CUT_ORDER)
 
 
 def head_cut(step: Step, k: int) -> dict[_Source, int]:
-    """How many head messages to drop from each shown list to drop `k` in all, HISTORY first, then AGENT MESSAGES, then INPUT. Only the lists that lose messages are keyed."""
+    """How many head messages to drop from each shown list to drop `k` in all, HISTORY first, then AGENT MESSAGES, then INPUT. Before a generate, the newest INPUT message is never dropped. Only the lists that lose messages are keyed."""
     counts: dict[_Source, int] = {}
     for source in _CUT_ORDER:
-        take = min(k, len(_shown(step, source)))
+        take = min(k, _cuttable_in(step, source))
         if take:
             counts[source] = take
             k -= take
