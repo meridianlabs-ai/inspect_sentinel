@@ -1,5 +1,6 @@
 import anyio
 import pytest
+from inspect_ai._sentinel._config import Sentinels as InspectAISentinels
 
 import inspect_sentinel
 import inspect_sentinel._integration
@@ -113,3 +114,16 @@ def test_wire_types_come_from_inspect_ai() -> None:
 
     assert inspect_sentinel.Action is SentinelAction
     assert inspect_sentinel.Suspicion is SentinelSuspicion
+
+
+def _fits_inspect_ai_sentinel_parameter(
+    sentinels: inspect_sentinel.Sentinels,
+) -> InspectAISentinels:
+    return sentinels
+
+
+def test_sentinels_fit_inspect_ai_sentinel_parameter() -> None:
+    # inspect_ai types `sentinel=` with a copy of the shape of `Sentinels`, so
+    # its signatures type check without this package; pyright checks that every
+    # `Sentinels` still fits that copy
+    assert _fits_inspect_ai_sentinel_parameter
