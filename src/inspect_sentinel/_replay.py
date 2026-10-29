@@ -117,14 +117,14 @@ async def replay_monitor(
         One report per step `select` chose, in the order given.
 
     Raises:
-        ValueError: If two steps of one stage share an id.
+        ValueError: If two steps of one stage and conversation share an id.
     """
     root, name, path = _root(sentinel)
     watched = watched_stages(root)
     store = Store()
     recorder = _Recorder()
     host = _ReplayHost(context, human)
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
     reports: list[ReplayReport] = []
     for replay_step in steps:
         _check(replay_step, seen)
@@ -175,11 +175,13 @@ def _root(sentinel: Sentinels) -> tuple[Protocol, str, str]:
     return root, registry_unqualified_name(registry_info(root)), ""
 
 
-def _check(replay_step: ReplayStep, seen: set[tuple[str, str]]) -> None:
-    key = (replay_step.stage, replay_step.id)
+def _check(replay_step: ReplayStep, seen: set[tuple[str, str, str]]) -> None:
+    # a tool call id is its provider's, so two agents' calls can share one
+    conversation = replay_step.step.conversation
+    key = (conversation, replay_step.stage, replay_step.id)
     if key in seen:
         raise ValueError(
-            f"Two {replay_step.stage!r} steps have the id {replay_step.id!r}; a step id must be unique within a transcript for its stage, so their reports could not be told apart."
+            f"Two {replay_step.stage!r} steps of conversation {conversation!r} have the id {replay_step.id!r}; a step id must be unique within its conversation for its stage, so their reports could not be told apart."
         )
     seen.add(key)
 

@@ -715,6 +715,58 @@ def test_steps_are_selected_by_transcript_as_well_as_step(
     assert built == [labelled]
 
 
+class Seen(StoreModel):
+    steps: int = 0
+
+
+@monitor
+def counts_both() -> MonitorGroup:
+    # a tenth of the steps the monitor's store has seen, at a call and its
+    # result, this one included
+    async def tool_call(context: Context, step: BeforeToolCall) -> Observation:
+        seen = context.store_as(Seen)
+        seen.steps += 1
+        return Observation.score(seen.steps / 10)
+
+    async def tool_result(context: Context, step: AfterToolCall) -> Observation:
+        seen = context.store_as(Seen)
+        seen.steps += 1
+        return Observation.score(seen.steps / 10)
+
+    return MonitorGroup(tool_call, tool_result)
+
+
+def test_a_table_with_a_stage_runs_only_that_stages_steps(tmp_path: Path) -> None:
+    # a call and its result share an id; a filtered results dataframe keeps
+    # each row's stage, a table of ids alone selects every stage
+    run(tmp_path / "logs", [[call(1, "c0"), call(2, "c1")]], None)
+    every = scan(
+        scanners={"s": as_scanner(counts_both())},
+        transcripts=transcripts_from(str(tmp_path / "logs")),
+        scans=str(tmp_path / "every"),
+        display="none",
+        max_processes=1,
+    )
+    frame: Any = scan_results_df(every.location).scanners["s"]
+    calls = frame[frame["metadata.stage"] == "tool_call"]
+    ids = calls[["transcript_id", "metadata.step_id"]].rename(
+        columns={"metadata.step_id": "step_id"}
+    )
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        staged=as_scanner(counts_both(), stage="tool_call", steps=calls),
+        unstaged=as_scanner(counts_both(), stage="tool_call", steps=ids),
+    )
+
+    def scores(rows: list[Row]) -> list[tuple[str, float]]:
+        return [(r["metadata.step_id"], r["value"]) for r in rows]
+
+    assert scores(found["staged"]) == [("c0", 0.1), ("c1", 0.2)]
+    assert scores(found["unstaged"]) == [("c0", 0.1), ("c1", 0.3)]
+
+
 @human_stand_in
 async def approves(
     step: ReplayStep, escalations: Escalations, choices: Sequence[str]
@@ -1870,6 +1922,41 @@ def test_a_label_names_one_transcripts_sub_agent_step_of_a_shared_call_id(
     )
 
     assert keyed(found["s"], "value") == {(labelled, "shared"): 0.6}
+
+
+def test_two_agents_reusing_a_call_id_each_read_their_own_evidence(
+    tmp_path: Path,
+) -> None:
+    # a sub-agent and the agent each make a call with the id "shared", as a
+    # provider that derives call ids can
+    log = run(
+        tmp_path / "logs",
+        [[call(1, "shared")]],
+        threshold(by_argument(), reject_at=0.9),
+        helpers=[call(5, "shared")],
+    )
+    assert log.samples is not None
+    helper, agent = [
+        e
+        for e in log.samples[0].events
+        if isinstance(e, ToolEvent) and e.id == "shared"
+    ]
+
+    found = scanned(tmp_path / "scans", tmp_path / "logs", read=as_reader())
+
+    # each decision shows its own child's report and cites its own call: the
+    # sub-agent's by its tool event, as its message is not the transcript's
+    assert [
+        (
+            r["metadata.step_id"],
+            [c["suspicion"] for c in r["metadata.reports"]],
+            [ref["id"] for kind in ("message", "event") for ref in references(r, kind)],
+        )
+        for r in found["read"]
+    ] == [
+        ("shared", [0.5], [helper.uuid]),
+        ("shared", [0.1], [agent.message_id]),
+    ]
 
 
 DRIVING_SCRIPT = """

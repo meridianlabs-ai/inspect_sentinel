@@ -45,7 +45,7 @@ from ._select import (
     callback_ref,
     selector_from,
     stand_in_from,
-    table_pairs,
+    table_rows,
 )
 from ._sources import factory_sources, import_factory_sources
 from ._steps import transcript_steps
@@ -102,7 +102,7 @@ def as_scanner(
         sentinel: A monitor or protocol, or monitors and protocols that resolve to one root, as `Task(sentinel=)` takes them, or their configuration. Several monitors with no protocol are refused: scan them one at a time.
         results: `"step"` for one result per step, `"transcript"` for one per transcript: a monitor's highest suspicion, per dimension when structured, or a protocol's strongest decision, citing the steps that set it.
         stage: The stage whose steps give results; every stage the sentinel watches when None, each row carrying its stage. Every watched stage still runs either way. Scout's summary of a scan averages a scanner's values over all its rows, so pass `stage` for a summary of one stage.
-        steps: Which steps to run the sentinel at: a label table (`StepTable`), such as a filtered results dataframe, or a selector `(transcript_id, step) -> bool` registered with `@step_selector`, or the `module:name` it is registered as. The others are not run, so a monitor's state does not see them. A transcript a table does not list gives no results and its steps are not rebuilt; narrow the scan's transcripts to the table's too, so they are not read.
+        steps: Which steps to run the sentinel at: a label table (`StepTable`), such as a filtered results dataframe, where a `stage` column limits each row to its stage and a table without one selects a step at every stage, or a selector `(transcript_id, step) -> bool` registered with `@step_selector`, or the `module:name` it is registered as. The others are not run, so a monitor's state does not see them. A transcript a table does not list gives no results and its steps are not rebuilt; narrow the scan's transcripts to the table's too, so they are not read.
         human: How `human()` is answered where no answer was recorded at the step; a recorded answer is always given first, to the `human()` at the path that recorded it, and the scan logs one warning where, at a step, a `human()` asks at a path with no recorded answer while an answer was recorded at a path where no `human()` asked. `"approve"`, `"reject"` or `"terminate"` gives that answer, or `terminate` where the asking `human()` does not offer it, as `reject` is not offered after a tool runs or a model replies. Or a stand-in registered with `@human_stand_in`, or the `module:name` it is registered as. A selector or stand-in defined in a notebook, REPL or `python -c` is refused, since a scan's worker processes cannot load it; put it in a `.py` file next to the notebook.
         timeline: The stored timeline whose agent spans and branches are the conversations, such as Petri's `"target"`, in place of the log's span tree. Raises for a transcript with no timeline of that name.
         depth: Run only steps whose conversation is at most this deep in the timeline (`ReplayStep.depth`), counting as `llm_scanner(depth=)` does. All steps when None.
@@ -122,7 +122,7 @@ def as_scanner(
         if steps is None
         else callback_ref("step_selector", steps, "steps")
         if isinstance(steps, str) or callable(steps)
-        else {"table": table_pairs(steps)}
+        else {"table": table_rows(steps)}
     )
     policy: object = (
         human if human in ANSWERS else callback_ref("human_stand_in", human, "human")

@@ -31,10 +31,13 @@ def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcri
     async def scan(transcript: Transcript) -> list[Result]:
         positions = Positions(transcript.events, transcript.transcript_id)
         cites = Cites(transcript)
-        children: dict[tuple[str, str], list[SentinelEvent]] = {}
+        # each step's children's reports, by conversation as well as stage and
+        # id, since two agents' tool calls can share an id
+        children: dict[tuple[str, str, str], list[SentinelEvent]] = {}
         for event in transcript.events:
             if isinstance(event, SentinelEvent) and _below(event.path, path):
-                children.setdefault((event.stage, event.step_id), []).append(event)
+                key = (event.conversation, event.stage, event.step_id)
+                children.setdefault(key, []).append(event)
         # a failure at or below the instance, at any stage, fails the read, as
         # in replay, including one a protocol went on without
         failures = [
@@ -64,7 +67,9 @@ def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcri
             shown = (
                 [
                     _child(c)
-                    for c in children.get((event.stage, event.step_id), [])
+                    for c in children.get(
+                        (event.conversation, event.stage, event.step_id), []
+                    )
                     if c.status == "reported"
                 ]
                 if isinstance(report, Decision)

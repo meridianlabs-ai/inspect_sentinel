@@ -7,6 +7,7 @@ from inspect_ai.event import (
     SentinelEvent,
     SpanBeginEvent,
     SpanEndEvent,
+    ToolEvent,
 )
 from inspect_ai.model import ChatMessage, ChatMessageUser, GenerateConfig, ModelOutput
 from inspect_scout import Result, Transcript
@@ -133,6 +134,40 @@ async def test_a_generate_in_another_conversation_does_not_overlap() -> None:
     ]
 
     assert cited(await read("model_input", events)) == {"u1": ["ea"], "u2": ["eb"]}
+
+
+def tool(uuid: str, parent: str) -> ToolEvent:
+    # a call with the id "shared", whose tool message is r<uuid>
+    return ToolEvent(
+        uuid=uuid,
+        span_id=parent,
+        id="shared",
+        function="addition",
+        arguments={},
+        message_id=f"r{uuid}",
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("stage", ["tool_call", "tool_result"])
+async def test_two_agents_calls_sharing_an_id_cite_their_own_tool_events(
+    stage: Stage,
+) -> None:
+    # both agents' calls are checked before either runs, and b's runs first
+    events = [
+        agent("a"),
+        agent("b"),
+        *checked("s1", "tool_call", "shared", "a"),
+        *checked("s2", "tool_call", "shared", "b"),
+        tool("eb", "b"),
+        tool("ea", "a"),
+        *checked("s3", "tool_result", "shared", "a"),
+        *checked("s4", "tool_result", "shared", "b"),
+    ]
+
+    results = await read(stage, events)
+
+    assert [[ref.id for ref in r.references] for r in results] == [["ea"], ["eb"]]
 
 
 @pytest.mark.anyio
