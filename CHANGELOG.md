@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.3.0...0.3.1) (2026-10-29)
+
+
+### Features
+
+* fit the score prompt to the context window of the monitor model ([#156](https://github.com/meridianlabs-ai/inspect_sentinel/issues/156)) ([9f3cebe](https://github.com/meridianlabs-ai/inspect_sentinel/commit/9f3cebebf580d2574dface09a77b21eb41f4b6e6))
+
 ## [0.3.0](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.2.0...0.3.0) (2026-10-27)
 
 
