@@ -75,6 +75,7 @@ from inspect_sentinel import (
     sequential,
     threshold,
 )
+from inspect_sentinel._from_messages import steps_from_messages
 from inspect_sentinel._replay import replay_monitor
 from inspect_sentinel.scout import (
     Stage,
@@ -86,6 +87,7 @@ from inspect_sentinel.scout import (
     step_selector,
 )
 from inspect_sentinel.scout._context import Contexts
+from inspect_sentinel.scout._select import selector_from, table_rows
 from inspect_sentinel.scout._steps import transcript_steps
 from tests._fakes import View
 
@@ -767,6 +769,63 @@ def test_a_table_with_a_stage_runs_only_that_stages_steps(tmp_path: Path) -> Non
     assert scores(found["unstaged"]) == [("c0", 0.1), ("c1", 0.3)]
 
 
+def two_agents_sharing_a_call_id() -> list[ReplayStep]:
+    # the steps of two agents' conversations, each calling "shared"
+    messages: list[ChatMessage] = [
+        ChatMessageUser(content="add"),
+        ChatMessageAssistant(
+            content="",
+            tool_calls=[ToolCall(id="shared", function="addition", arguments={"x": 1})],
+        ),
+        ChatMessageTool(content="2", tool_call_id="shared", function="addition"),
+    ]
+    return [
+        step
+        for conversation in ("agent-a", "agent-b")
+        for step in steps_from_messages(messages, conversation=conversation)
+        if step.id == "shared"
+    ]
+
+
+@pytest.mark.parametrize(
+    "label, selected",
+    [
+        (
+            {"transcript_id": "t", "conversation": "agent-b", "step_id": "shared"},
+            [("agent-b", "tool_call"), ("agent-b", "tool_result")],
+        ),
+        (
+            {
+                "transcript_id": "t",
+                "metadata.conversation": "agent-b",
+                "metadata.stage": "tool_call",
+                "metadata.step_id": "shared",
+            },
+            [("agent-b", "tool_call")],
+        ),
+        (
+            {"transcript_id": "t", "step_id": "shared"},
+            [
+                ("agent-a", "tool_call"),
+                ("agent-a", "tool_result"),
+                ("agent-b", "tool_call"),
+                ("agent-b", "tool_result"),
+            ],
+        ),
+    ],
+)
+def test_a_table_with_a_conversation_picks_one_agents_step_of_a_shared_id(
+    label: dict[str, str], selected: list[tuple[str, str]]
+) -> None:
+    # the table as a scan records it and rebuilds it in each process
+    table = selector_from({"table": table_rows(pandas.DataFrame([label]))})
+    assert table is not None
+
+    chosen = [s for s in two_agents_sharing_a_call_id() if table("t", s)]
+
+    assert [(s.step.conversation, s.stage) for s in chosen] == selected
+
+
 @human_stand_in
 async def approves(
     step: ReplayStep, escalations: Escalations, choices: Sequence[str]
@@ -939,6 +998,70 @@ def test_a_petri_shaped_log_replays_one_conversation_per_branch(
     assert [conversation(r) for r in found["stored"]] == ["target", "rollback"]
     assert {r["metadata.turns"] for r in found["stored"]} == {"stored"}
     assert {conversation(r) for r in found["tree"]} == {sample.uuid}
+
+
+def test_a_stored_timeline_replay_is_checked_against_read_mode_by_step(
+    tmp_path: Path,
+) -> None:
+    # the replay's conversations are the stored timeline's branches, read
+    # mode's the span tree's sample, so the rows are matched without them
+    [log] = eval(
+        Task(
+            dataset=[Sample(input="go")],
+            solver=two_branches(),
+            sentinel=observe_only(replay_check()),
+        ),
+        model="mockllm/model",
+        log_dir=str(tmp_path / "run"),
+        display="none",
+    )
+    assert log.samples is not None
+    sample = log.samples[0]
+    spans = {e.name: e.id for e in sample.events if isinstance(e, SpanBeginEvent)}
+    first, second = [
+        [
+            TimelineEvent(event=e)
+            for e in sample.events
+            if isinstance(e, ModelEvent) and e.span_id == spans[branch]
+        ]
+        for branch in ("first", "second")
+    ]
+    sample.timelines = [
+        Timeline(
+            name="target",
+            description="",
+            root=TimelineSpan(
+                id="target",
+                name="target",
+                content=list(first),
+                branches=[
+                    TimelineSpan(id="rollback", name="rollback", content=list(second))
+                ],
+            ),
+        )
+    ]
+    write_eval_log(log, str(tmp_path / "logs" / "petri.eval"))
+    status = scan(
+        scanners={
+            "replayed": as_scanner(replay_check(), timeline="target"),
+            "recorded": as_reader("replay_check"),
+        },
+        transcripts=transcripts_from(str(tmp_path / "logs")),
+        scans=str(tmp_path / "scans"),
+        display="none",
+        max_processes=1,
+    )
+    frames: Any = scan_results_df(status.location).scanners
+    replayed, recorded = frames["replayed"], frames["recorded"]
+    assert set(replayed["metadata.conversation"]) == {"target", "rollback"}
+    assert set(recorded["metadata.conversation"]) == {sample.uuid}
+
+    differences: Any = replay_check_differences(replayed, recorded)
+
+    # every step is matched; only what the branches change differs
+    rows = cast(list[Row], differences.to_dict("records"))
+    assert {r["reason"] for r in rows} == {"differs"}
+    assert {r["conversation"] for r in rows} == {None}
 
 
 @solver
@@ -1957,6 +2080,15 @@ def test_two_agents_reusing_a_call_id_each_read_their_own_evidence(
         ("shared", [0.5], [helper.uuid]),
         ("shared", [0.1], [agent.message_id]),
     ]
+    # each row says whose step it is: the sub-agent's span, then the sample
+    assert [r["metadata.conversation"] for r in found["read"]] == [
+        next(
+            e.id
+            for e in log.samples[0].events
+            if isinstance(e, SpanBeginEvent) and e.name == "helper"
+        ),
+        log.samples[0].uuid,
+    ]
 
 
 DRIVING_SCRIPT = """
@@ -2539,6 +2671,67 @@ def test_replay_check_differences_lists_what_replay_did_not_hand_over(
         ("model_output", "only replayed"),
     }
     assert replay_check_differences(replayed, replayed).empty
+
+
+def digested(conversation: str, call: str, turns: str | None) -> Row:
+    # a replay_check() results row for a "shared" call
+    return {
+        "transcript_id": "sample",
+        "metadata.conversation": conversation,
+        "metadata.stage": "tool_call",
+        "metadata.step_id": "shared",
+        "metadata.turns": turns,
+        "metadata.metadata": {"step": {"call": call}, "eval": "e"},
+    }
+
+
+@pytest.mark.parametrize(
+    "turns, replayed, recorded, expected",
+    [
+        # replay's conversations are read mode's: matched by conversation
+        (
+            "recorded",
+            [("agent-a", "a"), ("agent-b", "b")],
+            [("agent-a", "wrong for a"), ("agent-b", "b")],
+            [("agent-a", "step.call", "differs")],
+        ),
+        # a stored timeline's are not: matched without them
+        (
+            "stored",
+            [("rollback", "a")],
+            [("sample", "wrong for a")],
+            [(None, "step.call", "differs")],
+        ),
+        # where that leaves two rows with one key, they cannot be matched
+        (
+            "stored",
+            [("target", "a"), ("rollback", "b")],
+            [("agent-a", "a"), ("agent-b", "b")],
+            "Two replayed rows have transcript 'sample'",
+        ),
+    ],
+)
+def test_replay_check_differences_never_drops_a_row_it_cannot_match(
+    turns: str,
+    replayed: list[tuple[str, str]],
+    recorded: list[tuple[str, str]],
+    expected: list[tuple[str | None, str, str]] | str,
+) -> None:
+    def frame(rows: list[tuple[str, str]], turns: str | None) -> Any:
+        return pandas.DataFrame([digested(c, call, turns) for c, call in rows])
+
+    def compared() -> Any:
+        return replay_check_differences(frame(replayed, turns), frame(recorded, None))
+
+    if isinstance(expected, str):
+        with pytest.raises(ValueError, match=expected):
+            compared()
+        return
+    differences = compared()
+    assert [
+        (r["conversation"], r["field"], r["reason"])
+        for r in cast(list[Row], differences.to_dict("records"))
+    ] == expected
 
 
 @monitor

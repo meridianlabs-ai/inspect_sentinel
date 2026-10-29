@@ -4,8 +4,8 @@ import hashlib
 import importlib
 import json
 from collections.abc import Sequence
-from dataclasses import fields
-from typing import TYPE_CHECKING, Any, cast
+from dataclasses import dataclass, fields
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from inspect_ai.util import StoreModel
 from pydantic_core import to_jsonable_python
@@ -152,24 +152,33 @@ def _without_ids(value: Any) -> Any:
 def replay_check_differences(replayed: DataFrame, recorded: DataFrame) -> DataFrame:
     """The differences between `replay_check()` replayed and read over the same transcripts: empty where replay handed the monitor what it saw live.
 
-    Pass the results of `as_scanner(replay_check())` and of `as_reader("replay_check")`, each a scanner's dataframe from `scan_results_df()`, from one scan or two. Rows are matched by transcript, step id and stage.
+    Pass the results of `as_scanner(replay_check())` and of `as_reader("replay_check")`, each a scanner's dataframe from `scan_results_df()`, from one scan or two. Rows are matched by transcript, conversation, stage and step id where the replay's conversations are the log's span tree, as read mode's are (`turns` `"recorded"`). Where they are not, from a stored timeline (`as_scanner(timeline=)`, `turns` `"stored"`) or the messages (`"inferred"`), the transcript's rows are matched by transcript, stage and step id alone.
 
     Args:
         replayed: The replay scanner's results.
         recorded: The read scanner's results.
 
     Returns:
-        A pandas `DataFrame` with a row per difference and the columns `transcript_id`, `step_id`, `stage`, `field` (`step.<name>` for a field of the step, `eval` for `context.eval`, `None` for a step one side lacks), `replayed` and `recorded` (the two digests, `None` on the side that lacks the step), and `reason`: `"differs"`, `"only replayed"` or `"only recorded"`. Sorted by transcript, stage and step.
+        A pandas `DataFrame` with a row per difference and the columns `transcript_id`, `conversation` (`None` where the rows were matched without it), `step_id`, `stage`, `field` (`step.<name>` for a field of the step, `eval` for `context.eval`, `None` for a step one side lacks), `replayed` and `recorded` (the two digests, `None` on the side that lacks the step), and `reason`: `"differs"`, `"only replayed"` or `"only recorded"`. Sorted by transcript, stage, step and conversation.
 
     Raises:
-        ValueError: If a results row is not one of `replay_check()`'s, so it has no digests to compare.
+        ValueError: If a results row is not one of `replay_check()`'s, so it has no digests to compare, or two rows of one side have the same key, so they cannot be matched: two agents' steps that share a tool call id, in a transcript matched without conversations.
     """
     pandas: Any = importlib.import_module("pandas")
-    left, right = _digests(replayed, "replayed"), _digests(recorded, "recorded")
+    rows_replayed = _digests(replayed, "replayed")
+    # transcripts whose replayed conversations are not read mode's
+    unmatched = {r.transcript_id for r in rows_replayed if r.turns != "recorded"}
+    left = _keyed(rows_replayed, unmatched, "replayed")
+    right = _keyed(_digests(recorded, "recorded"), unmatched, "recorded")
     rows: list[dict[str, Any]] = []
-    for key in sorted(left.keys() | right.keys()):
-        transcript_id, stage, step_id = key
-        where = {"transcript_id": transcript_id, "step_id": step_id, "stage": stage}
+    for key in sorted(left.keys() | right.keys(), key=_order):
+        transcript_id, conversation, stage, step_id = key
+        where = {
+            "transcript_id": transcript_id,
+            "conversation": conversation,
+            "step_id": step_id,
+            "stage": stage,
+        }
         mine, theirs = left.get(key), right.get(key)
         if mine is None or theirs is None:
             rows.append(
@@ -198,6 +207,7 @@ def replay_check_differences(replayed: DataFrame, recorded: DataFrame) -> DataFr
 
 _COLUMNS = [
     "transcript_id",
+    "conversation",
     "step_id",
     "stage",
     "field",
@@ -206,10 +216,24 @@ _COLUMNS = [
     "reason",
 ]
 
+# a row's key: transcript, conversation (None where not matched by it), stage
+# and step id
+_Key: TypeAlias = tuple[str, str | None, str, str]
 
-def _digests(frame: DataFrame, side: str) -> dict[tuple[str, str, str], dict[str, str]]:
-    # each row's digests by field, keyed by transcript, stage and step id
-    found: dict[tuple[str, str, str], dict[str, str]] = {}
+
+@dataclass(frozen=True)
+class _Digested:
+    transcript_id: str
+    conversation: str
+    stage: str
+    step_id: str
+    turns: str | None
+    fields: dict[str, str]
+
+
+def _digests(frame: DataFrame, side: str) -> list[_Digested]:
+    # each row's digests by field, with what identifies its step
+    found: list[_Digested] = []
     records: Any = cast(Any, frame).to_dict("records")
     for row in cast(list[dict[str, Any]], records):
         metadata = _parsed(row.get("metadata.metadata"))
@@ -222,13 +246,48 @@ def _digests(frame: DataFrame, side: str) -> dict[tuple[str, str, str], dict[str
             f"step.{k}": v for k, v in cast(dict[str, str], digests["step"]).items()
         }
         fields["eval"] = digests["eval"]
-        key = (
-            str(row["transcript_id"]),
-            str(row["metadata.stage"]),
-            str(row["metadata.step_id"]),
+        turns = row.get("metadata.turns")
+        found.append(
+            _Digested(
+                transcript_id=str(row["transcript_id"]),
+                conversation=str(row["metadata.conversation"]),
+                stage=str(row["metadata.stage"]),
+                step_id=str(row["metadata.step_id"]),
+                turns=turns if isinstance(turns, str) else None,
+                fields=fields,
+            )
         )
-        found[key] = fields
     return found
+
+
+def _keyed(
+    rows: list[_Digested], unmatched: set[str], side: str
+) -> dict[_Key, dict[str, str]]:
+    # each row by its key, refusing two with one key, which could not be told
+    # apart, rather than keeping one of them
+    keyed: dict[_Key, dict[str, str]] = {}
+    for row in rows:
+        matched = row.transcript_id not in unmatched
+        key = (
+            row.transcript_id,
+            row.conversation if matched else None,
+            row.stage,
+            row.step_id,
+        )
+        if key in keyed:
+            where = f"transcript {row.transcript_id!r}, stage {row.stage!r} and step id {row.step_id!r}"
+            raise ValueError(
+                f"Two {side} rows have conversation {row.conversation!r}, {where}, so they cannot be matched."
+                if matched
+                else f"Two {side} rows have {where}, from different conversations, and they cannot be told apart: the replay took the transcript's conversations from a stored timeline or its messages, not the log's span tree that read mode's come from. With a stored timeline, replay without timeline= to compare them."
+            )
+        keyed[key] = row.fields
+    return keyed
+
+
+def _order(key: _Key) -> tuple[str, str, str, str]:
+    transcript_id, conversation, stage, step_id = key
+    return transcript_id, stage, step_id, conversation or ""
 
 
 def _parsed(value: object) -> object:

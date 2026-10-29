@@ -92,7 +92,7 @@ def as_scanner(
 ) -> Scanner[Transcript]:
     """Replay a monitor or protocol over each transcript a Scout scan reads, as a transcript scanner.
 
-    Each transcript's steps are rebuilt as the sentinel would have been handed them live, the sentinel runs over them through the same runner as an eval, and each step at a stage it watches becomes one `Result` in the transcript's resultset, so `scan_results_df(..., rows="results")` gives one row per step and stage. A result's metadata holds the step's `step_id`, `stage` and `depth`, how the transcript's agent turns were established (`turns`: `"recorded"` from the log, `"inferred"`, or `"stored"` from a stored timeline) and, when the step reached `human()`, where the answer came from (`human`) and, where it was `human=`'s fixed answer, that answer (`human_answer`). Its references cite the step's model event or message first, then what the report cites. Each has a cite label, `[M<n>]` for the transcript's nth message or `[E<n>]` for its nth event, a report's own labels rewritten to them in its explanation, and the explanation leads with the step's (`Step [E12]: ...`) and names any other it does not hold, so Scout View links them.
+    Each transcript's steps are rebuilt as the sentinel would have been handed them live, the sentinel runs over them through the same runner as an eval, and each step at a stage it watches becomes one `Result` in the transcript's resultset, so `scan_results_df(..., rows="results")` gives one row per step and stage. A result's metadata holds the step's `step_id`, `stage`, `conversation` (the span tree's agent span or the sample, the stored timeline's span or branch with `timeline=`, the transcript for a transcript of messages alone) and `depth`, how the transcript's agent turns were established (`turns`: `"recorded"` from the log, `"inferred"`, or `"stored"` from a stored timeline) and, when the step reached `human()`, where the answer came from (`human`) and, where it was `human=`'s fixed answer, that answer (`human_answer`). Its references cite the step's model event or message first, then what the report cites. Each has a cite label, `[M<n>]` for the transcript's nth message or `[E<n>]` for its nth event, a report's own labels rewritten to them in its explanation, and the explanation leads with the step's (`Step [E12]: ...`) and names any other it does not hold, so Scout View links them.
 
     For a monitor, a result's `value` is its suspicion, a number or a dict by dimension, `None` where it abstained, and the observation's own metadata is under `metadata`. For a protocol, it is the root's decision: `value` is whether the step was flagged (`reject`, `modify` or `terminate`; `escalate` declines to decide, so it is not), `answer` the action, and the metadata holds `audit`, `modified` and the children's reports. A monitor that raises, anywhere in the sentinel, makes the transcript's result an error, even where a protocol went on without it.
 
@@ -292,6 +292,7 @@ def _result(
     return step_result(
         step_id=report.step.id,
         stage=report.step.stage,
+        conversation=report.step.step.conversation,
         label=report.path or report.name,
         report=reported.report if reported is not None else None,
         citation=citations.cite(report.step),

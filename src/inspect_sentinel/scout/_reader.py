@@ -21,7 +21,7 @@ from ._scanner import EVENTS, Stage, within
 def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcript]:
     """Read what a monitor or protocol reported in the runs it was attached to, as a transcript scanner: read mode.
 
-    No inference runs. Each `SentinelEvent` the instance at `path` recorded with status `reported`, and each of its decisions recorded `superseded`, becomes one `Result` in the transcript's resultset, mapped as `as_scanner()` maps a replayed report and citing the step's model event or message the same way, so the two modes' rows join on transcript, `step_id` and `stage`. A superseded decision's metadata says so (`status`). A step the instance abstained at recorded nothing, so it has no result; a step that left no model event or tool result cites nothing. A failure recorded at or below `path`, at any stage, makes the transcript's result an error, as in replay, even where a protocol went on without the failed monitor.
+    No inference runs. Each `SentinelEvent` the instance at `path` recorded with status `reported`, and each of its decisions recorded `superseded`, becomes one `Result` in the transcript's resultset, mapped as `as_scanner()` maps a replayed report and citing the step's model event or message the same way, so the two modes' rows join on transcript, `conversation`, `step_id` and `stage`. A row's `conversation` is the one the log recorded, from its span tree; a replay whose `turns` is `"stored"` or `"inferred"` took its conversations from a stored timeline or the messages instead, so join those on transcript, `step_id` and `stage`, which two agents' tool calls that share an id leave ambiguous. A superseded decision's metadata says so (`status`). A step the instance abstained at recorded nothing, so it has no result; a step that left no model event or tool result cites nothing. A failure recorded at or below `path`, at any stage, makes the transcript's result an error, as in replay, even where a protocol went on without the failed monitor.
 
     Args:
         path: The instance's path, as `SentinelEvent.path` records it: empty for the root protocol (the default), else such as `attempt/suspicion`, or a lone monitor's name.
@@ -79,6 +79,7 @@ def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcri
                 step_result(
                     step_id=event.step_id,
                     stage=event.stage,
+                    conversation=event.conversation,
                     label=path or _name(event),
                     report=report,
                     citation=positions.cite(event, index),
