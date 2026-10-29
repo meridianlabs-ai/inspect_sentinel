@@ -11,6 +11,7 @@ from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, Refuse, SidecarHost
+from inspect_sentinel.sidecar._host import RunHost
 from tests.sidecar._traffic import message, reply, request, weather
 
 
@@ -99,3 +100,43 @@ async def test_generate_uses_the_role_model() -> None:
 
     # mockllm names itself as the model that answered
     assert output.model == "mockllm"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("roles", "model", "role"),
+    [
+        # the configured role, the role missing (so model= is used), and no
+        # role but a model name: the same resolution generate() uses
+        ({"monitor": "mockllm/model"}, None, None),
+        ({}, "mockllm/model", None),
+        ({"judge": "mockllm/model"}, None, "judge"),
+    ],
+)
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_input_budget_and_count_tokens_resolve_as_generate_does(
+    roles: dict[str, str], model: str | None, role: str | None
+) -> None:
+    host = SidecarHost(roles)
+
+    budget = await host.input_budget(model=model, role=role)
+    count = await host.count_tokens("Is this suspicious?", model=model, role=role)
+
+    # mockllm reports a 128k window less the output reserve, and counts tokens
+    assert 0 < budget < 128_000
+    assert count > 0
+
+
+@pytest.mark.anyio
+async def test_input_budget_needs_a_model_for_the_role_or_by_name() -> None:
+    with pytest.raises(ValueError, match="no model for role 'monitor'"):
+        await SidecarHost().input_budget()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_run_host_passes_the_budget_and_the_count_through() -> None:
+    host = RunHost(SidecarHost({"monitor": "mockllm/model"}), None)
+
+    assert 0 < await host.input_budget() < 128_000
+    assert await host.count_tokens("Is this suspicious?") > 0

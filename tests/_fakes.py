@@ -79,6 +79,8 @@ class FakeHost:
         completion: str = "ok",
         outputs: Sequence[ModelOutput] = (),
         eval: EvalContext | None = None,
+        budget: int = 10**9,
+        chars_per_token: int = 1,
     ) -> None:
         self.eval = eval
         self.answers = list(answers)
@@ -88,6 +90,34 @@ class FakeHost:
         self.models: list[tuple[str | None, str | None]] = []
         self.inputs: list[list[ChatMessage]] = []
         self.offered: list[Offered] = []
+        # the input budget this host reports, and a token count that is a
+        # simple function of the rendered text so a test can force a cut
+        self.budget = budget
+        self.chars_per_token = chars_per_token
+        self.budgets: list[tuple[str | None, str | None]] = []
+        self.counted: list[str] = []
+
+    async def input_budget(
+        self,
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int:
+        self.budgets.append((model, role))
+        return self.budget
+
+    async def count_tokens(
+        self,
+        input: str | list[ChatMessage],
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int:
+        text = input if isinstance(input, str) else "".join(m.text for m in input)
+        self.counted.append(text)
+        return -(-len(text) // self.chars_per_token)
 
     async def ask_human(
         self,
