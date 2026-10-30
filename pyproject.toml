@@ -27,13 +27,13 @@ dependencies = [
     # leaves that install in place. Only the Release Please release PR skips
     # it, so a release is tested against PyPI, after release-pin-deps.yml
     # raises this floor to the latest inspect_ai release.
-    "inspect-ai>=0.3.285",
+    "inspect-ai>=0.3.286",
     # step_as_str, and so Host.score, renders with Scout's messages_as_str and
     # message_numbering, until message rendering moves from Scout into
     # inspect_ai (design/pr-series.md). Development tracks Scout's `main` the
     # same way as inspect_ai's, and release-pin-deps.yml raises this floor
     # on the Release Please release PR too.
-    "inspect-scout>=0.6.1",
+    "inspect-scout>=0.6.2",
     # Host.score's templates are Jinja. Scout depends on it too, but it is
     # imported directly here, and a transitive dependency is not a promise.
     "jinja2>=3.0",
@@ -77,6 +77,12 @@ envoy = ["inspect_sentinel[sidecar]", "grpcio>=1.74.0", "protobuf>=6.31.1"]
 # inspect-ai does, so each is installed only where it is wanted. The floors
 # are inspect-ai's own.
 anthropic = ["anthropic>=2.0.0"]
+# Replay through Inspect Scout (inspect_sentinel.scout). Scout is a runtime
+# dependency already, for step_as_str; this extra names the first Scout
+# release that loads a scanner's timelines only when it asks for them, which
+# as_scanner(timeline=) does, and reads back a scan whose resultsets are all
+# empty (0.6.2).
+scout = ["inspect-scout>=0.6.2"]
 openai = ["openai>=3.4.0"]
 # The docs tools are in `doc`, which `dev` leaves out: CI installs `dev` and
 # never builds the docs, and quarto-cli has no wheel, so installing it builds it

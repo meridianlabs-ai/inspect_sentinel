@@ -20,7 +20,7 @@ class ReplayStep:
     """
 
     id: str
-    """The step id, as `SentinelEvent.step_id` records it live: the tool call id at a tool stage, and the generate's id (the `uuid` of its first `ModelEvent`) at both generate stages. Unique within a transcript for a stage, so a label made against it serves replay and the live record alike."""
+    """The step id, as `SentinelEvent.step_id` records it live: the tool call id at a tool stage, and the generate's id (the `uuid` of its first `ModelEvent`) at both generate stages. Unique within its conversation for a stage, so a label made against it serves replay and the live record alike; two agents' tool calls can share an id, since a provider makes it."""
 
     stage: Literal["model_input", "model_output", "tool_call", "tool_result"]
     """The stage of `step`, as `SentinelEvent.stage` records it: `model_input` for a `BeforeGenerate`, `model_output` for an `AfterGenerate`, `tool_call` for a `BeforeToolCall` and `tool_result` for an `AfterToolCall`."""
@@ -35,6 +35,9 @@ class ReplayStep:
         default_factory=lambda: MappingProxyType({})
     )
     """The answers a person gave through `human()` at this step when it ran, keyed by the path of the `human()` instance that asked, for the replay host to give again when the same instance asks. Empty when none were recorded. It is the replay's own record and never part of `step`, so monitors and protocols do not see it. Read-only: a copy of the mapping given."""
+
+    depth: int | None = None
+    """How deep the step's conversation is in the transcript's timeline, counted as Inspect Scout's `llm_scanner(depth=)` counts: only spans that make model calls of their own and are not utility spans count a level, so 1 is the outermost such span on each branch. It is the shallowest level of any span holding one of the conversation's model calls. `None` where none of them is in such a span, such as a lone call Scout's timeline leaves out of every span, or where the step's builder had no timeline."""
 
     def __post_init__(self) -> None:
         expected = _STAGES[type(self.step)]

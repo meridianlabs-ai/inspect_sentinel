@@ -17,12 +17,7 @@ from inspect_sentinel._decorators import (
     step_types,
 )
 from inspect_sentinel._host import HumanAnswer
-from inspect_sentinel._integration import (
-    config_from_sentinel,
-    resolve_sentinel,
-    run_sentinel,
-    sentinel_from_config,
-)
+from inspect_sentinel._integration import resolve_sentinel, run_sentinel
 from inspect_sentinel._protocols import (
     concurrent,
     human,
@@ -41,6 +36,7 @@ from inspect_sentinel._types import (
     Sentinel,
     Sentinels,
 )
+from inspect_sentinel.config import sentinel_config, sentinel_from_config
 from tests._fakes import FakeHost, ListRecorder, after_step, before_step, host_context
 
 
@@ -420,7 +416,7 @@ ROUND_TRIPS: list[Any] = [
 @pytest.mark.parametrize("raw", ROUND_TRIPS)
 def test_config_to_sentinel_to_config_is_equal(raw: Any) -> None:
     config = SentinelConfig.model_validate(raw)
-    recorded = config_from_sentinel(sentinel_from_config(raw))
+    recorded = sentinel_config(sentinel_from_config(raw))
     assert recorded == config
     assert SentinelConfig.model_validate_json(recorded.model_dump_json()) == config
 
@@ -465,13 +461,13 @@ async def test_sentinel_to_config_to_sentinel_is_equivalent() -> None:
             ]
         ),
     }
-    rebuilt = sentinel_from_config(config_from_sentinel(original))
+    rebuilt = sentinel_from_config(sentinel_config(original))
     assert _identity(rebuilt) == _identity(original)
     assert await _paths(rebuilt) == await _paths(original)
 
 
 def test_package_names_are_recorded_bare_and_others_in_full() -> None:
-    config = config_from_sentinel([threshold([cfg_suspicion()], reject_at=0.5)])
+    config = sentinel_config([threshold([cfg_suspicion()], reject_at=0.5)])
     assert config.model_dump() == [
         {
             "name": "threshold",
@@ -482,7 +478,7 @@ def test_package_names_are_recorded_bare_and_others_in_full() -> None:
 
 
 def test_a_lone_instance_is_recorded_as_a_lone_entry() -> None:
-    assert config_from_sentinel(cfg_rule("stop")) == SentinelConfig.model_validate(
+    assert sentinel_config(cfg_rule("stop")) == SentinelConfig.model_validate(
         {"name": "cfg_rule", "params": {"reason": "stop"}}
     )
 
@@ -490,7 +486,7 @@ def test_a_lone_instance_is_recorded_as_a_lone_entry() -> None:
 @pytest.mark.anyio
 async def test_a_lone_protocol_records_the_same_paths_once_rebuilt() -> None:
     original = threshold(cfg_suspicion(), reject_at=0.5)
-    rebuilt = sentinel_from_config(config_from_sentinel(original))
+    rebuilt = sentinel_from_config(sentinel_config(original))
     assert (
         await _paths(rebuilt)
         == await _paths(original)
@@ -503,7 +499,7 @@ async def test_a_lone_protocol_records_the_same_paths_once_rebuilt() -> None:
 
 def test_a_non_sentinel_is_not_recorded() -> None:
     with pytest.raises(TypeError, match="monitor or protocol"):
-        config_from_sentinel(cast(Any, [cfg_rule]))
+        sentinel_config(cast(Any, [cfg_rule]))
 
 
 @pytest.mark.parametrize(
@@ -580,7 +576,7 @@ def test_an_exact_name_wins_over_the_package_fallback() -> None:
         "observe_only",
         "inspect_sentinel/observe_only",
     ]
-    assert config_from_sentinel(built) == SentinelConfig.model_validate(config)
+    assert sentinel_config(built) == SentinelConfig.model_validate(config)
 
 
 @monitor(version=2)
@@ -604,16 +600,16 @@ def cfg_versioned_rule() -> Protocol:
 
 
 def test_a_version_round_trips() -> None:
-    config = config_from_sentinel([cfg_versioned()])
+    config = sentinel_config([cfg_versioned()])
     assert config.model_dump() == [
         {"name": "cfg_versioned", "params": {}, "version": 2}
     ]
-    assert config_from_sentinel(sentinel_from_config(config)) == config
+    assert sentinel_config(sentinel_from_config(config)) == config
     assert SentinelConfig.model_validate_json(config.model_dump_json()) == config
 
 
 def test_version_0_is_omitted() -> None:
-    config = config_from_sentinel(cfg_rule("stop"))
+    config = sentinel_config(cfg_rule("stop"))
     assert config.model_dump() == {"name": "cfg_rule", "params": {"reason": "stop"}}
     assert "version" not in config.model_dump_json()
 
@@ -650,7 +646,7 @@ def test_a_version_must_be_an_integer() -> None:
 
 
 def test_meta_is_not_written() -> None:
-    config = config_from_sentinel([cfg_versioned(), cfg_bundle(fast=[cfg_suspicion()])])
+    config = sentinel_config([cfg_versioned(), cfg_bundle(fast=[cfg_suspicion()])])
     assert "meta" not in config.model_dump_json()
 
 
@@ -671,9 +667,9 @@ def test_meta_is_ignored_when_building() -> None:
             }
         ]
     )
-    assert config_from_sentinel(sentinel_from_config(raw)) == expected
+    assert sentinel_config(sentinel_from_config(raw)) == expected
     validated = SentinelConfig.model_validate(raw)
-    assert config_from_sentinel(sentinel_from_config(validated)) == expected
+    assert sentinel_config(sentinel_from_config(validated)) == expected
 
 
 def test_nested_entries_carry_their_own_versions() -> None:
@@ -682,7 +678,7 @@ def test_nested_entries_carry_their_own_versions() -> None:
         slow={"plain": cfg_suspicion()},
     )
     gate = threshold({"v": cfg_versioned()}, reject_at=0.5)
-    config = config_from_sentinel({"bundle": original, "gate": gate})
+    config = sentinel_config({"bundle": original, "gate": gate})
     assert config.model_dump() == {
         "bundle": {
             "name": "cfg_bundle",
@@ -696,7 +692,7 @@ def test_nested_entries_carry_their_own_versions() -> None:
             "monitors": {"v": {"name": "cfg_versioned", "params": {}, "version": 2}},
         },
     }
-    assert config_from_sentinel(sentinel_from_config(config)) == config
+    assert sentinel_config(sentinel_from_config(config)) == config
 
 
 @protocol
@@ -804,10 +800,10 @@ async def test_a_factory_returning_a_configured_instance_runs_and_round_trips(
     records: list[tuple[str, str, str]],
 ) -> None:
     original = build()
-    config = config_from_sentinel(original)
+    config = sentinel_config(original)
     assert config == SentinelConfig.model_validate(entry)
     rebuilt = sentinel_from_config(config)
-    assert config_from_sentinel(rebuilt) == config
+    assert sentinel_config(rebuilt) == config
     assert await _records(rebuilt) == await _records(original) == records
 
 

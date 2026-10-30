@@ -4,6 +4,7 @@ from inspect_ai._sentinel._config import Sentinels as InspectAISentinels
 
 import inspect_sentinel
 import inspect_sentinel._integration
+import inspect_sentinel.config
 
 
 def test_version_is_exposed() -> None:
@@ -57,10 +58,26 @@ def test_author_facing_names_are_exported() -> None:
         "decide_final",
         "PortabilityError",
         "Escalations",
+        "HumanStandIn",
     }
     assert expected <= set(inspect_sentinel.__all__)
     for name in expected:
         assert hasattr(inspect_sentinel, name)
+
+
+def test_the_replay_runner_is_internal() -> None:
+    # replay's public API is the Scout adapter's (decided 2026-10-26)
+    for name in (
+        "replay_monitor",
+        "ReplayReport",
+        "steps_from_messages",
+        "HumanFallback",
+        "HumanPolicy",
+        "HumanSource",
+        "Split",
+    ):
+        assert name not in inspect_sentinel.__all__
+        assert not hasattr(inspect_sentinel, name)
 
 
 def test_integration_names_are_not_exported() -> None:
@@ -76,7 +93,9 @@ def test_integration_names_are_not_exported() -> None:
         "SentinelConfig",
         "SentinelEntry",
         "sentinel_from_config",
+        "sentinel_config",
         "config_from_sentinel",
+        "watched_stages",
         "validate_instance_name",
         "PRECEDENCE",
         "named_children",
@@ -107,6 +126,19 @@ def test_integration_module_exports_the_host_surface() -> None:
         "run_sentinel",
         "HostNative",
     }
+
+
+def test_the_config_module_exports_the_configuration_round_trip() -> None:
+    assert set(inspect_sentinel.config.__all__) == {
+        "sentinel_config",
+        "sentinel_from_config",
+        "watched_stages",
+    }
+    # inspect_ai's contract keeps its name for the same function
+    assert (
+        inspect_sentinel._integration.config_from_sentinel
+        is inspect_sentinel.config.sentinel_config
+    )
 
 
 def test_wire_types_come_from_inspect_ai() -> None:

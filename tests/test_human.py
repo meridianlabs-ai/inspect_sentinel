@@ -9,12 +9,7 @@ from inspect_ai.tool import ToolCall
 from inspect_sentinel import HumanAnswer, human, sequential
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol, step_types
-from inspect_sentinel._integration import (
-    Sentinels,
-    config_from_sentinel,
-    resolve_sentinel,
-    sentinel_from_config,
-)
+from inspect_sentinel._integration import Sentinels, resolve_sentinel
 from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import (
     Action,
@@ -25,6 +20,7 @@ from inspect_sentinel._report import (
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import AfterGenerate, AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup
+from inspect_sentinel.config import sentinel_config, sentinel_from_config
 from tests._fakes import (
     FakeHost,
     ListRecorder,
@@ -351,7 +347,7 @@ RAW: Any = {
 async def test_a_human_round_trips_through_config() -> None:
     config = SentinelConfig.model_validate(RAW)
     configured = sentinel_from_config(RAW)
-    assert config_from_sentinel(configured) == config
+    assert sentinel_config(configured) == config
     decision, host, _ = await _root(configured, HumanAnswer("reject", reason="no"))
     assert decision is not None and decision.message == "no"
     assert len(host.asked) == 1

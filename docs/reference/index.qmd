@@ -83,6 +83,12 @@ Pure functions for rules that check tool calls, and builders of steps for testin
 ### find_words
 ### result_text
 
+## Replay
+
+Running a sentinel over steps rebuilt from stored transcripts is done through Inspect Scout: `as_scanner()`, `as_reader()`, `replay_check()`, `replay_check_differences()`, `@step_selector` and `@human_stand_in` are in `inspect_sentinel.scout`; see [Replay](../replay.qmd). A stand-in for the person `human()` asks has this type, and is handed a `ReplayStep`. A sentinel's configuration and the stages it watches are in [`inspect_sentinel.config`](config.qmd).
+
+### HumanStandIn
+
 ## Preprocessing
 
 What a monitor shows a model about a step: a `StepPreprocessor` says how much of its conversations to show and what to leave out, `preprocess_step()` applies it, and `step_as_str()` renders the result.
