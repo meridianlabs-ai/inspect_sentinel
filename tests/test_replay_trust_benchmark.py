@@ -25,6 +25,7 @@ from benchmarks.replay_trust.measure import Outcome, measure
 from benchmarks.replay_trust.prompts import Request, request
 from benchmarks.replay_trust.run import RUNS, Asked, MonitorRun, RunName, StepRecord
 from benchmarks.replay_trust.spend import pricing, used
+from tests._fakes import FakeHost, before_tool_call, in_step
 
 
 # two evals and four scans for each of four monitors; about 45 seconds alone
@@ -591,6 +592,55 @@ def test_the_nonce_is_replaced_only_where_host_score_writes_it(
     text: str, same: bool
 ) -> None:
     assert (_prompt("deadbeef", text) == _prompt("cafebabe", text)) == same
+
+
+@pytest.mark.anyio
+async def test_fitted_host_score_prompts_match_live_and_replay() -> None:
+    step = replace(
+        before_tool_call("bash", cmd="ls"),
+        input=[ChatMessageUser(content=f"message {i} " + "a" * 5000) for i in range(5)],
+    )
+    requests: list[Request] = []
+    for _ in range(2):
+        output = ModelOutput.for_tool_call(
+            model="fake",
+            tool_name="answer",
+            tool_arguments={"explanation": "fine", "suspicion": 0.1},
+        )
+        host = FakeHost(
+            outputs=[output],
+            budget=8421,
+        )
+        with in_step(host=host) as context:
+            observation = await context.host.score(step, "Is it safe?")
+        assert observation.metadata == {"left_out": {"input": 4}}
+        assert (
+            "earlier messages left out to fit the context window"
+            in host.inputs[0][0].text
+        )
+        requests.append(
+            request(
+                ModelEvent(
+                    model="fake",
+                    input=host.inputs[0],
+                    tools=host.offered[0].tools,
+                    tool_choice=host.offered[0].tool_choice or "auto",
+                    config=host.offered[0].config or GenerateConfig(),
+                    output=output,
+                )
+            )
+        )
+    assert requests[0].text == requests[1].text
+    step_record = _step("fitted", **_every_run(0.1))
+    step_record.requests = {
+        "live_a": [requests[0]],
+        "live_b": [requests[0]],
+        "replay_1": [requests[1]],
+        "replay_2": [requests[1]],
+    }
+    prompt = measure(_run(step_record), [], calls_a_model=True).same_prompt
+    assert prompt is not None
+    assert (prompt.compared, prompt.identical, prompt.outcome) == (1, 1, "trusted")
 
 
 def test_cache_reads_and_writes_are_priced_at_their_own_rates() -> None:

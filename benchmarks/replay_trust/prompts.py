@@ -42,6 +42,7 @@ _NONCE = re.compile(r"^\[BEGIN .* \(([0-9a-f]{8})\)\]$", re.MULTILINE)
 # replaced, so the same characters elsewhere stay as they were
 _MARKS = [
     r"^\[(?:BEGIN|END) .* \(({n})\)\]$",
+    r"^\[\d+ earlier messages left out to fit the context window \(({n})\)\]$",
     r"^\[TOOL CHOICE \(({n})\)\] ",
     r"^(?:\[M\d+\] )?[^a-z\n]+ \(({n})\):$",
     r"^Tool (?:Call|Use) \(({n})\): ",
