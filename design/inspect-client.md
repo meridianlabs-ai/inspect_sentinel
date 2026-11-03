@@ -348,7 +348,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 - Inspect offers the same settings as for a sentinel inside it, which is none. While Inspect waits, the sample's token, turn and working limits are paused, and its time limit still applies, as they are while a sentinel inside Inspect runs. That follows Meridian's decision that a sentinel's monitors count as waiting, not working (inspect_ai's `design/working-time-concurrency.md`). The one limit on judging itself is the sidecar's `--time-limit`, which is the operator's and off by default.
 
-- This pauses the limits only while Inspect asks. The time the sidecar spends judging inside the model call, before the reply comes back, is still charged to the agent. Giving that time to Inspect as waiting is a to do ([sidecar.md, section 8](sidecar.md#what-holds-something-else-in-the-sidecar)).
+- This pauses the limits only while Inspect asks. The time the sidecar spends judging inside the model call, before the reply comes back, is still charged to the agent. Giving that time to Inspect as waiting is a to do, [#162](https://github.com/meridianlabs-ai/inspect_sentinel/issues/162) ([sidecar.md, section 8](sidecar.md#what-holds-something-else-in-the-sidecar)).
 
 - A sample that errors or is cancelled stops asking at once. `end_sample` goes where Inspect already records every way a sample can end, exactly once (inspect_ai's `design/sample-lifecycle.md`).
 
@@ -366,7 +366,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 - Later work, with the sidecar's record log ([sidecar.md](sidecar.md#10-operations)): which sentinel the sidecar runs, and its judge models' calls. Both are in the log when the sentinel runs inside Inspect. The models are named in each event, but not their calls.
 
-- To do: the usage of the judge models' calls, recorded under their roles in the eval's usage, as inside Inspect ([sidecar.md, section 8](sidecar.md#what-holds-something-else-in-the-sidecar)).
+- To do ([#163](https://github.com/meridianlabs-ai/inspect_sentinel/issues/163)): the usage of the judge models' calls, recorded under their roles in the eval's usage, as inside Inspect ([sidecar.md, section 8](sidecar.md#what-holds-something-else-in-the-sidecar)).
 
 ### F. Registering a task with a large dataset
 
