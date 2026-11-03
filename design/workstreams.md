@@ -37,7 +37,7 @@ AISI requirements that depend on it ([requirements-aisi-sync-monitor.md](require
 Raised by the maintainer on 2026-10-02, as a peer to workstream 7: what a monitor that calls a model needs, so each author does not rebuild it. Scope:
 
 - Model interaction as in Inspect Scout's LLM scanner: prompt templates, structured answers, and parsing with retries.
-- Chunking inputs that exceed the monitor model's context window (the conversation, long tool output) and reducing the chunks to one result.
+- Fitting a prompt that exceeds the monitor model's context window: `Host.score` cuts the oldest shown messages (HISTORY, then AGENT MESSAGES, then INPUT, never the newest INPUT message at `BeforeGenerate`) until it fits, built 2026-10-27 (`sentinel.md`, "Views"; `sentinel-deployment.md`, "The host ABI"). Chunking and reducing the chunks to one result is superseded by this head truncation.
 - Prompt caching: keep a stable prefix across steps and avoid changes that break the cache.
 - Helpers that build views for the model, turning the conversation and the call into a prompt.
 

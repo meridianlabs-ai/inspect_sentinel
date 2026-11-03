@@ -20,6 +20,7 @@ How a monitor or protocol calls a model. Covers `context.host.generate()` and wh
 - `context.host.score()`: a score from 0.0 to 1.0 for the step, or one per named dimension, with an explanation; the default template and custom templates; narrowing what the model sees with a `StepPreprocessor`, such as `StepPreprocessor(input_window=LastTurns(6))`, its messages numbered so the explanation can cite them
 - `score()`'s prompt: `instructions=`, `policy=`, the task, and `template=` with `template_variables=`
 - `score()`'s answer: a checked answer tool, three attempts before it raises and the monitor is recorded as failed, and `retry_refusals=` for provider refusals
+- `score()` and the context window: the prompt is counted against the monitor model's input budget (`context.host.input_budget()` and `context.host.count_tokens()`, which resolve the model as `generate()` does), and when it does not fit the oldest shown messages are cut, HISTORY first, then AGENT MESSAGES, then INPUT (at `BeforeGenerate` the newest INPUT message, the request being judged, is never cut), each cut list marked and the count recorded in `Observation.metadata` as `left_out`; the windows and the `transform` select the messages first and the cut applies to what they left; a fixed part too big (at `BeforeGenerate` including the newest INPUT message), or a `model_length` reply, raises
 - Structured output with `ResponseSchema`
 - Usage: monitor calls recorded separately and not charged to the agent's limits
 - Treating agent text as untrusted in prompts

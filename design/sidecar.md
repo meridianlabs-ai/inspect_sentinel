@@ -1236,6 +1236,7 @@ Considered and not taken:
 - **The model request's `x-irid`, available to Inspect's sidecar client**, so that it can ask the sidecar about a request whose response did not carry the `sentinel` field.
 - **Asking the sidecar for records and state**, writing them into the transcript and the sample's store, and ending the run once the sample is scored.
 - **A public way to make the default rendering of a tool call.**
+- **A public way to read a model's input budget**, its context window minus inspect_ai's output reserve. `Host.score` reads it to fit the prompt to the monitor model's context window. The sidecar's `input_budget` calls the private `get_model_input_budget` in `inspect_ai.model._model_info`; the token count uses the public `Model.count_tokens`. Until the budget function is public, the private import lives in `sidecar/_inspect_ai.py`.
 - **A label on a grader's model calls**, so that a proxy can tell them from an agent's calls.
 
 ## Proposed for the core package

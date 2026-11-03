@@ -13,7 +13,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any, cast
 
-from inspect_ai.model import ChatMessage, GenerateConfig
+from inspect_ai.model import ChatMessage, GenerateConfig, Model
 from inspect_ai.tool import (
     Tool,
     ToolCall,
@@ -48,6 +48,18 @@ VIEWED_TOOLS = frozenset(
 
 A call is taken for one of inspect_ai's tools by the name the model sees, which the client chooses, so only these names are looked up. Looking up any other would make the sidecar build a tool of the client's choosing, and keep what it found for every name it is sent.
 """
+
+
+def get_model_input_budget(model: Model, config: GenerateConfig | None = None) -> int:
+    """How many input tokens a `generate` with `model` and `config` may send: its context window minus the output reserve. An unknown window falls back to 128k, with a warning.
+
+    Asked of inspect_ai: a public way to read a model's input budget for `Host.score`.
+    """
+    from inspect_ai.model._model_info import (
+        get_model_input_budget as _get_model_input_budget,
+    )
+
+    return _get_model_input_budget(model, config)
 
 
 def tool_call_view(call: ToolCall, tool: str | None = None) -> ToolCallView:

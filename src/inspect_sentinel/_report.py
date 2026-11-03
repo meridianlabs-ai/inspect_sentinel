@@ -37,7 +37,7 @@ class Observation(BaseModel):
     """Messages and events in the transcript the report points at, which Inspect View links from cites such as `[M22]` in `explanation`."""
 
     metadata: dict[str, Any] | None = Field(default=None)
-    """Author-supplied structured context, recorded verbatim."""
+    """Author-supplied structured context, recorded verbatim. `Host.score` adds a `left_out` entry here when it cuts the oldest shown messages to fit the prompt."""
 
     @classmethod
     def score(
@@ -46,10 +46,14 @@ class Observation(BaseModel):
         explanation: str | None = None,
         *,
         references: Sequence[Reference] = (),
+        metadata: dict[str, Any] | None = None,
     ) -> Observation:
         """An observation that sets `suspicion` to the given score."""
         return cls(
-            suspicion=suspicion, explanation=explanation, references=list(references)
+            suspicion=suspicion,
+            explanation=explanation,
+            references=list(references),
+            metadata=metadata,
         )
 
     @classmethod

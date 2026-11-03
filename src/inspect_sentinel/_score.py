@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from inspect_ai.model import (
@@ -18,9 +18,18 @@ from inspect_ai.util import Store, json_schema
 from jinja2 import Environment, StrictUndefined, meta
 from pydantic import BaseModel, Field, ValidationError, create_model
 
-from ._preprocess import StepPreprocessor, preprocess_step, step_as_str
+from ._preprocess import (
+    ExtractReferences,
+    HeadCut,
+    StepPreprocessor,
+    cuttable,
+    head_cut,
+    keeps_newest_input,
+    preprocess_step,
+    render_step,
+)
 from ._report import Observation
-from ._step import Step
+from ._step import AfterGenerate, AfterToolCall, BeforeToolCall, Step
 
 S = TypeVar("S", bound=Step)
 
@@ -178,10 +187,7 @@ async def score_step(
     # agent sees, such as a tool result or a decision's message.
     nonce = store.get(_NONCE, secrets.token_hex(4))
     p = preprocessor or StepPreprocessor()
-    shown, extract_refs = await step_as_str(
-        await preprocess_step(step, p),
-        nonce=nonce,
-    )
+    pstep = await preprocess_step(step, p)
     eval = host.eval
     values = {
         "instructions": (instructions or DEFAULT_INSTRUCTIONS).strip(),
@@ -192,21 +198,41 @@ async def score_step(
         if eval
         else "",
         "eval": eval,
-        "step": shown,
         "sentinel_nonce": nonce,
         "dimensions": dimensions
         if isinstance(dimensions, str)
         else "\n\n".join(f"{name}:\n{text}" for name, text in dimensions.items()),
         "answer_format": f"You should use the {_ANSWER}() tool to provide your final answer.",
     }
-    messages: list[ChatMessage] = [
-        ChatMessageUser(
-            content=environment.from_string(source).render(**values, **extra)
-        )
-    ]
+    # the same config generate gets, so the budget and the counts match what it
+    # would send
     config = (config or GenerateConfig()).merge(
         GenerateConfig(parallel_tool_calls=False)
     )
+    rendered = environment.from_string(source)
+
+    async def render(cut: HeadCut) -> tuple[str, ExtractReferences]:
+        shown, extract_refs = await render_step(pstep, nonce=nonce, cut=cut)
+        return rendered.render(**values, step=shown, **extra), extract_refs
+
+    # by default the shown lists grow with the conversation, so the prompt can
+    # overflow the monitor model's context window: cut the oldest shown
+    # messages until it fits (nothing is cut when it already fits, so the
+    # prompt is byte for byte what it was and no metadata is added)
+    content, extract_refs = await render({})
+    content, extract_refs, left_out = await _fit(
+        host,
+        content,
+        extract_refs,
+        render,
+        pstep,
+        policy=bool(policy),
+        has_task=eval is not None,
+        model=model,
+        role=role,
+        config=config,
+    )
+    messages: list[ChatMessage] = [ChatMessageUser(content=content)]
 
     replies: list[ChatMessageAssistant] = []
     for _ in range(_ATTEMPTS):
@@ -232,6 +258,7 @@ async def score_step(
                 scores[_SINGLE] if isinstance(dimensions, str) else scores,
                 explanation,
                 references=extract_refs(explanation),
+                metadata={"left_out": dict(left_out)} if left_out else None,
             )
         # every call gets its error back, as a provider requires a result for
         # each call; a reply with no call (a refusal, say) gets a reminder
@@ -283,11 +310,143 @@ async def _generate(
             tool_choice="auto",
             config=config,
         )
+        # a model_length reply means the request exceeded the model's context
+        # window, although the prompt fit the input budget as counted: the count
+        # leaves out the answer tool, and a provider can count more tokens than
+        # count_tokens. A correction would only make the prompt longer, so raise
+        # at once
+        if output.choices and output.stop_reason == "model_length":
+            raise RuntimeError(
+                "The monitor model stopped with stop reason 'model_length': "
+                "the request exceeded the model's context window, although the "
+                "prompt fit the input budget as counted (the count leaves out "
+                "the answer tool, and a provider can count more tokens than "
+                "count_tokens)."
+            )
         if not output.choices or output.stop_reason != "content_filter":
             return output
     raise RuntimeError(
         f"The monitor model refused {retry_refusals + 1} times (stop reason content_filter)."
     )
+
+
+async def _fit(
+    host: HostNative,
+    content: str,
+    extract_refs: ExtractReferences,
+    render: Callable[[HeadCut], Awaitable[tuple[str, ExtractReferences]]],
+    step: Step,
+    *,
+    policy: bool,
+    has_task: bool,
+    model: str | None,
+    role: str | None,
+    config: GenerateConfig,
+) -> tuple[str, ExtractReferences, HeadCut]:
+    # Fit the score prompt to the monitor model's input budget by cutting the
+    # oldest shown messages. Return the prompt to send, its reference
+    # extractor, and how many messages each list lost (empty when none did).
+    budget = await host.input_budget(model=model, role=role, config=config)
+    # a 5% safety margin, since count_tokens can undercount a little
+    limit = int(budget * 0.95)
+
+    async def count(text: str) -> int:
+        return await host.count_tokens(
+            [ChatMessageUser(content=text)], model=model, role=role, config=config
+        )
+
+    if await count(content) <= limit:
+        return content, extract_refs, {}
+
+    # the fixed part alone, with every cuttable message cut: when even that does
+    # not fit, no head cut can, so name the parts and raise. Before a generate,
+    # the fixed part includes the newest INPUT message, the request being
+    # judged, so a step the model is not shown is never scored
+    total = cuttable(step)
+    content, extract_refs = await render(head_cut(step, total))
+    fixed = await count(content)
+    if fixed > limit:
+        raise RuntimeError(
+            _too_big(step, fixed, budget, limit, policy, has_task, model, role)
+        )
+
+    # the smallest head cut that fits, so the monitor keeps every message it
+    # can: binary search, one count per try
+    best = (content, extract_refs, head_cut(step, total))
+    low, high = 1, total
+    while low <= high:
+        mid = (low + high) // 2
+        cut = head_cut(step, mid)
+        text, refs = await render(cut)
+        if await count(text) <= limit:
+            best = (text, refs, cut)
+            high = mid - 1
+        else:
+            low = mid + 1
+    return best
+
+
+def _too_big(
+    step: Step,
+    count: int,
+    budget: int,
+    limit: int,
+    policy: bool,
+    has_task: bool,
+    model: str | None,
+    role: str | None,
+) -> str:
+    target = (
+        f"role {role!r}"
+        if role is not None
+        else f"model {model!r}"
+        if model is not None
+        else "role 'monitor'"
+    )
+    parts = ["the instructions"]
+    if policy:
+        parts.append("the policy")
+    if has_task:
+        parts.append("the task")
+    parts.append("the dimensions")
+    parts.extend(_step_parts(step))
+    if keeps_newest_input(step):
+        parts.append("the newest INPUT message")
+    parts.append("the answer tool")
+    left_out = (
+        "every other HISTORY, AGENT MESSAGES and INPUT message"
+        if keeps_newest_input(step)
+        else "every HISTORY, AGENT MESSAGES and INPUT message"
+    )
+    return (
+        f"The fixed part of the score prompt does not fit the input budget for {target}, "
+        f"even with {left_out} left out: it counts "
+        f"{count} tokens, over the budget of {budget} ({limit} with the 5% safety margin). "
+        f"The fixed part is {_and_list(parts)}. Shorten it or raise the model's context window."
+    )
+
+
+def _step_parts(step: Step) -> list[str]:
+    # the step's own fixed blocks, as the stage renders them
+    parts: list[str] = []
+    if step.input is not None:
+        if step.tools:
+            parts.append("the step's TOOLS")
+        if step.tool_choice is not None:
+            parts.append("the step's TOOL CHOICE")
+    if isinstance(step, AfterGenerate):
+        parts.append("the step's REPLY")
+    elif isinstance(step, AfterToolCall):
+        parts.extend(("the step's CALL", "the step's RESULT"))
+    elif isinstance(step, BeforeToolCall):
+        parts.append("the step's CALL")
+    return parts
+
+
+def _and_list(parts: list[str]) -> str:
+    if len(parts) == 1:
+        return parts[0]
+    return f"{', '.join(parts[:-1])} and {parts[-1]}"
 
 
 def _check(call: ToolCall, scores_type: type[BaseModel]) -> BaseModel | str:

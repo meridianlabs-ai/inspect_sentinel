@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Generic, Literal, TypeAlias, cast
 
@@ -188,6 +188,58 @@ async def step_as_str(
         step: The step to render, usually from `preprocess_step()`.
         nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker and message header; none by default. Scout needs at least 8 characters.
     """
+    return await render_step(step, nonce=nonce, cut={})
+
+
+HeadCut: TypeAlias = Mapping[_Source, int]
+"""How many head messages a `Host.score` cut drops from each shown list, keyed by list; only lists that lose messages are keyed."""
+
+# the shown lists a head cut drops from, in cut order: HISTORY, then AGENT
+# MESSAGES, then INPUT (`Host.score`, design/sentinel.md)
+_CUT_ORDER: tuple[_Source, ...] = ("history", "agent_messages", "input")
+
+
+def _shown(step: Step, source: _Source) -> Sequence[ChatMessage]:
+    messages: Sequence[ChatMessage] | None = getattr(step, source)
+    return messages or []
+
+
+def _cuttable_in(step: Step, source: _Source) -> int:
+    shown = len(_shown(step, source))
+    # before a generate, the newest INPUT message is the request being judged,
+    # so a cut keeps it: a step the model is not shown cannot be scored
+    if source == "input" and isinstance(step, BeforeGenerate):
+        return max(shown - 1, 0)
+    return shown
+
+
+def keeps_newest_input(step: Step) -> bool:
+    """Whether a head cut keeps the newest INPUT message as part of the fixed part of the prompt: before a generate, when `input` shows a message."""
+    return isinstance(step, BeforeGenerate) and bool(_shown(step, "input"))
+
+
+def cuttable(step: Step) -> int:
+    """How many messages a head cut could drop from the step's shown lists. Before a generate, the newest INPUT message is not cuttable."""
+    return sum(_cuttable_in(step, source) for source in _CUT_ORDER)
+
+
+def head_cut(step: Step, k: int) -> dict[_Source, int]:
+    """How many head messages to drop from each shown list to drop `k` in all, HISTORY first, then AGENT MESSAGES, then INPUT. Before a generate, the newest INPUT message is never dropped. Only the lists that lose messages are keyed."""
+    counts: dict[_Source, int] = {}
+    for source in _CUT_ORDER:
+        take = min(k, _cuttable_in(step, source))
+        if take:
+            counts[source] = take
+            k -= take
+    return counts
+
+
+async def render_step(
+    step: Step, *, nonce: str | None, cut: HeadCut
+) -> tuple[str, ExtractReferences]:
+    # `step_as_str` with the head of each shown list dropped as `cut` says, so
+    # `Host.score` can fit a prompt to a model's context window
+    #
     # Scout imports duckdb and pandas, so load it only when a monitor renders
     from inspect_scout import MessagesPreprocessor, message_numbering
 
@@ -196,6 +248,8 @@ async def step_as_str(
         MessagesPreprocessor(exclude_system=False),
         nonce=nonce,
     )
+
+    mark = "" if nonce is None else f" ({nonce})"
 
     async def text(messages: Sequence[ChatMessage] | None, unknown: str) -> str:
         if messages is None:
@@ -208,7 +262,23 @@ async def step_as_str(
             messages if isinstance(messages, list) else list(messages)
         )
 
-    mark = "" if nonce is None else f" ({nonce})"
+    async def listed(
+        source: _Source, messages: Sequence[ChatMessage] | None, unknown: str
+    ) -> str:
+        # a head cut drops the oldest messages of a shown list and names the
+        # count in one marker line before the kept ones; the marker takes no
+        # message number, so the render renumbers the kept messages from the
+        # top, and each cite still resolves to the kept message it names
+        if messages is None:
+            return unknown
+        dropped = cut.get(source, 0)
+        kept = await text(list(messages)[dropped:], unknown)
+        if not dropped:
+            return kept
+        marker = (
+            f"[{dropped} earlier messages left out to fit the context window{mark}]"
+        )
+        return f"{marker}\n{kept}" if kept else marker
 
     def blocks(*parts: tuple[str, str]) -> str:
         return "\n\n".join(
@@ -227,13 +297,16 @@ async def step_as_str(
         blocks(
             (
                 "HISTORY",
-                await text(
-                    step.history, "The messages the agent has sent are not available."
+                await listed(
+                    "history",
+                    step.history,
+                    "The messages the agent has sent are not available.",
                 ),
             ),
             (
                 "AGENT MESSAGES",
-                await text(
+                await listed(
+                    "agent_messages",
                     step.agent_messages,
                     "The agent's own message list is not available.",
                 ),
@@ -244,8 +317,10 @@ async def step_as_str(
         blocks(
             (
                 "INPUT",
-                await text(
-                    step.input, "The model input for this call is not available."
+                await listed(
+                    "input",
+                    step.input,
+                    "The model input for this call is not available.",
                 ),
             ),
             ("TOOLS", _tools(tools)),
