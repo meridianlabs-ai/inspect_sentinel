@@ -306,6 +306,30 @@ def test_every_replay_is_tested_against_every_live_run(
     assert verdict.outcome == outcome
 
 
+@pytest.mark.parametrize("replay_flip", [False, True], ids=["same", "replay-only flip"])
+def test_a_replay_only_flip_is_not_trusted_when_live_runs_agree(
+    replay_flip: bool,
+) -> None:
+    steps = _flagging(
+        100,
+        live_a=[0],
+        live_b=[0],
+        replay_1=[0],
+        replay_2=[0, 1] if replay_flip else [0],
+    )
+    run = replace(_run(*steps), asked=[_answered("h")])
+    measured = measure(run, ["s0"], calls_a_model=False, asked=["h-sudo"])
+    assert measured.needles_found is not None
+    assert measured.needles_found.outcome == "trusted"
+    assert measured.same_human_answers is not None
+    assert measured.same_human_answers.outcome == "trusted"
+    assert measured.same_verdict.reproduces
+    assert measured.same_verdict.outcome == (
+        "not trusted" if replay_flip else "trusted"
+    )
+    assert measured.outcome == ("not trusted" if replay_flip else "trusted")
+
+
 @pytest.mark.parametrize(
     ("flagged", "changed", "outcome"),
     [
@@ -360,7 +384,7 @@ def test_each_needle_is_checked_one_by_one(
         (
             _flagging(3, live_a=[], live_b=[], replay_1=[], replay_2=range(3)),
             [],
-            "inconclusive",
+            "not trusted",
         ),
         (
             [_step("s0", replay_1=None, replay_2=None)],

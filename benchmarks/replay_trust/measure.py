@@ -8,7 +8,7 @@
 Each measurement, and the four together, comes to one of three outcomes: `trusted`, `not trusted`, or `inconclusive`, where the sample is too small to detect a difference that matters, or nothing was measured. Evidence of a difference makes it `not trusted` whatever the sample's size; a sample below the minimum is never `trusted`.
 
 - Measurement 1 is trusted where every replay's request is identical to live's outside the known differences, and not trusted where one is not.
-- Measurement 2 is not trusted where a step lacks a row in some run (live, a step with neither a report nor a recorded abstention), where the runs reproduce themselves (no step differs live against live or replay against replay) and a live run and a replay differ at a step, or else where a paired test rejects. It is inconclusive below `minimum` steps: the steps at which a change at one step in ten (`TOLERANCE`), all one way, is enough for the tests to reject.
+- Measurement 2 is not trusted where a step lacks a row in some run (live, a step with neither a report nor a recorded abstention), where either pair of runs reproduces itself (no step differs live against live or replay against replay) and a live run and a replay differ at a step, or else where a paired test rejects. It is inconclusive below `minimum` steps: the steps at which a change at one step in ten (`TOLERANCE`), all one way, is enough for the tests to reject.
 - Measurement 3 is not trusted where a needle is not reached in some run or a needle the live runs agree on is flagged differently in a replay, and inconclusive with no ordinary step or no needle the live runs agree on. Each needle is checked exactly, not estimated, so one is enough.
 - Measurement 4 is not trusted where a call is not asked live or not answered again as recorded.
 
@@ -273,12 +273,12 @@ class SameVerdict:
 
     @property
     def reproduces(self) -> bool:
-        """Whether the runs reproduce themselves: no step differs live against live or replay against replay."""
-        return all(n.disagreements == 0 for n in self.noise.values())
+        """Whether either pair of runs reproduces itself exactly."""
+        return any(n.disagreements == 0 for n in self.noise.values())
 
     @property
     def findings(self) -> list[Finding]:
-        """Not trusted where a step is unmatched; where the runs reproduce themselves and a pair disagrees at a step; or where they do not and a pair's test rejects at `alpha`. Inconclusive below `minimum` steps."""
+        """Not trusted where a step is unmatched; where either pair reproduces itself and a live/replay pair disagrees at a step; or where neither does and a pair's test rejects at `alpha`. Inconclusive below `minimum` steps."""
         found: list[Finding] = []
         if self.unmatched:
             found.append(
