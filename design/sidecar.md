@@ -492,7 +492,7 @@ The resolved contract needs acceptance cases for grouped calls with mixed answer
 
 When a sentinel runs in a sidecar, every step is judged on the traffic that passes through the proxy. Inspect's sidecar client does four things, and the sidecar needs none of them to make a decision:
 
-1. At task init, it probes the proxy, to check that a live sentinel of a version it knows is behind it.
+1. At task init, when the eval asks it to, it probes the proxy, to check that a live sentinel of a version it knows is behind it. An eval that doesn't ask sends the same requests as it would with no sidecar.
 2. Where the deployment allows it, it registers the task's facts with the sidecar.
 3. On each model request, it sends `x-inspect-context`, which says which sample the request belongs to (section 7).
 4. It reads what the sidecar decided from the `sentinel` field on each reply or refusal. It fetches the sample's state before scoring, and ends the sample once it is scored.
@@ -501,7 +501,7 @@ When a sentinel runs in a sidecar, every step is judged on the traffic that pass
 
 Inspect knows only the base URL of the model API it is configured to use. By default, the endpoint for evals is reached at that same URL: the operator has the proxy forward the path `/sentinel`, and everything under it, to the sidecar. Those paths get the same access control as the proxy's model calls, whatever the operator has set up, which may be none. Inspect sends with them whatever it sends with a model call. Each proxy hook's README says how to set up that forwarding in its proxy.
 
-At task init, Inspect sends a probe there: `GET /sentinel/info`, at the proxy's base URL. It checks two things: that a live sentinel is behind the proxy, and that it speaks a version of the methods Inspect knows. The probe's own path has no version, because the probe is how Inspect learns which versions there are. Inspect then uses the highest version both sides know, such as `/sentinel/v1`. The sidecar answers:
+At task init, an eval that asks for the sidecar client sends a probe there: `GET /sentinel/info`, at the proxy's base URL. It checks two things: that a live sentinel is behind the proxy, and that it speaks a version of the methods Inspect knows. The probe's own path has no version, because the probe is how Inspect learns which versions there are. Inspect then uses the highest version both sides know, such as `/sentinel/v1`. The sidecar answers:
 
 ```json
 {
@@ -1292,7 +1292,7 @@ Considered and not taken:
 - **Public functions that read the tools, the tool choice and the generation settings from a request**, in each provider's format. A generate step is given all three. inspect_ai has these functions only in its agent bridge, `inspect_ai.agent._bridge`, where they are written for the bridge: they leave out a tool that the provider runs unless the eval grants it, and some raise an error on a kind of tool they don't know. They also index fields a provider lets a declaration leave out: a description, a function's parameters, a custom tool's format, and an MCP server's allowed tools and headers. Until there are public ones, the sidecar fills those in with what leaving them out means, and uses the bridge's readers with every tool granted, and treats a request with a tool declaration they can't read, or leave out, as unreadable.
 - **A public function that describes a tool as the model is offered it**, as a `ToolInfo`. The bridge's readers return some tools as a `Tool`, such as a web search, and the sidecar turns each into a `ToolInfo` with `tool_to_tool_info` in `inspect_ai.tool._tool_util`.
 - **The JSON request context on each provider call.** Inspect sends `x-inspect-context` with the fields listed in section 7: the version, the eval id, the task, the sample id, the epoch, the sample's uuid, the attempt and its number. It sends the sample input and private metadata through registration.
-- **Inspect's sidecar client**, as section 9 describes: the probe at task init, registering the task where that is allowed, and one setting for the client, `auto`, `required` or `off`.
+- **Inspect's sidecar client**, as section 9 describes: the probe at task init, registering the task where that is allowed, and one setting for the client, `off` (the default), `auto` or `required`.
 - **A way to export what Inspect would register, as a tasks file.** A tasks file has to match the samples an eval runs, and at task init Inspect has the loaded task, its arguments and its dataset. Exporting from `inspect eval` the registration it would send gives an admin the file with nothing to reproduce. This is for the workstream that builds Inspect's sidecar client.
 - **Reading the `sentinel` field** on a reply, an error or the last event of a stream, and acting on it as in process: a call taken out goes back into Inspect's copy with an approval error, a changed call keeps the model's original, a `terminate` ends the sample, and every step is written into the transcript.
 - **A person's answer to a sentinel in a sidecar.** Inspect's approval UI shows a question that the sidecar holds, and the answer goes to the sidecar on the person's own credential. This follows incremental streaming in [PR 13](sidecar-plan.md#pr-13-human-review).

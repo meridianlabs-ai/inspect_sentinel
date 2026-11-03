@@ -69,9 +69,9 @@ Inspect goes on only if `versions` holds a version it knows.
 
 | Mode | What Inspect does |
 | --- | --- |
-| `auto`, the default | Probes quietly, only where a base URL was set, and uses a sidecar it finds. If the probe can't tell, Inspect carries on as today. |
+| `off`, the default | Doesn't probe, and runs as today. |
+| `auto` | Probes quietly, only where a base URL was set, and uses a sidecar it finds. If the probe can't tell, Inspect carries on as today. |
 | `required` | Fails the task at the start unless a sidecar Inspect supports answers. |
-| `off` | Doesn't probe, and runs as today. |
 
 What each probe answer means:
 
@@ -82,7 +82,7 @@ What each probe answer means:
 | a 404, or an answer that isn't a sidecar | no sidecar: run as today | fail the task |
 | a 401 or 403, a 5xx, or a timeout | can't tell: run as today, with a debug line | fail the task |
 
-`auto` keeps an ordinary eval exactly as it is today, but it can't guarantee that the sidecar is used. A deployment that relies on its sidecar sets `required`.
+**Off unless set.** An eval that doesn't set `sentinel_proxy` sends exactly the requests it sends today: no probe, no header, and no call under `/sentinel/`. A deployment with a sidecar sets `auto` or `required` for its evals, for example in its runner, or with `INSPECT_EVAL_SENTINEL_PROXY`. `auto` can't guarantee that the sidecar is used, so a deployment that relies on its sidecar sets `required`.
 
 **Proposed: credentials.** The probe and every call under `/sentinel/` reuse the authentication configured for the model's endpoint, in whatever form Inspect uses for that model. The proxy checks them as it checks a model call.
 
@@ -399,7 +399,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 ### J. Models behind more than one proxy
 
-- Inspect probes each endpoint the agent uses whose base URL was set (section 1), because inside Inspect the sentinel judges every agent call: "a call is the agent's whatever model it uses" (Meridian's [generate-stages.md](generate-stages.md#the-rule)). It probes the assigned model's endpoint at task start, and any other on the agent's first call to it, once per endpoint and credentials, as inspect_ai already probes a LiteLLM proxy once per base URL and key (`design/litellm-proxy.md`). An endpoint that only graders, approvers, compaction or monitors use is never probed, since no agent call reaches it.
+- When an eval sets `sentinel_proxy`, Inspect probes each endpoint the agent uses whose base URL was set (section 1), because inside Inspect the sentinel judges every agent call: "a call is the agent's whatever model it uses" (Meridian's [generate-stages.md](generate-stages.md#the-rule)). It probes the assigned model's endpoint at task start, and any other on the agent's first call to it, once per endpoint and credentials, as inspect_ai already probes a LiteLLM proxy once per base URL and key (`design/litellm-proxy.md`). An endpoint that only graders, approvers, compaction or monitors use is never probed, since no agent call reaches it.
 
 - Inspect's headers go only on agent calls to an endpoint where a sidecar answered. Every other endpoint gets plain model calls, as today.
 
