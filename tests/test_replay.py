@@ -533,3 +533,31 @@ async def test_a_step_that_asked_two_people_reports_the_least_real_answer(
     [report] = await replay_monitor(sentinel, [answered], human=policy)
 
     assert report.human == source
+
+
+@monitor
+def budget_reader() -> MonitorGroup:
+    # reads the input budget and the token count of the scan's model, as
+    # Host.score does before it prompts
+    async def before(context: Context, step: BeforeToolCall) -> Observation:
+        budget = await context.host.input_budget(model="mockllm/model")
+        count = await context.host.count_tokens("Safe?", model="mockllm/model")
+        return Observation(suspicion=0.0, metadata={"budget": budget, "count": count})
+
+    return MonitorGroup(before)
+
+
+# asyncio only: a model's count_tokens can reach asyncio-only code in
+# inspect_ai ("no running event loop" under trio once a model is cached)
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.anyio
+async def test_a_monitor_reads_the_input_budget_and_token_count_in_replay() -> None:
+    steps = [s for s in segmented([1]) if s.stage == "tool_call"]
+
+    reports = await replay_monitor(budget_reader(), steps)
+
+    assert reports[0].failed == ()
+    report = reports[0].report
+    assert report is not None and report.report.metadata is not None
+    assert report.report.metadata["budget"] > 0
+    assert report.report.metadata["count"] > 0
