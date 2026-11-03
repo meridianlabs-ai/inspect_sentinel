@@ -360,7 +360,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 - A report trimmed by a sidecar started with `--no-eval-results` says it was trimmed, so it never looks like a monitor that had nothing to say.
 
-- Each event records where it came from: inside Inspect, or a sidecar. For a sidecar, it also records the proxy address, the endpoint version and release mode from the probe, the call's `x-irid`, whether the report was trimmed, and the models the step's monitors and protocols called, by role, from the field's `models`. This adds fields to `SentinelEvent` in inspect_ai's log format.
+- Each event records where it came from: inside Inspect, or a sidecar. For a sidecar, it also records the proxy address, the endpoint version and release mode from the probe, the call's `x-irid`, whether the report was trimmed, and the models the step's monitors and protocols called, by role, from the field's `models`. These go in the event's `metadata`, under `sentinel_sidecar`, so inspect_ai's log format doesn't change; a trimmed report has an empty `function`. `sentinel_proxy` isn't recorded in the log either, so `inspect eval-retry` is told it again. Typed log fields for both follow the first PR ([#167](https://github.com/meridianlabs-ai/inspect_sentinel/issues/167)), as changing the log format means regenerating the schema in inspect_ai, ts-mono and inspect_scout.
 
 - The sidecar takes a role's model from its own configuration, not from the eval's model roles ([sidecar.md, section 8](sidecar.md#what-holds-something-else-in-the-sidecar)). When a step's monitors used a role the eval also set, to another model, Inspect warns once, naming both models.
 
