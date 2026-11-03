@@ -24,18 +24,18 @@ You need Docker and a provider API key.
 docker compose up --build
 ```
 
-Envoy listens on `localhost:8080`. Run the task with the model's base URL set to Envoy. Envoy holds no key of its own: the task sends its provider key, and Envoy passes it on to the provider. The sidecar is never shown it.
+Envoy listens on `localhost:8080`. Run the task with the model's base URL set to Envoy, and with `--sentinel-proxy auto`, which has Inspect find the sidecar and read its decisions; Inspect never looks for one unless told to. Envoy holds no key of its own: the task sends its provider key, and Envoy passes it on to the provider. The sidecar is never shown it.
 
 ```bash
 ANTHROPIC_BASE_URL=http://localhost:8080 \
-  inspect eval task.py@philadelphia --model anthropic/claude-haiku-4-5
+  inspect eval task.py@philadelphia --model anthropic/claude-haiku-4-5 --sentinel-proxy auto
 ```
 
 For an OpenAI model:
 
 ```bash
 OPENAI_BASE_URL=http://localhost:8080/v1 \
-  inspect eval task.py@philadelphia --model openai/gpt-5-mini
+  inspect eval task.py@philadelphia --model openai/gpt-5-mini --sentinel-proxy auto
 ```
 
 To try a rule of your own, edit `rule/weather_rules/__init__.py` and `sentinel.yaml`, and rebuild the sidecar with `docker compose up --build sidecar`.
@@ -50,7 +50,7 @@ Inspect finds the sidecar through Envoy, at `/sentinel/`, because the task's bas
 - The log has a sentinel event for each decision, the rejection and then the sunny report going ahead. Each event names the sidecar that made it.
 - Inspect reports no HTTP retries.
 
-Inspect finds the sidecar only if it reads the sidecar's decisions. An Inspect that doesn't read them, or a run with `--sentinel-proxy off`, treats the 400 as final, and the sample fails with the sentinel's message. For such a run, set `reject_status: 503` in `sentinel.yaml` and rebuild the sidecar. The sidecar then refuses with a status Inspect retries by itself, and adds the rejection to the retried request, so the model sees its own report and the editor's note. Inspect reports one HTTP retry, and that retry is the rejection. The rejection isn't in Inspect's log, since Inspect never saw it.
+Inspect reads the sidecar's decisions only when a run sets `--sentinel-proxy`. A run without it, or an Inspect without that option, treats the 400 as final, and the sample fails with the sentinel's message. For such a run, set `reject_status: 503` in `sentinel.yaml` and rebuild the sidecar. The sidecar then refuses with a status Inspect retries by itself, and adds the rejection to the retried request, so the model sees its own report and the editor's note. Inspect reports one HTTP retry, and that retry is the rejection. The rejection isn't in Inspect's log, since Inspect never saw it.
 
 ## What an operator sets
 

@@ -30,18 +30,18 @@ You need Docker and a provider API key. You also need an Inspect that reads a si
 docker compose up --build
 ```
 
-Envoy listens on `localhost:8080`. Run a task with the model's base URL set to Envoy. Envoy passes the task's provider key on to the provider, and the sidecar is never shown it.
+Envoy listens on `localhost:8080`. Run a task with the model's base URL set to Envoy, and with `--sentinel-proxy auto`, which has Inspect find the sidecar and read its decisions. Envoy passes the task's provider key on to the provider, and the sidecar is never shown it.
 
 ```bash
 ANTHROPIC_BASE_URL=http://localhost:8080 \
-  inspect eval task.py@three_cities --model anthropic/claude-haiku-4-5
+  inspect eval task.py@three_cities --model anthropic/claude-haiku-4-5 --sentinel-proxy auto
 ```
 
 For an OpenAI model:
 
 ```bash
 OPENAI_BASE_URL=http://localhost:8080/v1 \
-  inspect eval task.py@three_cities --model openai/gpt-5-mini
+  inspect eval task.py@three_cities --model openai/gpt-5-mini --sentinel-proxy auto
 ```
 
 Run `stubborn_reporter` the same way.
