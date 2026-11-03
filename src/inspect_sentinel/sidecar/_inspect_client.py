@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from .._context import InspectSample
 from .._report import Decision, Failed, Reported
-from ._host import Record, Stage
+from ._host import ModelUsed, Record, Stage
 from ._wire import (
     StreamEvent,
     UnreadableError,
@@ -76,6 +76,8 @@ class Judged:
     """The step's final decision, or None if no protocol decided."""
     records: Sequence[Record]
     """What was recorded while the step was judged."""
+    models: Sequence[ModelUsed] = ()
+    """The models the step's monitors and protocols called."""
     original: ToolCall | None = None
     """The call the model proposed, where the client is not handed it as proposed."""
 
@@ -107,6 +109,16 @@ class Exchange:
     """What the provider billed for the model's reply, for a client that is refused it."""
 
 
+class SentinelModel(BaseModel):
+    """A model a monitor or protocol called while a step was judged."""
+
+    role: str | None = Field(
+        default=None,
+        description="The model role the call asked for, as Inspect names roles. Left out where the call named its model without a role.",
+    )
+    model: str = Field(description="The model the call went to, as Inspect names it.")
+
+
 class SentinelStep(BaseModel):
     """One step judged during an exchange."""
 
@@ -126,6 +138,10 @@ class SentinelStep(BaseModel):
     recorded: list[dict[str, Any]] | None = Field(
         default=None,
         description="What each monitor and protocol recorded for the step. Left out of a trimmed field.",
+    )
+    models: list[SentinelModel] | None = Field(
+        default=None,
+        description="The models the step's monitors and protocols called, each once, in the order first called. The sidecar takes a role's model from its own configuration, not from the eval's. Left out where none was called, and of a trimmed field.",
     )
 
 
@@ -201,6 +217,9 @@ def sentinel_field(
                     include={"action", "message", "modified"} if trimmed else None,
                 ),
                 recorded=None if trimmed else [record_json(r) for r in step.records],
+                models=None
+                if trimmed or not step.models
+                else [SentinelModel(role=m.role, model=m.model) for m in step.models],
             )
         )
     withheld, proposed = exchange.withheld, exchange.proposed
