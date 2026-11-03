@@ -286,7 +286,7 @@ Some ways the field goes missing:
    - the final scoring, where the task runner calls each scorer itself (`_eval/task/run.py`);
    - interim scoring, where `inspect ctl task score` scores a running eval's samples on request, from outside them (inspect_ai's `design/ctl/interim-scoring.md`).
 
-   A fourth place needs no copy: `inspect score` re-scores a finished eval from its log (`_eval/score.py`), after the sidecar may have dropped the run. It reads the monitor state saved in the log with the sample store, which is why the copy has to happen before the final scoring.
+   A fourth place needs no copy: `inspect score` re-scores a finished eval from its log (`_eval/score.py`), after the sidecar may have dropped the run. It reads the monitor state saved in the log with the sample store, which is why the copy has to happen before the final scoring. A sample saved without being scored, as a failed sample is, is copied before it is saved, so that its log holds the monitor state, as it does inside Inspect. A failed copy leaves the marker in the store, saying why the monitor state is missing.
 2. Inspect scores the sample.
 3. After the final scoring, `end_sample`: the sidecar drops the run's monitor state, and the rest of what it keeps for the sample.
 
