@@ -379,7 +379,7 @@ Each item says what this design proposes. Where something is still needed from s
 - A sidecar setting, `strictness` (`strictness:` in the `server` stanza, `--strictness` on the command line), with three levels:
   - `open`, the default and today's behaviour: every call is judged. A call that names a task the sidecar doesn't hold is judged without the task's facts.
   - `known_tasks`: a call that names a task the sidecar doesn't hold is refused. A call that names no task, such as a naked agent's, is judged as today.
-  - `registered_only`: a call that doesn't name a task the sidecar holds is refused, including non-eval traffic, and a grader's calls unless K's exemption is on.
+  - `registered_only`: a call that doesn't name a task the sidecar holds is refused, including non-eval traffic, and a grader's calls unless K's exemption is on. So a model-graded scorer whose model is reached through the proxy fails at every sample.
 
 - Only `x-inspect-context` marks a call as an eval's, and the client sets it. So `known_tasks` stops a client whose registration went wrong, but not one that leaves the header off. Meridian's trust model for Inspect says the same of any input the agent can influence: "Reaching a transport is not authorization" (inspect_ai's `design/sandbox-trust-model.md`). This is a sidecar change, not an Inspect one.
 
@@ -420,6 +420,8 @@ Each item says what this design proposes. Where something is still needed from s
 - **Deferred:** not built in PR 11. The exemption below follows as its own change, after the client, once what Inspect signs and how the key reaches both sides are settled. It is off by default, so nothing in PR 11 depends on it.
 
 - Inside Inspect, the sentinel never judges a grader's calls, a scorer's, or a monitor's own model calls (Meridian's [generate-stages.md, "What is in and out"](generate-stages.md#what-is-in-and-out)). Through a sidecar, a grader's calls go without `x-inspect-context`, and the sidecar judges them like any client's, as today. That stays so until the operator turns on the exemption below.
+
+- Inspect's own side requests go without the header too. The OpenAI provider checks once whether the account may have reasoning summaries, with a small Responses call (`reasoning_summaries()` in `model/_providers/openai.py`). Under `registered_only` that call is refused, and Inspect takes the refusal to mean summaries aren't available, so it turns them off for the run.
 
 - The operator lists the models that serve roles other than the agent's, such as the grader, in the sidecar's configuration. The list is fixed for the run, and nothing the client sends can change it, since no method can loosen a decision ([sidecar.md](sidecar.md#a-client-that-cant-be-trusted)). This follows Meridian's plan that the proxy side marks such calls ([pr-series.md](pr-series.md#then-hosts-in-process-bridge-sidecar)).
 
