@@ -218,7 +218,7 @@ Some calls may have been taken out or changed. The field's `proposed` holds the 
 - answers each call that was taken out with an approval error, as in process
 - runs each changed call with its new arguments, while the model's turn keeps the original
 
-**Case B: the whole turn is rejected.** Every call in the turn was rejected, so the proxy sends an error, with the field and `outcome: reject`. The field's `withheld` holds the model's turn.
+**Case B: the whole turn is rejected.** Every call in the turn was rejected, so the proxy sends an error, with the field and `outcome: reject`. The field's `withheld` holds the model's turn, and its `usage` what the provider billed for the reply, which Inspect counts as it counts any model call's usage.
 
 Inspect turns that error into an ordinary model output. The output holds the model's turn, and each call gets an approval error. The agent then goes on, as it would in process.
 
