@@ -45,7 +45,7 @@ from ._select import (
     callback_ref,
     selector_from,
     stand_in_from,
-    table_pairs,
+    table_rows,
 )
 from ._sources import factory_sources, import_factory_sources
 from ._steps import transcript_steps
@@ -92,7 +92,7 @@ def as_scanner(
 ) -> Scanner[Transcript]:
     """Replay a monitor or protocol over each transcript a Scout scan reads, as a transcript scanner.
 
-    Each transcript's steps are rebuilt as the sentinel would have been handed them live, the sentinel runs over them through the same runner as an eval, and each step at a stage it watches becomes one `Result` in the transcript's resultset, so `scan_results_df(..., rows="results")` gives one row per step and stage. A result's metadata holds the step's `step_id`, `stage` and `depth`, how the transcript's agent turns were established (`turns`: `"recorded"` from the log, `"inferred"`, or `"stored"` from a stored timeline) and, when the step reached `human()`, where the answer came from (`human`) and, where it was `human=`'s fixed answer, that answer (`human_answer`). Its references cite the step's model event or message first, then what the report cites. Each has a cite label, `[M<n>]` for the transcript's nth message or `[E<n>]` for its nth event, a report's own labels rewritten to them in its explanation, and the explanation leads with the step's (`Step [E12]: ...`) and names any other it does not hold, so Scout View links them.
+    Each transcript's steps are rebuilt as the sentinel would have been handed them live, the sentinel runs over them through the same runner as an eval, and each step at a stage it watches becomes one `Result` in the transcript's resultset, so `scan_results_df(..., rows="results")` gives one row per step and stage. A result's metadata holds the step's `step_id`, `stage`, `conversation` (the span tree's agent span or the sample, the stored timeline's span or branch with `timeline=`, the transcript for a transcript of messages alone) and `depth`, how the transcript's agent turns were established (`turns`: `"recorded"` from the log, `"inferred"`, or `"stored"` from a stored timeline) and, when the step reached `human()`, where the answer came from (`human`) and, where it was `human=`'s fixed answer, that answer (`human_answer`). Its references cite the step's model event or message first, then what the report cites. Each has a cite label, `[M<n>]` for the transcript's nth message or `[E<n>]` for its nth event, a report's own labels rewritten to them in its explanation, and the explanation leads with the step's (`Step [E12]: ...`) and names any other it does not hold, so Scout View links them.
 
     For a monitor, a result's `value` is its suspicion, a number or a dict by dimension, `None` where it abstained, and the observation's own metadata is under `metadata`. For a protocol, it is the root's decision: `value` is whether the step was flagged (`reject`, `modify` or `terminate`; `escalate` declines to decide, so it is not), `answer` the action, and the metadata holds `audit`, `modified` and the children's reports. A monitor that raises, anywhere in the sentinel, makes the transcript's result an error, even where a protocol went on without it.
 
@@ -102,7 +102,7 @@ def as_scanner(
         sentinel: A monitor or protocol, or monitors and protocols that resolve to one root, as `Task(sentinel=)` takes them, or their configuration. Several monitors with no protocol are refused: scan them one at a time.
         results: `"step"` for one result per step, `"transcript"` for one per transcript: a monitor's highest suspicion, per dimension when structured, or a protocol's strongest decision, citing the steps that set it.
         stage: The stage whose steps give results; every stage the sentinel watches when None, each row carrying its stage. Every watched stage still runs either way. Scout's summary of a scan averages a scanner's values over all its rows, so pass `stage` for a summary of one stage.
-        steps: Which steps to run the sentinel at: a label table (`StepTable`), such as a filtered results dataframe, or a selector `(transcript_id, step) -> bool` registered with `@step_selector`, or the `module:name` it is registered as. The others are not run, so a monitor's state does not see them. A transcript a table does not list gives no results and its steps are not rebuilt; narrow the scan's transcripts to the table's too, so they are not read.
+        steps: Which steps to run the sentinel at: a label table (`StepTable`), such as a filtered results dataframe, where a `stage` column limits each row to its stage and a table without one selects a step at every stage, or a selector `(transcript_id, step) -> bool` registered with `@step_selector`, or the `module:name` it is registered as. The others are not run, so a monitor's state does not see them. A transcript a table does not list gives no results and its steps are not rebuilt; narrow the scan's transcripts to the table's too, so they are not read.
         human: How `human()` is answered where no answer was recorded at the step; a recorded answer is always given first, to the `human()` at the path that recorded it, and the scan logs one warning where, at a step, a `human()` asks at a path with no recorded answer while an answer was recorded at a path where no `human()` asked. `"approve"`, `"reject"` or `"terminate"` gives that answer, or `terminate` where the asking `human()` does not offer it, as `reject` is not offered after a tool runs or a model replies. Or a stand-in registered with `@human_stand_in`, or the `module:name` it is registered as. A selector or stand-in defined in a notebook, REPL or `python -c` is refused, since a scan's worker processes cannot load it; put it in a `.py` file next to the notebook.
         timeline: The stored timeline whose agent spans and branches are the conversations, such as Petri's `"target"`, in place of the log's span tree. Raises for a transcript with no timeline of that name.
         depth: Run only steps whose conversation is at most this deep in the timeline (`ReplayStep.depth`), counting as `llm_scanner(depth=)` does. All steps when None.
@@ -122,7 +122,7 @@ def as_scanner(
         if steps is None
         else callback_ref("step_selector", steps, "steps")
         if isinstance(steps, str) or callable(steps)
-        else {"table": table_pairs(steps)}
+        else {"table": table_rows(steps)}
     )
     policy: object = (
         human if human in ANSWERS else callback_ref("human_stand_in", human, "human")
@@ -292,6 +292,7 @@ def _result(
     return step_result(
         step_id=report.step.id,
         stage=report.step.stage,
+        conversation=report.step.step.conversation,
         label=report.path or report.name,
         report=reported.report if reported is not None else None,
         citation=citations.cite(report.step),
