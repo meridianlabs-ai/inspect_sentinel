@@ -11,7 +11,7 @@ from typing import Any, cast
 
 from inspect_ai.model import ChatMessage
 
-from ._state import Conversation
+from ._state import Conversation, Sent
 
 # Not sent to the model: the id, source and metadata, and the model an
 # assistant message names, which a reader fills from the request it reads, so
@@ -35,23 +35,55 @@ def record_sent(
         input: The messages the request sends the model, as read from `body`.
         body: The request body they were read from, which tells an id the request carries from one a reader made up.
     """
-    carried = _strings(body)
-    keys = [_digest(_key(message, carried)) for message in input]
-    begins = [_begun(earlier, keys) for earlier in conversation.recent]
-    longest = max(begins, default=0)
-    matched: set[int] = set()
-    for earlier, begun in zip(conversation.recent, begins, strict=True):
-        if begun != longest:
-            continue
-        shared = _shared(earlier, keys, begun)
-        # the latest of those alike, as they come latest last
-        if len(shared) >= len(matched):
-            matched = shared
+    keys = _keys(input, body)
+    matched = _matched(conversation, keys)
     for position, message in enumerate(input):
         if position not in matched:
             conversation.sent.append(message)
-    conversation.recent.append(keys)
+    conversation.recent.append(Sent(keys, [message.id for message in input]))
     del conversation.recent[:-RECENT_REQUESTS]
+
+
+def with_sent_ids(
+    conversation: Conversation, input: Sequence[ChatMessage], body: bytes
+) -> list[ChatMessage]:
+    """The request's messages, each that the conversation sent before under the id it had then.
+
+    In Inspect's own process a message keeps its id from one model call to the next, and a monitor can find a message it was shown before by its id, as `NewSinceLastReport` does. A request carries no message ids, so each read gives a message a new one. A message matched to one an earlier request sent, as `record_sent` matches it, is given that message's id, and any other keeps the new one.
+
+    Args:
+        conversation: The conversation.
+        input: The messages the request sends the model, as read from `body`.
+        body: The request body they were read from.
+    """
+    matched = _matched(conversation, _keys(input, body))
+    return [
+        message.model_copy(update={"id": matched[position]})
+        if matched.get(position) is not None
+        else message
+        for position, message in enumerate(input)
+    ]
+
+
+def _keys(input: Sequence[ChatMessage], body: bytes) -> list[str]:
+    carried = _strings(body)
+    return [_digest(_key(message, carried)) for message in input]
+
+
+def _matched(conversation: Conversation, keys: Sequence[str]) -> dict[int, str | None]:
+    # The positions of the request that the earlier request it continues
+    # sent, each with the id the message had there.
+    begins = [_begun(earlier.keys, keys) for earlier in conversation.recent]
+    longest = max(begins, default=0)
+    matched: dict[int, str | None] = {}
+    for earlier, begun in zip(conversation.recent, begins, strict=True):
+        if begun != longest:
+            continue
+        shared = _shared(earlier.keys, keys, begun)
+        # the latest of those alike, as they come latest last
+        if len(shared) >= len(matched):
+            matched = {now: earlier.ids[was] for now, was in shared.items()}
+    return matched
 
 
 EXACT_PAIRS = 40_000
@@ -70,28 +102,28 @@ def _begun(earlier: Sequence[str], keys: Sequence[str]) -> int:
     )
 
 
-def _shared(earlier: Sequence[str], keys: Sequence[str], begun: int) -> set[int]:
-    # The positions of the request that the earlier request also sent: the
-    # beginning they share, and what else of the rest matches, in order. A
-    # request that adds to the end of the earlier one, as most do, needs no
-    # more.
-    shared = set(range(begun))
+def _shared(earlier: Sequence[str], keys: Sequence[str], begun: int) -> dict[int, int]:
+    # The positions of the request that the earlier request also sent, each
+    # with its position there: the beginning they share, and what else of the
+    # rest matches, in order. A request that adds to the end of the earlier
+    # one, as most do, needs no more.
+    shared = {position: position for position in range(begun)}
     rest, after = earlier[begun:], keys[begun:]
     if not rest or not after:
         return shared
     if len(rest) * len(after) <= EXACT_PAIRS:
         found = SequenceMatcher(None, rest, after, autojunk=False)
         shared.update(
-            begun + block.b + offset
+            (begun + block.b + offset, begun + block.a + offset)
             for block in found.get_matching_blocks()
             for offset in range(block.size)
         )
     else:
-        shared.update(begun + position for position in _in_order(rest, after))
+        shared.update((begun + now, begun + was) for now, was in _in_order(rest, after))
     return shared
 
 
-def _in_order(earlier: Sequence[str], keys: Sequence[str]) -> list[int]:
+def _in_order(earlier: Sequence[str], keys: Sequence[str]) -> list[tuple[int, int]]:
     # Each message of the request matched to the first like it in the
     # earlier request after the one last matched. For a run of messages
     # alike this matches as the exact matcher does. Where the earlier
@@ -102,7 +134,7 @@ def _in_order(earlier: Sequence[str], keys: Sequence[str]) -> list[int]:
     for position, key in enumerate(earlier):
         places.setdefault(key, []).append(position)
     last = -1
-    found: list[int] = []
+    found: list[tuple[int, int]] = []
     for position, key in enumerate(keys):
         candidates = places.get(key)
         if candidates is None:
@@ -110,7 +142,7 @@ def _in_order(earlier: Sequence[str], keys: Sequence[str]) -> list[int]:
         next_place = bisect_right(candidates, last)
         if next_place < len(candidates):
             last = candidates[next_place]
-            found.append(position)
+            found.append((position, last))
     return found
 
 

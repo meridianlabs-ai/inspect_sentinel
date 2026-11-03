@@ -42,7 +42,7 @@ from ._exchange import (
     Request,
     succeeded,
 )
-from ._history import record_sent
+from ._history import record_sent, with_sent_ids
 from ._host import Record, RunHost, SidecarHost, stage
 from ._inspect_ai import VIEWED_TOOLS, tool_call_view
 from ._inspect_client import (
@@ -652,6 +652,10 @@ class Handler:
                 start=conversation.noted,
             )
             answer = Replace(amended.body)
+        # what the model is sent, each message the conversation sent before
+        # under the id it had then, as in Inspect's own process
+        body = amended.body if amended.body is not None else request.body
+        messages = with_sent_ids(conversation, messages, body)
 
         held = Held(
             run=run_key,
@@ -708,11 +712,7 @@ class Handler:
             return self._with_field(refusal, proxy, held.exchange, "terminate", attempt)
         # the request goes on to the model, as the client sent it with what
         # this sidecar added
-        record_sent(
-            conversation,
-            messages,
-            amended.body if amended.body is not None else request.body,
-        )
+        record_sent(conversation, messages, body)
         await self._state.hold(request.id, held)
         # an Inspect client is told of the request's steps with the reply
         return answer
