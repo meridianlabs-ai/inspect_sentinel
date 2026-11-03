@@ -13,7 +13,8 @@ import uvicorn
 from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.applications import Starlette
 
-from .._config import parse_config_file, sentinel_from_config
+from .._config import parse_config_file
+from ..config import sentinel_from_config
 from ._eval_endpoint import TOKEN_VARIABLE, eval_routes
 from ._exchange import MAX_BODY_BYTES
 from ._handler import Handler

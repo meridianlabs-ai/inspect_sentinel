@@ -16,6 +16,9 @@ class Invocation:
     # it; the functions of a group, and repeat calls at one path, are told apart
     parent: Invocation | None
     function: str
+    # the instance path the function runs at, which a host reads to tell which
+    # instance is asking it, as the replay host does for human()
+    path: str
     decided: Reported[Decision] | None = None
     # run when the function returns or decides final, not when it raises or
     # is cancelled: state it only means to keep once it has reported
@@ -35,8 +38,8 @@ _decided: ContextVar[list[Invocation] | None] = ContextVar(
 )
 
 
-def invocation(function: str) -> Invocation:
-    return Invocation(parent=_current.get(), function=function)
+def invocation(function: str, path: str) -> Invocation:
+    return Invocation(parent=_current.get(), function=function, path=path)
 
 
 def current_invocation() -> Invocation | None:
