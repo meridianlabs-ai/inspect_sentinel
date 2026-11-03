@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from inspect_ai.model import ChatMessageAssistant
+from inspect_ai.model import ChatMessageAssistant, ModelUsage
 from inspect_ai.tool import ToolCall
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
@@ -103,6 +103,8 @@ class Exchange:
     """What the model is told of the rejection, if the turn was refused for one."""
     ended: bool = False
     """Whether the reply was refused because the run ended, by a sentinel's decision while it was judged or before, rather than for a rejection."""
+    usage: ModelUsage | None = None
+    """What the provider billed for the model's reply, for a client that is refused it."""
 
 
 class SentinelStep(BaseModel):
@@ -160,6 +162,10 @@ class SentinelField(BaseModel):
         default=None,
         description="The model's turn as it proposed it, when the client was handed it with calls taken out because they were rejected. `results` holds what the model is told of each call taken out. The sidecar puts those calls and results back in each later request of the conversation that doesn't already hold them.",
     )
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="What the provider billed for the model's reply, as Inspect writes `ModelUsage`, when the client was refused a reply the model gave. A refusal carries no usage of its own, so the client counts it from here.",
+    )
 
 
 def sentinel_field(
@@ -204,6 +210,12 @@ def sentinel_field(
         steps=steps,
         withheld=withheld_turn(withheld) if withheld is not None else None,
         proposed=withheld_turn(proposed) if proposed is not None else None,
+        # a reply that goes on carries its own usage
+        usage=(
+            exchange.usage.model_dump(mode="json", exclude_none=True)
+            if exchange.usage is not None and outcome != "proceed"
+            else None
+        ),
     )
     return written.model_dump(mode="json", exclude_none=True)
 

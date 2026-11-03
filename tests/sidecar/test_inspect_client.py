@@ -229,6 +229,11 @@ async def test_a_refused_turn_carries_the_rejected_calls_and_what_was_recorded(
     assert rejected["recorded"][0]["report"] == rejected["decision"]
     # every call the client is not handed has its original
     assert all("original" in step for step in answer.sentinel["steps"])
+    # what the provider billed for the reply, which the refusal can't carry
+    assert output.usage is not None
+    assert answer.sentinel["usage"] == output.usage.model_dump(
+        mode="json", exclude_none=True
+    )
 
 
 @pytest.mark.anyio
@@ -268,6 +273,8 @@ async def test_a_turn_with_a_call_taken_out_carries_what_the_model_proposed(
     ]
     assert proposed["results"] == {calls[1].id: f"{city} is not allowed."}
     assert "withheld" not in field
+    # the reply that goes on carries its own usage
+    assert "usage" not in field
 
 
 @pytest.mark.anyio
@@ -291,6 +298,9 @@ async def test_a_run_ended_at_a_call_is_the_last_step() -> None:
         "toolu_3",
     ]
     assert set(withheld["results"].values()) == {_ENDED}
+    output = await read_reply(answered.provider, answered.content_type, answered.body)
+    assert output.usage is not None
+    assert answer.sentinel["usage"]["input_tokens"] == output.usage.input_tokens
 
 
 @protocol
