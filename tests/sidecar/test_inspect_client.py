@@ -29,7 +29,7 @@ from inspect_sentinel.sidecar import (
     read_reply,
 )
 from inspect_sentinel.sidecar._handler import _ENDED, SampleResult
-from inspect_sentinel.sidecar._host import ListRecorder
+from inspect_sentinel.sidecar._host import ListRecorder, SidecarHost
 from inspect_sentinel.sidecar._inspect_client import with_sentinel
 from inspect_sentinel.sidecar._state import MemoryState
 from inspect_sentinel.sidecar._wire import stream_events
@@ -897,6 +897,52 @@ async def test_without_eval_results_only_what_inspect_acts_on_is_sent() -> None:
         "message": "Tokyo is not allowed.",
     }
     assert rejected["original"]["arguments"] == {"location": "Tokyo"}
+
+
+@protocol
+def asks_models() -> Protocol:
+    # a protocol that asks its role's model, then a model it names, at each call
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
+        if not isinstance(step, BeforeToolCall):
+            return None
+        await context.host.generate("Is this call suspicious?")
+        await context.host.generate("Is it?", model="mockllm/named")
+        await context.host.generate("Again?")
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.anyio
+# inspect_ai calls a model on trio only once it is set up to, as an eval does;
+# the sidecar serves on asyncio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.parametrize("eval_results", [True, False], ids=["sent", "trimmed"])
+async def test_each_step_says_which_models_judged_it(eval_results: bool) -> None:
+    # the sidecar's roles, not the eval's: so the eval can tell which judged
+    handler = Handler(
+        asks_models(),
+        host=SidecarHost({"monitor": "mockllm/monitor"}),
+        eval_results=eval_results,
+    )
+    asked, answered = _exchange("anthropic")
+    await handler.request(asked)
+
+    answer = await handler.reply(answered)
+
+    assert isinstance(answer, Replace)
+    steps = _field(answered.content_type, answer.body)["steps"]
+    assert [step["stage"] for step in steps].count("tool_call") == 3
+    for step in steps:
+        if eval_results and step["stage"] == "tool_call":
+            assert step["models"] == [
+                {"role": "monitor", "model": "mockllm/monitor"},
+                {"model": "mockllm/named"},
+            ]
+        else:
+            assert "models" not in step
 
 
 def test_a_stream_keeps_its_line_ends_and_each_events_other_lines() -> None:

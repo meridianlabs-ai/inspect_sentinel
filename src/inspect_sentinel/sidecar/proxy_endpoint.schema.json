@@ -622,6 +622,34 @@
       "title": "SentinelField",
       "type": "object"
     },
+    "SentinelModel": {
+      "description": "A model a monitor or protocol called while a step was judged.",
+      "properties": {
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model role the call asked for, as Inspect names roles. Left out where the call named its model without a role.",
+          "title": "Role"
+        },
+        "model": {
+          "description": "The model the call went to, as Inspect names it.",
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "SentinelModel",
+      "type": "object"
+    },
     "SentinelStep": {
       "description": "One step judged during an exchange.",
       "properties": {
@@ -685,6 +713,22 @@
           "default": null,
           "description": "What each monitor and protocol recorded for the step. Left out of a trimmed field.",
           "title": "Recorded"
+        },
+        "models": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/SentinelModel"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The models the step's monitors and protocols called, each once, in the order first called. The sidecar takes a role's model from its own configuration, not from the eval's. Left out where none was called, and of a trimmed field.",
+          "title": "Models"
         }
       },
       "required": [

@@ -43,7 +43,7 @@ from ._exchange import (
     succeeded,
 )
 from ._history import record_sent, with_sent_ids
-from ._host import Record, RunHost, SidecarHost, stage
+from ._host import Record, RunHost, SidecarHost, noting_models, stage
 from ._inspect_ai import VIEWED_TOOLS, tool_call_view
 from ._inspect_client import (
     INSPECT_CONTEXT,
@@ -1115,21 +1115,29 @@ class Handler:
 
     async def _judge(self, held: Held, run: Run, step: Step) -> Decision | None:
         recorded = len(held.recorder.records)
-        decision = await run_sentinel(
-            self._protocol,
-            HostContext(
-                host=RunHost(self._host, run.eval),
-                recorder=held.recorder,
-                store=held.store,
-                proxy=held.proxy,
-            ),
-            step,
-        )
+        # which models judged the step, for the eval: its roles don't reach here
+        with noting_models() as models:
+            decision = await run_sentinel(
+                self._protocol,
+                HostContext(
+                    host=RunHost(self._host, run.eval),
+                    recorder=held.recorder,
+                    store=held.store,
+                    proxy=held.proxy,
+                ),
+                step,
+            )
         call = (
             step.call.id if isinstance(step, BeforeToolCall | AfterToolCall) else None
         )
         held.exchange.judged.append(
-            Judged(stage(step), call, decision, held.recorder.records[recorded:])
+            Judged(
+                stage(step),
+                call,
+                decision,
+                held.recorder.records[recorded:],
+                tuple(models),
+            )
         )
         return decision
 
