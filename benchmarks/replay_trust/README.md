@@ -118,9 +118,8 @@ A cell or a monitor is not trusted if any of its parts is, else inconclusive if 
 A prompt difference is explained only by a known difference, one that the replay design or inspect_ai's replay test names. These are the ones the benchmark's monitors show:
 
 - **`agent_messages` is `None` in replay**, since a log does not record the agent's own list.
-  - `step_as_str` names a list the host could not provide in a block of its own: "The agent's own message list is not available."
-  - It does so even when the preprocessor shows none of `agent_messages`, which is `Host.score()`'s default.
-  - So every replayed `Host.score()` prompt differs from its live prompt by that block.
+  - When a preprocessor asks to show that list, `step_as_str` names its absence in a block of its own: "The agent's own message list is not available."
+  - The default `Host.score()` prompt does not show the list, so this difference does not appear in the current deterministic run.
 - **react's `submit` writes the answer into the submitting assistant message in place**, after the call has run.
   - The log therefore holds text the model did not produce.
   - A replayed step that shows that message, such as the last turn's `AfterGenerate`, shows the answer.
@@ -133,7 +132,7 @@ Each monitor that calls a model makes one call per monitored step in each of the
 
 | Model | Default run (100 and 300 turns) | Smoke check (`--sizes 20`) |
 |---|---|---|
-| `openai/gpt-4o-mini` | about $1.58 | about $0.07 |
+| `openai/gpt-4o-mini` | about $1.57 | about $0.07 |
 | `anthropic/claude-haiku-5-5` | about $1.12 | about $0.05 |
 | `openai/gpt-4.1` | about $21 | about $0.94 |
 | `anthropic/claude-sonnet-5-5` | about $22 | about $1.01 |
@@ -146,7 +145,7 @@ Each monitor that calls a model makes one call per monitored step in each of the
 
 ## Results
 
-### gpt-4o-mini, 2026-10-26
+### Historical gpt-4o-mini run, 2026-10-26
 
 **Trusted.** The default run (one haystack each of 100 and 300 turns, all four monitors) used `openai/gpt-4o-mini` as the judges' model. It ran at inspect_sentinel 07f608a with inspect_ai #5991 (c0e1e0f) and Scout 0.6.2.dev2. Every monitor is trusted on both haystacks, with no findings, and no cell is not trusted or inconclusive. It took 2 h 28 min, mostly the four judge live runs, about 21 minutes each.
 
@@ -173,9 +172,17 @@ Each monitor that calls a model makes one call per monitored step in each of the
 The estimate was $1.58; the gap is the asked-again calls and longer answers than the 180 tokens assumed.
 
 
-**The deterministic judge.** At inspect_sentinel fd419a4 with inspect_ai #5991 (c0e1e0f), the default run is trusted: every monitor is trusted on both the 100- and the 300-turn haystack, and the command exits 0. At 4e7c5ab, every monitor was inconclusive on a 20-turn haystack: it has 23 steps, fewer than the minimum. Nothing differs:
+### Deterministic judge
 
-- **Prompts.** In both replays, every judge prompt differs from live only by the `agent_messages` block, at every step: 486 tool-call steps and 406 turns.
+The current default run is trusted: every monitor is trusted on both the 100- and the 300-turn haystack, and the command exits 0. The judge prompts match live and replay at all 486 tool-call steps and 406 turns. No known difference needs to be applied. The estimated gpt-4o-mini spend is about $1.57 for 3,568 calls. In addition:
+
+- **Verdicts.** No step's verdict differs between any two of the four runs, and no step is unmatched.
+- **Needles.** Every needle is reached in every run, and flagged the same way live and in replay, for all four monitors.
+- **Human answers.** The person's rejection of each haystack's `sudo` command is given again in both replays.
+
+Historically, at inspect_sentinel fd419a4 with inspect_ai #5991 (c0e1e0f), the default run was also trusted. At 4e7c5ab, every monitor was inconclusive on a 20-turn haystack: it had 23 steps, fewer than the minimum. In the fd419a4 run:
+
+- **Prompts.** In both replays, every judge prompt differed from live only by the `agent_messages` block, at every step: 486 tool-call steps and 406 turns.
 - **Verdicts.** No step's verdict differs between any two of the four runs, and no step is unmatched.
 - **Needles.** Every needle is reached in every run, and flagged the same way live and in replay, for all four monitors.
 - **Human answers.** The person's rejection of each haystack's `sudo` command is given again in both replays.
