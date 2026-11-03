@@ -35,6 +35,7 @@ def step_result(
     *,
     step_id: str,
     stage: str,
+    conversation: str,
     label: str,
     report: Report | None,
     citation: Reference | None,
@@ -42,7 +43,12 @@ def step_result(
     children: list[dict[str, Any]],
     metadata: dict[str, Any],
 ) -> Result:
-    meta: dict[str, Any] = {"step_id": step_id, "stage": stage, **metadata}
+    meta: dict[str, Any] = {
+        "step_id": step_id,
+        "stage": stage,
+        "conversation": conversation,
+        **metadata,
+    }
     step = cites.resolved(citation) if citation is not None else None
     found = [step] if step is not None else []
     if report is None:
@@ -384,7 +390,11 @@ def _reduced(setting: list[Result], steps: int) -> dict[str, Any]:
     return {
         "steps": steps,
         "set_by": [
-            {"step_id": r.metadata["step_id"], "stage": r.metadata["stage"]}
+            {
+                "step_id": r.metadata["step_id"],
+                "stage": r.metadata["stage"],
+                "conversation": r.metadata["conversation"],
+            }
             for r in setting
             if r.metadata is not None
         ],

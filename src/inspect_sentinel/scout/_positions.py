@@ -28,7 +28,9 @@ class Positions:
         self._final: dict[str, ModelEvent] = {}
         self._outputs: set[str] = set()
         retrying: dict[str | None, tuple[str, ModelEvent]] = {}
-        self._tools: dict[str, tuple[list[int], list[ToolEvent]]] = {}
+        # each conversation's tool events, by call id and position: two agents'
+        # calls can share an id
+        self._tools: dict[tuple[str, str], tuple[list[int], list[ToolEvent]]] = {}
         self._conversations = Conversations(events, sample)
         # each conversation's model events, by position
         models: dict[str, tuple[list[int], list[ModelEvent]]] = {}
@@ -51,7 +53,9 @@ class Positions:
                 if event.output.choices and event.output.message.id:
                     self._outputs.add(event.output.message.id)
             elif isinstance(event, ToolEvent):
-                at, tools = self._tools.setdefault(event.id, ([], []))
+                at, tools = self._tools.setdefault(
+                    (self._conversations.of(event.span_id), event.id), ([], [])
+                )
                 at.append(index)
                 tools.append(event)
             elif (
@@ -90,9 +94,9 @@ class Positions:
                 # an output with no message: its generate's event
                 return Reference(type="event", id=event.step_id) if first else None
             case "tool_call":
-                tool = self._tool(event.step_id, end, after=True)
+                tool = self._tool(event, end, after=True)
             case _:
-                tool = self._tool(event.step_id, begin, after=False)
+                tool = self._tool(event, begin, after=False)
         if tool is None:
             return None
         # the call's tool message, else, where none was recorded, its tool event
@@ -116,8 +120,8 @@ class Positions:
         if event.error is not None:
             retrying[event.span_id] = (first, event)
 
-    def _tool(self, call_id: str, at: int, *, after: bool) -> ToolEvent | None:
-        found = self._tools.get(call_id)
+    def _tool(self, event: SentinelEvent, at: int, *, after: bool) -> ToolEvent | None:
+        found = self._tools.get((event.conversation, event.step_id))
         if found is None:
             return None
         positions, tools = found

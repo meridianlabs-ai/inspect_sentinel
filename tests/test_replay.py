@@ -427,11 +427,32 @@ async def test_a_handled_escalation_needs_no_person() -> None:
 
 
 @pytest.mark.anyio
-async def test_two_steps_of_one_stage_with_one_id_are_refused() -> None:
+async def test_two_steps_of_one_stage_and_conversation_with_one_id_are_refused() -> (
+    None
+):
     step = next(s for s in segmented([1]) if s.stage == "tool_call")
 
-    with pytest.raises(ValueError, match="Two 'tool_call' steps have the id"):
+    with pytest.raises(
+        ValueError, match="Two 'tool_call' steps of conversation 'conv0' have the id"
+    ):
         await replay_monitor(counter(), [step, step])
+
+
+@pytest.mark.anyio
+async def test_two_conversations_can_reuse_a_tool_call_id() -> None:
+    # a provider makes a call's id, so two agents' calls can share one
+    steps = [
+        replace(s, id="shared")
+        for s in segmented([1], conversations=2)
+        if s.stage == "tool_call"
+    ]
+
+    reports = await replay_monitor(counter(), steps)
+
+    assert [(r.step.step.conversation, r.step.id) for r in reports] == [
+        ("conv0", "shared"),
+        ("conv1", "shared"),
+    ]
 
 
 @pytest.mark.anyio
