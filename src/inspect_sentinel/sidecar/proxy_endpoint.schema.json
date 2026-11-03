@@ -599,6 +599,20 @@
           ],
           "default": null,
           "description": "The model's turn as it proposed it, when the client was handed it with calls taken out because they were rejected. `results` holds what the model is told of each call taken out. The sidecar puts those calls and results back in each later request of the conversation that doesn't already hold them."
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the provider billed for the model's reply, as Inspect writes `ModelUsage`, when the client was refused a reply the model gave. A refusal carries no usage of its own, so the client counts it from here.",
+          "title": "Usage"
         }
       },
       "required": [

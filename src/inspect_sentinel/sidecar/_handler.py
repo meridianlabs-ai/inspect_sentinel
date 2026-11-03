@@ -868,6 +868,8 @@ class Handler:
         )
         # kept whatever is decided: the provider continues from what it sent
         conversation.noted = noted
+        # billed whatever is decided, so a client refused the reply still counts it
+        held.exchange.usage = output.usage
         refusal = _ended(run, held.marks, held.sample_attempt)
         if refusal is not None:
             # a sentinel ended the run while the model was answering
