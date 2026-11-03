@@ -663,7 +663,7 @@ class Handler:
             named=named,
             sample_attempt=sample_attempt,
             answered=any(mark in run.answered for mark in marks[:-1]),
-            model=_model(request.provider, request.model),
+            model=_step_model(request.provider, request.model, sample),
             format=request_format(request.provider, request.body, request.format),
             recorder=await self._state.recorder(request.id),
             input=messages,
@@ -1261,6 +1261,17 @@ def _ends(decision: Decision | None) -> bool:
 def _model(provider: str, model: str) -> str:
     # a step names the model as `provider/name`
     return model if model.startswith(f"{provider}/") else f"{provider}/{model}"
+
+
+def _step_model(provider: str, model: str, sample: InspectSample | None) -> str:
+    # Inspect's own name for the model, as in its process, where an Inspect
+    # client gives one that ends in the model the request names: it can add
+    # what precedes the name, such as `openai-api/together/`, and not name
+    # another model
+    claimed = sample.model if sample is not None else None
+    if claimed is not None and model and claimed.endswith(f"/{model}"):
+        return claimed
+    return _model(provider, model)
 
 
 def _opening(messages: Sequence[ChatMessage]) -> str:

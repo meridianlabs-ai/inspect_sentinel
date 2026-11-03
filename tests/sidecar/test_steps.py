@@ -216,6 +216,32 @@ async def test_a_tool_choice_that_cannot_be_read_is_unreadable() -> None:
         )
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("named", "model"),
+    [
+        (None, "anthropic/claude-test"),
+        ("anthropic/claude-test", "anthropic/claude-test"),
+        ("openai-api/together/claude-test", "openai-api/together/claude-test"),
+        ("anthropic/another-model", "anthropic/claude-test"),
+    ],
+    ids=["not named", "the same", "more parts", "another model"],
+)
+async def test_a_step_names_the_model_as_inspect_does(
+    named: str | None, model: str
+) -> None:
+    # as in Inspect's own process, where an Inspect client names it, but only
+    # a name that ends in the model the request names: the client can add
+    # what precedes it, and not name another model
+    handler = Handler(reports_generates())
+    headers = inspect_headers(**({"model": named} if named is not None else {}))
+
+    await handler.request(replace(request("a"), headers=headers))
+
+    [explanation] = _explanations(await handler.records("a"))
+    assert explanation.split("|")[0] == model
+
+
 # the text beside each call in a reply, as `ran` writes it when the client
 # sends the reply back
 _LOOKING = {"type": "text", "text": "Looking."}
