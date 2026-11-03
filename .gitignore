@@ -219,3 +219,6 @@ src/inspect_sentinel/_version.py
 # Quarto Docs
 /.luarc.json
 
+
+# replay-trust benchmark output (python -m benchmarks.replay_trust)
+benchmarks/replay_trust/results/
