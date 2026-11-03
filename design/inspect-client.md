@@ -10,6 +10,7 @@ Each part is marked:
 - **Proposed**: suggested here, not yet agreed.
 - **Decided**: settled in this design.
 - **Waiting on**: something still needed from someone, named with it.
+- **Deferred**: proposed, and left for a later change, named with it.
 
 ## The short version
 
@@ -124,7 +125,9 @@ Inspect calls `register_task` either way. A pre-registered task runs only sample
 
 - the eval's id
 - the task's name, description and metadata
-- each sample selected for this run, after `--limit`, `--sample-id` and the like: its id, input, description and metadata
+- the ids of the samples selected for this run, after `--limit`, `--sample-id` and the like, and the number of epochs
+
+Before each sample's first epoch, Inspect then calls `complete_registration` with the sample's input, description and metadata (F below).
 
 The sidecar gives one of four answers.
 
@@ -190,12 +193,14 @@ This is an advanced setup, described in sidecar.md section 9:
   "sample_id": 1,
   "epoch": 2,
   "sample_uuid": "sample_123",
-  "attempt": "attempt_1"
+  "attempt": "attempt_1",
+  "attempt_number": 1
 }
 ```
 
 - `sample_uuid` stays the same when Inspect retries a failed sample.
 - `attempt` is new for each retry of the sample.
+- `attempt_number` is higher for each retry of the sample, so the sidecar can tell a late call of an earlier attempt from the current attempt's.
 
 The proxy removes both headers before the request reaches the provider.
 
@@ -266,7 +271,7 @@ Some ways the field goes missing:
 - **Ordinary retries stay.** Inspect still retries the provider and network failures it retries today. Once `request_result` confirms that the sidecar couldn't judge a call that came back as an error, the sample fails, with no extra retry on top.
 - **None of these is permission to go on.** `dropped`, `unknown` and a failed lookup say nothing about what the sentinel decided. Under `auto`, the reply is used as it would be with no sidecar, and the transcript says the sidecar's protocol decision is unavailable.
 
-**Proposed: a fuller answer.** Today `request_result` gives the outcome and the records, but not the field's step-by-step decisions. It should give the same information as the field, so Inspect can act exactly as it would on the field. This is a change on the sidecar's side.
+**Decided: the same answer as the field.** Once the sidecar has decided, `request_result` gives the `sentinel` field the reply or refusal carried, step by step, so Inspect acts on it exactly as it would on the field ([sidecar.md, the methods](sidecar.md#the-methods)).
 
 ## 6. The end of a sample
 
@@ -285,7 +290,7 @@ Some ways the field goes missing:
 2. Inspect scores the sample.
 3. After the final scoring, `end_sample`: the sidecar drops the run's monitor state, and the rest of what it keeps for the sample.
 
-Inspect skips `end_sample` when it will retry the sample, so that the retry keeps its monitor state in the sidecar.
+Inspect skips `end_sample` when it will retry the sample, since a sample the eval has ended is refused from then on. The retry starts with empty monitor state in the sidecar, as it starts with an empty sample store in Inspect's own process. Inspect copies only from the sidecars the attempt being scored called, so a retry that calls none is scored on that empty store, never on what a sidecar kept from an earlier attempt.
 
 **Waiting on:** Meridian's answer to I, on whether this copy is wanted at all. A failed copy must never look like a sample in which the sentinel had nothing to say.
 
@@ -405,6 +410,8 @@ Each item says what this design proposes. Where something is still needed from s
 - **Waiting on:** Meridian's answer to I, for monitor state from more than one sidecar. If it is copied, it is copied from each sidecar, and Inspect fails the sample if two sentinels write the same key.
 
 ### K. Model calls that aren't the agent's
+
+- **Deferred:** not built in PR 11. The exemption below follows as its own change, after the client, once what Inspect signs and how the key reaches both sides are settled. It is off by default, so nothing in PR 11 depends on it.
 
 - Inside Inspect, the sentinel never judges a grader's calls, a scorer's, or a monitor's own model calls (Meridian's [generate-stages.md, "What is in and out"](generate-stages.md#what-is-in-and-out)). Through a sidecar, a grader's calls go without `x-inspect-context`, and the sidecar judges them like any client's, as today. That stays so until the operator turns on the exemption below.
 
