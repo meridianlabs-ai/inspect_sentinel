@@ -194,13 +194,15 @@ This is an advanced setup, described in sidecar.md section 9:
   "epoch": 2,
   "sample_uuid": "sample_123",
   "attempt": "attempt_1",
-  "attempt_number": 1
+  "attempt_number": 1,
+  "model": "openai-api/together/meta-llama-3"
 }
 ```
 
 - `sample_uuid` stays the same when Inspect retries a failed sample.
 - `attempt` is new for each retry of the sample.
 - `attempt_number` is higher for each retry of the sample, so the sidecar can tell a late call of an earlier attempt from the current attempt's.
+- `model` is Inspect's name for the model. The request names the model without Inspect's provider or service, so the sidecar gives a monitor this name as `step.model`, as inside Inspect, where it ends in the name the request gives.
 
 The proxy removes both headers before the request reaches the provider.
 
