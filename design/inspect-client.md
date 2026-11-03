@@ -372,7 +372,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 - `register_task` sends the task's facts, the ids of the samples selected for this run, and the number of epochs.
 
-- Before a sample's first epoch, Inspect calls `complete_registration` with the sample's id, input and metadata. It does this once per sample, since a sample's input is the same in every epoch. So Inspect reads each sample only when it runs, as it does anyway, and a large dataset is never sent in one request. Inspect is built not to hold a large dataset in memory (inspect_ai's `design/hf-lazy-dataset.md`), and a task can add samples while it runs (`design/sample-source.md`).
+- Before a sample's first epoch, Inspect calls `complete_registration` with the sample's id, input and metadata. It does this once per sample, since a sample's input is the same in every epoch. So Inspect reads each sample only when it runs, as it does anyway, and a large dataset is never sent in one request. Inspect is built not to hold a large dataset in memory (inspect_ai's `design/hf-lazy-dataset.md`), and a task can add samples while it runs (`design/sample-source.md`). A sidecar that no longer keeps the task's registration, because it restarted or the registration expired, answers with `unknown_task`. Inspect then registers the task again and completes the sample's registration once more, as the endpoint asks ([sidecar.md](sidecar.md), section 9). If that fails too, the sample fails.
 
 - A sample a task adds while it runs, with `enqueue_sample`, extends the registration rather than completing it, which a `registered_only` sidecar refuses (G). A task the admin registered beforehand is unaffected, since the tasks folder already holds every sample.
 
