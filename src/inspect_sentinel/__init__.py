@@ -26,6 +26,8 @@ from ._protocols import (
     sequential,
     threshold,
 )
+from ._replay import HumanStandIn
+from ._replay_step import ReplayStep
 from ._report import (
     Action,
     Decision,
@@ -86,6 +88,7 @@ __all__ = [
     "Host",
     "HumanAnswer",
     "HumanDecision",
+    "HumanStandIn",
     "InspectSample",
     "Monitor",
     "MonitorFailedError",
@@ -99,6 +102,7 @@ __all__ = [
     "ProxyContext",
     "Protocols",
     "Report",
+    "ReplayStep",
     "Reported",
     "Reports",
     "Sentinel",

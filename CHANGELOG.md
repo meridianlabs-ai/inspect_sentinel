@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.2.0...0.3.0) (2026-10-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* a proceed no longer contests a concurrent modify ([#154](https://github.com/meridianlabs-ai/inspect_sentinel/issues/154))
+* threshold proceeds when no monitor reported ([#153](https://github.com/meridianlabs-ai/inspect_sentinel/issues/153))
+
+### Bug Fixes
+
+* a proceed no longer contests a concurrent modify ([#154](https://github.com/meridianlabs-ai/inspect_sentinel/issues/154)) ([c5fef76](https://github.com/meridianlabs-ai/inspect_sentinel/commit/c5fef76f9c47de7f42d1d40dead917c62fc69274))
+* **sidecar:** regenerate the endpoint schema for inspect_ai's new docs link ([#147](https://github.com/meridianlabs-ai/inspect_sentinel/issues/147)) ([d78583a](https://github.com/meridianlabs-ai/inspect_sentinel/commit/d78583a21a939904f28f0dff02c71101092da72c))
+* threshold proceeds when no monitor reported ([#153](https://github.com/meridianlabs-ai/inspect_sentinel/issues/153)) ([d6e0404](https://github.com/meridianlabs-ai/inspect_sentinel/commit/d6e04048ff2cdacd531f3922d920055bdb06d7ac))
+
 ## [0.2.0](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.4...0.2.0) (2026-10-21)
 
 

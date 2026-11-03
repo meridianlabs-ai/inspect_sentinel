@@ -145,10 +145,10 @@ Each takes a single frozen dataclass rather than positional arguments, following
 class BeforeGenerate:
     model: str
     conversation: str           # links this agent's steps across compactions
-    input: list[ChatMessage]    # exactly what the model is sent
-    agent_messages: list[ChatMessage] | None  # the outermost running agent function's own list, read live at every stage; None without one
-    history: list[ChatMessage] | None = field(default=None, kw_only=True)  # every message this agent instance has sent, in order sent; None when the host cannot produce it
-    human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)  # human() decisions at earlier steps of this conversation
+    input: Sequence[ChatMessage]  # exactly what the model is sent
+    agent_messages: Sequence[ChatMessage] | None  # the outermost running agent function's own list, read live at every stage; None without one
+    history: Sequence[ChatMessage] | None = field(default=None, kw_only=True)  # every message this agent instance has sent, in order sent; None when the host cannot produce it
+    human_decisions: Sequence[HumanDecision] | None = field(default=None, kw_only=True)  # human() decisions at earlier steps of this conversation
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -158,10 +158,10 @@ class BeforeGenerate:
 class AfterGenerate:
     model: str
     conversation: str
-    input: list[ChatMessage]    # exactly what the model was sent
-    agent_messages: list[ChatMessage] | None
-    history: list[ChatMessage] | None = field(default=None, kw_only=True)  # includes input
-    human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
+    input: Sequence[ChatMessage]  # exactly what the model was sent
+    agent_messages: Sequence[ChatMessage] | None
+    history: Sequence[ChatMessage] | None = field(default=None, kw_only=True)  # includes input
+    human_decisions: Sequence[HumanDecision] | None = field(default=None, kw_only=True)
     tools: list[ToolInfo]
     tool_choice: ToolChoice
     config: GenerateConfig
@@ -175,11 +175,11 @@ class BeforeToolCall:
     message_id: str             # id of the assistant message that made the call
     call: ToolCall              # the call as it will execute
     view: ToolCallView
-    input: list[ChatMessage] | None  # the request that produced the call; None without one
-    agent_messages: list[ChatMessage] | None  # the same live agent list as at generate stages; None without one
-    history: list[ChatMessage] | None = field(default=None, kw_only=True)  # as for BeforeGenerate
-    human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
-    tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
+    input: Sequence[ChatMessage] | None  # the request that produced the call; None without one
+    agent_messages: Sequence[ChatMessage] | None  # the same live agent list as at generate stages; None without one
+    history: Sequence[ChatMessage] | None = field(default=None, kw_only=True)  # as for BeforeGenerate
+    human_decisions: Sequence[HumanDecision] | None = field(default=None, kw_only=True)
+    tools: Sequence[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
     tool_choice: ToolChoice | None = None  # that request's tool choice; None exactly when input is
 
 
@@ -190,13 +190,13 @@ class AfterToolCall:
     message_id: str
     call: ToolCall              # the call as executed (after any `modify`)
     result: ChatMessageTool     # what the model will see, after truncation
-    output: ToolResult          # the tool's untruncated return value
+    output: ToolResult | None  # the tool's untruncated return value; None where the host can't see it (a proxy, a replay)
     view: ToolCallView
-    input: list[ChatMessage] | None  # the request that produced the call; None without one
-    agent_messages: list[ChatMessage] | None
-    history: list[ChatMessage] | None = field(default=None, kw_only=True)
-    human_decisions: tuple[HumanDecision, ...] | None = field(default=None, kw_only=True)
-    tools: list[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
+    input: Sequence[ChatMessage] | None  # the request that produced the call; None without one
+    agent_messages: Sequence[ChatMessage] | None
+    history: Sequence[ChatMessage] | None = field(default=None, kw_only=True)
+    human_decisions: Sequence[HumanDecision] | None = field(default=None, kw_only=True)
+    tools: Sequence[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
     tool_choice: ToolChoice | None = None  # that request's tool choice; None exactly when input is
     truncated: Truncation | Literal[False] | None = None  # the host's cut; False: not cut; None: can't tell
 
@@ -220,7 +220,19 @@ def human_decision_for(step: Step, call_id: str) -> HumanDecision | None: ...  #
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall
 """The union, for code that handles any stage — a protocol, or a dispatcher."""
+
+
+
+@dataclass(frozen=True)
+class ReplayStep:               # a step rebuilt from a stored transcript (sentinel-development.md, R7)
+    id: str                     # as SentinelEvent.step_id
+    stage: Literal["model_input", "model_output", "tool_call", "tool_result"]  # as SentinelEvent.stage
+    step: Step
+    segment: tuple[str, int]    # the conversation, and how many of its compactions came before
+    recorded_answers: Mapping[str, HumanAnswer] = field(default_factory=dict)  # the step's own recorded human() answers, by instance path; never on the step (R7-D4)
 ```
+
+`input`, `history`, `agent_messages` and `human_decisions` at every stage, and `tools` at the tool stages, are read-only `Sequence`s, so a host can hand each step a view of the conversation's lists cut at the step rather than a copy, which would make building the steps of a conversation quadratic in its length; a monitor that wants a list calls `list()` on one, at its own cost (R7-D6, decided 2026-10-19 in [sentinel-development.md](sentinel-development.md); the generate stages' `input` added 2026-10-20, since replay builds it as a view over the log's stored ranges). The generate stages' `tools` stay a `list`: they do not grow with the conversation. `AfterToolCall.output` is `None` where the host cannot see the tool's untruncated return value: beside a proxy, which sees only the result the model is sent, and in a replay from a log, which records only that result. Both were built with R7 PR 2, as was `ReplayStep`.
 
 Which model calls the generate stages check, where the hook sits, and what each action means there are worked through in [generate-stages.md](generate-stages.md).
 
@@ -267,13 +279,22 @@ An agent that replaces its state object instead of mutating it continues to expo
 `history` is every message one agent instance has sent to the model, across all its calls, in the order sent (AISI R10, built 2026-10-14 as `sent` and renamed for 0.2.0, when the scaffold's list, until then `history`, became `agent_messages`; `pr-series.md`, "Renaming the histories"). It answers what `input` cannot, since `input` is one call, and what `agent_messages` cannot, since `agent_messages` is the agent's own list rather than what was sent, and a scaffold can rewrite messages before sending them (ControlArena replaces the opening system and user messages to build an attack policy), the model adds a configured system message, and a compaction drops the opening prompts from later requests. Like `input` and `agent_messages` it is a fact about the conversation, so it is a step field, filled for every monitor and protocol while a sentinel runs; it is keyword-only with a default of `None`, so the payloads' positional fields are unchanged.
 
 - **What is in it.** The inputs of the instance's model calls (`conversation` names the instance), each message once, where it was first sent: the opening prompts come first, and turns a compaction later dropped stay. The outputs appear once a later call sends them back. At `BeforeGenerate` it does not yet include `input`; at `AfterGenerate` it does; at the tool stages it includes the input of the call that produced the tool call.
-- **Edits.** A message sent again changed, the same id with different content, appears again as its new version where it was sent, so each version is kept in the order sent. A message is already sent when a version with the same id and equal content was sent, or when the previous call had a message with the same role and content at the same index; the second rule covers messages the host rebuilds with a fresh id for every call, such as the configured system message, which would otherwise repeat each call. A fresh id skipped by the second rule is remembered as the message it repeats, so the same copy sent again later, after a request that left it out or at another index, is not added again. Only the latest such id is remembered for each message, so the index stays one entry per message sent however often a scaffold rebuilds it (a bridge rebuilds every message with a fresh id on every call), and an id reused as the rebuilt id of another message does not displace the first; the accepted edge is a scaffold that keeps two rebuilt ids for one message and alternates between them, which can see that message repeated. Content means the message without its id, `source` and `metadata`, none of which the model is sent. One host behaviour shows as an edit: under `reasoning_history="last"` inspect_ai sends an earlier assistant turn without its reasoning, under a fresh id, so each such turn appears once with its reasoning and once without. A message the scaffold changes in place after sending it shows its current content, since the list holds the message itself.
-- **Whose calls.** Only the instance's agent turns, by the same test the generate stages use (`sentinel_scope`): a sub-agent or a parallel agent has its own conversation, and a compaction summary, a scorer, an approver and a monitor are not agent turns. A model call a scaffold makes inside its agent loop is an agent turn, so ControlArena's own monitor and compaction summariser calls are in the list (decided 2026-10-14: no rule that tries to tell them apart). A scaffold keeps such a call out of the agent's conversation by running it as an agent of its own through `inspect_ai.agent.run()`, which gives it its own agent span and so its own conversation. Sub-agents run inside one bridged CLI share the bridge's conversation.
-- **`None`** when the host cannot produce it: a replay from a log, which does not record which model calls were agent turns (R7). In-process Inspect always fills it while a sentinel runs. Beside a proxy, the sidecar builds it from the requests it sees, which carry neither message ids nor the agent instance, so it differs: messages are matched by what they say, agents whose conversations open alike share one history, and every model call of the conversation counts as an agent turn ([sidecar.md](sidecar.md#8-what-a-sentinel-is-given)).
+- **What counts as new.** Since inspect_ai #5990, what was already sent is decided by content and position, with no dependence on message ids. Content means the message without its id, `source` and `metadata`, none of which the model is sent. Each call's input is aligned against the previous call's input. The part that starts the same as the previous input is matched whole. Past it, a message equal to one in the previous input at or after the point the alignment has reached is matched, and the alignment moves past it. Anything else is new and is added where it was sent. So:
+  - a message the host rebuilds with a fresh id for every call, such as the configured system message, is matched where it was, and is not repeated;
+  - a message sent again changed appears again as its new version, where that version was sent, so each version is kept in the order sent;
+  - a message inserted among sent ones is new, and the ones after it still match;
+  - a message moved behind one that came after it is new again;
+  - a message one call drops and a later call restores is new again, since only the previous call's input is compared;
+  - two equal messages sent at different turns, such as the same nudge twice, are two messages.
 
-inspect_ai builds it incrementally. Each agent turn's input is folded in when `Model.generate` records the call, before the request is sent, so a request in flight counts as sent; the host keeps, per conversation and weak-keyed by the transcript, the list of messages sent, the versions sent under each message id, the latest rebuilt id of each message mapped to the message first sent (so the fresh copy is not kept), and what the previous call sent at each position, in a list of its own, since a caller may extend the list it passed. It holds the message objects themselves, almost all of them shared with the scaffold's own list and the transcript's events, so the added memory is the lists' references and any message only the model was sent (a rewritten system prompt, say); each step gets a copy of the list, not of the messages. An unchanged message is usually the very object sent before, so most are checked by identity rather than compared. Nothing is written to the log. Nothing is built while no sentinel is active.
+  One host behaviour shows as an edit: under `reasoning_history="last"` inspect_ai sends an earlier assistant turn without its reasoning, so each such turn appears once with its reasoning and once without.
+- **As sent.** `history` holds each message as it was sent: the copy of the input that the call's `ModelEvent` logs (inspect_ai #5883, which #5990 also uses for `history`), not the scaffold's own object. A message the agent edits or elides in place after sending it still shows as it was sent. When `react`'s `on_continue` rewrites an old tool result to `"[elided]"`, `history` keeps the result the model was sent, and if an edited message is sent again it appears again as its new version. A message that cannot be copied (a value that does not serialize or deep copy) is held live, in the log and in `history`, as before #5883. So `history` entries are not the same objects as those in `input` or `agent_messages`, though equal content still compares equal.
+- **Whose calls.** Only the instance's agent turns, the calls whose `ModelEvent.origin` is `"agent"`, by the same rule the generate stages use ([generate-stages.md](generate-stages.md#a-which-calls)): a sub-agent or a parallel agent has its own conversation, and a compaction summary, a scorer, an approver and a monitor are not agent turns. A model call a scaffold makes inside its agent loop is an agent turn unless the scaffold marks it, so ControlArena's own monitor and compaction summariser calls are in the list (decided 2026-10-14: sentinel has no rule that tries to tell them apart). A scaffold keeps such a call out by wrapping it in `model_origin("helper")` from `inspect_ai.model` (or `"environment"` for an auditor or simulated user), which also leaves the call and its tool calls unchecked. It can instead run the call as an agent of its own through `inspect_ai.agent.run()`, which gives it its own agent span and so its own conversation. Sub-agents run inside one bridged CLI share the bridge's conversation.
+- **`None`** when the host cannot produce it: a replay from a log, until replay is built (R7). The log now records which model calls were agent turns (`ModelEvent.origin`, R7 PR 1, inspect_ai #5990), and replay rebuilds `history` by folding a conversation's `"agent"` inputs from the log by the rule above, as sent, so it equals the live one (R7 PR 3; [sentinel-development.md](sentinel-development.md), "Replay over logs (R7)"); `agent_messages` stays `None` in replay. In-process Inspect always fills it while a sentinel runs. Beside a proxy, the sidecar builds it from the requests it sees, which carry neither message ids nor the agent instance, so it differs: messages are matched by what they say, agents whose conversations open alike share one history, and every model call of the conversation counts as an agent turn ([sidecar.md](sidecar.md#8-what-a-sentinel-is-given)).
 
-**Lineage.** Linking one agent's inputs across a compaction is not possible today by inspection of the log. A `CompactionEvent` carries a `role` and a `source` but no reference to the conversation it compacted, a `ModelEvent` carries only its innermost span, several agents can interleave their events in one sample, and a compaction summary call runs in the agent's span with nothing to mark it. So every step carries `conversation: str`, an id minted by whichever loop owns the messages — `react`, the generate loop, a bridge — when that conversation starts and held for its life, and `SentinelEvent` records it. Live, inspect_ai links its agent turns to that id as it makes them (above). A log does not record which model calls were agent turns, so replaying `history` needs core to record it: likely a kind marker on `ModelEvent` (an agent turn or not) rather than the conversation id, since the instance follows from the span tree once the turns are marked, with an inference fallback for older logs (`pr-series.md`, Deferred). `sentinel-development.md` depends on it to rebuild an agent's as-sent history from events.
+inspect_ai builds it incrementally. Each agent turn's input is folded in when `Model.generate` records the call, before the request is sent, so a request in flight counts as sent. The host keeps, per conversation and weak-keyed by the transcript, the list of messages sent and a content key (a hash of the content) for each message of the previous input. The keys are computed on every send, so a message changed in place since it was last sent counts as new. The messages are the copies the `ModelEvent`s already hold, so `history` adds no copy of its own: the added memory is the lists' references and one key per message of the previous input, and the cost is one serialization and hash per message per agent call. Each step gets a copy of the list, not of the messages. Monitors must not mutate the messages: a change alters the in-memory log record, though no longer the agent's conversation. Nothing is folded while no sentinel is active. `ModelEvent.origin` is written whether or not a sentinel is active.
+
+**Lineage.** Before inspect_ai #5990 a log could not link one agent's inputs across a compaction: a `CompactionEvent` carries a `role` and a `source` but no reference to the conversation it compacted, a `ModelEvent` carries only its innermost span, several agents can interleave their events in one sample, and a compaction summary call ran in the agent's span with nothing to mark it. So every step carries `conversation: str`, an id minted by whichever loop owns the messages — `react`, the generate loop, a bridge — when that conversation starts and held for its life, and `SentinelEvent` records it. Live, inspect_ai links its agent turns to that id as it makes them (above). Since inspect_ai #5990 a log records enough to replay `history`: `ModelEvent.origin` marks the agent turns (and a compaction summary call as `"compaction"`), and a call's conversation follows from the span tree, the innermost `agent` span above it, else the sample's uuid, which is the conversation the call had live. The one known exception is a call a bridged CLI's event sink attributes to a sub-agent span, which inspect_ai #6004, a follow-up to #5990, changes. No conversation id is recorded. Logs written before #5990 and other sources have no `origin`, so they get their turns from the transcript's timeline (R7 PR 6). Replay rebuilds an agent's as-sent history from those events (R7 PR 3; [sentinel-development.md](sentinel-development.md), "What the log records"). *Superseded: until 2026-10-19 this paragraph proposed a kind marker on `ModelEvent` as a likely future option.*
 
 ### The context
 
@@ -861,7 +882,7 @@ def threshold(
     return per_stage(decide, monitors)
 ```
 
-It holds the constants a monitor cannot, reads its children's scores through the runner, and returns a decision. Nothing else. Each of `escalate_at`, `reject_at` and `terminate_at` is a floor: at or above it the step gets at least that action, and the decision is the strongest action any score reaches. At least one is required; `observe_only()` is how to record scores with nothing acting on them. A decision is explained for the log with the highest score that reached its threshold, that monitor's name and its explanation; it carries every reporting monitor's references, and `metadata["observations"]` lists every monitor's score and explanation, so a `human()` after it receives all of them in the `escalations` it is handed, and inspect_ai's approval card shows them once it renders that metadata ([pr-series.md](pr-series.md), Deferred, "inspect_ai's human view shows every score"). None sets `message`, so the agent learns only that the call was refused. It runs at each stage its monitors watch, monitors of different stages each thresholded at their own; `reject_at` limits it to `BeforeToolCall`, where a reject is legal. An escalation is answered by what follows it in a `sequential()`: `sequential([threshold(monitors, escalate_at=0.6, terminate_at=0.9), human(stages=["tool_call"])])`. When no monitor reported at a step it decides `proceed`, explained as "no monitor reported", rather than abstaining, so a `human()` after it is asked only when it escalates, not about every step its monitors skip ([pr-series.md](pr-series.md), "threshold proceeds when no monitor reported"). That `proceed` is a vote: in a `concurrent()` beside a protocol that modifies the call it contests the `modify`, which becomes a `reject`, as a low-scoring threshold's does. A failed monitor is not an abstention: it fails the sample, as [Failure semantics](#failure-semantics) says.
+It holds the constants a monitor cannot, reads its children's scores through the runner, and returns a decision. Nothing else. Each of `escalate_at`, `reject_at` and `terminate_at` is a floor: at or above it the step gets at least that action, and the decision is the strongest action any score reaches. At least one is required; `observe_only()` is how to record scores with nothing acting on them. A decision is explained for the log with the highest score that reached its threshold, that monitor's name and its explanation; it carries every reporting monitor's references, and `metadata["observations"]` lists every monitor's score and explanation, so a `human()` after it receives all of them in the `escalations` it is handed, and inspect_ai's approval card shows them once it renders that metadata ([pr-series.md](pr-series.md), Deferred, "inspect_ai's human view shows every score"). None sets `message`, so the agent learns only that the call was refused. It runs at each stage its monitors watch, monitors of different stages each thresholded at their own; `reject_at` limits it to `BeforeToolCall`, where a reject is legal. An escalation is answered by what follows it in a `sequential()`: `sequential([threshold(monitors, escalate_at=0.6, terminate_at=0.9), human(stages=["tool_call"])])`. When no monitor reported at a step it decides `proceed`, explained as "no monitor reported", rather than abstaining, so a `human()` after it is asked only when it escalates, not about every step its monitors skip ([pr-series.md](pr-series.md), "threshold proceeds when no monitor reported"). That `proceed` is a vote, but a `proceed` does not contest a `modify`, so in a `concurrent()` beside a protocol that modifies the call the rewrite takes effect, as beside a low-scoring threshold ([Two compositions](#two-compositions-concurrent-and-ordered)). A failed monitor is not an abstention: it fails the sample, as [Failure semantics](#failure-semantics) says.
 
 Each threshold is one number or a mapping per dimension. A key `"<monitor>.<dimension>"` applies to one monitor's dimension (the monitor's instance name, as in `Reported.name`), a bare `"<dimension>"` to that dimension from every monitor, a monitor's instance name to its single-number score, and `"*"` to anything unlisted; the most specific key wins, and a score no key covers never triggers. A number is shorthand for `{"*": number}`, so a float threshold behaves and explains itself as it always has. The strongest action any score reaches decides: terminate, then reject, then escalate. A key containing `.` is always qualified, by the longest instance name that prefixes it, never a bare dimension. Configuration validates the keys, requires finite values, and rejects a threshold that can never apply because a stronger action's threshold is at or below it for every score it covers (`escalate_at=0.9` beside `terminate_at=0.8`); a key one mapping lists and another does not is not such a conflict. This is what thresholding [structured suspicion](#suspicion-is-structured) per dimension means: calibration produces one percentile per dimension, and the mapping holds them.
 
@@ -1064,7 +1085,7 @@ The functions of one [`ProtocolGroup`](#one-function-one-stage) run in one call 
 
 Three properties fall out of writing it as ordinary code. A monitor in a `sequential` is recorded and falls through, since an observation cannot be "the first decision" — ordered composition is Decision-shaped in substance. A `sequential` whose every deciding link escalated returns the last escalate, so it passes up to the layer above as concurrent's does, and if it reaches the root `run_sentinel` returns a `terminate` explained as an unhandled escalation in its place, which `human()` or `handle_escalation()` at the end of the chain prevents; one where only monitors participated returns `proceed`. The [approval adapter](#a-protocol-layer-for-approval-too) keeps approval's fail-closed `reject` on its own path, so existing approval users see no change, and a `sequential` that wants fail-closed ends with a rejecting monitor, as approval lists end with `auto` today. And sequential dispatch stops being a violation of the independence rule, because the loop is a named, shipped protocol whose mode the transcript shows.
 
-**`concurrent()`** is the concurrent composition, and it is also what a top-level list or mapping containing a protocol resolves to (see [Configuration](#configuration)). In outline, leaving out per-instance vote counting and group labels:
+**`concurrent()`** is the concurrent composition, and it is also what a top-level list or mapping containing a protocol resolves to (see [Configuration](#configuration)). In outline, leaving out group labels:
 
 ``` python
 @protocol
@@ -1080,9 +1101,10 @@ def concurrent(children: Sentinels) -> Protocol:
             return strongest.report
         own = strongest.report.explanation
         update: dict[str, object] = {}
-        contesting = [d for d in voters if d is not strongest and d.report.action != "escalate"]
-        if strongest.report.action == "modify" and contesting:    # others decided about the call as it stood
-            rewrite = f"{strongest.name} modified the call but {len(contesting)} other vote(s) also decided"
+        contesting = [d for d in voters if d is not strongest and d.report.action == "modify"]
+        if strongest.report.action == "modify" and contesting:    # two rewrites conflict
+            others = ", ".join(d.name for d in contesting)
+            rewrite = f"{strongest.name} modified the call but so did {others}"
             own = f"{rewrite}: {own}" if own else rewrite
             update = {"action": "reject", "modified": None}
         summary = "; ".join(f"{d.name}: {d.report.action}" for d in voters)
@@ -1092,7 +1114,9 @@ def concurrent(children: Sentinels) -> Protocol:
     return run
 ```
 
-That settles the `modify` question this document previously left open: concurrent children cannot see each other's rewrites, so a `modify` when another child decided anything but `escalate` is a rejection naming the modifier, keeping the modifier's `audit`, `metadata` and explanation. Votes count by instance, so another function of the modifier's own [multi-function](#one-function-one-stage) instance contests its `modify` only by modifying too, and the explanation labels each such function's vote `name.function`. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own. Re-approving modified arguments is more machinery than the decision is worth for now, and #5423 reached the same answer independently. The name pairs with `sequential`: both say how the children run and leave the decision rule to the docs. `strictest` and `all_of` were the alternatives; the first named only the recommendation half of the reduction (observations aggregate by max, not strictness) and the second named what the configuration means rather than its shape.
+That settles the `modify` question this document previously left open: concurrent children cannot see each other's rewrites, so two rewrites conflict, and a `modify` beside another `modify` is a rejection naming the modifiers, keeping the first modifier's `audit`, `metadata` and explanation. Another `modify` contests it whichever instance it comes from, another function of the modifier's own [multi-function](#one-function-one-stage) instance included, and the explanation labels each such function's vote `name.function`. A `proceed` or an `escalate` beside it does not contest it, so the rewrite is honoured, and a `reject` or `terminate` outranks it anyway. When more than one protocol decided, the layer's explanation lists each one's decision after the winner's own. Re-approving modified arguments is more machinery than the decision is worth for now, so the rewritten call is not checked again by the protocols that proceeded, as it is not for a lone modifier.
+
+Until 2026-10-26 a `proceed` contested a `modify` too: a `modify` when another child decided anything but `escalate` became a rejection, because the others had approved the call as it stood and nobody had approved the rewrite (#5423 reached the same answer independently). Reversed by the maintainer on 2026-10-26. A peer with no objection to the original call should not make the layer stricter than having no peer at all: a lone modifier's rewrite is honoured unchecked, and adding a peer that proceeds turned that fix into a block. It also meant that a `threshold()` whose monitors did not report, which votes `proceed` since sentinel #153, blocked a sibling's rewrite. The accepted cost is that the protocols that proceeded do not see the rewrite, the same as for a lone modifier. The name pairs with `sequential`: both say how the children run and leave the decision rule to the docs. `strictest` and `all_of` were the alternatives; the first named only the recommendation half of the reduction (observations aggregate by max, not strictness) and the second named what the configuration means rather than its shape.
 
 **Concurrent is the default, and ordered is one explicit word.** The argument for making ordered the default is that many people will want a chain, which is true. The argument against is that ordered-by-default silences monitors, and silencing is a safety failure while concurrency's cost is latency and tokens. A default should fail safe, and changing one later is a silent semantic change for everyone. So a list with a protocol in it is `concurrent`, and ordered composition is `sequential(...)`. The mistake the wrong default would produce most often — a `human()` in a concurrent group, prompting on every call — is not an error, since asking about every call can be intended; the docs recommend `sequential()` for asking only on escalation.
 
@@ -1473,7 +1497,7 @@ Then the protocol reconciles the two halves with its thresholds and budget, subj
 
 Three LLM monitors in sequence triple the added latency at every step, which argues for an anyio task group with `tg_collect()`'s semantics (not `asyncio.gather`, per AGENTS.md). TraceGuard gives a stronger reason: **independence is the point**. Its 95%-versus-0% result against a colluding monitor comes from fragmenting evaluation so no single model sees the whole assessment, which requires monitors that cannot observe each other's conclusions.
 
-So concurrent dispatch is the default, and the cost is that `modify` becomes incoherent — a concurrent child cannot see another's rewrite. Settled in `concurrent()`: a `modify` is honoured only when it was the only decision; when more than one child decided, it becomes a `reject` naming the modifier. Last-wins in configuration order and "two is an error" were the alternatives; the rejection is chosen because the other children approved the *original* arguments and nothing has approved the modified ones. A `sequential` has no such problem, since only one link decides.
+So concurrent dispatch is the default, and the cost is that `modify` becomes incoherent — a concurrent child cannot see another's rewrite. Settled in `concurrent()`: two rewrites conflict, so a `modify` beside another `modify` becomes a `reject` naming the modifiers, while a `modify` beside a `proceed` or an `escalate` is honoured, unchecked by the children that proceeded, as a lone modifier's is. Last-wins in configuration order and "two is an error" were the alternatives to the rejection. Until 2026-10-26 any other decision but `escalate` turned a `modify` into a `reject`, because the other children approved the *original* arguments and nothing approved the modified ones; the maintainer reversed that on 2026-10-26, since a peer that proceeds has no objection to the call and should not make the layer stricter than no peer at all ([Two compositions](#two-compositions-concurrent-and-ordered)). A `sequential` has no such problem, since only one link decides.
 
 ### A second axis: concurrent with the *agent*
 
@@ -1497,9 +1521,9 @@ class SentinelEvent(BaseEvent):
     `reported`, `superseded` and `error` events; `None` for `cancelled` and `bypassed`, which
     are per instance."""
     step_id: str
-    """The step examined: the triggering message id (BeforeGenerate), the assistant
-    message id (AfterGenerate), or the tool call id (tool stages). See
-    sentinel-development.md, "Step ids"."""
+    """The step examined: at the generate stages the generate's id, the `uuid` of
+    its first `ModelEvent`, shared by BeforeGenerate and AfterGenerate; at the tool
+    stages the tool call id. See sentinel-development.md, "Step ids"."""
     conversation: str
     """The agent conversation this step belongs to; the same id the loop's
     `ModelEvent`s and `CompactionEvent`s carry. See "Two histories"."""
@@ -1585,7 +1609,7 @@ What a monitor can be shown, where each thing comes from, and where it is availa
 | Tool call view (`ToolCallView`) | `step.view` | yes | **no** | from events only | evidence |
 | Exact model input | `step.input` | yes | yes (the request) | exact from `ModelEvent`; `None` at a tool stage without one | evidence |
 | The outermost running agent function's own message list (`AgentState.messages`) | `step.agent_messages` | with a running `@agent` agent function | proxy and bridge: **no**, `None` | no, `None` (not logged) | evidence |
-| Every message the agent instance has sent, in order sent | `step.history` | yes | proxy: **yes**, built by the sidecar from the requests it sees, matched by content; agents that open alike share one; bridged in-process: yes, one conversation per bridge | **not yet**, `None`: needs agent turns recorded in the log (R7) | evidence |
+| Every message the agent instance has sent, in order sent | `step.history` | yes | proxy: **yes**, built by the sidecar from the requests it sees, matched by content; agents that open alike share one; bridged in-process: yes, one conversation per bridge | **not yet**, `None`: the log records agent turns since inspect_ai #5990 (`ModelEvent.origin`, R7 PR 1), and R7 PR 3 rebuilds `history` from them, as sent | evidence |
 | Reasoning (`ContentReasoning`) | inside assistant messages | provider-dependent: full, summary, or redacted | whatever the wire carries | as logged | evidence |
 | System prompt, as the model saw it | `step.input[0]` when present | yes | yes | from events only | **see below** |
 | Tool definitions, generate config | `step.tools`, `step.config` (tool stages: `step.tools` only, the producing call's) | yes | yes | from events only; `None` at a tool stage without a producing `ModelEvent` | evidence |
@@ -1630,7 +1654,7 @@ The input is shown whole by default, so each step's prompt starts with the last 
 
 `NewSinceLastReport(context)` is the incremental window. It keeps the id of the last message shown, per conversation, per source (`input`, `history`, `agent_messages`) and per monitor function (shared across the stages a function watches), in the monitor's store (`context.store_as`). The runner saves it only when the function returns or decides final, so a function that raises, is cancelled, or is passed by a descendant's final decision is shown those messages again at the next step; so an incremental monitor does not re-read its conversations, and the cost argument from `sentinel-deployment.md` — quadratic inference, linear deserialization, WASM memory that never shrinks — is answered by a window rather than by discipline. A conversation whose recorded message is gone, as after a compaction or where a host gives messages new ids on each step, is shown whole.
 
-The monitor must be able to see everything the agent saw, so nothing is left out without a flag asking for it (decided by the maintainer on 2026-10-16). Text rendering cannot meet that: Scout renders images, audio, video, documents and provider data as bare placeholders such as `<image />`, redacted reasoning as `<thinking_redacted/>`, and drops a content type it does not know, so the monitor model is shown something other than what the monitored model was sent. The planned answer is a `messages_as_contents` that returns the thinned and transformed messages as a list of `Content` parts rather than text (maintainers, 2026-10-19); until it exists, `step_as_str` renders those placeholders without saying so.
+The monitor must be able to see everything the agent saw, so nothing is left out without a flag asking for it (decided by the maintainer on 2026-10-16). The maintainer accepted one exception on 2026-10-27: when the prompt overflows the monitor model's context window, `Host.score` cuts the oldest shown messages to fit (`sentinel-deployment.md`, "The host ABI"). The cut is on by default with no flag, since an overflowing prompt cannot be sent at all; it is named in the prompt with a marker line per cut list and counted in `Observation.metadata` (`left_out`), and it raises rather than cut the fixed part of the prompt, which at `BeforeGenerate` includes the newest INPUT message, the request being judged (decided by the maintainer on 2026-10-29). Text rendering cannot meet that: Scout renders images, audio, video, documents and provider data as bare placeholders such as `<image />`, redacted reasoning as `<thinking_redacted/>`, and drops a content type it does not know, so the monitor model is shown something other than what the monitored model was sent. The planned answer is a `messages_as_contents` that returns the thinned and transformed messages as a list of `Content` parts rather than text (maintainers, 2026-10-19); until it exists, `step_as_str` renders those placeholders without saying so.
 
 **`call_as_str(call, view=None)`.** The Python-call rendering `default_tool_call_viewer` produces for approvers, honouring a registered `ToolCallView` when one is present. One implementation serves the human approval surface and the monitor prompt.
 
@@ -1812,7 +1836,7 @@ That proposal will not land as written; the group has agreed to build on sentine
 | named chains, and the name in the log | instance names from the mapping; `SentinelEvent.path` |
 | a summary event when several chains participated | the top-level `concurrent` layer's own event |
 | `terminate` cancels the other chains | `run_protocols` |
-| `modify` with several participants is a rejection naming the chain | `concurrent()` |
+| `modify` with several participants is a rejection naming the chain | `concurrent()`, for two rewrites; since 2026-10-26 a `proceed` beside a `modify` no longer contests it |
 | an uncovered call rejects, as a lone policy list does today | on the approval adapter path only; a `sequential` that nothing covers is `proceed`, matching review |
 | concurrent by default (their open question 1) | yes |
 
@@ -1875,7 +1899,8 @@ whether the protocol layer lands first (it is not a layer — monitors and
 protocols are two registry types, and a protocol is what acts); whether proxy portability is a
 goal or an observation, which now lives only in `sentinel-deployment.md`;
 whether `modify` composes (settled in [`concurrent()`](#two-compositions-concurrent-and-ordered):
-a `modify` with more than one participant is a rejection naming the modifier);
+a `modify` beside another `modify` is a rejection naming the modifiers, and
+since 2026-10-26 one beside a `proceed` is honoured);
 what happens in a mixed configuration with no protocol (there is no such
 configuration — a list containing a protocol resolves to `concurrent`, which
 honours decisions and records observations, and a list of monitors only is

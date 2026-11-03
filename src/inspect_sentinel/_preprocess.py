@@ -12,9 +12,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Generic, Literal, TypeAlias
+from typing import TYPE_CHECKING, Generic, Literal, TypeAlias, cast
 
 from inspect_ai.model import (
     ChatMessage,
@@ -24,8 +24,6 @@ from inspect_ai.model import (
 )
 from inspect_ai.scorer import Reference
 from inspect_ai.tool import ToolChoice, ToolInfo
-from inspect_ai.util import StoreModel
-from pydantic import Field
 from typing_extensions import TypeVar
 
 from ._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
@@ -79,7 +77,9 @@ class LastMessages:
 class NewSinceLastReport:
     """Keep the messages after the last one this monitor reported on, so an incremental monitor does not re-read its conversations.
 
-    The last message shown is recorded by id in the monitor's store (by `context.path`), separately for each conversation, for each list it windows, and for each function of the monitor. It is recorded only when the function returns or decides final and the runner accepts what it returned, so a function that raises or is cancelled is shown those messages again at the next step. An edited version of a message, which `history` holds again under the same id, is new. A conversation whose recorded message is gone, as after a compaction, is kept whole. Preprocess with it from the monitor or protocol function the runner is running; elsewhere preprocessing raises `RuntimeError`.
+    An incremental prompt chooses `input_window` as well: `StepPreprocessor` shows all of `input` by default, so `StepPreprocessor(history_window=NewSinceLastReport(context))` still sends the monitor model the whole request at every step. To judge what was already sent, at `AfterGenerate` or a tool stage, where `history` holds the request, window `history` and omit or bound `input`: `StepPreprocessor(input_window=None, history_window=NewSinceLastReport(context))`. At `BeforeGenerate`, `history` does not yet hold the request about to go out, so a monitor that judges that request keeps `input`: `StepPreprocessor(input_window=NewSinceLastReport(context))` shows only what is new in it. `history` only grows and is resumed where it was; over `input` or `agent_messages`, which can be rewritten, each step rereads the whole list to find what is new, though it shows only that.
+
+    The last message shown is recorded by id and position in the monitor's store (by `context.path`), separately for each conversation, for each list it windows, and for each function of the monitor. It is recorded only when the function returns or decides final and the runner accepts what it returned, so a function that raises or is cancelled is shown those messages again at the next step. `history`, which only grows, is resumed where it was without reading what was shown before; `input` and `agent_messages` can be rewritten, as by a compaction, so for them the whole list is read to find the message shown last, a cost linear in the list at each step. An edited version of a message, which `history` holds again under the same id, is new. A conversation whose recorded message is gone, as after a compaction, is kept whole. Preprocess with it from the monitor or protocol function the runner is running; elsewhere preprocessing raises `RuntimeError`.
     """
 
     context: Context
@@ -140,7 +140,7 @@ async def preprocess_step(
 
     def thin(
         source: _Source,
-        messages: list[ChatMessage] | None,
+        messages: Sequence[ChatMessage] | None,
         window: Window | None,
     ) -> list[ChatMessage] | None:
         # a list with no window is left out even when the host could not provide
@@ -188,6 +188,58 @@ async def step_as_str(
         step: The step to render, usually from `preprocess_step()`.
         nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker and message header; none by default. Scout needs at least 8 characters.
     """
+    return await render_step(step, nonce=nonce, cut={})
+
+
+HeadCut: TypeAlias = Mapping[_Source, int]
+"""How many head messages a `Host.score` cut drops from each shown list, keyed by list; only lists that lose messages are keyed."""
+
+# the shown lists a head cut drops from, in cut order: HISTORY, then AGENT
+# MESSAGES, then INPUT (`Host.score`, design/sentinel.md)
+_CUT_ORDER: tuple[_Source, ...] = ("history", "agent_messages", "input")
+
+
+def _shown(step: Step, source: _Source) -> Sequence[ChatMessage]:
+    messages: Sequence[ChatMessage] | None = getattr(step, source)
+    return messages or []
+
+
+def _cuttable_in(step: Step, source: _Source) -> int:
+    shown = len(_shown(step, source))
+    # before a generate, the newest INPUT message is the request being judged,
+    # so a cut keeps it: a step the model is not shown cannot be scored
+    if source == "input" and isinstance(step, BeforeGenerate):
+        return max(shown - 1, 0)
+    return shown
+
+
+def keeps_newest_input(step: Step) -> bool:
+    """Whether a head cut keeps the newest INPUT message as part of the fixed part of the prompt: before a generate, when `input` shows a message."""
+    return isinstance(step, BeforeGenerate) and bool(_shown(step, "input"))
+
+
+def cuttable(step: Step) -> int:
+    """How many messages a head cut could drop from the step's shown lists. Before a generate, the newest INPUT message is not cuttable."""
+    return sum(_cuttable_in(step, source) for source in _CUT_ORDER)
+
+
+def head_cut(step: Step, k: int) -> dict[_Source, int]:
+    """How many head messages to drop from each shown list to drop `k` in all, HISTORY first, then AGENT MESSAGES, then INPUT. Before a generate, the newest INPUT message is never dropped. Only the lists that lose messages are keyed."""
+    counts: dict[_Source, int] = {}
+    for source in _CUT_ORDER:
+        take = min(k, _cuttable_in(step, source))
+        if take:
+            counts[source] = take
+            k -= take
+    return counts
+
+
+async def render_step(
+    step: Step, *, nonce: str | None, cut: HeadCut
+) -> tuple[str, ExtractReferences]:
+    # `step_as_str` with the head of each shown list dropped as `cut` says, so
+    # `Host.score` can fit a prompt to a model's context window
+    #
     # Scout imports duckdb and pandas, so load it only when a monitor renders
     from inspect_scout import MessagesPreprocessor, message_numbering
 
@@ -197,12 +249,36 @@ async def step_as_str(
         nonce=nonce,
     )
 
-    async def text(messages: list[ChatMessage] | None, unknown: str) -> str:
+    mark = "" if nonce is None else f" ({nonce})"
+
+    async def text(messages: Sequence[ChatMessage] | None, unknown: str) -> str:
         if messages is None:
             return unknown
-        return await numbered(messages) if messages else ""
+        if not messages:
+            return ""
+        # Scout renders a list; a view becomes one only here, where every
+        # message is rendered anyway
+        return await numbered(
+            messages if isinstance(messages, list) else list(messages)
+        )
 
-    mark = "" if nonce is None else f" ({nonce})"
+    async def listed(
+        source: _Source, messages: Sequence[ChatMessage] | None, unknown: str
+    ) -> str:
+        # a head cut drops the oldest messages of a shown list and names the
+        # count in one marker line before the kept ones; the marker takes no
+        # message number, so the render renumbers the kept messages from the
+        # top, and each cite still resolves to the kept message it names
+        if messages is None:
+            return unknown
+        dropped = cut.get(source, 0)
+        kept = await text(list(messages)[dropped:], unknown)
+        if not dropped:
+            return kept
+        marker = (
+            f"[{dropped} earlier messages left out to fit the context window{mark}]"
+        )
+        return f"{marker}\n{kept}" if kept else marker
 
     def blocks(*parts: tuple[str, str]) -> str:
         return "\n\n".join(
@@ -221,13 +297,16 @@ async def step_as_str(
         blocks(
             (
                 "HISTORY",
-                await text(
-                    step.history, "The messages the agent has sent are not available."
+                await listed(
+                    "history",
+                    step.history,
+                    "The messages the agent has sent are not available.",
                 ),
             ),
             (
                 "AGENT MESSAGES",
-                await text(
+                await listed(
+                    "agent_messages",
                     step.agent_messages,
                     "The agent's own message list is not available.",
                 ),
@@ -238,8 +317,10 @@ async def step_as_str(
         blocks(
             (
                 "INPUT",
-                await text(
-                    step.input, "The model input for this call is not available."
+                await listed(
+                    "input",
+                    step.input,
+                    "The model input for this call is not available.",
                 ),
             ),
             ("TOOLS", _tools(tools)),
@@ -264,66 +345,121 @@ async def step_as_str(
     )
 
 
-class _Marks(StoreModel):
-    # "<conversation>/<source>/<function>" -> id of the last message shown,
-    # and how many copies of that id the list held then
-    marks: dict[str, tuple[str, int]] = Field(default_factory=dict)
+def _mark_key(context: Context, step: Step, source: _Source, function: str) -> str:
+    # one store entry per monitor, conversation, list and function, so a
+    # report reads and writes only its own: (id of the last message shown, how
+    # many copies of that id the list held then, its position + 1). The parts
+    # are JSON-encoded, since a path or a conversation can hold any delimiter.
+    return "NewSinceLastReport:" + json.dumps(
+        [context.path, step.conversation, source, function]
+    )
 
 
 def _cut(
     step: Step,
     source: _Source,
-    messages: list[ChatMessage],
+    messages: Sequence[ChatMessage],
     window: Window,
-) -> list[ChatMessage]:
+) -> Sequence[ChatMessage]:
+    # a window reads the list it is given as it is and slices off what it
+    # keeps; `AllMessages` keeps it whole, and the others read from where
+    # what they keep starts, except for `NewSinceLastReport` over `input` or
+    # `agent_messages`, which a scaffold can rewrite, so it scans them
     match window:
         case AllMessages():
             return messages
         case LastTurns(n):
-            starts = [i for i, m in enumerate(messages) if m.role == "assistant"]
-            return (
-                []
-                if n == 0
-                else messages
-                if len(starts) <= n
-                else messages[starts[-n] :]
-            )
+            return messages[_turns_start(messages, n) :]
         case LastMessages(n):
             return messages[len(messages) - min(n, len(messages)) :]
         case NewSinceLastReport(context):
             return _after_mark(context, step, source, messages)
 
 
+def _turns_start(messages: Sequence[ChatMessage], n: int) -> int:
+    # from the end, so a short window reads little more than the turns it
+    # keeps; a list of no more than n turns is kept whole
+    if n == 0:
+        return len(messages)
+    start = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].role == "assistant":
+            if n == 0:
+                return start
+            n -= 1
+            start = i
+    return 0
+
+
 def _after_mark(
     context: Context,
     step: Step,
     source: _Source,
-    messages: list[ChatMessage],
-) -> list[ChatMessage]:
+    messages: Sequence[ChatMessage],
+) -> Sequence[ChatMessage]:
     node = current_invocation()
     if node is None:
         raise RuntimeError(
             "NewSinceLastReport works only in a monitor or protocol function the runner is running, since it records what the function reported on."
         )
-    store = context.store_as(_Marks)
-    key = f"{step.conversation}/{source}/{node.function}"
-    seen = store.marks.get(key)
-    ids = [m.id for m in messages]
-    last = next((m.id for m in reversed(messages) if m.id is not None), None)
+    # `_host` imports this module, through `Host.score`
+    from ._host import active_step
+
+    store = active_step("NewSinceLastReport").store
+    key = _mark_key(context, step, source, node.function)
+    seen = cast("tuple[str, int, int] | None", store.get(key))
+    start, grew = _resumed(source, messages, seen)
+    last = _last_with_id(messages)
     if last is not None:
-        mark = (last, ids.count(last))
-        node.on_success.append(
-            lambda: setattr(store, "marks", {**store.marks, key: mark})
-        )
+        index, id = last
+        if grew and seen is not None:
+            # count the copies in what is new, missing only an earlier copy of
+            # a new last id, which `history` resumes past by position anyway
+            copies = (seen[1] if id == seen[0] else 0) + sum(
+                1 for i in range(start, index + 1) if messages[i].id == id
+            )
+        else:
+            copies = sum(1 for m in messages if m.id == id)
+        mark = (id, copies, index + 1)
+        node.on_success.append(lambda: store.set(key, mark))
+    return messages[start:]
+
+
+def _resumed(
+    source: _Source,
+    messages: Sequence[ChatMessage],
+    seen: tuple[str, int, int] | None,
+) -> tuple[int, bool]:
+    # where to show from, and whether the list only grew since
     if seen is None:
-        return messages
+        return 0, False
+    id, copies, length = seen
+    # only `history` is append-only, so only there does a list that holds the
+    # message shown last where it was hold everything shown before it
+    if (
+        source == "history"
+        and 0 < length <= len(messages)
+        and messages[length - 1].id == id
+    ):
+        return length, True
     # from the copy shown last: `history` holds each edited version of a
-    # message under its one id, so a later version is new
-    copies = [i for i, id in enumerate(ids) if id == seen[0]]
-    return messages[copies[seen[1] - 1] + 1 :] if len(copies) >= seen[1] else messages
+    # message under its one id, so a later version is new; a list that no
+    # longer holds that copy, as after a compaction, is shown whole
+    found = [i for i, m in enumerate(messages) if m.id == id]
+    return (found[copies - 1] + 1 if len(found) >= copies else 0), False
 
 
-def _omitted(messages: list[ChatMessage], p: StepPreprocessor[S]) -> list[ChatMessage]:
+def _last_with_id(messages: Sequence[ChatMessage]) -> tuple[int, str] | None:
+    for i in range(len(messages) - 1, -1, -1):
+        id = messages[i].id
+        if id is not None:
+            return i, id
+    return None
+
+
+def _omitted(
+    messages: Sequence[ChatMessage], p: StepPreprocessor[S]
+) -> list[ChatMessage]:
     removed = tuple(
         kind
         for omit, kind in (
@@ -356,7 +492,7 @@ def _step_block(step: Step) -> str:
     return "MODEL REPLY"
 
 
-def _tools(tools: list[ToolInfo] | None) -> str:
+def _tools(tools: Sequence[ToolInfo] | None) -> str:
     # none offered, or not known, leaves the block out
     return (
         json.dumps([t.model_dump(exclude_none=True) for t in tools], indent=2)

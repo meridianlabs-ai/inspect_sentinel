@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import replace
 
 import pytest
@@ -36,7 +37,7 @@ from tests._fakes import (
 )
 
 
-def _evidence(history: list[ChatMessage] | None) -> str:
+def _evidence(history: Sequence[ChatMessage] | None) -> str:
     # the None-safe pattern: say the history is absent rather than judge an empty one
     if history is None:
         return "history unavailable"

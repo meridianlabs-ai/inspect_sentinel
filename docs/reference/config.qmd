@@ -1,0 +1,11 @@
+---
+title: Configuration
+description: A sentinel as the configuration an eval log records, and the stages it watches.
+reference: inspect_sentinel.config
+---
+
+Tools that run a sentinel somewhere other than an eval, such as a scan that replays it over logs, use these to carry it between processes as its configuration and to tell which steps it reads. See [Configuration](../configuration.qmd) for the configuration's shape.
+
+### sentinel_config
+### sentinel_from_config
+### watched_stages

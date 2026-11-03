@@ -137,6 +137,8 @@ def test_find_words_ignoring_case() -> None:
             ),
             "Error (timeout): Command timed out after 60s",
         ),
+        # what the model saw, even where the host cannot see the whole output
+        (replace(after_tool_call("bash", "out\n", command="ls"), output=None), "out\n"),
     ],
 )
 def test_result_text(step: AfterToolCall, expected: str) -> None:

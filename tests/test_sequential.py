@@ -9,11 +9,7 @@ from inspect_sentinel import sequential
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._final import decide_final
-from inspect_sentinel._integration import (
-    config_from_sentinel,
-    resolve_sentinel,
-    sentinel_from_config,
-)
+from inspect_sentinel._integration import resolve_sentinel
 from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import (
     Action,
@@ -24,6 +20,7 @@ from inspect_sentinel._report import (
 from inspect_sentinel._runner import run_protocols, run_sentinel
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall, Step
 from inspect_sentinel._types import Monitor, Protocol, ProtocolGroup, Sentinels
+from inspect_sentinel.config import sentinel_config, sentinel_from_config
 from tests._fakes import ListRecorder, after_step, before_step, host_context
 
 
@@ -416,7 +413,7 @@ RAW: Any = [
 
 def test_a_chain_round_trips_through_config() -> None:
     config = SentinelConfig.model_validate(RAW)
-    assert config_from_sentinel(sentinel_from_config(RAW)) == config
+    assert sentinel_config(sentinel_from_config(RAW)) == config
 
 
 @pytest.mark.anyio

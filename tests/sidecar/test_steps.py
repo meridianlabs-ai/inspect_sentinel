@@ -1,6 +1,7 @@
 """What a sentinel in the sidecar is given at each step, found in the traffic."""
 
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any, cast
 
@@ -143,7 +144,7 @@ def reports_outputs() -> Protocol:
     return after
 
 
-def _roles(messages: list[Any] | None) -> str:
+def _roles(messages: Sequence[Any] | None) -> str:
     return str(None if messages is None else [m.role for m in messages])
 
 
