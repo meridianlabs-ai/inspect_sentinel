@@ -9,6 +9,7 @@ import pytest
 from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import Tool, ToolCall, ToolCallContent, ToolCallView, tool
 
+from inspect_sentinel import NewSinceLastReport, StepPreprocessor, preprocess_step
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
 from inspect_sentinel._report import Decision, Escalations
@@ -293,6 +294,40 @@ async def test_a_reply_is_given_what_its_conversation_sent_while_it_waited() -> 
     assert after == str(
         ["You are helpful.", "What is the weather?", "Looking.", "rain"]
     )
+
+
+@protocol
+def reports_new_input() -> Protocol:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
+        if not isinstance(step, BeforeGenerate):
+            return Decision.proceed(type(step).__name__)
+        thinned = await preprocess_step(
+            step, StepPreprocessor(input_window=NewSinceLastReport(context))
+        )
+        new = [message.text for message in thinned.input or []]
+        return Decision.proceed(f"BeforeGenerate|{new}")
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_monitor_is_shown_only_the_input_new_since_its_last_report() -> None:
+    # as in Inspect's own process, where a message keeps its id from one model
+    # call to the next, a monitor finds the message it was last shown
+    handler = Handler(reports_new_input())
+    await handler.request(request("a"))
+    await handler.reply(reply(message(_LOOKING, weather("Oslo", "toolu_1")), id="a"))
+    await handler.request(request("b", then=ran("Oslo", "rain", "toolu_1")))
+
+    shown = [
+        explanation.split("|", 1)[1]
+        for id in ["a", "b"]
+        for explanation in _explanations(await handler.records(id))
+        if explanation.startswith("BeforeGenerate|")
+    ]
+    assert shown == [str(["What is the weather?"]), str(["Looking.", "rain"])]
 
 
 _SAID: list[dict[str, Any]] = [

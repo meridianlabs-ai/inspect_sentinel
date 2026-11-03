@@ -116,6 +116,17 @@ class Made:
     """The id the reply holding the call was given, so the call's two steps share it."""
 
 
+@dataclass(frozen=True)
+class Sent:
+    """What one request of a conversation sent the model, which a later request is matched against."""
+
+    keys: list[str]
+    """A digest of what the model was sent of each of the request's messages."""
+
+    ids: list[str | None]
+    """The id each of the request's messages was given, which a message of a later request matched to it keeps."""
+
+
 @dataclass
 class Conversation:
     """One conversation within a run."""
@@ -141,8 +152,8 @@ class Conversation:
     sent: list[ChatMessage] = field(default_factory=list[ChatMessage])
     """Every message the conversation's requests sent the model, in the order first sent, each once: a step's `history`. Messages a compaction dropped from later requests are kept."""
 
-    recent: list[list[str]] = field(default_factory=list[list[str]])
-    """For each of the conversation's latest requests, latest last, a digest of what the model was sent of each of its messages, which a later request is matched against."""
+    recent: list[Sent] = field(default_factory=list[Sent])
+    """What each of the conversation's latest requests sent the model, latest last, which a later request is matched against."""
 
 
 @dataclass
