@@ -415,7 +415,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 - `required` covers only the assigned model's endpoint. An agent call to another endpoint with no sidecar behind it goes through unjudged.
 
-- **Waiting on:** Meridian's answer to I, for monitor state from more than one sidecar. If it is copied, it is copied from each sidecar, and Inspect fails the sample if two sentinels write the same key.
+- **Waiting on:** Meridian's answer to I, for monitor state from more than one sidecar. If it is copied, it is copied from each sidecar, and Inspect fails the sample if two sentinels write the same key, a sentinel inside Inspect and one in a sidecar included: the copy would otherwise overwrite the value the sentinel inside Inspect carries on from.
 
 ### K. Model calls that aren't the agent's
 
