@@ -90,6 +90,26 @@ class HostNative(typing.Protocol):
         tool_choice: ToolChoice | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput: ...
+    async def input_budget(
+        self,
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int: ...
+    """How many input tokens a generate with this model, role and config may send:
+    the resolved model's context window minus the output reserve; 128k for an unknown model, with a warning.
+    Read once per score; `Host.score` fits the prompt to it."""
+    async def count_tokens(
+        self,
+        input: str | list[ChatMessage],
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int: ...
+    """The resolved model's token count for `input` (its own `Model.count_tokens`).
+    Counted per prompt; `Host.score` counts several times while it fits a prompt."""
     async def ask_human(
         self, step: Step, escalations: Escalations, choices: Sequence[str]
     ) -> HumanAnswer: ...
