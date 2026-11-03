@@ -42,6 +42,7 @@ class _Header(BaseModel):
     sample_uuid: str
     attempt: str
     attempt_number: int
+    model: str | None = None
 
 
 def inspect_sample(headers: Mapping[str, str]) -> InspectSample | None:

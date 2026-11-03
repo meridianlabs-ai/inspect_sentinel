@@ -43,7 +43,7 @@ class BeforeGenerate:
     """
 
     model: str
-    """The model the request is for, as `provider/name`."""
+    """The model the request is for, as Inspect names it, such as `anthropic/claude-haiku-4-5`. Behind a proxy it is Inspect's name where an Inspect client gives it, otherwise the provider and the model the request names; `Context.proxy.model` is the proxy's own name for it."""
 
     conversation: str
     """Id linking this agent's steps across compactions."""
@@ -72,7 +72,7 @@ class BeforeGenerate:
     """The tool choice the model is sent."""
 
     config: GenerateConfig
-    """The generation configuration the model is sent, with the task's and the model's settings merged in. In-process this is the host's own object; monitors must not mutate it."""
+    """The generation configuration the model is sent, with the task's and the model's settings merged in. In-process this is the host's own object; monitors must not mutate it. Behind a proxy it is read from the request, so it holds what the model was sent, the provider's defaults included, and settings that govern only Inspect's own client, such as `max_retries`, `timeout` and `max_connections`, are None."""
 
 
 @dataclass(frozen=True)
@@ -83,7 +83,7 @@ class AfterGenerate:
     """
 
     model: str
-    """The model the request was for, as `provider/name`; `output.model` names the model that answered."""
+    """The model the request was for, as `model` is at `BeforeGenerate`; `output.model` names the model that answered."""
 
     conversation: str
     """Id linking this agent's steps across compactions."""
@@ -107,7 +107,7 @@ class AfterGenerate:
     """The tool choice the model was sent."""
 
     config: GenerateConfig
-    """The generation configuration the model was sent; monitors must not mutate it."""
+    """The generation configuration the model was sent, as `config` is at `BeforeGenerate`; monitors must not mutate it."""
 
     output: ModelOutput
     """What the model returned; the first choice's message is what the agent receives. Some providers return an output with no choices, so check `output.choices` before reading `output.message`. In-process this is the host's own output, which the agent receives; monitors must not mutate it."""
