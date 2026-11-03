@@ -13,6 +13,7 @@ from inspect_ai._util.registry import (
 )
 from inspect_ai.model import ChatMessage, GenerateConfig, Model, ModelOutput, get_model
 from inspect_ai.model._model import active_model, model_roles
+from inspect_ai.model._model_info import get_model_input_budget
 from inspect_ai.tool import ToolChoice, ToolInfo
 from inspect_ai.util import Store
 
@@ -271,6 +272,33 @@ class _ReplayHost:
         tool_choice: ToolChoice | None = None,
         config: GenerateConfig | None = None,
     ) -> ModelOutput:
+        return await self._resolve(model, role).generate(
+            input,
+            tools=tools or [],
+            tool_choice=tool_choice,
+            config=config or GenerateConfig(),
+        )
+
+    async def input_budget(
+        self,
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int:
+        return get_model_input_budget(self._resolve(model, role), config)
+
+    async def count_tokens(
+        self,
+        input: str | list[ChatMessage],
+        *,
+        model: str | None = None,
+        role: str | None = None,
+        config: GenerateConfig | None = None,
+    ) -> int:
+        return await self._resolve(model, role).count_tokens(input, config)
+
+    def _resolve(self, model: str | None, role: str | None) -> Model:
         # models resolve as inspect_ai's host resolves them live, from the
         # scan's model and roles in place of the eval's
         if isinstance(cast(object, model), Model):
@@ -288,6 +316,7 @@ class _ReplayHost:
         if model is not None and role is None:
             resolved = copy(get_model(model))
             resolved._set_role("sentinel")  # pyright: ignore[reportPrivateUsage]
+            return resolved
         else:
             role = role or "monitor"
             if model is None and role not in model_roles():
@@ -295,13 +324,7 @@ class _ReplayHost:
                     logger,
                     f"No model is configured for the sentinel role '{role}', so monitor calls in this replay use the scan's model. Set one with the scan's model_roles={{'{role}': ...}}.",
                 )
-            resolved = get_model(model, role=role, default=active_model())
-        return await resolved.generate(
-            input,
-            tools=tools or [],
-            tool_choice=tool_choice,
-            config=config or GenerateConfig(),
-        )
+            return get_model(model, role=role, default=active_model())
 
     async def ask_human(
         self, step: Step, escalations: Escalations, choices: Sequence[str]
