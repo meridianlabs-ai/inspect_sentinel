@@ -559,7 +559,7 @@ A sentinel in the sidecar is given the sample's details as `context.eval` only w
 }
 ```
 
-**Then, before each sample runs, `complete_registration`.** Before a sample's first epoch, Inspect sends that sample's input and metadata. It does this once for each sample, since a sample's input is the same in every epoch:
+**Then, before each sample runs, `complete_registration`.** Before each epoch of a sample, and before each retry, Inspect sends that sample's input and metadata. They are the same every time. Sending them again lets a later epoch or a retry find a sidecar that has lost the task, as after a restart:
 
 ```json
 {
@@ -664,7 +664,7 @@ sequenceDiagram
     Note over S: Store the task's facts under eval_id and task,<br/>or, for a task in the tasks folder, store nothing
     S-->>P: Registered
     P-->>I: Registered
-    Note over I: Before each sample's first epoch
+    Note over I: Before each epoch and each retry of a sample
     I->>P: complete_registration: the sample's input and metadata
     P->>S: Forward, under the proxy's usual access control
     Note over S: Store the sample's facts with the task's,<br/>or, for a task in the tasks folder, store nothing
@@ -1060,7 +1060,7 @@ A registration for a task in the tasks folder stores nothing, whether runtime re
 
 A sidecar started with `--no-runtime-task-registration` answers a `register_task` for a task that is not in the folder with an error, with the code `-32001`.
 
-**`complete_registration`.** Inspect sends a sample's facts before its first epoch. "Registering a task" above shows the call. The result says whether the facts were stored:
+**`complete_registration`.** Inspect sends a sample's facts before each epoch and each retry of it. "Registering a task" above shows the call. The result says whether the facts were stored:
 
 ```json
 {
