@@ -364,6 +364,8 @@ Each item says what this design proposes. Where something is still needed from s
 
 - Later work, with the sidecar's record log ([sidecar.md](sidecar.md#10-operations)): which sentinel the sidecar runs, and its judge models' calls. Both are in the log when the sentinel runs inside Inspect. The models are named in each event, but not their calls.
 
+- To do: the usage of the judge models' calls, recorded under their roles in the eval's usage, as inside Inspect ([sidecar.md, section 8](sidecar.md#what-holds-something-else-in-the-sidecar)).
+
 ### F. Registering a task with a large dataset
 
 - `register_task` sends the task's facts, the ids of the samples selected for this run, and the number of epochs.
