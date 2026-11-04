@@ -38,8 +38,6 @@ GUARDRAIL_IMPORT = (
     'uv run --no-project --with dist-litellm/*.whl --with "litellm[proxy]==1.105.0"'
     " python -c \"import inspect_sentinel_litellm; print('Guardrail imported successfully')\"",
 )
-# The publish job's build toolchain, until the release build is hashed.
-PUBLISH_BUILD_TOOLS = ("publish.yaml:publish", "pip install --upgrade pip build")
 
 spec = importlib.util.spec_from_file_location(
     "release_floors", GITHUB / "scripts" / "release_floors.py"
@@ -333,7 +331,7 @@ def test_pip_installs_are_dependency_free_or_hashed() -> None:
             and "--require-hashes" not in line.split()
         )
     ]
-    assert unlocked == [PUBLISH_BUILD_TOOLS]
+    assert unlocked == []
 
 
 def test_no_workflow_opts_out_of_the_cooldown() -> None:

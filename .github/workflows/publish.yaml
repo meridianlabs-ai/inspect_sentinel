@@ -41,10 +41,16 @@ jobs:
         with:
           fetch-depth: 0 # Get all tags for version detection
 
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      # From uv.lock: the project's dependencies and the `dist` extra, which
+      # holds the build tools. No Actions cache: this job holds an id-token.
+      - name: Install the build tools
+        uses: meridianlabs-ai/actions/install-python-dependencies@3bc608093ab8b8dd7f82764a863d9d5f9dce61a5 # main
         with:
-          python-version: "3.x"
+          versions: locked
+          python-version: "3.13"
+          extras: dist
+          project-install: skip
+          actions-cache: none
 
       - name: Show current version
         run: |
@@ -52,8 +58,7 @@ jobs:
 
       - name: Build
         run: |
-          pip install --upgrade pip build
-          python -m build
+          .venv/bin/python -m build
           ls -la dist/
 
       - name: Publish to PyPI
