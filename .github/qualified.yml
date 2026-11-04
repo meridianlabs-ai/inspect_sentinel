@@ -5,4 +5,4 @@
 #   - exactly one top-level key: `users:`
 #   - entries are `  - <numeric account id>` — one per line, nothing else
 users:
-  # No entries yet.
+  - 1178561
