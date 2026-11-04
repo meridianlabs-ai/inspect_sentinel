@@ -16,8 +16,10 @@ test:
 # environment never has. Its tests start a real sidecar from this repository's
 # environment, `.venv`, so set that up first (CONTRIBUTING.md). `uv run
 # --isolated --no-project` never reads or installs this repository's project.
+# `--no-config` keeps the cooldown in `pyproject.toml` off this environment:
+# the canary tests the newest LiteLLM, which is often less than 7 days old.
 LITELLM ?= 1.105.0
-LITELLM_ENV = cd src/proxies/litellm && uv run --isolated --no-project \
+LITELLM_ENV = cd src/proxies/litellm && uv run --isolated --no-project --no-config \
 	--with "litellm[proxy]==$(LITELLM)" --with-editable . \
 	--with pytest --with pytest-timeout --with pytest-xdist --with jsonschema \
 	--with httpx --with "anthropic>=2"
