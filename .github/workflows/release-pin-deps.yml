@@ -21,10 +21,12 @@ name: Pin inspect_ai and inspect_scout for release
 # `uv lock` may build sdists to read their metadata, which runs dependency
 # code. So the floor job holds only a read-only token that checkout doesn't
 # persist, and restores no cache. It hands the push job only version strings
-# and the commit it read, which it records before `uv lock` runs. The push job
-# holds the App token, installs and runs nothing from the repo, checks out the
-# release branch by name, stops unless that is the commit the floor job read,
-# checks that each string is a version, and writes it into pyproject.toml.
+# and the commit it read. That commit only detects a release branch that moved:
+# code that `uv lock` runs can change it. The push job holds the App token and
+# installs and runs nothing from the repo. It checks out the release branch by
+# name, which is the safeguard. It stops unless that is the commit the floor
+# job read, checks that each string is a version, and writes it into
+# pyproject.toml.
 
 on:
   pull_request:
@@ -89,7 +91,8 @@ jobs:
         id: floor
         if: steps.relpr.outputs.found == 'true'
         run: |
-          # Before release_floors.py, whose `uv lock` may run dependency code.
+          # This SHA only detects a release branch that moved. Code that `uv lock`
+          # runs can change it, so push-floor checks out the branch by name.
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           floors=$(python3 -I .github/scripts/release_floors.py)
           echo "$floors"
