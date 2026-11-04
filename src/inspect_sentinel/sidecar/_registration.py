@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
@@ -25,7 +26,7 @@ class RegistrationError(Exception):
 
 
 class RegistrationsFullError(RegistrationError):
-    """A task registration the sidecar can't take now, because it keeps as many as it takes. A failure, not a refusal: one is taken again once a kept task expires."""
+    """A task registration the sidecar can't take now, because it keeps as many as it takes, or a sample's registration a task's registration can't hold, because it holds as much as the sidecar takes for a task. A failure, not a refusal: the task may run there once a kept registration expires."""
 
 
 Strictness: TypeAlias = Literal["open", "known_tasks", "registered_only"]
@@ -102,9 +103,36 @@ class RegisteredTask:
     sample_ids: set[str | int] = field(init=False)
     """The samples the eval runs: those the registration named, and any a sample's registration added."""
 
+    held: int = field(init=False)
+    """How many bytes the registration holds, as JSON: the task's registration, the facts of each sample whose registration is complete, and the id of each sample a sample's registration added."""
+
     def __post_init__(self) -> None:
         # a set, as a dataset can have many samples, and each is looked up
         self.sample_ids = set(self.registration.sample_ids)
+        self.held = _bytes(self.registration)
+
+    def keep_samples(self, samples: dict[str | int, SampleFacts]) -> None:
+        """Keep the facts of samples whose registration was complete, as a registration that replaces another does."""
+        self.samples = dict(samples)
+        self.held = _bytes(self.registration) + sum(
+            _bytes(sample) for sample in samples.values()
+        )
+
+    def holding(self, sample: SampleFacts) -> int:
+        """How many bytes the registration would hold once a sample's registration is complete."""
+        held = self.held + _bytes(sample)
+        before = self.samples.get(sample.sample_id)
+        if before is not None:
+            held -= _bytes(before)
+        if sample.sample_id not in self.sample_ids:
+            held += len(json.dumps(sample.sample_id))
+        return held
+
+    def complete(self, sample: SampleFacts) -> None:
+        """Keep a sample's facts, replacing any it had."""
+        self.held = self.holding(sample)
+        self.sample_ids.add(sample.sample_id)
+        self.samples[sample.sample_id] = sample
 
     def eval_context(self, sample: InspectSample) -> EvalContext | None:
         """The sample a request names, as a sentinel is given it, or None if its registration isn't complete."""
@@ -112,6 +140,11 @@ class RegisteredTask:
         if found is None:
             return None
         return _eval_context(self.registration, found, sample)
+
+
+def _bytes(model: BaseModel) -> int:
+    # what a registration holds of a model, as the JSON it arrived in
+    return len(model.model_dump_json().encode())
 
 
 def _eval_context(

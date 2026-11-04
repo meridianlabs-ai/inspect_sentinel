@@ -198,7 +198,7 @@ _ERRORS: dict[int, tuple[str, str]] = {
     ),
     REGISTRATIONS_FULL: (
         "registrations_full",
-        "The sidecar keeps as many task registrations as it takes, and takes another once a kept one expires. A failure, not a refusal: the deployment has not said that the task may not run.",
+        "The sidecar keeps as many task registrations as it takes, and takes another once a kept one expires; or, for `complete_registration`, the task's registration holds as much as the sidecar takes for a task. A failure, not a refusal: the deployment has not said that the task may not run.",
     ),
     UNKNOWN_SAMPLE: (
         "unknown_sample",
@@ -311,6 +311,8 @@ async def _answer(
             )
         except UnknownTaskError as ex:
             raise RpcError(UNKNOWN_TASK, str(ex)) from None
+        except RegistrationsFullError as ex:
+            raise RpcError(REGISTRATIONS_FULL, str(ex)) from None
         except RegistrationError as ex:
             raise RpcError(REGISTRATION_REFUSED, str(ex)) from None
         return CompleteRegistrationResult(

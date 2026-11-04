@@ -163,6 +163,7 @@ class Handler:
         strictness: Strictness = "open",
         task_expiry: float = MAX_TASK_EXPIRY,
         max_task_registrations: int = MAX_TASK_REGISTRATIONS,
+        max_registration_bytes: int = MAX_BODY_BYTES,
         release: Literal["whole", "early"] = "whole",
         keepalive: float | None = KEEPALIVE_SECONDS,
     ) -> None:
@@ -180,6 +181,7 @@ class Handler:
             strictness: How strict the handler is about a request it can't place. `open`, the default, judges every request, without the task's facts where it holds none. `known_tasks` refuses a request whose `x-inspect-context` names a task the handler doesn't hold, and judges one without the header. `registered_only` refuses any request that doesn't name a sample the handler holds, in an epoch the task's registration runs, including one without the header, and refuses a sample's registration that the task's registration doesn't name.
             task_expiry: The longest a task an eval registered is kept once no request has named it, in seconds, whatever the registration asks.
             max_task_registrations: How many tasks registered by evals are kept at once. A registration past it is refused.
+            max_registration_bytes: The most a task registered by an eval holds, in bytes of JSON: its registration, the facts of each sample whose registration is complete, and each sample id a sample's registration added. A sample's registration past it fails. It defaults to the largest request body, which is what a task's whole registration could hold when it came in one call.
             release: How a streamed reply is passed on. `whole`, the default, holds every reply until the sentinel has judged it. `early` passes on the text and reasoning that come before the turn's first tool call as they arrive, holds the rest of the turn, and judges it once the turn has ended, as `whole` does. The sentinel is given the whole turn either way.
             keepalive: Under early release, the longest a client is sent nothing while a streamed reply is held, in seconds, after which it is sent a keepalive, an SSE comment that every provider SDK skips. The keepalive sends the status, so a turn refused after it is refused with an error event in the stream. None sends no keepalives.
 
@@ -205,6 +207,7 @@ class Handler:
         self._strictness: Strictness = strictness
         self._task_expiry = task_expiry
         self._max_task_registrations = max_task_registrations
+        self._max_registration_bytes = max_registration_bytes
         # the tool results being judged now, by run, conversation and digest,
         # so that a request holding one waits for the request judging it
         self._judging: dict[tuple[str, str, str], anyio.Event] = {}
@@ -458,11 +461,15 @@ class Handler:
         kept = RegisteredTask(registration)
         before = await self._state.registration(eval_id, registration.task)
         if before is not None:
-            kept.samples = {
-                id: sample
-                for id, sample in before.samples.items()
-                if id in kept.sample_ids
-            }
+            kept.keep_samples(
+                {
+                    id: sample
+                    for id, sample in before.samples.items()
+                    if id in kept.sample_ids
+                }
+            )
+        if kept.held > self._max_registration_bytes:
+            raise self._full(registration.task, kept.held)
         if not await self._state.register(
             eval_id, registration.task, kept, granted, self._max_task_registrations
         ):
@@ -489,6 +496,7 @@ class Handler:
         Raises:
             UnknownTaskError: If the eval hasn't registered the task, or its registration is no longer kept.
             RegistrationError: If the handler is `registered_only` and the task's registration doesn't name the sample.
+            RegistrationsFullError: If the task's registration would then hold more than the handler takes for a task.
         """
         if task in self._tasks:
             return True
@@ -502,9 +510,16 @@ class Handler:
                 raise RegistrationError(
                     f"This sidecar takes only the samples a task's registration names, and the registration of {task!r} doesn't name the sample {sample.sample_id!r}."
                 )
-            kept.sample_ids.add(sample.sample_id)
-        kept.samples[sample.sample_id] = sample
+        held = kept.holding(sample)
+        if held > self._max_registration_bytes:
+            raise self._full(task, held)
+        kept.complete(sample)
         return False
+
+    def _full(self, task: str, held: int) -> RegistrationsFullError:
+        return RegistrationsFullError(
+            f"The registration of {task!r} would hold {held} bytes, and this sidecar keeps no more than {self._max_registration_bytes} for a task: its registration, and the facts of each sample whose registration is complete."
+        )
 
     def _view(self, call: ToolCall, run: Run) -> ToolCallView:
         # A request names a tool only by the name the model sees. A task

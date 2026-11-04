@@ -347,6 +347,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         strictness=arguments.strictness,
         task_expiry=arguments.task_expiry,
         max_task_registrations=arguments.max_task_registrations,
+        max_registration_bytes=arguments.max_body_bytes,
         release=arguments.release,
         keepalive=arguments.keepalive or None,
     )
