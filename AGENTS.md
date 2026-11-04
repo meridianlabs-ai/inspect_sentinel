@@ -34,7 +34,7 @@
 - `feat:`/`fix:` are for user-facing changes only: they headline the release notes and bump the version. `perf:`/`revert:` also appear in the notes (no bump); `docs:`, `refactor:`, `chore:`, `build:`, `ci:`, `test:`, `style:` are hidden
 - Body lines starting with `<type>:` are parsed as extra changelog entries—don't begin description lines with a conventional-commit prefix unless that's intended
 - Never edit `CHANGELOG.md`, version numbers, or `.release-please-manifest.json`—Release Please owns them
-- Keep the `inspect-ai` and `inspect-scout` dependencies in `pyproject.toml` PyPI floors, never git references—development installs their `main` over the floors (CONTRIBUTING.md), and `release-pin-deps.yml` raises the floors on the release PR
+- Keep the `inspect-ai` and `inspect-scout` dependencies in `pyproject.toml` PyPI floors, never git references—development tracks their `main` through `[tool.uv.sources]` (CONTRIBUTING.md), and `release-pin-deps.yml` raises the floors on the release PR
 - Before opening a non-trivial PR, run at least one code review pass in a fresh context (e.g. `/code-review` or a subagent that hasn't seen the authoring conversation) using a frontier-class model — the authoring context is blind to its own assumptions, and in our experience reviews from small fast-tier models rarely surface real issues. Fix or explicitly dismiss each finding before opening the PR, and disclose the pass in the description (see "Agent review disclosure" below).
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines
 
@@ -82,7 +82,8 @@ Supports Python 3.11+ (the same floor as `inspect-ai`, which is intended to depe
 
 ### Common Pitfalls
 - Use the venv for all Python commands: either reference `.venv/bin/` directly or run `source .venv/bin/activate`
-- **Never use `uv sync` or `uv run`**—there is no `uv.lock`, so they lock and sync the project and silently replace inspect_ai's and inspect_scout's `main` (or a local editable checkout) with a PyPI release. Set up with `uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git git+https://github.com/meridianlabs-ai/inspect_scout.git` then `uv pip install -e ".[dev]"`; refresh them with `uv pip install --upgrade git+https://github.com/UKGovernmentBEIS/inspect_ai.git git+https://github.com/meridianlabs-ai/inspect_scout.git`
+- Set up or refresh the venv with `uv sync --extra dev`. Use `uv run --no-sync` or `.venv/bin/`, not plain `uv run`: developers often have a local editable inspect_ai or inspect_scout installed over the locked one, and a plain `uv run` or `uv sync` reinstalls the locked version
+- After changing dependencies in `pyproject.toml`, run `uv lock` and commit `uv.lock`; CI's `uv sync --locked` fails on a stale lock. Don't override the 7-day `exclude-newer` cooldown; for an emergency release, CONTRIBUTING.md describes a dated entry
 
 ## Reviewing other people's pull requests
 

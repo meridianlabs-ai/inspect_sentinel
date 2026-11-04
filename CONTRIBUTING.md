@@ -10,31 +10,56 @@ Reviewing a PR takes much longer than agreeing on a direction in an issue. Start
 
 ## Development setup
 
-Inspect Sentinel uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, and requires Python 3.11+. Use uv 0.9.15 or later. Scout keeps its viewer files in Git LFS, and sentinel doesn't use them. From 0.9.15, uv leaves them out of a git install, but an older uv on a machine with Git LFS installed downloads them, and a failed download fails the whole install. With an older uv, set `GIT_LFS_SKIP_SMUDGE=1` for the install.
-
-The development environment pins 3.13 (`.python-version`). CI covers both ends of the supported range: 3.11 proves the floor still works, and 3.14 exercises the newest interpreter. `make check` only ever sees the 3.13 environment, so a construct that is new in 3.12 or later passes locally and fails in CI on 3.11. To reproduce the floor locally:
-
-```bash
-uv venv --python 3.11 /tmp/py311
-uv pip install --python /tmp/py311/bin/python git+https://github.com/UKGovernmentBEIS/inspect_ai.git git+https://github.com/meridianlabs-ai/inspect_scout.git
-uv pip install --python /tmp/py311/bin/python -e ".[dev]"
-.venv/bin/pyright --pythonpath /tmp/py311/bin/python
-```
-
-Development tracks `inspect_ai` and `inspect_scout` from `main`, so install those first (this is what CI does), then the package in editable mode with the dev tools (ruff, pyright, pytest):
+Inspect Sentinel uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, and requires Python 3.11+. Install uv 0.13.4 or later, then clone the repository and create the environment:
 
 ```bash
 git clone https://github.com/meridianlabs-ai/inspect_sentinel
 cd inspect_sentinel
-uv venv
-source .venv/bin/activate
-uv pip install git+https://github.com/UKGovernmentBEIS/inspect_ai.git git+https://github.com/meridianlabs-ai/inspect_scout.git
-uv pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
-Tracking `main` is deliberate: sentinel and inspect_ai co-develop, and most sentinel changes need hooks that have not shipped yet. Scout is tracked the same way, so a Scout change that alters what a monitor's model is shown reaches CI at once. `pyproject.toml` names both by a PyPI floor, which the git install satisfies, so the last line leaves them in place. To pick up new commits, run `uv pip install --upgrade git+https://github.com/UKGovernmentBEIS/inspect_ai.git git+https://github.com/meridianlabs-ai/inspect_scout.git`. To develop against a local inspect_ai or inspect_scout checkout instead, install it editable: `uv pip install -e ../inspect_ai` or `uv pip install -e ../inspect_scout`.
+`uv sync` creates `.venv` with the exact versions in `uv.lock`, the `dev` extra included, and installs sentinel editable. Run Python commands from it: `uv run <command>`, `.venv/bin/<command>`, or `source .venv/bin/activate`; `make check` and `make test` call the tools directly. `uv sync` without `--extra dev` removes the dev tools again.
 
-Run Python commands from the activated venv, or reference `.venv/bin/` directly; `make check` and `make test` call the tools directly. Do **not** use `uv sync` or `uv run`: there is no `uv.lock`, so they lock and sync the project, and silently replace inspect_ai's and inspect_scout's `main` (or your editable checkout) with a PyPI release.
+The development environment pins 3.13 (`.python-version`). CI covers both ends of the supported range: 3.11 proves the floor still works, and 3.14 exercises the newest interpreter. `make check` only ever sees the 3.13 environment, so a construct that is new in 3.12 or later passes locally and fails in CI on 3.11. To reproduce the floor locally, install the same lock into a second environment:
+
+```bash
+UV_PROJECT_ENVIRONMENT=/tmp/py311 uv sync --locked --extra dev --python 3.11
+.venv/bin/pyright --pythonpath /tmp/py311/bin/python
+/tmp/py311/bin/pytest
+```
+
+### Dependencies and the cooldown
+
+`uv.lock` pins every Python dependency. CI's type-check, test and build jobs install their dependencies from it, and fail when `uv.lock` is out of date with `pyproject.toml`. When you change dependencies in `pyproject.toml`, run `uv lock` and commit both files.
+
+`pyproject.toml` sets `exclude-newer = "7 days"` under `[tool.uv]`, so `uv lock`, `uv sync` and `uv pip` only pick releases that have been on PyPI for at least seven days. A compromised release is usually found and removed within that time, before it reaches `uv.lock`, CI or your machine. A few packages wait 6 hours instead, so sentinel can adopt a new release the day it ships: `inspect-ai`, `inspect-scout`, and the `anthropic` and `openai` SDKs. They are listed with `"6 hours"` in `[tool.uv.exclude-newer-package]`. Only a direct dependency (a package in `dependencies` or an extra in `pyproject.toml`) that is a model provider SDK or an Inspect package gets this exception. Every other package keeps the seven-day cooldown, including the CA bundle (`certifi`). Dependabot's `uv` entry in `.github/dependabot.yml` repeats the cooldown and the list, except `inspect-ai` and `inspect-scout`, which it ignores. When you add a `"6 hours"` entry, also add the package to `cooldown.exclude` and the `six-hour-cooldown` group there. `tests/test_dependency_cooldown.py` checks that each entry is a direct dependency, that dated entries (below) are less than seven days old, and that the two files match. Whether a package is a provider SDK or an Inspect package is up to review.
+
+Dependabot proposes `uv.lock` updates daily, once a release has cleared its cooldown. To adopt a release sooner, run `uv lock --upgrade-package <package>` and commit `uv.lock`. A release still inside its cooldown can't be locked; wait for it rather than overriding `exclude-newer`, unless it's an emergency (below).
+
+In an emergency, for example a security fix, you can adopt a release that is less than seven days old with a one-time dated entry:
+
+1. Under `[tool.uv.exclude-newer-package]` in `pyproject.toml`, add `<package> = "<timestamp>"`. The package must be a direct dependency. Use an RFC 3339 timestamp just after the upload time of the fixed release. Don't add a dated entry to `.github/dependabot.yml`.
+2. Run `uv lock --upgrade-package <package>` and commit both files.
+3. Within seven days, once the normal cooldown includes the release, delete the entry, run `uv lock --upgrade-package <package>`, and commit both files. A plain `uv lock` doesn't reliably remove the entry from `uv.lock`, and CI then fails. A test fails when a dated entry is seven days old or older.
+
+Testing against the newest release of every dependency happens in the nightly canary in [meridianlabs-ai/canaries](https://github.com/meridianlabs-ai/canaries), so sentinel's own CI doesn't need to.
+
+### inspect_ai and inspect_scout main
+
+Development and CI track inspect_ai's and inspect_scout's `main` branches. Tracking `main` is deliberate: sentinel and inspect_ai co-develop, and most sentinel changes need hooks that have not shipped yet. Scout is tracked the same way, so a Scout change that alters what a monitor's model is shown reaches CI at once. `[tool.uv.sources]` in `pyproject.toml` points `inspect-ai` and `inspect-scout` at their git repositories, and `uv.lock` records a commit of each. Only uv reads `[tool.uv.sources]`: the published package requires the `inspect-ai>=` and `inspect-scout>=` floors in `[project]`.
+
+- CI moves both to the latest `main` commit before every install (`.github/actions/uv-sync`), so it always tests against their `main`. Every other package stays at its locked version.
+- `uv sync --extra dev` installs the commits in `uv.lock`. To move to the latest `main` commits, run `uv sync --upgrade-package inspect-ai --upgrade-package inspect-scout --extra dev`. Committing the updated `uv.lock` is optional.
+- On the release PR, CI ignores the git sources and installs the newest releases that have cleared their cooldown (below).
+
+To work against a local inspect_ai or inspect_scout checkout, install it over the locked one:
+
+```bash
+uv sync --extra dev
+uv pip install -e ../inspect_ai
+```
+
+Then run commands with `.venv/bin/<command>` or `uv run --no-sync <command>`. A plain `uv run` or `uv sync` reinstalls the locked version.
 
 ## Checks and tests
 
@@ -73,7 +98,7 @@ See [`AGENTS.md`](AGENTS.md) for the full conventions used in this repo.
 Docs live in `docs/` and are built with [Quarto](https://quarto.org). The Quarto CLI and the doc-build dependencies are in the `doc` extra. `dev` leaves it out, so CI doesn't install them. `make docs` installs the `doc` extra and renders the docs to `docs/_site/`. To run Quarto yourself:
 
 ```bash
-uv pip install -e ".[doc]"
+uv sync --extra dev --extra doc
 cd docs
 source ../.venv/bin/activate
 quarto render        # outputs to docs/_site/
@@ -122,12 +147,12 @@ Anything that isn't a user-facing feature or fix should avoid `feat:`/`fix:` so 
 
 ### The inspect_ai and inspect_scout pins at release time
 
-`pyproject.toml` names inspect_ai and inspect_scout by PyPI floors, and every CI build installs their `main` over them, except on the Release Please release PR. That PR tests against PyPI, the way a published sentinel is installed, and two workflows keep its floors honest:
+`pyproject.toml` names inspect_ai and inspect_scout by PyPI floors, and every CI build installs their `main` through `[tool.uv.sources]`, except on the Release Please release PR. There, CI ignores the git sources (`UV_NO_SOURCES=1`) and installs the newest inspect-ai and inspect-scout releases that have cleared their cooldown, the way a published sentinel is installed. Two workflows keep its floors honest:
 
-- `release-pin-deps.yml` raises the `inspect-ai` and `inspect-scout` floors to the latest PyPI versions and pushes them to the release PR. It runs on release-PR events and every two hours, because an inspect_ai or inspect_scout release produces no event in this repository. The raised floors land on `main` with the release, which changes nothing for development.
+- `release-pin-deps.yml` raises the `inspect-ai` and `inspect-scout` floors to those releases and pushes them to the release PR. It runs on release-PR events and every two hours, because an inspect_ai or inspect_scout release produces no event in this repository. The raised floors land on `main` with the release. Main keeps the git sources, so nothing has to be restored after a release.
 - `release-dep-guard.yml` fails the release PR if any runtime dependency points at a git ref, as a backstop: a published package cannot depend on one (PyPI rejects it, and a moving ref is not reproducible).
 
-If the release PR then fails its build or tests, sentinel needs an inspect_ai or inspect_scout change that has not shipped: cut a release of that package first, and the scheduled run raises the floor once it is on PyPI.
+If the release PR then fails its build or tests, sentinel needs an inspect_ai or inspect_scout change that has not shipped: cut a release of that package first, and the scheduled run raises the floor once it is on PyPI and has cleared its cooldown.
 
 ## Reporting issues
 
