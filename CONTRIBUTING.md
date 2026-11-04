@@ -18,7 +18,7 @@ cd inspect_sentinel
 uv sync --extra dev
 ```
 
-`uv sync` creates `.venv` with the exact versions in `uv.lock`, the `dev` extra included, and installs sentinel editable. Run Python commands from it: `uv run <command>`, `.venv/bin/<command>`, or `source .venv/bin/activate`; `make check` and `make test` call the tools directly. `uv sync` without `--extra dev` removes the dev tools again.
+`uv sync` creates `.venv` with the exact versions in `uv.lock`, the `dev` extra included, and installs sentinel editable. Run Python commands from it: `.venv/bin/<command>`, `uv run --no-sync <command>`, or an activated venv (`source .venv/bin/activate`). A plain `uv run` also works, but it reinstalls the locked inspect_ai and inspect_scout over a local editable checkout (below). `make check` and `make test` call the tools directly. `uv sync` without `--extra dev` removes the dev tools again.
 
 The development environment pins 3.13 (`.python-version`). CI covers both ends of the supported range: 3.11 proves the floor still works, and 3.14 exercises the newest interpreter. `make check` only ever sees the 3.13 environment, so a construct that is new in 3.12 or later passes locally and fails in CI on 3.11. To reproduce the floor locally, install the same lock into a second environment:
 
