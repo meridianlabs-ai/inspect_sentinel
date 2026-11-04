@@ -2015,7 +2015,7 @@
     },
     "-32008": {
       "name": "registrations_full",
-      "description": "The sidecar keeps as many task registrations as it takes, and takes another once a kept one expires. A failure, not a refusal: the deployment has not said that the task may not run."
+      "description": "The sidecar keeps as many task registrations as it takes, and takes another once a kept one expires; or, for `complete_registration`, the task's registration holds as much as the sidecar takes for a task. A failure, not a refusal: the deployment has not said that the task may not run."
     },
     "-32002": {
       "name": "unknown_sample",

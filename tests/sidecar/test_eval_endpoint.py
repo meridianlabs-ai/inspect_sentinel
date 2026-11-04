@@ -207,6 +207,25 @@ async def test_a_registration_past_the_limit_fails_with_its_own_error() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_sample_past_what_a_registration_holds_fails_with_the_same_error() -> (
+    None
+):
+    handler = Handler(weather_rule(), max_registration_bytes=1_000)
+    async with _client(handler) as client:
+        await _call(client, "register_task", _REGISTRATION)
+        answered = await _call(
+            client,
+            "complete_registration",
+            _COMPLETION | {"sample_input": "x" * 2_000},
+        )
+
+    # a failure, not a refusal: the task may run once its registration is
+    # made again
+    assert answered["error"]["code"] == REGISTRATIONS_FULL
+    assert "no more than 1000" in answered["error"]["message"]
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "params",
     [

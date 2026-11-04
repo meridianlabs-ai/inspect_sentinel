@@ -15,6 +15,7 @@ from inspect_sentinel.sidecar import Handler, Request, _state
 from inspect_sentinel.sidecar._registration import (
     FileTask,
     RegistrationError,
+    RegistrationsFullError,
     SampleFacts,
     TaskFacts,
     TaskRegistration,
@@ -379,6 +380,107 @@ async def test_a_sample_the_registration_doesnt_name_extends_it() -> None:
     assert (await _eval_seen(handler, "a"))["sample_input"] == (
         "File tomorrow's report."
     )
+
+
+def _sample(sample_id: int, size: int = 1_000) -> SampleFacts:
+    return SampleFacts(sample_id=sample_id, sample_input="x" * size)
+
+
+async def _held(handler: Handler) -> int:
+    kept = await handler._state.registration("eval_789", "philadelphia")
+    assert kept is not None
+    return kept.held
+
+
+@pytest.mark.anyio
+async def test_a_registration_holds_no_more_than_the_sidecar_takes_for_a_task() -> None:
+    # anything that can reach the endpoint can register a task, so what one
+    # registration holds is bounded, its samples' facts included
+    handler = Handler(reports_the_eval(), max_registration_bytes=5_000)
+    await handler.register_task(
+        "eval_789",
+        _registration(_TASK).model_copy(update={"sample_ids": [1, 2, 3, 4, 5]}),
+    )
+    for sample_id in [1, 2, 3]:
+        await handler.complete_registration(
+            "eval_789", "philadelphia", _sample(sample_id)
+        )
+    held = await _held(handler)
+
+    with pytest.raises(RegistrationsFullError, match="no more than 5000"):
+        for sample_id, size in [(4, 1_000), (5, 2_000)]:
+            await handler.complete_registration(
+                "eval_789", "philadelphia", _sample(sample_id, size)
+            )
+
+    # what fails isn't kept, and what was kept still is
+    kept = await handler._state.registration("eval_789", "philadelphia")
+    assert kept is not None
+    assert sorted(kept.samples) == [1, 2, 3, 4]
+    assert held < kept.held <= 5_000
+
+
+@pytest.mark.anyio
+async def test_a_first_registration_holds_no_more_than_the_sidecar_takes() -> None:
+    handler = Handler(reports_the_eval(), max_registration_bytes=300)
+    large = _registration(_TASK).model_copy(update={"sample_ids": list(range(100))})
+
+    with pytest.raises(RegistrationsFullError, match="no more than 300"):
+        await handler.register_task("eval_789", large)
+
+    assert await handler._state.registration("eval_789", "philadelphia") is None
+
+
+@pytest.mark.anyio
+async def test_completing_a_samples_registration_again_holds_it_once() -> None:
+    # an eval completes a sample's registration for each epoch and retry
+    handler = Handler(reports_the_eval(), max_registration_bytes=5_000)
+    await handler.register_task("eval_789", _registration(_TASK))
+    await handler.complete_registration("eval_789", "philadelphia", _sample(1))
+    once = await _held(handler)
+
+    for _ in range(10):
+        await handler.complete_registration("eval_789", "philadelphia", _sample(1))
+
+    assert await _held(handler) == once
+
+
+@pytest.mark.anyio
+async def test_the_samples_a_registration_adds_count_toward_what_it_holds() -> None:
+    # an open sidecar takes samples the registration doesn't name; their ids
+    # are held too, so new ids can't grow a registration without bound
+    handler = Handler(reports_the_eval(), max_registration_bytes=2_000)
+    await handler.register_task("eval_789", _registration(_TASK))
+
+    with pytest.raises(RegistrationsFullError):
+        for sample_id in range(10_000):
+            await handler.complete_registration(
+                "eval_789", "philadelphia", _sample(sample_id, size=0)
+            )
+
+    kept = await handler._state.registration("eval_789", "philadelphia")
+    assert kept is not None
+    assert len(kept.sample_ids) < 100
+    assert kept.held <= 2_000
+
+
+@pytest.mark.anyio
+async def test_registering_a_task_again_holds_only_the_samples_it_keeps() -> None:
+    handler = Handler(reports_the_eval())
+    registration = _registration(_TASK).model_copy(update={"sample_ids": [1, 2]})
+    await handler.register_task("eval_789", registration)
+    await handler.register_task("eval_789", _registration(_TASK))
+    fresh = await _held(handler)
+    await handler.register_task("eval_789", registration)
+    for sample_id in [1, 2]:
+        await handler.complete_registration(
+            "eval_789", "philadelphia", _sample(sample_id)
+        )
+
+    # registering again without sample 2 holds sample 1's facts only
+    await handler.register_task("eval_789", _registration(_TASK))
+
+    assert await _held(handler) == fresh + len(_sample(1).model_dump_json())
 
 
 @pytest.mark.anyio
