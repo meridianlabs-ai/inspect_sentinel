@@ -264,7 +264,8 @@ Some ways the field goes missing:
 | Answer | What it means | With a reply | With an error |
 | --- | --- | --- | --- |
 | `decided` | the sidecar judged the call | acts on the decision, as in section 4 | a rejection or a `terminate`: acts on it, as in section 4. A `proceed`: the reply itself was lost on the way, so the call stays a failed call, and Inspect retries it as it does today |
-| `judging` or `awaiting_reply` | it's still being judged | waits, then asks again (question D) | waits, then asks again (question D) |
+| `judging` | it's still being judged | waits, then asks again (question D) | waits, then asks again (question D) |
+| `awaiting_reply` | the sidecar judged the request and hasn't been handed the reply | the proxy passed the reply on without the sidecar, which hands it to the sidecar first otherwise: as for `dropped` | the sidecar never received the reply: as for `unknown` |
 | `not_judged`, with a reason | the sidecar saw the call but couldn't judge it | uses the reply, since the proxy chose to let it through, and records why it wasn't judged | fails the sample with that reason |
 | `dropped` | the sidecar once held the call's records, and no longer keeps them. The sidecar's judging may not have finished | `auto`: uses the reply, and records the protocol decision as unavailable. `required`: fails the sample | fails the sample |
 | `unknown` | the sidecar never saw the call | as for `dropped` | fails the sample |
@@ -344,7 +345,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 ### D. Waiting while the sidecar is still judging
 
-- When `request_result` says the sidecar is still judging, Inspect asks again, backing off: after half a second, doubling each time, up to about 10 seconds. inspect_ai already backs off this way when it retries model calls (`_util/retry.py`).
+- When `request_result` says the sidecar is still judging, Inspect asks again, backing off: after half a second, doubling each time, up to about 10 seconds. inspect_ai already backs off this way when it retries model calls (`_util/retry.py`). Only `judging` is waited on: a state this version of Inspect doesn't know, as from a newer sidecar, is taken as an answer, the judgment being unavailable.
 
 - Inspect offers the same settings as for a sentinel inside it, which is none. While Inspect waits, the sample's token, turn and working limits are paused, and its time limit still applies, as they are while a sentinel inside Inspect runs. That follows Meridian's decision that a sentinel's monitors count as waiting, not working (inspect_ai's `design/working-time-concurrency.md`). The one limit on judging itself is the sidecar's `--time-limit`, which is the operator's and off by default.
 
@@ -413,7 +414,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 - Each sidecar gets its own `register_task`, `complete_registration` and `end_sample`, and `request_result` goes to the sidecar the call went to. A registration that fails mid-run fails that sample, not the task.
 
-- `required` covers only the assigned model's endpoint. An agent call to another endpoint with no sidecar behind it goes through unjudged.
+- `required` covers only the assigned model's endpoint. An agent call to another endpoint with no sidecar behind it goes through unjudged. Inspect says so: a warning once per model, and a note in the sample's transcript the first time each attempt calls it.
 
 - **Waiting on:** Meridian's answer to I, for monitor state from more than one sidecar. If it is copied, it is copied from each sidecar, and Inspect fails the sample if two sentinels write the same key, a sentinel inside Inspect and one in a sidecar included: the copy would otherwise overwrite the value the sentinel inside Inspect carries on from.
 
