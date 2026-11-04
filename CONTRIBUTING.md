@@ -2,11 +2,39 @@
 
 Thanks for your interest in contributing. Bug reports, doc fixes, and core changes are all welcome.
 
-## Start with an issue
+<!-- BEGIN shared text from meridianlabs-ai/actions policy/CONTRIBUTING.md. Change it there, not here. -->
+## How contributions work
 
-Open an issue before you write code, and wait for a maintainer to say on the issue that we want the change. Then open a PR that links the issue (`Fixes #NNN`). This applies whoever filed the issue. Maintainers may open PRs directly, and trivial documentation fixes, such as typos and broken links, are welcome without an issue.
+There are two paths:
 
-Reviewing a PR takes much longer than agreeing on a direction in an issue. Starting with an issue spends review time on work we have agreed we want, and spares you writing code we can't merge.
+- **Qualified contributors**: maintainers and individuals recorded (by
+  account id) in [`.github/qualified.yml`](.github/qualified.yml) — may open
+  PRs directly.
+
+- **Everyone else**: start from an issue a maintainer has labeled `accepted`
+  before writing code, and reference it from your PR (`Fixes #NNN`). This
+  applies regardless of your contribution history here, and regardless of
+  who filed the issue — what matters is that a maintainer has accepted it.
+  PRs that aren't linked to an accepted issue may be closed; if a linked
+  issue is later accepted, reopen the PR.
+  **Exception:** trivial documentation fixes (typos, broken links — docs
+  files only, under 25 changed lines) are always welcome directly.
+
+Whatever your path, check for an existing open PR addressing the same
+problem before opening yours: duplicates are closed in favor of the earlier
+PR unless a maintainer has asked for an alternative.
+
+Issues a maintainer has labeled `deferred` are decisions not to prioritize
+that work right now. PRs against a deferred issue are closed —
+comment on the issue with new evidence or demand if you think it should be
+revisited.
+
+**Why:** like most open-source projects, we now receive a large volume of
+unrequested, often agent-generated PRs. Reviewing a PR is time-consuming;
+agreeing on a direction in an issue first is much easier. This policy spends
+our review time on work we've agreed we want and spares you writing code we
+can't merge.
+<!-- END shared text from meridianlabs-ai/actions policy/CONTRIBUTING.md -->
 
 ## Development setup
 
