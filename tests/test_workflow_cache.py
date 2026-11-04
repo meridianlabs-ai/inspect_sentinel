@@ -2,6 +2,9 @@
 # any job can write to the shared Actions cache, so a job holding secrets, an
 # id-token or write permissions, or one whose output is published, must not
 # restore one.
+#
+# Jobs that install packages with no cooldown restore no cache either. Every
+# install in a job uses the job's one setup-uv, so all of them say none.
 
 from pathlib import Path
 from typing import Any
@@ -17,6 +20,10 @@ CREDENTIAL_JOBS = [
     ("release-pin-deps.yml", "floor"),
     ("release-pin-deps.yml", "push-floor"),
 ]
+NO_COOLDOWN_JOBS = [
+    ("build.yaml", "py-build"),
+    ("build.yaml", "litellm-guardrail"),
+]
 
 
 def job_steps(workflow: str, job: str) -> list[dict[str, Any]]:
@@ -25,8 +32,8 @@ def job_steps(workflow: str, job: str) -> list[dict[str, Any]]:
     return steps
 
 
-@pytest.mark.parametrize("workflow,job", CREDENTIAL_JOBS)
-def test_credential_holding_jobs_restore_no_cache(workflow: str, job: str) -> None:
+@pytest.mark.parametrize("workflow,job", CREDENTIAL_JOBS + NO_COOLDOWN_JOBS)
+def test_jobs_restore_no_cache(workflow: str, job: str) -> None:
     for step in job_steps(workflow, job):
         action = step.get("uses", "").split("@")[0]
         inputs: dict[str, Any] = step.get("with") or {}
@@ -36,6 +43,7 @@ def test_credential_holding_jobs_restore_no_cache(workflow: str, job: str) -> No
         if action in {
             "meridianlabs-ai/actions/setup-uv",
             "meridianlabs-ai/actions/install-python-dependencies",
+            "./.github/actions/uv-sync",
         }:
             assert inputs.get("actions-cache") == "none"
         if action == "actions/setup-python":

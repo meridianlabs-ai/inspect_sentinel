@@ -18,8 +18,9 @@ test:
 # --isolated --no-project` never reads or installs this repository's project.
 # `--no-config` keeps the cooldown in `pyproject.toml` off this environment:
 # the canary tests the newest LiteLLM, which is often less than 7 days old. It
-# also skips the user's uv config, so this environment has no cooldown, as CI
-# had before the lock.
+# also skips the user's uv config, so this environment has no cooldown. CI
+# builds the same environment with the shared install-python-dependencies
+# action (build.yaml, litellm-guardrail).
 LITELLM ?= 1.105.0
 LITELLM_ENV = cd src/proxies/litellm && uv run --isolated --no-project --no-config \
 	--with "litellm[proxy]==$(LITELLM)" --with-editable . \

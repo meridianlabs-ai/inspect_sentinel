@@ -2,8 +2,11 @@
 # a list of model provider SDKs and Inspect packages. Dependabot applies the
 # seven days to its uv.lock bumps and leaves that list to uv. Every CI job
 # installs from uv.lock, except that inspect-ai and inspect-scout move to their
-# main's latest commit first. Testing against the newest releases happens in
-# meridianlabs-ai/canaries, outside this repository.
+# main's latest commit first. The build toolchain comes from a hashed
+# requirements file, and the LiteLLM guardrail's environments take a pinned
+# LiteLLM with no cooldown. Every install goes through the shared action.
+# Testing against the newest releases happens in meridianlabs-ai/canaries,
+# outside this repository.
 
 import importlib.util
 import pathlib
@@ -23,21 +26,25 @@ SHARED_ACTIONS = "meridianlabs-ai/actions/"
 RELEASE_BRANCH = "release-please--branches--main"
 MATRIX_PYTHON = "${{ matrix.python-version }}"
 LOCKED_JOBS = {
+    "py-ruff": {"python-version": "3.13", "extras": "dev"},
     "py-pyright": {"python-version": MATRIX_PYTHON, "extras": "dev"},
     "py-test": {"python-version": MATRIX_PYTHON, "extras": "dev"},
-    "litellm-guardrail": {"python-version": MATRIX_PYTHON, "extras": "dev"},
-    "py-build": {"python-version": MATRIX_PYTHON, "project-install": "skip"},
+    "litellm-guardrail": {
+        "python-version": MATRIX_PYTHON,
+        "extras": "dev",
+        "actions-cache": "none",
+    },
+    "py-build": {
+        "python-version": MATRIX_PYTHON,
+        "project-install": "skip",
+        "actions-cache": "none",
+        "also-install-without-deps": "${{ steps.build.outputs.wheel }}",
+    },
 }
+BUILD_REQUIREMENTS = "scripts/build-dist/requirements.txt"
 EXEMPT_COOLDOWN = "6 hours"
 # CI moves these to their main, so Dependabot leaves them alone.
 MAIN_TRACKED = ["inspect-ai", "inspect-scout"]
-# The LiteLLM guardrail is checked in an environment of its own, with the wheel
-# just built and a pinned LiteLLM.
-GUARDRAIL_IMPORT = (
-    "build.yaml:py-build",
-    'uv run --no-project --with dist-litellm/*.whl --with "litellm[proxy]==1.105.0"'
-    " python -c \"import inspect_sentinel_litellm; print('Guardrail imported successfully')\"",
-)
 
 spec = importlib.util.spec_from_file_location(
     "release_floors", GITHUB / "scripts" / "release_floors.py"
@@ -237,18 +244,6 @@ def test_uv_comes_from_the_shared_setup_uv() -> None:
     assert re.fullmatch(r"[0-9a-f]{40}", refs.pop())
 
 
-def test_ruff_action_uses_the_locked_ruff() -> None:
-    # Without a version, ruff-action installs the newest ruff release.
-    steps = [
-        step
-        for _, step in all_steps()
-        if step.get("uses", "").startswith("astral-sh/ruff-action@")
-    ]
-    assert steps
-    for step in steps:
-        assert step["with"]["version-file"] == "uv.lock", step
-
-
 @pytest.mark.parametrize("name,inputs", LOCKED_JOBS.items())
 def test_locked_jobs_install_from_the_lockfile(
     name: str, inputs: dict[str, str]
@@ -270,7 +265,12 @@ def test_uv_sync_action_moves_only_the_main_tracked_packages() -> None:
     action = yaml.safe_load((GITHUB / "actions" / "uv-sync" / "action.yml").read_text())
     setup, move, install, restore = action["runs"]["steps"]
     assert setup["uses"].startswith(SHARED_ACTIONS + "setup-uv@")
-    assert setup["with"] == {"python-version": "${{ inputs.python-version }}"}
+    # A job that installed through the shared action first already ran setup-uv.
+    assert setup["if"] == "env.MERIDIAN_SETUP_UV == ''"
+    assert setup["with"] == {
+        "python-version": "${{ inputs.python-version }}",
+        "actions-cache": "${{ inputs.actions-cache }}",
+    }
     assert move["env"]["HEAD_REF"] == "${{ github.head_ref }}"
     assert run_lines({"steps": [move]}) == [
         "uv lock --check",
@@ -286,6 +286,8 @@ def test_uv_sync_action_moves_only_the_main_tracked_packages() -> None:
         "python-version": "${{ inputs.python-version }}",
         "extras": "${{ inputs.extras }}",
         "project-install": "${{ inputs.project-install }}",
+        "actions-cache": "${{ inputs.actions-cache }}",
+        "also-install-without-deps": "${{ inputs.also-install-without-deps }}",
     }
     assert run_lines({"steps": [restore]}) == ["git checkout -- uv.lock"]
 
@@ -316,7 +318,32 @@ def test_uv_never_relocks() -> None:
             or not {"--locked", "--no-sync", "--no-project"} & set(line.split())
         )
     ]
-    assert unlocked == [GUARDRAIL_IMPORT]
+    assert unlocked == []
+
+
+# Each fetches a build backend or packages outside the shared install action.
+@pytest.mark.parametrize("command", [r"\buv build\b", r"\buv pip\b"])
+def test_no_install_bypasses_the_shared_action(command: str) -> None:
+    assert [
+        (w, line) for w, line in workflow_run_lines() if re.search(command, line)
+    ] == []
+
+
+# The build toolchain comes from the hashed file, as wheels, and the build
+# resolves nothing more.
+def test_builds_use_the_hashed_toolchain_without_isolation() -> None:
+    hashed = [
+        step["with"]
+        for _, step in all_steps()
+        if step.get("with", {}).get("versions") == "hashed-requirements"
+    ]
+    assert len(hashed) == 2
+    for inputs in hashed:
+        assert inputs["requirements-file"] == BUILD_REQUIREMENTS
+        assert inputs["package-format"] == "wheels-only"
+    builds = [line for _, line in workflow_run_lines() if " -m build" in line]
+    assert len(builds) == 3
+    assert [line for line in builds if "--no-isolation" not in line.split()] == []
 
 
 # pip installs skip uv.lock, so they may only add local packages without their
