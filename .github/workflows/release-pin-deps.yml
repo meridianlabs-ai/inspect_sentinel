@@ -20,8 +20,10 @@ name: Pin inspect_ai and inspect_scout for release
 #
 # `uv lock` may build sdists to read their metadata, which runs dependency
 # code. So the floor job holds only a read-only token that checkout doesn't
-# persist, and restores no cache. It hands the push job only version strings.
-# The push job holds the App token, installs and runs nothing from the repo,
+# persist, and restores no cache. It hands the push job only version strings
+# and the commit it read, which it records before `uv lock` runs. The push job
+# holds the App token, installs and runs nothing from the repo, checks out the
+# release branch by name, stops unless that is the commit the floor job read,
 # checks that each string is a version, and writes it into pyproject.toml.
 
 on:
@@ -87,14 +89,18 @@ jobs:
         id: floor
         if: steps.relpr.outputs.found == 'true'
         run: |
+          # Before release_floors.py, whose `uv lock` may run dependency code.
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           floors=$(python3 -I .github/scripts/release_floors.py)
           echo "$floors"
           echo "$floors" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           changed=false
-          # Each line is <package>=<version>; the floor is "<package>>=<version>".
+          # Each line is <package>=<version>. A change is due unless every
+          # "<package>>=" requirement is "<package>>=<version>".
           for floor in $floors; do
-            grep -qF "\"${floor/=/>=}\"" pyproject.toml || changed=true
+            package=${floor%%=*}
+            found=$(sed -nE "s/.*(\"$package>=[^\"]*\").*/\1/p" pyproject.toml | sort -u)
+            [ "$found" = "\"$package>=${floor#*=}\"" ] || changed=true
           done
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
 
@@ -111,12 +117,23 @@ jobs:
           app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
 
-      # The commit the floor job read: if the branch has moved since, the push
-      # below is rejected rather than overwriting it, and the next run retries.
+      # The release branch by name, never a commit the floor job names: code
+      # that `uv lock` ran could change the floor job's HEAD.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.floor.outputs.sha }}
+          ref: release-please--branches--main
           token: ${{ steps.app-token.outputs.token }}
+
+      # If the branch has moved since the floor job read it, stop; the next run
+      # retries. A move after this check makes the push below fail.
+      - name: Check the release branch is the commit the floor job read
+        env:
+          FLOOR_SHA: ${{ needs.floor.outputs.sha }}
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$FLOOR_SHA" ]; then
+            echo "::error::The release branch is not at the commit the floor job read. The next run retries."
+            exit 1
+          fi
 
       - name: Commit and push the floors
         env:
@@ -131,8 +148,10 @@ jobs:
               exit 1
             fi
             sed -i -E "s/\"$package>=[^\"]*\"/\"$package>=$version\"/" pyproject.toml
-            if ! grep -qF "\"$package>=$version\"" pyproject.toml; then
-              echo "::error::Expected a $package>= requirement in pyproject.toml"
+            # Every "<package>>=" requirement (inspect-scout has two), and at least one.
+            found=$(sed -nE "s/.*(\"$package>=[^\"]*\").*/\1/p" pyproject.toml | sort -u)
+            if [ "$found" != "\"$package>=$version\"" ]; then
+              echo "::error::Expected each $package>= requirement in pyproject.toml to be $package>=$version"
               exit 1
             fi
           done
