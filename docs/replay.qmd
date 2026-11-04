@@ -87,9 +87,11 @@ Every stage the sentinel watches still runs, in order, so a monitor that keeps s
 Scout's summary of a scan averages a scanner's values over all of its rows. For a monitor that watches several stages, pass `stage=` so the summary covers one.
 :::
 
-### Labeled Steps
+### Choosing Specific Steps
 
-`steps=` runs the sentinel only at the steps you list. A common use is re-running the steps a first scan flagged, for example with a second monitor or new thresholds. Here we keep the rows whose `network` suspicion is at least 0.8:
+`steps=` runs the sentinel only at the steps you list. There are two common ways to get that list.
+
+**From an earlier scan.** You can re-run the steps a first scan flagged, for example with a second monitor or new thresholds. Here we take the `steps` results from [Getting Started](#getting-started) and keep the rows whose `network` suspicion is at least 0.8:
 
 ``` python
 flagged = steps[
@@ -98,14 +100,25 @@ flagged = steps[
 as_scanner(suspicion(), stage="tool_call", steps=flagged)
 ```
 
-`steps=` takes any table with `transcript_id` and `step_id` columns. A filtered results dataframe works as is (its step ids are in `metadata.step_id`), as do rows of `(transcript_id, step_id)` pairs. Two more columns narrow each row further:
+**From your own labels.** If you've labeled steps yourself (e.g. a CSV from a human review), pass a table with `transcript_id` and `step_id` columns:
+
+``` python
+import pandas as pd
+
+labels = pd.read_csv("labels.csv")  # transcript_id, step_id, label
+as_scanner(suspicion(), steps=labels)
+```
+
+A tool step's id is its tool call's id, and a model step's id is its model call's id. The easiest way to collect them for labeling is to run a first scan over the transcripts and take each row's `metadata.step_id`.
+
+`steps=` also accepts rows of `(transcript_id, step_id)` pairs. Two more columns narrow each row further:
 
 | Column                                    | Effect                                                                                       |
 |-------------------------------------------|----------------------------------------------------------------------------------------------|
 | `stage` (`metadata.stage`)                | Runs the row's step at that stage only. Without it, a row runs its step at every stage.       |
 | `conversation` (`metadata.conversation`)  | Runs the row's step in that conversation only, since two agents' tool calls can share an id. |
 
-Since `flagged` is a results dataframe, each of its rows runs at its own stage and conversation only. If you use `timeline=` (see [Stored Timelines](#stored-timelines)), conversations are matched against the stored timeline, so take the table from a scan with the same `timeline=`.
+Since `flagged` is a results dataframe, each of its rows runs at its own stage and conversation only. A labels table without those columns runs each listed step at every stage the sentinel watches. If you use `timeline=` (see [Stored Timelines](#stored-timelines)), conversations are matched against the stored timeline, so take the table from a scan with the same `timeline=`.
 
 A transcript the table doesn't list gives no rows, and its steps aren't rebuilt. Scout still reads it, though (a scanner can't narrow a scan's transcripts), so narrow the transcripts to the table's too:
 
