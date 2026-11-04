@@ -133,20 +133,18 @@ scan(scanners={...}, transcripts=listed)
 
 ### Step Selectors
 
-For more control, write a step selector: a function `(transcript_id, step) -> bool` decorated with `@step_selector`. It can choose by anything a `ReplayStep` holds. For example, to run only after a conversation's second compaction, choose by `step.segment`, which holds the step's conversation and how many of its compactions came before it:
+For more control, write a step selector: a function `(transcript_id, step) -> bool`. It can choose by anything a `ReplayStep` holds. For example, to run only after a conversation's second compaction, choose by `step.segment`, which holds the step's conversation and how many of its compactions came before it:
 
 ``` python
 from inspect_sentinel import ReplayStep
-from inspect_sentinel.scout import step_selector
 
-@step_selector
 def after_two_compactions(transcript_id: str, step: ReplayStep) -> bool:
     return step.segment[1] >= 2
 ```
 
-Pass it as `steps=after_two_compactions` (or as the `module:name` string it's registered under).
+Pass it as `steps=after_two_compactions` (or by name, as `"module:after_two_compactions"`).
 
-Define a selector at module level, in a module or in the script that runs the scan. Scout may run the scan in other processes, and a selector defined in a notebook, a REPL or `python -c` can't be loaded there, so it's refused. From a notebook, put the selector in a `.py` file next to the notebook and import it.
+Define a selector at module level in a `.py` file (a module, or the script that runs the scan), since Scout may run the scan in other processes, which find it there; one defined in a notebook, a REPL or `python -c` is refused, so from a notebook, put it in a `.py` file next to the notebook and import it. A function of the wrong shape is a type error at the `as_scanner()` call.
 
 ### Depth
 
@@ -173,22 +171,20 @@ Replay can't ask a person, so a `human()` protocol needs answers from somewhere 
 
 A fixed answer behaves as if the person had picked it, so a protocol decides as it would live. Where the `human()` asking doesn't offer that answer, it gets `terminate` instead, the answer a host gives when nobody can be asked, which `human()` takes whatever it offers. So with the default `"reject"`, a step after a tool runs or a model replies (where `reject` isn't offered) gets `terminate`.
 
-A stand-in is an `async` function `(step, escalations, choices) -> HumanAnswer` decorated with `@human_stand_in`:
+A stand-in is an `async` function `(step, escalations, choices) -> HumanAnswer`, passed as `human=`:
 
 ``` python
 from collections.abc import Sequence
 
 from inspect_sentinel import Escalations, HumanAnswer, ReplayStep
-from inspect_sentinel.scout import human_stand_in
 
-@human_stand_in
 async def cautious(
     step: ReplayStep, escalations: Escalations, choices: Sequence[str]
 ) -> HumanAnswer:
     return HumanAnswer("reject" if "reject" in choices else "terminate")
 ```
 
-Like a step selector, define it at module level, in a module or the scan's script.
+Like a step selector, define it at module level in a `.py` file; a function of the wrong shape (e.g. one that isn't `async`) is a type error at the `as_scanner()` call.
 
 A recorded answer is matched to the `human()` that recorded it by its path in the sentinel, exactly. Answers a log recorded under `triage/human` aren't given to a sentinel whose `human()` is at `human`. When that happens at a step (a `human()` asks at a path with no recorded answer, while an answer was recorded at a path where no `human()` asked) the scan logs one warning naming both paths.
 

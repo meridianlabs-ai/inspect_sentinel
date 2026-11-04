@@ -74,6 +74,7 @@ from inspect_sentinel import (
     Decision,
     Escalations,
     HumanAnswer,
+    HumanStandIn,
     MonitorGroup,
     Observation,
     ReplayStep,
@@ -89,12 +90,11 @@ from inspect_sentinel._from_messages import steps_from_messages
 from inspect_sentinel._replay import replay_monitor
 from inspect_sentinel.scout import (
     Stage,
+    StepSelector,
     as_reader,
     as_scanner,
-    human_stand_in,
     replay_check,
     replay_check_differences,
-    step_selector,
 )
 from inspect_sentinel.scout._context import Contexts
 from inspect_sentinel.scout._select import selector_from, table_rows
@@ -289,10 +289,8 @@ def test_the_scout_adapter_exports_the_replay_api() -> None:
         "StepTable",
         "as_reader",
         "as_scanner",
-        "human_stand_in",
         "replay_check",
         "replay_check_differences",
-        "step_selector",
     }
 
 
@@ -836,7 +834,6 @@ def test_a_table_with_a_conversation_picks_one_agents_step_of_a_shared_id(
     assert [(s.step.conversation, s.stage) for s in chosen] == selected
 
 
-@human_stand_in
 async def approves(
     step: ReplayStep, escalations: Escalations, choices: Sequence[str]
 ) -> HumanAnswer:
@@ -893,21 +890,36 @@ def test_a_resumed_scan_gives_the_rows_a_whole_scan_gives(tmp_path: Path) -> Non
     assert {row["metadata.human"] for row in whole["s"]} == {"simulated"}
 
 
-def anything(*args: Any) -> Any:
-    return True
+def a_lambda() -> StepSelector:
+    return lambda transcript_id, step: True
+
+
+def nested() -> tuple[StepSelector, HumanStandIn]:
+    def selects(transcript_id: str, step: ReplayStep) -> bool:
+        return True
+
+    async def answers(
+        step: ReplayStep, escalations: Escalations, choices: Sequence[str]
+    ) -> HumanAnswer:
+        return HumanAnswer("approve")
+
+    return selects, answers
 
 
 @pytest.mark.parametrize(
-    "kwargs,error",
+    "kwargs,error,message",
     [
-        ({"steps": anything}, "registered with @step_selector"),
-        ({"human": anything}, "registered with @human_stand_in"),
+        ({"steps": a_lambda()}, TypeError, "module level"),
+        ({"steps": nested()[0]}, TypeError, "module level"),
+        ({"human": nested()[1]}, TypeError, "module level"),
+        ({"steps": "tests.scout.test_scout:nowhere"}, ValueError, "did not define"),
+        ({"human": "approves"}, ValueError, "module:name"),
     ],
 )
-def test_a_scan_takes_only_what_it_can_record(
-    kwargs: dict[str, Any], error: str
+def test_a_scan_takes_only_a_function_it_can_find_again(
+    kwargs: dict[str, Any], error: type[Exception], message: str
 ) -> None:
-    with pytest.raises(TypeError, match=error):
+    with pytest.raises(error, match=message):
         as_scanner(by_argument(), **kwargs)
 
 
@@ -923,14 +935,6 @@ def test_a_scan_needs_one_subject_at_a_stage_it_watches(
 ) -> None:
     with pytest.raises(ValueError, match=error):
         as_scanner(sentinel(), **kwargs)
-
-
-def test_a_selector_must_be_importable_to_register() -> None:
-    def nested(transcript_id: str, step: ReplayStep) -> bool:
-        return True
-
-    with pytest.raises(TypeError, match="module level"):
-        step_selector(nested)
 
 
 @monitor
@@ -1989,7 +1993,6 @@ def counts_calls() -> MonitorGroup:
     return MonitorGroup(tool_call)
 
 
-@step_selector
 def after_four_compactions(transcript_id: str, step: ReplayStep) -> bool:
     return step.segment[1] >= 4
 
@@ -2200,6 +2203,7 @@ def test_two_agents_reusing_a_call_id_each_read_their_own_evidence(
 
 DRIVING_SCRIPT = """
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from inspect_scout import scan, transcripts_from
@@ -2216,7 +2220,7 @@ from inspect_sentinel import (
     sequential,
     threshold,
 )
-from inspect_sentinel.scout import as_scanner, human_stand_in, step_selector
+from inspect_sentinel.scout import as_scanner
 
 
 @monitor
@@ -2229,14 +2233,12 @@ def scripted_score(marker: str) -> MonitorGroup:
     return MonitorGroup(before)
 
 
-@step_selector
 def calls_named_a(transcript_id: str, step: ReplayStep) -> bool:
     return step.id.startswith("a")
 
 
-@human_stand_in
 async def scripted_person(
-    step: ReplayStep, escalations: Escalations, choices: list[str]
+    step: ReplayStep, escalations: Escalations, choices: Sequence[str]
 ) -> HumanAnswer:
     return HumanAnswer("reject", "the script's person")
 
@@ -2321,9 +2323,8 @@ def test_a_scripts_own_selector_and_stand_in_run_in_workers_and_resume(
 def test_a_stand_in_typed_into_python_c_is_refused() -> None:
     code = """
 from inspect_sentinel import HumanAnswer, human
-from inspect_sentinel.scout import as_scanner, human_stand_in
+from inspect_sentinel.scout import as_scanner
 
-@human_stand_in
 async def typed_in(step, escalations, choices):
     return HumanAnswer("approve")
 

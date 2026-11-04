@@ -6,7 +6,7 @@
 from ._probe import replay_check, replay_check_differences
 from ._reader import as_reader
 from ._scanner import Stage, as_scanner
-from ._select import StepSelector, StepTable, human_stand_in, step_selector
+from ._select import StepSelector, StepTable
 
 __all__ = [
     "Stage",
@@ -14,8 +14,6 @@ __all__ = [
     "StepTable",
     "as_reader",
     "as_scanner",
-    "human_stand_in",
     "replay_check",
     "replay_check_differences",
-    "step_selector",
 ]
