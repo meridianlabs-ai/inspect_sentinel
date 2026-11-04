@@ -1,36 +1,28 @@
 name: Pin inspect_ai and inspect_scout for release
 
-# On the Release Please release PR, keep the `inspect_ai` and `inspect_scout`
-# floors at the currently-shipped PyPI versions:
-#   - bump a stale floor (`inspect-ai>=OLD`) to the latest shipped version, so
-#     the declared minimum matches what the release build actually validated
-#     against (pip resolves the latest, so a stale floor could ship untested).
-#     The release PR is the one build that skips installing inspect_ai's and
-#     inspect_scout's `main` (build.yaml), so it tests against exactly those
-#     releases;
-#   - rewrite a moving git ref (`inspect-ai @ git+...@main`) to
-#     `inspect-ai>=<latest>`, should one come back. `main` keeps a floor, and
-#     development tracks inspect_ai's and inspect_scout's `main` by installing
-#     them, not by naming them in pyproject.toml (CONTRIBUTING.md); a
-#     *published* sentinel must depend on *released* packages (PyPI rejects
-#     direct-reference deps, and a git ref is not reproducible).
+# Development and CI track inspect_ai's and inspect_scout's main:
+# pyproject.toml's [tool.uv.sources] points inspect-ai and inspect-scout at
+# their main branches, and every CI install moves them to main's latest commit
+# (.github/actions/uv-sync). A published sentinel requires released packages
+# through the `inspect-ai>=` and `inspect-scout>=` floors in [project] (PyPI
+# rejects direct-reference deps, and only uv reads [tool.uv.sources]). On the
+# release PR, CI ignores the git sources and installs the newest inspect-ai and
+# inspect-scout releases that clear their cooldown. This workflow raises the
+# floors to those releases, so the declared minimum is the version the release
+# was tested against. Main keeps the git sources throughout.
 #
-# The floor bump is squash-merged to `main` with the release PR, which is
-# harmless: development installs inspect_ai's and inspect_scout's `main` over
-# it all the same.
-#
-# Runs on release-PR events AND on a schedule: publishing a new inspect_ai or
+# Runs on release-PR events and on a schedule: publishing a new inspect_ai or
 # inspect_scout to PyPI produces no event in this repo, so the schedule is what
-# turns "inspect shipped the fix we need" into "the release PR re-pins and goes
-# green" without a human nudge. The scheduled path no-ops unless a release PR
-# is open.
+# turns "inspect shipped the fix we need" into "the release PR raises its
+# floor" without a human nudge. If sentinel needs an unreleased inspect_ai or
+# inspect_scout, the release PR's checks fail, which is the signal to cut a
+# release of that package first.
 #
-# This is the companion to release-dep-guard.yml: the guard *blocks* a release
-# PR that still carries a git ref; this workflow *fixes* it automatically. If
-# sentinel genuinely needs an unreleased inspect_ai or inspect_scout, pinning to
-# the shipped version makes the release PR's build/tests fail loudly — which is
-# the signal to cut a release of that package first (and this schedule picks it
-# up once cut).
+# `uv lock` may build sdists to read their metadata, which runs dependency
+# code. So the floor job holds only a read-only token that checkout doesn't
+# persist, and restores no cache. It hands the push job only version strings.
+# The push job holds the App token, installs and runs nothing from the repo,
+# checks that each string is a version, and writes it into pyproject.toml.
 
 on:
   pull_request:
@@ -47,11 +39,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  pin:
+  floor:
     # PR events: only the Release Please release PR. Schedule/dispatch: always
     # start; the first step exits quietly when no release PR is open.
     if: ${{ github.event_name != 'pull_request' || github.head_ref == 'release-please--branches--main' }}
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.floor.outputs.sha }}
+      inspect-ai: ${{ steps.floor.outputs.inspect-ai }}
+      inspect-scout: ${{ steps.floor.outputs.inspect-scout }}
+      changed: ${{ steps.floor.outputs.changed }}
     steps:
       - name: Check an open release PR exists (scheduled runs)
         id: relpr
@@ -72,74 +69,75 @@ jobs:
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # App token so the pin commit re-triggers the PR's checks (guard + build).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.relpr.outputs.found == 'true'
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'release-please--branches--main' }}
+          persist-credentials: false
+
+      - name: Install uv
+        if: steps.relpr.outputs.found == 'true'
+        uses: meridianlabs-ai/actions/setup-uv@3bc608093ab8b8dd7f82764a863d9d5f9dce61a5 # main
+        with:
+          actions-cache: none
+
+      # -I keeps the checkout off sys.path, so a module at the release branch's
+      # root can't shadow the stdlib.
+      - name: Find the releases the release PR is tested against
+        id: floor
+        if: steps.relpr.outputs.found == 'true'
+        run: |
+          floors=$(python3 -I .github/scripts/release_floors.py)
+          echo "$floors"
+          echo "$floors" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          changed=false
+          # Each line is <package>=<version>; the floor is "<package>>=<version>".
+          for floor in $floors; do
+            grep -qF "\"${floor/=/>=}\"" pyproject.toml || changed=true
+          done
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+  push-floor:
+    needs: floor
+    if: needs.floor.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # App token so the floor commit re-triggers the PR's checks (guard + build).
       # A commit pushed with the default GITHUB_TOKEN would not trigger them.
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        if: steps.relpr.outputs.found == 'true'
         id: app-token
         with:
           app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
 
+      # The commit the floor job read: if the branch has moved since, the push
+      # below is rejected rather than overwriting it, and the next run retries.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: steps.relpr.outputs.found == 'true'
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'release-please--branches--main' }}
+          ref: ${{ needs.floor.outputs.sha }}
           token: ${{ steps.app-token.outputs.token }}
 
-      - name: Pin/bump inspect_ai and inspect_scout to the shipped PyPI versions
-        if: steps.relpr.outputs.found == 'true'
-        # -I keeps the checkout off sys.path: the release branch can carry
-        # agent-landed commits, and a json.py or re.py at its root would
-        # otherwise run here, beside the App token in .git/config.
+      - name: Commit and push the floors
+        env:
+          INSPECT_AI: ${{ needs.floor.outputs.inspect-ai }}
+          INSPECT_SCOUT: ${{ needs.floor.outputs.inspect-scout }}
         run: |
-          python3 -I - <<'PY'
-          import json, re, sys, urllib.request
-
-          def vtuple(v):
-              try:
-                  return tuple(int(p) for p in v.split("."))
-              except ValueError:
-                  return None
-
-          path = "pyproject.toml"
-          src = open(path).read()
-
-          for package in ("inspect-ai", "inspect-scout"):
-              with urllib.request.urlopen(f"https://pypi.org/pypi/{package}/json", timeout=30) as r:
-                  version = json.load(r)["info"]["version"]
-              if not version:
-                  print(f"::error::Could not resolve a released {package} version from PyPI")
-                  sys.exit(1)
-
-              name = package.replace("-", "[-_]")
-              git_pat = re.compile(rf'"{name}\s*@\s*git\+[^"]*"')
-              floor_pat = re.compile(rf'"{name}>=([0-9.]+)"')
-
-              if git_pat.search(src):
-                  src = git_pat.sub(f'"{package}>={version}"', src)
-                  print(f"Pinned {package} git ref to >={version}")
-              else:
-                  m = floor_pat.search(src)
-                  cur, latest = (vtuple(m.group(1)), vtuple(version)) if m else (None, None)
-                  if cur and latest and latest > cur:
-                      src = floor_pat.sub(f'"{package}>={version}"', src)
-                      print(f"Bumped {package} floor {m.group(1)} -> {version}")
-                  else:
-                      print(f"{package} pin already current (latest PyPI: {version})")
-
-          open(path, "w").write(src)
-          PY
-
-      - name: Commit the pin if pyproject changed
-        if: steps.relpr.outputs.found == 'true'
-        run: |
-          if git diff --quiet -- pyproject.toml; then
-            echo "No change to commit."
-            exit 0
-          fi
+          for floor in "inspect-ai=$INSPECT_AI" "inspect-scout=$INSPECT_SCOUT"; do
+            package=${floor%%=*}
+            version=${floor#*=}
+            if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+              echo "::error::Not a release version of $package: $version"
+              exit 1
+            fi
+            sed -i -E "s/\"$package>=[^\"]*\"/\"$package>=$version\"/" pyproject.toml
+            if ! grep -qF "\"$package>=$version\"" pyproject.toml; then
+              echo "::error::Expected a $package>= requirement in pyproject.toml"
+              exit 1
+            fi
+          done
           git config user.name "meridian-release-bot[bot]"
           git config user.email "meridian-release-bot[bot]@users.noreply.github.com"
           git add pyproject.toml
-          git commit -m "chore: pin inspect_ai and inspect_scout to the shipped releases for publishing"
+          git commit -m "chore: raise the inspect_ai and inspect_scout floors to the releases they were tested against"
           git push origin HEAD:release-please--branches--main
