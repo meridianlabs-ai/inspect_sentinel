@@ -307,10 +307,6 @@ as_scanner(suspicion(), timeline="target")
 
 A row's `metadata.turns` is then `"stored"` (a transcript replayed from messages stays `"inferred"`). A stored timeline only groups steps: in a log without origins, it doesn't change which calls are inferred as turns. A transcript with no timeline of that name raises an error.
 
-### Logs Before inspect_ai 0.3.94
-
-Logs written by inspect_ai before 0.3.94 (May 2025) don't record a span for each tool call, so their tool steps can't be rebuilt from events. Replay refuses them rather than replay tool steps incompletely, and Scout reports an error for each such transcript.
-
 ### Transcripts From Messages
 
 A transcript Scout imported from another source, or one with no model events, replays from its messages, with `metadata.turns` `"inferred"`. Each assistant message is a model call whose input is everything before it, and each tool call with its answering tool message gives that call's tool steps. The whole transcript is one conversation.
