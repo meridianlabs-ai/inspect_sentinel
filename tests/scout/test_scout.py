@@ -3,7 +3,7 @@ import importlib
 import json
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,6 +23,7 @@ from inspect_ai.approval._human import approver as approver_module
 from inspect_ai.dataset import Sample
 from inspect_ai.event import (
     Event,
+    InfoEvent,
     ModelEvent,
     SentinelEvent,
     SpanBeginEvent,
@@ -3036,6 +3037,134 @@ def test_a_transcript_without_model_events_replays_from_its_messages(
     generates = [m for m in sample.messages if isinstance(m, ChatMessageAssistant)]
     assert len(found["replay"]) == len(generates)
     assert {r["metadata.turns"] for r in found["replay"]} == {"inferred"}
+
+
+def unphased(events: list[Event]) -> list[Event]:
+    # as inspect_ai before 0.3.100 wrote a sample: its solver spans at the top
+    # level, with no `solvers` span
+    [solvers] = [
+        e for e in events if isinstance(e, SpanBeginEvent) and e.name == "solvers"
+    ]
+    for event in events:
+        if isinstance(event, SpanBeginEvent) and event.parent_id == solvers.id:
+            event.parent_id = None
+    return [e for e in events if getattr(e, "id", None) != solvers.id]
+
+
+def nested_tool_events(events: list[Event]) -> list[Event]:
+    # as inspect_ai before 0.3.94 wrote a tool call: its events in the ToolEvent
+    for event in events:
+        if isinstance(event, ToolEvent):
+            event.events = [InfoEvent(data="inside the tool")]
+    return events
+
+
+@pytest.mark.parametrize(
+    ("version", "layout", "replayed_from"),
+    [
+        ("0.3.100", None, "events"),
+        # a header with no version, in the current layout
+        (None, None, "events"),
+        ("0.3.99", None, "messages"),
+        ("0.3.100.dev3+g0123abc", None, "messages"),
+        ("0.3.43", None, "messages"),
+        # a retried eval keeps its completed samples under a newer header
+        ("0.3.288", unphased, "messages"),
+        (None, nested_tool_events, "messages"),
+    ],
+)
+def test_a_log_from_before_inspect_0_3_100_replays_from_its_messages(
+    tmp_path: Path,
+    version: str | None,
+    layout: Callable[[list[Event]], list[Event]] | None,
+    replayed_from: str,
+) -> None:
+    log = run(tmp_path / "run", [[call(1)]], None)
+    assert log.samples is not None
+    sample = log.samples[0]
+    events = layout(list(sample.events)) if layout is not None else sample.events
+    transcript = Transcript(transcript_id="t", messages=sample.messages, events=events)
+    header = EvalInfo(inspect_ai_version=version, sentinel=False)
+
+    steps, turns = transcript_steps(transcript, header, None)
+
+    from_messages = list(steps_from_messages(sample.messages, conversation="t"))
+    if replayed_from == "messages":
+        assert turns == "inferred"
+        assert [(s.stage, s.id) for s in steps] == [
+            (s.stage, s.id) for s in from_messages
+        ]
+        # the copy of the driver's check in the adapter routes exactly the
+        # logs the driver refuses
+        condensed, data = condense_events(events)
+        with pytest.raises(ValueError, match="0.3.100 or later"):
+            steps_from_events(
+                sample.messages,
+                condensed,
+                data["messages"],
+                sample_uuid="t",
+                eval_info=header,
+            )
+    else:
+        assert turns == "recorded"
+        assert {s.step.conversation for s in steps} == {"t"}
+        # a generate's step id is its model event's, not its message's
+        assert [s.id for s in steps if s.stage == "model_input"] == [
+            e.uuid for e in events if isinstance(e, ModelEvent)
+        ]
+
+
+@approver(name="rewrites_the_call")
+def rewrites_the_call() -> Approver:
+    async def approve(
+        message: str, call: ToolCall, view: ToolCallView, history: list[ChatMessage]
+    ) -> Approval:
+        return Approval(
+            decision="modify",
+            modified=ToolCall(
+                id=call.id, function=call.function, arguments={"x": 5, "y": 1}
+            ),
+        )
+
+    return approve
+
+
+def test_a_log_whose_tool_event_is_not_the_approved_call_is_a_scan_error(
+    tmp_path: Path,
+) -> None:
+    [log] = eval(
+        Task(
+            dataset=[Sample(input="add")],
+            solver=[use_tools(addition()), generate()],
+            approval=[ApprovalPolicy(rewrites_the_call(), "*")],
+        ),
+        model=get_model(
+            "mockllm/model",
+            custom_outputs=[call(1), ModelOutput.from_content("mockllm/model", "done")],
+        ),
+        log_dir=str(tmp_path / "run"),
+        display="none",
+    )
+    assert log.status == "success", log.error
+    assert log.samples is not None
+    # as inspect_ai before 0.3.277 wrote it: the proposal, not the approved
+    # call that ran
+    for event in log.samples[0].events:
+        if isinstance(event, ToolEvent):
+            event.arguments = {"x": 1, "y": 1}
+    write_eval_log(log, str(tmp_path / "logs" / "log.eval"))
+
+    status = scan(
+        scanners={"replay": as_scanner(conversations())},
+        transcripts=transcripts_from(str(tmp_path / "logs")),
+        scans=str(tmp_path / "scans"),
+        display="none",
+        max_processes=1,
+    )
+
+    assert not status.complete
+    [row] = rows(status.location)["replay"]
+    assert "approved call does not match the ToolEvent that ran" in row["scan_error"]
 
 
 @solver

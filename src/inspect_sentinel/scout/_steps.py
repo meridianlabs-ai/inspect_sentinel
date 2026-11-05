@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
@@ -15,6 +16,7 @@ from inspect_ai.event import (
     Timeline,
     TimelineEvent,
     TimelineSpan,
+    ToolEvent,
     timeline_build,
 )
 from inspect_ai.log import condense_events
@@ -40,14 +42,22 @@ def transcript_steps(
     # A transcript from an Inspect log with model events replays from them,
     # through the driver inspect_ai shares with live: by the origins its log
     # records, else with turns inferred from its timeline (older Inspect
-    # logs). One imported from another source, which has no log header, or
-    # one with no model events replays from its messages, each assistant
-    # message taken for an agent turn (imports: decided by Charles
-    # 2026-10-27, until replay joins on stable message ids). Each step gets
-    # its conversation's depth in the chosen timeline.
+    # logs). One imported from another source, which has no log header, one
+    # with no model events, and one the driver refuses as written before
+    # inspect_ai 0.3.100 replays from its messages, each assistant message
+    # taken for an agent turn (imports: decided by Charles 2026-10-27, until
+    # replay joins on stable message ids). Each step gets its conversation's
+    # depth in the chosen timeline.
     stored = _timeline(transcript, timeline) if timeline is not None else None
     turns: Turns
-    header = eval_info if _model_events(transcript) else None
+    header = (
+        eval_info
+        if eval_info is not None
+        and _model_events(transcript)
+        and not _before_phase_spans(eval_info.inspect_ai_version)
+        and not _has_earlier_layout(transcript.events)
+        else None
+    )
     if header is None:
         steps = list(
             steps_from_messages(
@@ -183,6 +193,61 @@ def _walk_spans(
 
 def _model_events(transcript: Transcript) -> bool:
     return any(isinstance(e, ModelEvent) for e in transcript.events)
+
+
+# inspect_ai's driver refuses a log from before 0.3.100, the first to record the
+# `solvers` and `scorers` spans, and a sample in that layout under any header,
+# since a retried eval keeps its completed samples under a newer header (its
+# private `_before_phase_spans` and `_has_earlier_layout`, which tests pin
+# these to). Such a log replays from its messages instead. The driver also
+# refuses a solver or scorer `StepEvent`, which a scan never loads (`EVENTS`),
+# so it is not checked here. One whose header records no version, or one that
+# doesn't parse, and whose only sign of age is a native tool call without a
+# tool span is still refused by the driver, and its scan reports the error.
+_PHASE_SPANS = [0, 3, 100]
+# a PEP 440 version, as inspect_ai's driver parses it
+_VERSION = re.compile(
+    r"v?(?:(?P<epoch>\d+)!)?(?P<release>\d+(?:\.\d+)*)"
+    r"(?P<pre>[-_.]?(?:a|b|c|rc|alpha|beta|pre|preview)[-_.]?\d*)?"
+    r"(?P<post>-\d+|[-_.]?(?:post|rev|r)[-_.]?\d*)?"
+    r"(?P<dev>[-_.]?dev[-_.]?\d*)?"
+    r"(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?",
+    re.IGNORECASE,
+)
+
+
+def _before_phase_spans(version: str | None) -> bool:
+    # an unparsable version, or one with an epoch, is unknown, not older
+    parsed = _VERSION.fullmatch(version.strip()) if version is not None else None
+    if parsed is None or int(parsed["epoch"] or 0) > 0:
+        return False
+    release = [int(part) for part in parsed["release"].split(".")]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    if release != _PHASE_SPANS:
+        return release < _PHASE_SPANS
+    # 0.3.100's own pre-releases and dev builds came before its spans
+    return bool(parsed["pre"] or parsed["dev"]) and not parsed["post"]
+
+
+def _has_earlier_layout(events: Sequence[Event]) -> bool:
+    # a tool event that nests events, a top-level scorer span, or a
+    # top-level solver span in a sample with no
+    # `solvers` span (where there is one, a solver span outside it is a chain
+    # Task.cleanup or a hook awaited)
+    phased = any(
+        isinstance(e, SpanBeginEvent) and e.parent_id is None and e.name == "solvers"
+        for e in events
+    )
+    return any(
+        (isinstance(event, ToolEvent) and bool(event.events))
+        or (
+            isinstance(event, SpanBeginEvent)
+            and event.parent_id is None
+            and (event.type == "scorer" or (event.type == "solver" and not phased))
+        )
+        for event in events
+    )
 
 
 def _origins(transcript: Transcript) -> bool:

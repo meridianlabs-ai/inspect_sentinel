@@ -293,6 +293,10 @@ Inspect logs record origins on every model call or on none. If a transcript mixe
 
 If the older log did run a sentinel, its recorded checks and human decisions are used only where their step id pairs with a model call's exact id; checks with no matching call are skipped with a warning. Inferred turns may differ from the ones that sentinel saw live, and reproducing them isn't guaranteed.
 
+Logs written by inspect_ai before 0.3.100 don't separate the agent's work from setup and scoring in their span tree, so they replay from their messages instead (see [Transcripts From Messages](#transcripts-from-messages)). So do samples that a retried eval carried over from such a log, whatever version the log records.
+
+A transcript where an approver changed a tool call, but the log records a different call as the one that ran (as inspect_ai before 0.3.277 could), can't be replayed, since the log doesn't show which arguments ran. Scout reports an error for that transcript.
+
 ### Stored Timelines
 
 Some transcripts carry a stored timeline of their own (e.g. Petri's `"target"`). Pass its name as `timeline=` to make its agent spans and branches the conversations:
@@ -305,7 +309,7 @@ A row's `metadata.turns` is then `"stored"` (a transcript replayed from messages
 
 ### Transcripts From Messages
 
-A transcript Scout imported from another source, or one with no model events, replays from its messages, with `metadata.turns` `"inferred"`. Each assistant message is a model call whose input is everything before it, and each tool call with its answering tool message gives that call's tool steps. The whole transcript is one conversation.
+A transcript Scout imported from another source, one with no model events, or one from a log written by inspect_ai before 0.3.100 replays from its messages, with `metadata.turns` `"inferred"`. Each assistant message is a model call whose input is everything before it, and each tool call with its answering tool message gives that call's tool steps. The whole transcript is one conversation.
 
 A step from messages holds less than one from an Inspect log:
 
