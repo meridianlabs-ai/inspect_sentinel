@@ -1597,7 +1597,7 @@ def test_loading_inspect_ai_entry_points_does_not_load_scout(
 
 
 @pytest.mark.parametrize("model_events", [True, False])
-def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
+def test_a_log_from_before_generate_ids_keeps_its_answers(
     tmp_path: Path, model_events: bool
 ) -> None:
     log = run(tmp_path / "run", [[call(9, "a")]], observe_only(replay_check()))
@@ -1655,18 +1655,22 @@ def test_a_log_from_before_origins_joins_read_mode_and_keeps_its_answers(
         human=as_scanner(escalating),
     )
 
-    assert (
-        keyed(found["replay"], "value").keys() == keyed(found["read"], "value").keys()
-    )
-    for kind in ("message", "event"):
-        cited = {k: references(r, kind) for k, r in by_key(found["replay"]).items()}
-        assert cited == {
-            k: references(r, kind) for k, r in by_key(found["read"]).items()
-        }
     if model_events:
-        # read mode cites the step's model event, which a transcript without
-        # them does not have
-        assert all(references(r, "event") for r in found["read"])
+        # replay from events keys a generate by its model event, and a check
+        # the old sentinel keyed otherwise is outside its contract, so the
+        # rows don't join read mode's (docs/replay.qmd, Older Inspect Logs)
+        assert {r["metadata.step_id"] for r in found["replay"]} == set(turns)
+        assert not set(turns) & {r["metadata.step_id"] for r in found["read"]}
+    else:
+        assert (
+            keyed(found["replay"], "value").keys()
+            == keyed(found["read"], "value").keys()
+        )
+        for kind in ("message", "event"):
+            cited = {k: references(r, kind) for k, r in by_key(found["replay"]).items()}
+            assert cited == {
+                k: references(r, kind) for k, r in by_key(found["read"]).items()
+            }
     [row] = found["human"]
     assert (row["answer"], row["metadata.human"], row["metadata.turns"]) == (
         "reject",
