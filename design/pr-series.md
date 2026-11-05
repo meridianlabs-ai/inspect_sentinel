@@ -626,7 +626,7 @@ Agreed work that waits for something else. Each entry says what unblocks it. Kee
 
 ### Next: viewer pairing
 
-- **A before-call sentinel step renders as its own row instead of inside the tool card (found 2026-11-05).** In a one-sample run of `no_network()` plus `observe_only(suspicion())` (inspect_ai 0.3.288.dev70, bundled viewer at ts-mono 91f2be58, which matches ts-mono main for `transform/toolSentinels.ts`, `ToolEventView.tsx` and `SentinelEventView.tsx`), the rejected `bash()` call shows **Did not run** in its card and the sentinel step as a separate **SENTINEL before call** row below it. The three `SentinelEvent`s sit in a sentinel span, have `stage="tool_call"` and `step_id` equal to the `ToolEvent`'s `id`, and come before it, so `pairToolSentinels()` should pair them into the card. Find out why it doesn't, fix it, then retake `docs/images/viewer-rejected-tool-call.png` (kept locally, not committed) and place it on the Log Viewer page (`docs/transcript.qmd`), whose text describes the in-card layout.
+- **Viewer pairing fix ships in inspect_ai (found 2026-11-05).** In a real log, a before-call sentinel step rendered as its own row instead of inside its tool card, because the timeline sorts the `ToolEvent` (stamped when the call starts) ahead of its sentinel span. Fixed in ts-mono #834. Until inspect_ai bumps its ts-mono submodule past it, the Log Viewer page's screenshot (`docs/images/viewer-rejected-tool-call.png`, taken with the fix) shows a layout the released viewer doesn't. Remove this entry after the bump.
 
 ### R7 replay: waiting on other PRs
 
