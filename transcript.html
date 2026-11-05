@@ -2,7 +2,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.10.19">
+<meta name="generator" content="quarto-1.10.18">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
@@ -80,10 +80,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="site_libs/quarto-html/anchor.min.js"></script>
 <link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-bf27225e3a48a9273f3daa8f8e829971.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
 <link href="site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script src="site_libs/quarto-contrib/glightbox/glightbox.min.js"></script>
+<link href="site_libs/quarto-contrib/glightbox/glightbox.min.css" rel="stylesheet">
+<link href="site_libs/quarto-contrib/glightbox/lightbox.css" rel="stylesheet">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -118,10 +121,18 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <meta property="og:title" content="Inspect Sentinel">
 <meta property="og:description" content="Monitors and control protocols that watch agents and intervene in their execution.">
+<meta property="og:image" content="https://meridianlabs-ai.github.io/inspect_sentinel/images/viewer-rejected-tool-call.png">
 <meta property="og:site_name" content="Inspect Sentinel">
+<meta property="og:image:alt" content="A bash() tool call card in Inspect View. Its summary row says Rejected by no_network with the explanation command uses curl. The expanded 3 checks tree shows the top-level reject, no_network's reject, and the suspicion monitor's network score under observe_only. Below, the card says Did not run, followed by the message the agent received.">
+<meta property="og:image:height" content="333">
+<meta property="og:image:width" content="1108">
 <meta name="twitter:title" content="Inspect Sentinel">
 <meta name="twitter:description" content="Monitors and control protocols that watch agents and intervene in their execution.">
-<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://meridianlabs-ai.github.io/inspect_sentinel/images/viewer-rejected-tool-call.png">
+<meta name="twitter:image:alt" content="A bash() tool call card in Inspect View. Its summary row says Rejected by no_network with the explanation command uses curl. The expanded 3 checks tree shows the top-level reject, no_network's reject, and the suspicion monitor's network score under observe_only. Below, the card says Did not run, followed by the message the agent received.">
+<meta name="twitter:image-height" content="333">
+<meta name="twitter:image-width" content="1108">
+<meta name="twitter:card" content="summary_large_image">
 </head>
 
 <body class="nav-sidebar docked nav-fixed quarto-light">
@@ -437,7 +448,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Run an eval with a sentinel, then open the log viewer:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">inspect</span> view</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>Open a sample and look at its tool calls. Each tool call the sentinel checked shows the results inside the tool call’s card. Results from before the tool call ran appear with its input, and results from after it returned appear below its output.</p>
-<!-- screenshot: a tool call card with a summary row (Rejected, path, score, explanation), the "3 checks" pill, and the monitor model call line -->
+<p><a href="images/viewer-rejected-tool-call.png" class="lightbox" data-gallery="quarto-lightbox-gallery-1"><img src="images/viewer-rejected-tool-call.png" class="img-fluid" alt="A bash() tool call card in Inspect View. Its summary row says Rejected by no_network with the explanation command uses curl. The expanded 3 checks tree shows the top-level reject, no_network's reject, and the suspicion monitor's network score under observe_only. Below, the card says Did not run, followed by the message the agent received."></a></p>
 <section id="summary-row" class="level3">
 <h3 class="anchored" data-anchor-id="summary-row">Summary Row</h3>
 <p>The first row names the action that took effect: <strong>Proceeded</strong>, <strong>Rejected</strong>, <strong>Modified</strong>, <strong>Terminated</strong>, or <strong>Escalated</strong>. It also shows the explanation, the suspicion score if there is one, and the instance path of the protocol that decided, when that protocol is not at the top. A step where only monitors reported, as under <code>observe_only()</code>, shows <strong>Observed</strong> with the monitors’ scores.</p>
@@ -1215,6 +1226,38 @@ document.addEventListener("DOMContentLoaded", function () {
     </div>
   </div>
 </footer>
+<script>var lightboxQuarto = GLightbox({"closeEffect":"zoom","descPosition":"bottom","loop":false,"openEffect":"zoom","selector":".lightbox"});
+(function() {
+  let previousOnload = window.onload;
+  window.onload = () => {
+    if (previousOnload) {
+      previousOnload();
+    }
+    lightboxQuarto.on('slide_before_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      const href = trigger.getAttribute('href');
+      if (href !== null) {
+        const imgEl = window.document.querySelector(`a[href="${href}"] img`);
+        if (imgEl !== null) {
+          const srcAttr = imgEl.getAttribute("src");
+          if (srcAttr && srcAttr.startsWith("data:")) {
+            slideConfig.href = srcAttr;
+          }
+        }
+      } 
+    });
+  
+    lightboxQuarto.on('slide_after_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(slideNode);
+      }
+    });
+  
+  };
+  
+})();
+          </script>
 
 
 

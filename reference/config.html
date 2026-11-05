@@ -2,7 +2,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.10.19">
+<meta name="generator" content="quarto-1.10.18">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
@@ -80,7 +80,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-bf27225e3a48a9273f3daa8f8e829971.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
 <link href="../site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
@@ -418,7 +418,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Record constructed monitors and protocols as the configuration that rebuilds them.</p>
 <p>The inverse of <span class="element-type-name ref-interlink"><a href="../reference/config.html#sentinel_from_config">sentinel_from_config()</a></span>, for the eval log and retry: each instance becomes an entry with its registry name, the params it was created with, and its factory’s version unless that is 0, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a lone entry, so it rebuilds as the root it was.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_config.py#L262">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_config.py#L262">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> sentinel_config(sentinels: Sentinels) <span class="op">-&gt;</span> SentinelConfig</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <dl>
@@ -433,7 +433,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Build the monitors and protocols a configuration describes.</p>
 <p>Each entry is constructed through the registry with its <code>params</code> and its nested entries, which are built first. An entry whose recorded <code>version</code> differs from the installed factory’s is built anyway, with a warning naming both versions; its <code>meta</code> is ignored. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved into its root: it is what <code>Task(sentinel=)</code> takes.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_config.py#L44">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_config.py#L44">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> sentinel_from_config(</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    config: <span class="bu">str</span> <span class="op">|</span> SentinelConfig <span class="op">|</span> Sequence[Mapping[<span class="bu">str</span>, Any]] <span class="op">|</span> Mapping[<span class="bu">str</span>, Any],</span>
@@ -450,7 +450,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>The step payload types a configured monitor or protocol, or any monitor or protocol given to its factory, watches.</p>
 <p>A composition that only forwards the step to its children, such as <code>concurrent</code>, <code>sequential</code> or <code>observe_only</code>, watches what its children watch, and <code>handle_escalation</code>, which only answers escalations from earlier links, watches nothing of its own. Any other function watches the stages it accepts, so a protocol annotated <code>Step</code> watches every stage.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_decorators.py#L250">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_decorators.py#L250">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> watched_stages(sentinel: Sentinel) <span class="op">-&gt;</span> <span class="bu">frozenset</span>[<span class="bu">type</span>[Any]]</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <dl>

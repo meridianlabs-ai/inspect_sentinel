@@ -21,6 +21,8 @@ inspect view
 
 Open a sample and look at its tool calls. Each tool call the sentinel checked shows the results inside the tool call’s card. Results from before the tool call ran appear with its input, and results from after it returned appear below its output.
 
+[![A bash() tool call card in Inspect View. Its summary row says Rejected by no_network with the explanation command uses curl. The expanded 3 checks tree shows the top-level reject, no_network's reject, and the suspicion monitor's network score under observe_only. Below, the card says Did not run, followed by the message the agent received.](images/viewer-rejected-tool-call.png)](images/viewer-rejected-tool-call.png)
+
 ### Summary Row
 
 The first row names the action that took effect: **Proceeded**, **Rejected**, **Modified**, **Terminated**, or **Escalated**. It also shows the explanation, the suspicion score if there is one, and the instance path of the protocol that decided, when that protocol is not at the top. A step where only monitors reported, as under `observe_only()`, shows **Observed** with the monitors’ scores.

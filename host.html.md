@@ -1,0 +1,23 @@
+# The Host and Model Roles – Inspect Sentinel
+
+> **WARNING: WarningOutline**
+>
+> This page is an outline: a summary and the sections planned for it, not yet the documentation. See [Getting Started](./index.html.md) for a worked example.
+
+## Overview
+
+How a monitor or protocol calls a model. Covers `context.host.generate()` and why it is used instead of [get_model()](https://inspect.aisi.org.uk/reference/inspect_ai.model.html#get_model), `context.host.score()` to have a model score a step, the `model=` and `role=` convention for LLM monitors, the `monitor` model role and its fallback, how monitor usage is recorded and kept off the agent’s limits, and structured output. Outbound HTTP through `fetch` is planned.
+
+## Planned Sections
+
+- `context.host.generate()`: prompts, messages, tools, `tool_choice` and [GenerateConfig](https://inspect.aisi.org.uk/reference/inspect_ai.model.html#generateconfig)
+- `model=` and `role=` on an LLM monitor’s factory: `model` is a model name, `role` a model role; a configured role wins, then `model`, and with neither the role is `monitor`
+- The `monitor` role: `--model-role monitor=...` and `Task(model_roles=...)`, and the fallback to the agent’s model
+- `context.host.score()`: a score from 0.0 to 1.0 for the step, or one per named dimension, with an explanation; the default template and custom templates; narrowing what the model sees with a `StepPreprocessor`, such as `StepPreprocessor(input_window=LastTurns(6))`, its messages numbered so the explanation can cite them
+- [score()](https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#score)’s prompt: `instructions=`, `policy=`, the task, and `template=` with `template_variables=`
+- [score()](https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#score)’s answer: a checked answer tool, three attempts before it raises and the monitor is recorded as failed, and `retry_refusals=` for provider refusals
+- [score()](https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#score) and the context window: the prompt is counted against the monitor model’s input budget (`context.host.input_budget()` and `context.host.count_tokens()`, which resolve the model as [generate()](https://inspect.aisi.org.uk/reference/inspect_ai.solver.html#generate) does), and when it does not fit the oldest shown messages are cut, HISTORY first, then AGENT MESSAGES, then INPUT (at `BeforeGenerate` the newest INPUT message, the request being judged, is never cut), each cut list marked and the count recorded in `Observation.metadata` as `left_out`; the windows and the `transform` select the messages first and the cut applies to what they left; a fixed part too big (at `BeforeGenerate` including the newest INPUT message), or a `model_length` reply, raises
+- Structured output with [ResponseSchema](https://inspect.aisi.org.uk/reference/inspect_ai.model.html#responseschema)
+- Usage: monitor calls recorded separately and not charged to the agent’s limits
+- Treating agent text as untrusted in prompts
+- Other effects: `fetch` (planned), and calling inspect_ai APIs directly at the cost of portability

@@ -8,7 +8,7 @@ Record constructed monitors and protocols as the configuration that rebuilds the
 
 The inverse of [sentinel_from_config()](../reference/config.html.md#sentinel_from_config), for the eval log and retry: each instance becomes an entry with its registry name, the params it was created with, and its factory’s version unless that is 0, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a lone entry, so it rebuilds as the root it was.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_config.py#L262)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_config.py#L262)
 
 ``` python
 def sentinel_config(sentinels: Sentinels) -> SentinelConfig
@@ -23,7 +23,7 @@ Build the monitors and protocols a configuration describes.
 
 Each entry is constructed through the registry with its `params` and its nested entries, which are built first. An entry whose recorded `version` differs from the installed factory’s is built anyway, with a warning naming both versions; its `meta` is ignored. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved into its root: it is what `Task(sentinel=)` takes.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_config.py#L44)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_config.py#L44)
 
 ``` python
 def sentinel_from_config(
@@ -40,7 +40,7 @@ The step payload types a configured monitor or protocol, or any monitor or proto
 
 A composition that only forwards the step to its children, such as `concurrent`, `sequential` or `observe_only`, watches what its children watch, and `handle_escalation`, which only answers escalations from earlier links, watches nothing of its own. Any other function watches the stages it accepts, so a protocol annotated `Step` watches every stage.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_decorators.py#L250)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_decorators.py#L250)
 
 ``` python
 def watched_stages(sentinel: Sentinel) -> frozenset[type[Any]]

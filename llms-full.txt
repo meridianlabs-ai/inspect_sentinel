@@ -511,6 +511,8 @@ inspect view
 
 Open a sample and look at its tool calls. Each tool call the sentinel checked shows the results inside the tool call’s card. Results from before the tool call ran appear with its input, and results from after it returned appear below its output.
 
+[![A bash() tool call card in Inspect View. Its summary row says Rejected by no_network with the explanation command uses curl. The expanded 3 checks tree shows the top-level reject, no_network's reject, and the suspicion monitor's network score under observe_only. Below, the card says Did not run, followed by the message the agent received.](images/viewer-rejected-tool-call.png)](images/viewer-rejected-tool-call.png)
+
 ### Summary Row
 
 The first row names the action that took effect: **Proceeded**, **Rejected**, **Modified**, **Terminated**, or **Escalated**. It also shows the explanation, the suspicion score if there is one, and the instance path of the protocol that decided, when that protocol is not at the top. A step where only monitors reported, as under `observe_only()`, shows **Observed** with the monitors’ scores.
@@ -3012,7 +3014,7 @@ Record constructed monitors and protocols as the configuration that rebuilds the
 
 The inverse of [sentinel_from_config()](../reference/config.html.md#sentinel_from_config), for the eval log and retry: each instance becomes an entry with its registry name, the params it was created with, and its factory’s version unless that is 0, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a lone entry, so it rebuilds as the root it was.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_config.py#L262)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_config.py#L262)
 
 ``` python
 def sentinel_config(sentinels: Sentinels) -> SentinelConfig
@@ -3027,7 +3029,7 @@ Build the monitors and protocols a configuration describes.
 
 Each entry is constructed through the registry with its `params` and its nested entries, which are built first. An entry whose recorded `version` differs from the installed factory’s is built anyway, with a warning naming both versions; its `meta` is ignored. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved into its root: it is what `Task(sentinel=)` takes.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_config.py#L44)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_config.py#L44)
 
 ``` python
 def sentinel_from_config(
@@ -3044,7 +3046,7 @@ The step payload types a configured monitor or protocol, or any monitor or proto
 
 A composition that only forwards the step to its children, such as `concurrent`, `sequential` or `observe_only`, watches what its children watch, and `handle_escalation`, which only answers escalations from earlier links, watches nothing of its own. Any other function watches the stages it accepts, so a protocol annotated `Step` watches every stage.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_decorators.py#L250)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_decorators.py#L250)
 
 ``` python
 def watched_stages(sentinel: Sentinel) -> frozenset[type[Any]]
@@ -3066,7 +3068,7 @@ A generate by the agent’s model, before the request is sent and before the cac
 
 `input`, `history`, `agent_messages` and `human_decisions` are read-only sequences that can share the lists the host keeps rather than copy them; a monitor that wants a list calls `list()` on one, at its own cost. `input`, `agent_messages`, `tools` and `config` are the host’s own objects, borrowed for the step, not copies, and `history` holds the logged copies of what was sent: monitors and protocols must not mutate any of them (copy first to edit), since a change could alter the agent state, the real request or the log.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L38)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L38)
 
 ``` python
 @dataclass(frozen=True)
@@ -3112,7 +3114,7 @@ A generate by the agent’s model that has completed, before its output reaches 
 
 `input`, `history`, `agent_messages` and `human_decisions` are read-only sequences that can share the lists the host keeps rather than copy them; a monitor that wants a list calls `list()` on one, at its own cost. `input`, `agent_messages`, `tools`, `config` and `output` are the host’s own objects, borrowed for the step, not copies, and `history` holds the logged copies of what was sent: monitors and protocols must not mutate any of them (copy first to edit), since a change could alter the agent state, the real request, the response the agent receives or the log.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L78)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L78)
 
 ``` python
 @dataclass(frozen=True)
@@ -3157,7 +3159,7 @@ A tool call about to execute.
 
 `input`, `tools`, `history`, `agent_messages` and `human_decisions` are read-only sequences that can share the lists the host keeps for the conversation rather than copy them; a monitor that wants a list calls `list()` on one, at its own cost. Monitors and protocols must not mutate them or the messages and tool definitions in them.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L127)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L127)
 
 ``` python
 @dataclass(frozen=True)
@@ -3205,7 +3207,7 @@ A tool call that has executed, before the model sees its result.
 
 `input`, `tools`, `history`, `agent_messages` and `human_decisions` are read-only sequences that can share the lists the host keeps for the conversation rather than copy them; a monitor that wants a list calls `list()` on one, at its own cost. Monitors and protocols must not mutate them or the messages and tool definitions in them.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L168)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L168)
 
 ``` python
 @dataclass(frozen=True)
@@ -3260,7 +3262,7 @@ Whether the host cut the tool’s output before the model saw it in `result`. A 
 
 A cut the host made to a tool’s output before the model saw it: `AfterToolCall.truncated` when there was one.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L116)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L116)
 
 ``` python
 @dataclass(frozen=True)
@@ -3281,7 +3283,7 @@ A decision a person made through `human()` at an earlier step of the agent’s c
 
 Use it to annotate the past call it covers when rendering the conversation into a prompt, such as “reviewed by a person: approved”, so a monitor does not flag already-reviewed history again. It is not a standing permission: never lower suspicion of a new call because it resembles one a person approved. The same command can mean something else once the state has changed (an `rm -rf build/` approved in one working directory deletes something else after a `cd`), and an agent can get a benign call approved and then issue a similar harmful one.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L13)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L13)
 
 ``` python
 @dataclass(frozen=True)
@@ -3312,7 +3314,7 @@ The latest decision a person made through `human()` that covers the tool call `c
 
 A call can be decided about more than once: its turn at `model_output` covers each of its calls, then the call itself before it runs and its result after, so the latest is the most specific. Look decisions up by call id, which the model’s provider assigns and which stays the same however a scaffold copies or rebuilds its messages; message ids do not, so there is no lookup by message, and a review of a turn with no tool calls, which stays in `step.human_decisions`, is found by none. None when no decision covers the call, and also when `step.human_decisions` is None because the host cannot tell; check that field to tell the two apart. Use the result to annotate that exact call, not to judge a new call that resembles it (see `HumanDecision`).
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L222)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L222)
 
 ``` python
 def human_decision_for(step: Step, call_id: str) -> HumanDecision | None
@@ -3328,7 +3330,7 @@ The id of a tool call earlier in the conversation, as `ToolCall.id`.
 
 The union, for code that handles any stage: a protocol, or a host.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L218)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L218)
 
 ``` python
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall
@@ -3340,7 +3342,7 @@ A step rebuilt from a stored transcript, for replaying a sentinel over it: the s
 
 Replay builds them in the order the steps ran live. The sample’s `Context` is the same for every step of a transcript, so the replay holds it rather than each step. Only `step` reaches monitors and protocols; the other fields are the replay’s own.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_replay_step.py#L12)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_replay_step.py#L12)
 
 ``` python
 @dataclass(frozen=True)
@@ -3373,7 +3375,7 @@ How deep the step’s conversation is in the transcript’s timeline, counted as
 
 Evidence for a protocol to calibrate and threshold. What a monitor returns.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L27)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L27)
 
 ``` python
 class Observation(BaseModel)
@@ -3398,7 +3400,7 @@ Author-supplied structured context, recorded verbatim. `Host.score` adds a `left
 score  
 An observation that sets `suspicion` to the given score.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L42)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L42)
 
 ``` python
 @classmethod
@@ -3423,7 +3425,7 @@ def score(
 flag  
 A detector’s observation: suspicion `1.0`, for a protocol to act on or not.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L59)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L59)
 
 ``` python
 @classmethod
@@ -3440,7 +3442,7 @@ def flag(
 
 What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to `decide_final()`.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L91)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L91)
 
 ``` python
 class Decision(BaseModel)
@@ -3474,7 +3476,7 @@ Author-supplied structured context, recorded verbatim.
 proceed  
 Let the step proceed unchanged: a decision with action `proceed`.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L117)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L117)
 
 ``` python
 @classmethod
@@ -3490,7 +3492,7 @@ def proceed(
 reject  
 Reject the step, telling the agent it was rejected: with `message` if given, else with the host’s default text.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L126)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L126)
 
 ``` python
 @classmethod
@@ -3512,7 +3514,7 @@ def reject(
 terminate  
 End the sample.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L142)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L142)
 
 ``` python
 @classmethod
@@ -3528,7 +3530,7 @@ def terminate(
 escalate  
 Decline to decide and pass the step to the next decider.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L151)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L151)
 
 ``` python
 @classmethod
@@ -3545,7 +3547,7 @@ def escalate(
 
 How suspicious a step is: one finite score, or a non-empty dict scoring several dimensions independently.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L12)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L12)
 
 ``` python
 Suspicion: TypeAlias = SentinelSuspicion
@@ -3555,7 +3557,7 @@ Suspicion: TypeAlias = SentinelSuspicion
 
 What a protocol can decide about the step it examined.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L15)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L15)
 
 ``` python
 Action: TypeAlias = SentinelAction
@@ -3565,7 +3567,7 @@ Action: TypeAlias = SentinelAction
 
 What the transcript records.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L176)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L176)
 
 ``` python
 Report: TypeAlias = Observation | Decision
@@ -3575,7 +3577,7 @@ Report: TypeAlias = Observation | Decision
 
 A report with the identity of the configured instance that produced it.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L182)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L182)
 
 ``` python
 @dataclass(frozen=True)
@@ -3600,7 +3602,7 @@ The `__name__` of the function that produced the report, which tells apart the f
 
 A monitor function that raised instead of reporting, with the identity of its configured instance.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L203)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L203)
 
 ``` python
 @dataclass(frozen=True)
@@ -3633,7 +3635,7 @@ Use as `@monitor`, or as `@monitor(name=..., version=..., portable=...)`. The fa
 
 A configured function runs only through the runners while a sentinel is running: a protocol that calls one directly from its body raises `RuntimeError`, and must call it through `run_monitors` or `run_children` instead. Outside a run, as in a unit test, a direct call works.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_decorators.py#L141)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_decorators.py#L141)
 
 ``` python
 def monitor(
@@ -3666,7 +3668,7 @@ Same contract as `@monitor`, with each returned function taking `(context, step,
 
 As with `@monitor`, a configured function called directly from another protocol’s body during a run raises `RuntimeError`; call it through `run_protocols` or `run_children`.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_decorators.py#L190)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_decorators.py#L190)
 
 ``` python
 def protocol(
@@ -3695,7 +3697,7 @@ Whether the protocol can run outside an eval, checked when the factory is called
 
 A monitor: observes a step at one stage and reports a suspicion score, or abstains.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L10)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L10)
 
 ``` python
 Monitor: TypeAlias = (
@@ -3710,7 +3712,7 @@ Monitor: TypeAlias = (
 
 A control protocol, not `typing.Protocol`: decides what happens at a step, or abstains. Annotating `Step` runs it at every stage. Its third parameter is the escalations earlier links of a `sequential` handed it, empty anywhere else.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L18)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L18)
 
 ``` python
 Protocol: TypeAlias = (
@@ -3738,7 +3740,7 @@ Protocol: TypeAlias = (
 
 The escalations a protocol is handed as its third parameter: those of the links before it in a `sequential()`, in the order they escalated, each with the escalating instance’s name and its decision. Empty anywhere else, since escalations do not cross layers. A monitor is never handed them.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L199)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L199)
 
 ``` python
 Escalations: TypeAlias = tuple[Reported[Decision], ...]
@@ -3750,7 +3752,7 @@ Several monitor functions that form one monitor instance.
 
 Return one from a `@monitor` factory in place of a single function. Together the functions are one configured instance, sharing its name, path and `store_as` namespace; each runs, in the order given, at the stage it watches, sequentially since they share one store, and each report records which `function` made it. A group is not callable: hand it to a protocol, which runs it through `run_monitors` or `run_children`.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L64)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L64)
 
 ``` python
 @final
@@ -3767,7 +3769,7 @@ The member functions, in the order they run.
 \_\_init\_\_  
 Group monitor functions into one instance.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L71)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L71)
 
 ``` python
 def __init__(self, *functions: Monitor) -> None
@@ -3782,7 +3784,7 @@ Several protocol functions that form one protocol instance.
 
 Return one from a `@protocol` factory in place of a single function. As with `MonitorGroup`, the functions share one name, path and `store_as` namespace and run in the order given at the stages they accept; a function that returns `terminate` or calls `decide_final()` ends the instance’s run, and those after it do not run and are not recorded. A group is not callable: hand it to a protocol, which runs it through `run_protocols` or `run_children`.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L88)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L88)
 
 ``` python
 @final
@@ -3799,7 +3801,7 @@ The member functions, in the order they run.
 \_\_init\_\_  
 Group protocol functions into one instance.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L95)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L95)
 
 ``` python
 def __init__(self, *functions: Protocol) -> None
@@ -3812,7 +3814,7 @@ At least one protocol function, each with a distinct `__name__`.
 
 Monitors handed to a protocol, named by mapping key or by registry name without its package prefix.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L112)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L112)
 
 ``` python
 Monitors: TypeAlias = (
@@ -3824,7 +3826,7 @@ Monitors: TypeAlias = (
 
 Protocols handed to a protocol, named the same way.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L117)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L117)
 
 ``` python
 Protocols: TypeAlias = (
@@ -3836,7 +3838,7 @@ Protocols: TypeAlias = (
 
 A monitor or protocol, or a group of either.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L122)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L122)
 
 ``` python
 Sentinel: TypeAlias = Monitor | MonitorGroup | Protocol | ProtocolGroup
@@ -3846,7 +3848,7 @@ Sentinel: TypeAlias = Monitor | MonitorGroup | Protocol | ProtocolGroup
 
 What `Task(sentinel=)` and the compositions accept: one sentinel, or a sequence or mapping of them, named by mapping key or by registry name without its package prefix.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L125)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L125)
 
 ``` python
 Sentinels: TypeAlias = Sentinel | Mapping[str, Sentinel] | Sequence[Sentinel]
@@ -3858,7 +3860,7 @@ A portable monitor or protocol references something a portable function cannot u
 
 Raised when the factory of a `@monitor` or `@protocol` declared with `portable=True` (the default) is called, before it runs. The message lists each reference in the factory’s code that a portable function cannot use: the file and line, the function, the name, what it resolved to and why. A factory whose source exists but cannot be parsed or located is reported as not checked. It subclasses `TypeError`, like the factory’s other configuration checks.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_portable.py#L134)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_portable.py#L134)
 
 ``` python
 class PortabilityError(TypeError)
@@ -3874,7 +3876,7 @@ A monitor that raises is recorded as failed and logged as a warning, once per in
 
 How a monitor runs when nothing should act on its scores, such as while a benign score distribution is collected; `Task(sentinel=)` takes no bare monitors, so the configuration says that the sentinel enforces nothing.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_protocols/observe_only.py#L15)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_protocols/observe_only.py#L15)
 
 ``` python
 @protocol
@@ -3890,7 +3892,7 @@ Run every child at once; the strictest decision wins.
 
 What a list containing a protocol resolves to. Monitors are recorded in the transcript, a monitor that raises recorded as failed and logged as a warning while the others go on; protocols vote by `terminate > reject > modify > escalate > proceed`, the first in configuration order winning a tie, so a peer’s `proceed` does not override an `escalate` and the layer escalates when that is the strongest vote. A `modify` is honoured beside a `proceed` or an `escalate`, so a peer with no objection to the call does not turn a rewrite into a block; the rewritten call is not checked again by the protocols that proceeded, as with a lone modifier. Only another `modify` contests it, from any instance or from another function of the modifier’s own: two rewrites conflict, so the layer returns a `reject` naming the modifiers, carrying the first modifier’s `audit` and `metadata`, its explanation leading with that modifier’s. A `reject` or `terminate` outranks a `modify` anyway. When more than one protocol decided and not all of them proceeded, the layer’s explanation lists each one’s decision after the winner’s own, labelling a function of a `ProtocolGroup` or `MonitorGroup` `name.function`. A child that calls `decide_final()` ends the step and no vote is taken. Its protocol children are handed no escalations, even inside a `sequential()`: escalations do not cross layers.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_protocols/concurrent.py#L13)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_protocols/concurrent.py#L13)
 
 ``` python
 @protocol
@@ -3910,7 +3912,7 @@ Each child is run through the runner and recorded under its own name, and a chil
 
 A monitor is recorded and falls through, since an observation is not a decision; one that raises is recorded as failed, logged as a warning, and falls through the same way. When every child that decided escalated, the chain returns the last escalate, passing it up as `concurrent` does; when only monitors reported, it returns `proceed`; when no child took part, `None`. A child that calls `decide_final()` ends the step as usual.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_protocols/sequential.py#L13)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_protocols/sequential.py#L13)
 
 ``` python
 @protocol
@@ -3930,7 +3932,7 @@ The person is asked through `Host.ask_human`, which is handed the step and the e
 
 The answer is an ordinary decision: it ends a `sequential()` as any link’s decision does, and beside other protocols in a `concurrent()` it is one vote, so another protocol’s `reject` outranks the person’s `approve`.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_protocols/human.py#L30)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_protocols/human.py#L30)
 
 ``` python
 @protocol
@@ -3954,7 +3956,7 @@ Put it last in a `sequential()`, after the links that escalate what they are uns
 
 An escalate that reaches the root with nothing to handle it ends the sample, `run_sentinel` returning a `terminate` explained as an unhandled escalation; `handle_escalation()` is how a configuration states a fixed policy instead. `"proceed"` lets an unsure escalation through, recorded in the configuration and the log. It runs before and after tool calls and the agent’s model calls, but never makes a stage watched on its own: a stage runs only when something else in the configuration watches it.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_protocols/handle_escalation.py#L14)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_protocols/handle_escalation.py#L14)
 
 ``` python
 @protocol
@@ -3980,7 +3982,7 @@ The smallest protocol, and the one calibration feeds: the constants come from a 
 
 A monitor that raises fails the step: `threshold` does not decide without one of its monitors, so the `MonitorFailedError` reading its observations propagates and the sample fails, with the monitor’s failure in the transcript.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_protocols/threshold.py#L19)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_protocols/threshold.py#L19)
 
 ``` python
 @protocol
@@ -4017,7 +4019,7 @@ Derives each child’s context under this layer’s path and records every obser
 
 A monitor function that raises does not fail the call: its failure is recorded through `Recorder.failed` and listed in the result’s `failed`, and reading the result’s observations then raises `MonitorFailedError`, so a caller that reads them fails unless it checks `failed` first. A [LimitExceededError](https://inspect.aisi.org.uk/reference/inspect_ai.util.html#limitexceedederror) is not a monitor failure; it propagates, as a cancellation does.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_runner.py#L172)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_runner.py#L172)
 
 ``` python
 async def run_monitors(
@@ -4040,7 +4042,7 @@ Run protocols concurrently and collect their decisions in configuration order, c
 
 A typed shortcut for `run_children` over protocols only: its parameter rejects a monitor and its return type is the decisions alone. A `decide_final()` from any protocol at any depth below propagates out of this call, so the caller’s own decision logic does not run.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_runner.py#L192)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_runner.py#L192)
 
 ``` python
 async def run_protocols(
@@ -4070,7 +4072,7 @@ Run monitors and protocols together in one task group, cancelling the rest at th
 
 Runs any mix of children; `run_monitors` and `run_protocols` are typed shortcuts for one family. A child cancelled this way is recorded through `Recorder.cancelled`; one that finishes without awaiting is recorded normally.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_runner.py#L215)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_runner.py#L215)
 
 ``` python
 async def run_children(
@@ -4100,7 +4102,7 @@ End the step with this decision.
 
 Nothing above the calling protocol runs; siblings still in flight are cancelled and recorded as such. First call wins if two race.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_final.py#L25)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_final.py#L25)
 
 ``` python
 def decide_final(decision: Decision) -> NoReturn
@@ -4115,7 +4117,7 @@ What a layer’s monitors reported, in configuration order.
 
 When a monitor failed, reading the observations raises, so a protocol that reads them fails closed rather than deciding without the failed monitor. A protocol that decides anyway checks `failed` and reads `succeeded`.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_results.py#L45)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_results.py#L45)
 
 ``` python
 class Observations(_ReportSequence[Observation])
@@ -4134,7 +4136,7 @@ The observations of the monitors that did not fail, readable whether or not any 
 max_suspicion  
 The highest suspicion reported, taking the highest dimension of a structured score; `None` if nobody observed.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_results.py#L98)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_results.py#L98)
 
 ``` python
 def max_suspicion(self) -> float | None
@@ -4144,7 +4146,7 @@ def max_suspicion(self) -> float | None
 
 What a layer’s protocols decided, in configuration order.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_results.py#L141)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_results.py#L141)
 
 ``` python
 class Decisions(_ReportSequence[Decision])
@@ -4155,7 +4157,7 @@ class Decisions(_ReportSequence[Decision])
 strongest  
 The strongest decision by `terminate > reject > modify > escalate > proceed`, the first in configuration order on a tie; `None` if nobody decided.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_results.py#L144)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_results.py#L144)
 
 ``` python
 def strongest(self) -> Reported[Decision] | None
@@ -4165,7 +4167,7 @@ def strongest(self) -> Reported[Decision] | None
 
 Both families of report from one layer, unpackable as `observations, decisions = await run_children(...)`.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_results.py#L151)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_results.py#L151)
 
 ``` python
 class Reports(NamedTuple)
@@ -4183,7 +4185,7 @@ From the layer’s protocols.
 
 Raised on reading the observations of a layer in which a monitor failed. Check `Observations.failed` first to decide without the failed monitors.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_results.py#L109)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_results.py#L109)
 
 ``` python
 class MonitorFailedError(RuntimeError)
@@ -4195,7 +4197,7 @@ class MonitorFailedError(RuntimeError)
 
 What a monitor or protocol is given. Nothing in it came from the agent, except what `proxy` holds.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_context.py#L95)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_context.py#L95)
 
 ``` python
 @dataclass(frozen=True, kw_only=True)
@@ -4223,7 +4225,7 @@ Typed view of this instance’s state, namespaced by `path`.
 
 Renaming the instance (its mapping key) or wrapping it in another layer changes `path`, so its state moves with it. The store is the one the host supplied for the running step, so call this while the monitor or protocol runs; outside a step it raises `RuntimeError`.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_context.py#L113)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_context.py#L113)
 
 ``` python
 def store_as(self, model_cls: type[SMT]) -> SMT
@@ -4236,7 +4238,7 @@ The [StoreModel](https://inspect.aisi.org.uk/reference/inspect_ai.util.html#stor
 
 The Inspect eval sample a monitor or protocol is running in. Constant for the sample; nothing in it came from the agent.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_context.py#L16)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_context.py#L16)
 
 ``` python
 @dataclass(frozen=True, kw_only=True)
@@ -4276,7 +4278,7 @@ The expected answer. None until monitors and protocols can opt in with `target=T
 
 What a proxy says about the model request a step was found in. The caller set the headers, so with an agent that makes its own model calls, they came from the agent.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_context.py#L75)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_context.py#L75)
 
 ``` python
 @dataclass(frozen=True, kw_only=True)
@@ -4304,7 +4306,7 @@ The sample the request says it is from, when an Inspect eval sent it. Read it wh
 
 The Inspect sample a request says it is from, as its `x-inspect-context` header says. The client set the header, so this is its claim.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_context.py#L52)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_context.py#L52)
 
 ``` python
 @dataclass(frozen=True, kw_only=True)
@@ -4339,7 +4341,7 @@ Inference and asking a person are the only effects for now. Outbound HTTP throug
 
 The host builds it around its `HostNative`; `score` is built on `generate`, so it is the same for every host.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L88)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L88)
 
 ``` python
 class Host(HostNative)
@@ -4355,7 +4357,7 @@ The task and sample being run, in an Inspect eval; monitors read it as `Context.
 \_\_init\_\_  
 Wrap a host’s own implementation.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L96)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L96)
 
 ``` python
 def __init__(self, native: HostNative) -> None
@@ -4369,7 +4371,7 @@ Generate with a model the host resolves.
 
 `model` is a model name, e.g. `openai/gpt-4o-mini`; `role` is a model role, e.g. `monitor` or `trusted`, which resolves through the host’s role configuration (in an eval, `Task(model_roles=...)` or `--model-role`). A configured `role` wins; otherwise `model`; with neither, the role is `monitor`. When the role is not configured and no `model` is given, what happens is up to the host, and inspect_ai falls back to the agent’s model with a warning. A role is portable, since the deployer picks its model; a model name suits quick experiments.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L109)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L109)
 
 ``` python
 async def generate(
@@ -4405,7 +4407,7 @@ Generation configuration.
 input_budget  
 How many input tokens a `generate` with the same `model`, `role` and `config` may send: the resolved model’s context window minus the output tokens inspect_ai reserves for the reply. An unknown model falls back to 128k, with a warning. `Host.score` reads it to decide whether a prompt fits.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L140)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L140)
 
 ``` python
 async def input_budget(
@@ -4429,7 +4431,7 @@ Generation configuration, as for `generate`; its `max_tokens` sets the reply res
 count_tokens  
 The resolved model’s token count for `input`, the same count a `generate` with this `model`, `role` and `config` would send. `Host.score` counts a prompt against `input_budget` with it.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L156)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L156)
 
 ``` python
 async def count_tokens(
@@ -4477,7 +4479,7 @@ The default template opens with `instructions` and a paragraph on the nonce, the
 
 A template that uses a name that is none of these raises before the model is asked, so a misspelled variable is caught. The template is rendered once and values are inserted as text, so the agent’s text is never read as template. A custom template states the 0.0 to 1.0 scale in its own words; without it the answer tool still rejects scores out of range.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L176)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L176)
 
 ``` python
 async def score(
@@ -4535,7 +4537,7 @@ Ask a person to decide about a step, and wait for the answer.
 
 The host is handed the step itself and renders it by its type, with the `escalations` (who escalated and why): before a tool call the call, its view and the conversation; after a call the same with the result the model is about to receive; after a generate the whole assistant turn, its text and every tool call it makes. A host raises a clear error for a stage it cannot render. When the person ends the prompt without one of the `choices`, the host answers `reject` if it was offered and `terminate` otherwise, so the step fails closed; `human()` accepts that `terminate` even when it was not offered. It notifies the person and marks the sample as awaiting a person while it waits. `human()` calls this; most protocols never need to.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L242)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L242)
 
 ``` python
 async def ask_human(
@@ -4559,7 +4561,7 @@ What the person may pick, from `approve`, `reject`, `terminate` and `modify`, in
 
 What a person answered when `Host.ask_human` asked them about a step.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L25)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L25)
 
 ``` python
 @dataclass(frozen=True)
@@ -4587,7 +4589,7 @@ The text of a tool call: every string in its arguments.
 
 The string argument values, in the order the arguments were given, joined with newlines. Strings inside lists and dicts are included, in order (a dict’s values in insertion order); empty strings and values that are not strings, such as numbers, are left out. This knows nothing about particular tools: for [bash()](https://inspect.aisi.org.uk/reference/inspect_ai.tool.html#bash) it is the `command`, and for [text_editor()](https://inspect.aisi.org.uk/reference/inspect_ai.tool.html#text_editor) it is the `command` (such as `"create"`) as well as the path and the file’s text.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_rules.py#L13)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_rules.py#L13)
 
 ``` python
 def call_text(call: ToolCall) -> str
@@ -4602,7 +4604,7 @@ Whether the call’s tool name matches any of the patterns.
 
 A pattern is a tool name or a glob (`*`, `?`, `[seq]`) that must match the whole name: `"bash"` matches `bash` and not `bash_session`, while `"bash*"` matches both. Matching is case-sensitive by default and the same on every platform; pass `case_sensitive=False` for tools whose names differ only in case, such as inspect_ai’s `bash` and a bridged agent’s `Bash`. Unlike the `tools` of an [ApprovalPolicy](https://inspect.aisi.org.uk/reference/inspect_ai.approval.html#approvalpolicy) in inspect_ai, a pattern is not extended with a trailing `*` and is not split on commas.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_rules.py#L38)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_rules.py#L38)
 
 ``` python
 def tool_matches(call: ToolCall, *patterns: str, case_sensitive: bool = True) -> bool
@@ -4623,7 +4625,7 @@ The words that appear in the text as whole words.
 
 A word matches where it is not part of a longer word: the characters on either side of it are not letters, digits or underscores. So `"rm"` matches `rm -rf x` and `/bin/rm x` but not `platform`, and a word that starts or ends with punctuation works too: `"-delete"` matches `find . -delete`. A space in a word matches any run of whitespace, so `"pip install"` also matches `pip` and `install` separated by a tab or several spaces.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_rules.py#L58)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_rules.py#L58)
 
 ``` python
 def find_words(
@@ -4646,7 +4648,7 @@ The tool call’s result as text, as inspect_ai’s human review shows it.
 
 Content other than text, such as an image, appears as its type in brackets (`[image]`). A call that failed reads `"Error (<type>): <message>"`.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_rules.py#L85)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_rules.py#L85)
 
 ``` python
 def result_text(step: AfterToolCall) -> str
@@ -4663,7 +4665,7 @@ Running a sentinel over steps rebuilt from stored transcripts is done through In
 
 A stand-in for the person `human()` asks, in a replay: handed the step, the escalations and the choices, as `Host.ask_human` is, and answering as the person would. An oracle built from labels, or a model.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_replay.py#L35)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_replay.py#L35)
 
 ``` python
 HumanStandIn: TypeAlias = Callable[
@@ -4681,7 +4683,7 @@ What a monitor shows a model about a step.
 
 `preprocess_step()` applies it, in this order: the windows to `input`, `history` and `agent_messages`, then the omissions to every message the step holds, then `transform`, which sees the result. By default `input` is shown whole, while `history` and `agent_messages` are omitted, even when the host could not provide them, so a default prompt is the same live and in replay. A scaffold may keep hidden instructions out of its own list but send them in `input` and `history`. To omit the request lists and show the agent’s own list, use `StepPreprocessor(input_window=None, history_window=None, agent_messages_window=AllMessages())`; this requires the conversation-owning scaffold to be the outermost `@agent` agent function. Other stage content remains: every stage renders the request’s tools and tool choice while `input` is known (a tool stage’s are the producing request’s); `AfterGenerate` renders the reply, including reasoning by default before the scaffold has curated it; both tool stages render the assistant text and call; and `AfterToolCall` renders the result. Strict blindness also needs a stage-specific `transform` or a custom prompt that curates these surfaces; a transform can clear `tools` and `tool_choice`.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L93)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L93)
 
 ``` python
 @dataclass(frozen=True, kw_only=True)
@@ -4717,7 +4719,7 @@ Any further change, applied last to the thinned step. It returns a step of the s
 
 How much of one conversation, `input`, `history` or `agent_messages`, to show.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L89)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L89)
 
 ``` python
 Window: TypeAlias = AllMessages | LastTurns | LastMessages | NewSinceLastReport
@@ -4727,7 +4729,7 @@ Window: TypeAlias = AllMessages | LastTurns | LastMessages | NewSinceLastReport
 
 Keep all of a conversation.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L44)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L44)
 
 ``` python
 @dataclass(frozen=True)
@@ -4738,7 +4740,7 @@ class AllMessages
 
 Keep the last `n` turns of a conversation: everything from the `n`th assistant message from the end. A conversation with no more than `n` assistant messages is kept whole. `n=0` keeps nothing.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L49)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L49)
 
 ``` python
 @dataclass(frozen=True)
@@ -4756,7 +4758,7 @@ Keep the last `n` messages of a conversation.
 
 The cut can fall between a tool call and its result, so the kept messages can start with a result whose call is not shown, and the monitor model sees output without the command that produced it. Prefer `LastTurns`, which keeps each call with its result, unless the count of messages matters more than that.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L61)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L61)
 
 ``` python
 @dataclass(frozen=True)
@@ -4776,7 +4778,7 @@ An incremental prompt chooses `input_window` as well: `StepPreprocessor` shows a
 
 The last message shown is recorded by id and position in the monitor’s store (by `context.path`), separately for each conversation, for each list it windows, and for each function of the monitor. It is recorded only when the function returns or decides final and the runner accepts what it returned, so a function that raises or is cancelled is shown those messages again at the next step. `history`, which only grows, is resumed where it was without reading what was shown before; `input` and `agent_messages` can be rewritten, as by a compaction, so for them the whole list is read to find the message shown last, a cost linear in the list at each step. An edited version of a message, which `history` holds again under the same id, is new. A conversation whose recorded message is gone, as after a compaction, is kept whole. Preprocess with it from the monitor or protocol function the runner is running; elsewhere preprocessing raises `RuntimeError`.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L76)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L76)
 
 ``` python
 @dataclass(frozen=True)
@@ -4794,7 +4796,7 @@ The monitor’s context, whose store holds what was shown.
 
 Each window cuts its list as it is. A list with no window becomes `[]`, even one the host could not provide; a windowed list the host could not provide stays None. The omissions apply to `input`, `history`, `agent_messages`, a tool call’s result and a generate’s reply.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L125)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L125)
 
 ``` python
 async def preprocess_step(
@@ -4814,7 +4816,7 @@ Render `step` for a monitor’s prompt, numbering its messages `[M1]`, `[M2]` an
 
 Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At every stage: `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the outermost running agent function’s own message list, which its scaffold may curate), then the model request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`; at a tool stage, the request that produced the call. Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant’s text and the call) and, after the call, `RESULT`. A list the host could not provide (None) is named in its block (`preprocess_step()` leaves a list with no window empty, so only a windowed one is named); at a tool stage whose input is not known, the tools and tool choice are left out. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.
 
-[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L180)
+[Source](https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L180)
 
 ``` python
 async def step_as_str(

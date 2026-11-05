@@ -2,7 +2,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.10.19">
+<meta name="generator" content="quarto-1.10.18">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
@@ -80,7 +80,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-bf27225e3a48a9273f3daa8f8e829971.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
 <link href="../site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
@@ -505,7 +505,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>A generate by the agent’s model, before the request is sent and before the cache lookup.</p>
 <p><code>input</code>, <code>history</code>, <code>agent_messages</code> and <code>human_decisions</code> are read-only sequences that can share the lists the host keeps rather than copy them; a monitor that wants a list calls <code>list()</code> on one, at its own cost. <code>input</code>, <code>agent_messages</code>, <code>tools</code> and <code>config</code> are the host’s own objects, borrowed for the step, not copies, and <code>history</code> holds the logged copies of what was sent: monitors and protocols must not mutate any of them (copy first to edit), since a change could alter the agent state, the real request or the log.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L38">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L38">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> BeforeGenerate</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -558,7 +558,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>A generate by the agent’s model that has completed, before its output reaches the agent.</p>
 <p><code>input</code>, <code>history</code>, <code>agent_messages</code> and <code>human_decisions</code> are read-only sequences that can share the lists the host keeps rather than copy them; a monitor that wants a list calls <code>list()</code> on one, at its own cost. <code>input</code>, <code>agent_messages</code>, <code>tools</code>, <code>config</code> and <code>output</code> are the host’s own objects, borrowed for the step, not copies, and <code>history</code> holds the logged copies of what was sent: monitors and protocols must not mutate any of them (copy first to edit), since a change could alter the agent state, the real request, the response the agent receives or the log.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L78">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L78">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> AfterGenerate</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -613,7 +613,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>A tool call about to execute.</p>
 <p><code>input</code>, <code>tools</code>, <code>history</code>, <code>agent_messages</code> and <code>human_decisions</code> are read-only sequences that can share the lists the host keeps for the conversation rather than copy them; a monitor that wants a list calls <code>list()</code> on one, at its own cost. Monitors and protocols must not mutate them or the messages and tool definitions in them.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L127">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L127">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> BeforeToolCall</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -672,7 +672,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>A tool call that has executed, before the model sees its result.</p>
 <p><code>input</code>, <code>tools</code>, <code>history</code>, <code>agent_messages</code> and <code>human_decisions</code> are read-only sequences that can share the lists the host keeps for the conversation rather than copy them; a monitor that wants a list calls <code>list()</code> on one, at its own cost. Monitors and protocols must not mutate them or the messages and tool definitions in them.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L168">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L168">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> AfterToolCall</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -742,7 +742,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="truncation">Truncation</h3>
 <p>A cut the host made to a tool’s output before the model saw it: <code>AfterToolCall.truncated</code> when there was one.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L116">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L116">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Truncation</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -765,7 +765,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>A decision a person made through <code>human()</code> at an earlier step of the agent’s conversation. <code>human_decisions</code> on a step holds them, and <code>human_decision_for()</code> finds the one covering a call.</p>
 <p>Use it to annotate the past call it covers when rendering the conversation into a prompt, such as “reviewed by a person: approved”, so a monitor does not flag already-reviewed history again. It is not a standing permission: never lower suspicion of a new call because it resembles one a person approved. The same command can mean something else once the state has changed (an <code>rm -rf build/</code> approved in one working directory deletes something else after a <code>cd</code>), and an agent can get a benign call approved and then issue a similar harmful one.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L13">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L13">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> HumanDecision</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -798,7 +798,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>The latest decision a person made through <code>human()</code> that covers the tool call <code>call_id</code>, from <code>step.human_decisions</code>.</p>
 <p>A call can be decided about more than once: its turn at <code>model_output</code> covers each of its calls, then the call itself before it runs and its result after, so the latest is the most specific. Look decisions up by call id, which the model’s provider assigns and which stays the same however a scaffold copies or rebuilds its messages; message ids do not, so there is no lookup by message, and a review of a turn with no tool calls, which stays in <code>step.human_decisions</code>, is found by none. None when no decision covers the call, and also when <code>step.human_decisions</code> is None because the host cannot tell; check that field to tell the two apart. Use the result to annotate that exact call, not to judge a new call that resembles it (see <code>HumanDecision</code>).</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L222">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L222">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> human_decision_for(step: Step, call_id: <span class="bu">str</span>) <span class="op">-&gt;</span> HumanDecision <span class="op">|</span> <span class="va">None</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <dl>
@@ -816,7 +816,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="step">Step</h3>
 <p>The union, for code that handles any stage: a protocol, or a host.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_step.py#L218">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_step.py#L218">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>Step: TypeAlias <span class="op">=</span> BeforeGenerate <span class="op">|</span> AfterGenerate <span class="op">|</span> BeforeToolCall <span class="op">|</span> AfterToolCall</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
@@ -825,7 +825,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>A step rebuilt from a stored transcript, for replaying a sentinel over it: the step a monitor is given, with what identifies it in the transcript and what was recorded at it.</p>
 <p>Replay builds them in the order the steps ran live. The sample’s <code>Context</code> is the same for every step of a transcript, so the replay holds it rather than each step. Only <code>step</code> reaches monitors and protocols; the other fields are the replay’s own.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_replay_step.py#L12">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_replay_step.py#L12">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> ReplayStep</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -866,7 +866,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="observation">Observation</h3>
 <p>Evidence for a protocol to calibrate and threshold. What a monitor returns.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L27">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L27">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Observation(BaseModel)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <section class="level4">
@@ -897,7 +897,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>An observation that sets <code>suspicion</code> to the given score.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L42">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L42">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="at">@classmethod</span></span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> score(</span>
@@ -931,7 +931,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>A detector’s observation: suspicion <code>1.0</code>, for a protocol to act on or not.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L59">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L59">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="at">@classmethod</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> flag(</span>
@@ -955,7 +955,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="decision">Decision</h3>
 <p>What should happen at a step. What a protocol returns; advisory to any protocol wrapping it unless passed to <code>decide_final()</code>.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L91">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L91">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Decision(BaseModel)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <section class="level4">
@@ -998,7 +998,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>Let the step proceed unchanged: a decision with action <code>proceed</code>.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L117">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L117">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="at">@classmethod</span></span>
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> proceed(</span>
@@ -1019,7 +1019,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>Reject the step, telling the agent it was rejected: with <code>message</code> if given, else with the host’s default text.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L126">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L126">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="at">@classmethod</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> reject(</span>
@@ -1048,7 +1048,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>End the sample.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L142">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L142">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="at">@classmethod</span></span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> terminate(</span>
@@ -1069,7 +1069,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>Decline to decide and pass the step to the next decider.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L151">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L151">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="at">@classmethod</span></span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> escalate(</span>
@@ -1093,7 +1093,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="suspicion">Suspicion</h3>
 <p>How suspicious a step is: one finite score, or a non-empty dict scoring several dimensions independently.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L12">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L12">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb18"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a>Suspicion: TypeAlias <span class="op">=</span> SentinelSuspicion</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
@@ -1101,7 +1101,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="action">Action</h3>
 <p>What a protocol can decide about the step it examined.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L15">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L15">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb19"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>Action: TypeAlias <span class="op">=</span> SentinelAction</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
@@ -1109,7 +1109,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="report">Report</h3>
 <p>What the transcript records.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L176">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L176">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb20"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>Report: TypeAlias <span class="op">=</span> Observation <span class="op">|</span> Decision</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
@@ -1117,7 +1117,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="reported">Reported</h3>
 <p>A report with the identity of the configured instance that produced it.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L182">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L182">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Reported(Generic[R_co])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -1147,7 +1147,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="failed">Failed</h3>
 <p>A monitor function that raised instead of reporting, with the identity of its configured instance.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L203">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L203">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb22"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Failed</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -1183,7 +1183,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Use as <code>@monitor</code>, or as <code>@monitor(name=..., version=..., portable=...)</code>. The factory returns a function that must be <code>async</code>, take <code>(context, step)</code>, annotate <code>step</code> with exactly one stage payload, and be annotated <code>-&gt; Observation</code>, or <code>-&gt; Observation | None</code> if it can abstain. These are checked when the factory is called. Each function watches one stage, so <code>Step</code> or any other union is rejected; to watch several, return a <code>MonitorGroup</code> of functions, which together are one configured instance. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A factory may instead return an instance of its kind that another factory configured, such as <code>sequential([...])</code> from a <code>@protocol</code> factory, to register that composition under its own name: it runs as configured, its records and configuration entry carry this factory’s name and params, and a configuration rebuilds it by calling this factory. The returned instance is guarded afresh, not cloned: it keeps its attributes other than its registry name and params and its step types, which this factory replaces, and it shares its closure and children with the instance returned, so a factory that returns one shared instance shares that state across its configurations. Since the configuration records only this factory, bump this factory’s <code>version</code> when the composition it returns changes behaviour. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided <code>terminate</code>.</p>
 <p>A configured function runs only through the runners while a sentinel is running: a protocol that calls one directly from its body raises <code>RuntimeError</code>, and must call it through <code>run_monitors</code> or <code>run_children</code> instead. Outside a run, as in a unit test, a direct call works.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_decorators.py#L141">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_decorators.py#L141">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb23"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> monitor(</span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>    factory: Callable[P, Monitor <span class="op">|</span> MonitorGroup] <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
@@ -1218,7 +1218,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Same contract as <code>@monitor</code>, with each returned function taking <code>(context, step, escalations)</code> and annotated <code>-&gt; Decision</code>, or <code>-&gt; Decision | None</code> if it can abstain. <code>escalations</code>, annotated <code>Escalations</code> (<code>tuple[Reported[Decision], ...]</code>), holds the escalations of the links before this one in a <code>sequential()</code>, in the order they escalated, so a protocol after them sees who escalated and why; it is empty anywhere else, since escalations do not cross layers. A monitor is never handed them, so its observation does not depend on what another monitor or protocol decided. <code>step</code> may also be annotated <code>Step</code> for a protocol that runs at every stage, such as a composition that only forwards the step to its children. A function never dispatches on the payload type: a union of some stages but not all is rejected, so write a <code>ProtocolGroup</code> with one function per stage instead. A union of every stage written out is <code>Step</code>. To configure several functions as one instance, return a <code>ProtocolGroup</code>; a function among them that returns <code>terminate</code> or calls <code>decide_final()</code> ends the instance’s run, and those after it do not run and are not recorded. The factory must return fresh functions on each call; a shared function would make two configured instances indistinguishable in the log and the store. A function must let a cancellation exception propagate; one that swallows it can report after a sibling has already decided <code>terminate</code>.</p>
 <p>As with <code>@monitor</code>, a configured function called directly from another protocol’s body during a run raises <code>RuntimeError</code>; call it through <code>run_protocols</code> or <code>run_children</code>.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_decorators.py#L190">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_decorators.py#L190">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb24"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> protocol(</span>
 <span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>    factory: Callable[P, Protocol <span class="op">|</span> ProtocolGroup] <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>,</span>
@@ -1251,7 +1251,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="monitor-1">Monitor</h3>
 <p>A monitor: observes a step at one stage and reports a suspicion score, or abstains.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L10">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L10">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb25"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>Monitor: TypeAlias <span class="op">=</span> (</span>
 <span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    Callable[[Context, BeforeGenerate], Awaitable[Observation <span class="op">|</span> <span class="va">None</span>]]</span>
@@ -1264,7 +1264,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="protocol-1">Protocol</h3>
 <p>A control protocol, not <code>typing.Protocol</code>: decides what happens at a step, or abstains. Annotating <code>Step</code> runs it at every stage. Its third parameter is the escalations earlier links of a <code>sequential</code> handed it, empty anywhere else.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L18">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L18">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb26"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>Protocol: TypeAlias <span class="op">=</span> (</span>
 <span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>    Callable[[Context, Step, Escalations], Awaitable[Decision <span class="op">|</span> <span class="va">None</span>]]</span>
@@ -1290,7 +1290,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="escalations">Escalations</h3>
 <p>The escalations a protocol is handed as its third parameter: those of the links before it in a <code>sequential()</code>, in the order they escalated, each with the escalating instance’s name and its decision. Empty anywhere else, since escalations do not cross layers. A monitor is never handed them.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_report.py#L199">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_report.py#L199">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb27"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>Escalations: TypeAlias <span class="op">=</span> <span class="bu">tuple</span>[Reported[Decision], ...]</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
@@ -1299,7 +1299,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Several monitor functions that form one monitor instance.</p>
 <p>Return one from a <code>@monitor</code> factory in place of a single function. Together the functions are one configured instance, sharing its name, path and <code>store_as</code> namespace; each runs, in the order given, at the stage it watches, sequentially since they share one store, and each report records which <code>function</code> made it. A group is not callable: hand it to a protocol, which runs it through <code>run_monitors</code> or <code>run_children</code>.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L64">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L64">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb28"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="at">@final</span></span>
 <span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> MonitorGroup(Group)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -1319,7 +1319,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>Group monitor functions into one instance.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L71">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L71">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb29"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, <span class="op">*</span>functions: Monitor) <span class="op">-&gt;</span> <span class="va">None</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <dl>
@@ -1337,7 +1337,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Several protocol functions that form one protocol instance.</p>
 <p>Return one from a <code>@protocol</code> factory in place of a single function. As with <code>MonitorGroup</code>, the functions share one name, path and <code>store_as</code> namespace and run in the order given at the stages they accept; a function that returns <code>terminate</code> or calls <code>decide_final()</code> ends the instance’s run, and those after it do not run and are not recorded. A group is not callable: hand it to a protocol, which runs it through <code>run_protocols</code> or <code>run_children</code>.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L88">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L88">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb30"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="at">@final</span></span>
 <span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> ProtocolGroup(Group)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -1357,7 +1357,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>Group protocol functions into one instance.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L95">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L95">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb31"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, <span class="op">*</span>functions: Protocol) <span class="op">-&gt;</span> <span class="va">None</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <dl>
@@ -1374,7 +1374,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="monitors">Monitors</h3>
 <p>Monitors handed to a protocol, named by mapping key or by registry name without its package prefix.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L112">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L112">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb32"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>Monitors: TypeAlias <span class="op">=</span> (</span>
 <span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>    Mapping[<span class="bu">str</span>, Monitor <span class="op">|</span> MonitorGroup] <span class="op">|</span> Sequence[Monitor <span class="op">|</span> MonitorGroup]</span>
@@ -1384,7 +1384,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="protocols">Protocols</h3>
 <p>Protocols handed to a protocol, named the same way.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L117">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L117">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb33"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>Protocols: TypeAlias <span class="op">=</span> (</span>
 <span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>    Mapping[<span class="bu">str</span>, Protocol <span class="op">|</span> ProtocolGroup] <span class="op">|</span> Sequence[Protocol <span class="op">|</span> ProtocolGroup]</span>
@@ -1394,7 +1394,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="sentinel">Sentinel</h3>
 <p>A monitor or protocol, or a group of either.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L122">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L122">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb34"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>Sentinel: TypeAlias <span class="op">=</span> Monitor <span class="op">|</span> MonitorGroup <span class="op">|</span> Protocol <span class="op">|</span> ProtocolGroup</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
@@ -1402,7 +1402,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="sentinels">Sentinels</h3>
 <p>What <code>Task(sentinel=)</code> and the compositions accept: one sentinel, or a sequence or mapping of them, named by mapping key or by registry name without its package prefix.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_types.py#L125">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_types.py#L125">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb35"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a>Sentinels: TypeAlias <span class="op">=</span> Sentinel <span class="op">|</span> Mapping[<span class="bu">str</span>, Sentinel] <span class="op">|</span> Sequence[Sentinel]</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
@@ -1411,7 +1411,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>A portable monitor or protocol references something a portable function cannot use.</p>
 <p>Raised when the factory of a <code>@monitor</code> or <code>@protocol</code> declared with <code>portable=True</code> (the default) is called, before it runs. The message lists each reference in the factory’s code that a portable function cannot use: the file and line, the function, the name, what it resolved to and why. A factory whose source exists but cannot be parsed or located is reported as not checked. It subclasses <code>TypeError</code>, like the factory’s other configuration checks.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_portable.py#L134">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_portable.py#L134">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb36"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> PortabilityError(<span class="pp">TypeError</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
@@ -1424,7 +1424,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>A monitor that raises is recorded as failed and logged as a warning, once per instance and exception type, and the step continues.</p>
 <p>How a monitor runs when nothing should act on its scores, such as while a benign score distribution is collected; <code>Task(sentinel=)</code> takes no bare monitors, so the configuration says that the sentinel enforces nothing.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_protocols/observe_only.py#L15">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_protocols/observe_only.py#L15">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb37"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="at">@protocol</span></span>
 <span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> observe_only(monitors: Monitor <span class="op">|</span> MonitorGroup <span class="op">|</span> Monitors) <span class="op">-&gt;</span> Protocol</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -1440,7 +1440,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Run every child at once; the strictest decision wins.</p>
 <p>What a list containing a protocol resolves to. Monitors are recorded in the transcript, a monitor that raises recorded as failed and logged as a warning while the others go on; protocols vote by <code>terminate &gt; reject &gt; modify &gt; escalate &gt; proceed</code>, the first in configuration order winning a tie, so a peer’s <code>proceed</code> does not override an <code>escalate</code> and the layer escalates when that is the strongest vote. A <code>modify</code> is honoured beside a <code>proceed</code> or an <code>escalate</code>, so a peer with no objection to the call does not turn a rewrite into a block; the rewritten call is not checked again by the protocols that proceeded, as with a lone modifier. Only another <code>modify</code> contests it, from any instance or from another function of the modifier’s own: two rewrites conflict, so the layer returns a <code>reject</code> naming the modifiers, carrying the first modifier’s <code>audit</code> and <code>metadata</code>, its explanation leading with that modifier’s. A <code>reject</code> or <code>terminate</code> outranks a <code>modify</code> anyway. When more than one protocol decided and not all of them proceeded, the layer’s explanation lists each one’s decision after the winner’s own, labelling a function of a <code>ProtocolGroup</code> or <code>MonitorGroup</code> <code>name.function</code>. A child that calls <code>decide_final()</code> ends the step and no vote is taken. Its protocol children are handed no escalations, even inside a <code>sequential()</code>: escalations do not cross layers.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_protocols/concurrent.py#L13">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_protocols/concurrent.py#L13">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb38"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="at">@protocol</span></span>
 <span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> concurrent(</span>
@@ -1459,7 +1459,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Each child is run through the runner and recorded under its own name, and a child that does not watch the current stage is not invoked. An <code>escalate</code> hands the step to the next child with the escalation appended to the <code>escalations</code> that protocol is handed, so a person at the end sees who asked and why; a monitor is never handed them. The list starts empty for each run of the chain: escalations do not cross layers, so a nested <code>sequential</code> does not see the escalations of the chain around it, and the chain ignores any it is handed itself. The functions of one <code>ProtocolGroup</code> run in one call and are all handed the escalations from before any of their own.</p>
 <p>A monitor is recorded and falls through, since an observation is not a decision; one that raises is recorded as failed, logged as a warning, and falls through the same way. When every child that decided escalated, the chain returns the last escalate, passing it up as <code>concurrent</code> does; when only monitors reported, it returns <code>proceed</code>; when no child took part, <code>None</code>. A child that calls <code>decide_final()</code> ends the step as usual.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_protocols/sequential.py#L13">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_protocols/sequential.py#L13">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb39"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="at">@protocol</span></span>
 <span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> sequential(</span>
@@ -1478,7 +1478,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>The person is asked through <code>Host.ask_human</code>, which is handed the step and the escalations this protocol was handed and shows them together, so at the end of a <code>sequential()</code> the person sees who escalated and why. On its own, <code>human(stages=["tool_call"])</code> asks about every call. After a generate, the person sees the whole assistant turn, its text and every tool call it makes, before any of the calls run. The answer maps to a decision: <code>approve</code> to <code>proceed</code> explained by the person’s reason, so the log records why the step went ahead, <code>reject</code> to <code>reject</code> with the person’s reason as both the <code>message</code> the agent reads and the <code>explanation</code>, <code>terminate</code> to <code>terminate</code> explained by the reason, and <code>modify</code> to a <code>modify</code> with the person’s replacement call.</p>
 <p>The answer is an ordinary decision: it ends a <code>sequential()</code> as any link’s decision does, and beside other protocols in a <code>concurrent()</code> it is one vote, so another protocol’s <code>reject</code> outranks the person’s <code>approve</code>.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_protocols/human.py#L30">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_protocols/human.py#L30">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb40"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="at">@protocol</span></span>
 <span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> human(</span>
@@ -1502,7 +1502,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Put it last in a <code>sequential()</code>, after the links that escalate what they are unsure about, as in <code>sequential([threshold(...), handle_escalation("terminate")])</code>, or after a <code>human()</code> for when the person cannot be reached. It decides only when it is handed escalations and abstains otherwise, so at the root, or anywhere nothing escalated, it does nothing. Its explanation names each escalation it handled, <code>escalated by triage: call deletes files (rm)</code>, and it carries their references.</p>
 <p>An escalate that reaches the root with nothing to handle it ends the sample, <code>run_sentinel</code> returning a <code>terminate</code> explained as an unhandled escalation; <code>handle_escalation()</code> is how a configuration states a fixed policy instead. <code>"proceed"</code> lets an unsure escalation through, recorded in the configuration and the log. It runs before and after tool calls and the agent’s model calls, but never makes a stage watched on its own: a stage runs only when something else in the configuration watches it.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_protocols/handle_escalation.py#L14">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_protocols/handle_escalation.py#L14">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb41"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="at">@protocol</span></span>
 <span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> handle_escalation(action: Literal[<span class="st">"terminate"</span>, <span class="st">"proceed"</span>]) <span class="op">-&gt;</span> ProtocolGroup</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -1523,7 +1523,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>The smallest protocol, and the one calibration feeds: the constants come from a benign score distribution, which is why they live here and not on a monitor.</p>
 <p>A monitor that raises fails the step: <code>threshold</code> does not decide without one of its monitors, so the <code>MonitorFailedError</code> reading its observations propagates and the sample fails, with the monitor’s failure in the transcript.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_protocols/threshold.py#L19">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_protocols/threshold.py#L19">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb42"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a><span class="at">@protocol</span></span>
 <span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> threshold(</span>
@@ -1562,7 +1562,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Derives each child’s context under this layer’s path and records every observation, including the ones the caller goes on to ignore. A monitor that abstained or does not watch this stage contributes nothing, so the result may be empty. An instance whose factory returned several functions contributes one observation per function that reported, in the order the factory returned them.</p>
 <p>A monitor function that raises does not fail the call: its failure is recorded through <code>Recorder.failed</code> and listed in the result’s <code>failed</code>, and reading the result’s observations then raises <code>MonitorFailedError</code>, so a caller that reads them fails unless it checks <code>failed</code> first. A <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.util.html#limitexceedederror">LimitExceededError</a></span> is not a monitor failure; it propagates, as a cancellation does.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_runner.py#L172">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_runner.py#L172">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb43"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> run_monitors(</span>
 <span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a>    monitors: Monitor <span class="op">|</span> MonitorGroup <span class="op">|</span> Monitors, context: Context, step: Step</span>
@@ -1587,7 +1587,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Run protocols concurrently and collect their decisions in configuration order, cancelling the rest at their next await when one returns <code>terminate</code> or calls <code>decide_final()</code>.</p>
 <p>A typed shortcut for <code>run_children</code> over protocols only: its parameter rejects a monitor and its return type is the decisions alone. A <code>decide_final()</code> from any protocol at any depth below propagates out of this call, so the caller’s own decision logic does not run.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_runner.py#L192">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_runner.py#L192">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb44"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> run_protocols(</span>
 <span id="cb44-2"><a href="#cb44-2" aria-hidden="true" tabindex="-1"></a>    protocols: Protocol <span class="op">|</span> ProtocolGroup <span class="op">|</span> Protocols,</span>
@@ -1620,7 +1620,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Run monitors and protocols together in one task group, cancelling the rest at their next await when a protocol returns <code>terminate</code> or calls <code>decide_final()</code>.</p>
 <p>Runs any mix of children; <code>run_monitors</code> and <code>run_protocols</code> are typed shortcuts for one family. A child cancelled this way is recorded through <code>Recorder.cancelled</code>; one that finishes without awaiting is recorded normally.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_runner.py#L215">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_runner.py#L215">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb45"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> run_children(</span>
 <span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>    children: Sentinels,</span>
@@ -1653,7 +1653,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>End the step with this decision.</p>
 <p>Nothing above the calling protocol runs; siblings still in flight are cancelled and recorded as such. First call wins if two race.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_final.py#L25">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_final.py#L25">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb46"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> decide_final(decision: Decision) <span class="op">-&gt;</span> NoReturn</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <dl>
@@ -1668,7 +1668,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>What a layer’s monitors reported, in configuration order.</p>
 <p>When a monitor failed, reading the observations raises, so a protocol that reads them fails closed rather than deciding without the failed monitor. A protocol that decides anyway checks <code>failed</code> and reads <code>succeeded</code>.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_results.py#L45">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_results.py#L45">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb47"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Observations(_ReportSequence[Observation])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <section class="level4">
@@ -1691,7 +1691,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>The highest suspicion reported, taking the highest dimension of a structured score; <code>None</code> if nobody observed.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_results.py#L98">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_results.py#L98">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb48"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb48-1"><a href="#cb48-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> max_suspicion(<span class="va">self</span>) <span class="op">-&gt;</span> <span class="bu">float</span> <span class="op">|</span> <span class="va">None</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div>
@@ -1705,7 +1705,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="decisions">Decisions</h3>
 <p>What a layer’s protocols decided, in configuration order.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_results.py#L141">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_results.py#L141">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb49"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb49-1"><a href="#cb49-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Decisions(_ReportSequence[Decision])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <section class="level4 class-methods">
@@ -1715,7 +1715,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>The strongest decision by <code>terminate &gt; reject &gt; modify &gt; escalate &gt; proceed</code>, the first in configuration order on a tie; <code>None</code> if nobody decided.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_results.py#L144">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_results.py#L144">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb50"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb50-1"><a href="#cb50-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> strongest(<span class="va">self</span>) <span class="op">-&gt;</span> Reported[Decision] <span class="op">|</span> <span class="va">None</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div>
@@ -1729,7 +1729,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="reports">Reports</h3>
 <p>Both families of report from one layer, unpackable as <code>observations, decisions = await run_children(...)</code>.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_results.py#L151">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_results.py#L151">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb51"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb51-1"><a href="#cb51-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Reports(NamedTuple)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <section class="level4">
@@ -1750,7 +1750,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="monitorfailederror">MonitorFailedError</h3>
 <p>Raised on reading the observations of a layer in which a monitor failed. Check <code>Observations.failed</code> first to decide without the failed monitors.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_results.py#L109">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_results.py#L109">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb52"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb52-1"><a href="#cb52-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> MonitorFailedError(<span class="pp">RuntimeError</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
@@ -1761,7 +1761,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="context">Context</h3>
 <p>What a monitor or protocol is given. Nothing in it came from the agent, except what <code>proxy</code> holds.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_context.py#L95">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_context.py#L95">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb53"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb53-1"><a href="#cb53-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>, kw_only<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb53-2"><a href="#cb53-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Context</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -1794,7 +1794,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Typed view of this instance’s state, namespaced by <code>path</code>.</p>
 <p>Renaming the instance (its mapping key) or wrapping it in another layer changes <code>path</code>, so its state moves with it. The store is the one the host supplied for the running step, so call this while the monitor or protocol runs; outside a step it raises <code>RuntimeError</code>.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_context.py#L113">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_context.py#L113">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb54"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb54-1"><a href="#cb54-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> store_as(<span class="va">self</span>, model_cls: <span class="bu">type</span>[SMT]) <span class="op">-&gt;</span> SMT</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <dl>
@@ -1811,7 +1811,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="evalcontext">EvalContext</h3>
 <p>The Inspect eval sample a monitor or protocol is running in. Constant for the sample; nothing in it came from the agent.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_context.py#L16">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_context.py#L16">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb55"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb55-1"><a href="#cb55-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>, kw_only<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb55-2"><a href="#cb55-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> EvalContext</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -1861,7 +1861,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="proxycontext">ProxyContext</h3>
 <p>What a proxy says about the model request a step was found in. The caller set the headers, so with an agent that makes its own model calls, they came from the agent.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_context.py#L75">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_context.py#L75">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb56"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb56-1"><a href="#cb56-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>, kw_only<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb56-2"><a href="#cb56-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> ProxyContext</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -1895,7 +1895,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="inspectsample">InspectSample</h3>
 <p>The Inspect sample a request says it is from, as its <code>x-inspect-context</code> header says. The client set the header, so this is its claim.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_context.py#L52">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_context.py#L52">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb57"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb57-1"><a href="#cb57-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>, kw_only<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb57-2"><a href="#cb57-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> InspectSample</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -1935,7 +1935,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Inference and asking a person are the only effects for now. Outbound HTTP through named endpoints (<code>fetch</code>) is planned. Meanwhile a monitor running in-process may call inspect_ai APIs directly, such as <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.util.html#sandbox">sandbox()</a></span>, if it is declared <code>portable=False</code>.</p>
 <p>The host builds it around its <code>HostNative</code>; <code>score</code> is built on <code>generate</code>, so it is the same for every host.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L88">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L88">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb58"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb58-1"><a href="#cb58-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Host(HostNative)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <section class="level4">
@@ -1954,7 +1954,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>Wrap a host’s own implementation.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L96">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L96">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb59"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb59-1"><a href="#cb59-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, native: HostNative) <span class="op">-&gt;</span> <span class="va">None</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <dl>
@@ -1969,7 +1969,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Generate with a model the host resolves.</p>
 <p><code>model</code> is a model name, e.g.&nbsp;<code>openai/gpt-4o-mini</code>; <code>role</code> is a model role, e.g.&nbsp;<code>monitor</code> or <code>trusted</code>, which resolves through the host’s role configuration (in an eval, <code>Task(model_roles=...)</code> or <code>--model-role</code>). A configured <code>role</code> wins; otherwise <code>model</code>; with neither, the role is <code>monitor</code>. When the role is not configured and no <code>model</code> is given, what happens is up to the host, and inspect_ai falls back to the agent’s model with a warning. A role is portable, since the deployer picks its model; a model name suits quick experiments.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L109">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L109">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb60"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb60-1"><a href="#cb60-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> generate(</span>
 <span id="cb60-2"><a href="#cb60-2" aria-hidden="true" tabindex="-1"></a>    <span class="va">self</span>,</span>
@@ -2012,7 +2012,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>How many input tokens a <code>generate</code> with the same <code>model</code>, <code>role</code> and <code>config</code> may send: the resolved model’s context window minus the output tokens inspect_ai reserves for the reply. An unknown model falls back to 128k, with a warning. <code>Host.score</code> reads it to decide whether a prompt fits.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L140">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L140">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb61"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb61-1"><a href="#cb61-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> input_budget(</span>
 <span id="cb61-2"><a href="#cb61-2" aria-hidden="true" tabindex="-1"></a>    <span class="va">self</span>,</span>
@@ -2040,7 +2040,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <dd>
 <p>The resolved model’s token count for <code>input</code>, the same count a <code>generate</code> with this <code>model</code>, <code>role</code> and <code>config</code> would send. <code>Host.score</code> counts a prompt against <code>input_budget</code> with it.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L156">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L156">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb62"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb62-1"><a href="#cb62-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> count_tokens(</span>
 <span id="cb62-2"><a href="#cb62-2" aria-hidden="true" tabindex="-1"></a>    <span class="va">self</span>,</span>
@@ -2089,7 +2089,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </ul>
 <p>A template that uses a name that is none of these raises before the model is asked, so a misspelled variable is caught. The template is rendered once and values are inserted as text, so the agent’s text is never read as template. A custom template states the 0.0 to 1.0 scale in its own words; without it the answer tool still rejects scores out of range.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L176">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L176">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb63"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb63-1"><a href="#cb63-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> score(</span>
 <span id="cb63-2"><a href="#cb63-2" aria-hidden="true" tabindex="-1"></a>    <span class="va">self</span>,</span>
@@ -2158,7 +2158,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Ask a person to decide about a step, and wait for the answer.</p>
 <p>The host is handed the step itself and renders it by its type, with the <code>escalations</code> (who escalated and why): before a tool call the call, its view and the conversation; after a call the same with the result the model is about to receive; after a generate the whole assistant turn, its text and every tool call it makes. A host raises a clear error for a stage it cannot render. When the person ends the prompt without one of the <code>choices</code>, the host answers <code>reject</code> if it was offered and <code>terminate</code> otherwise, so the step fails closed; <code>human()</code> accepts that <code>terminate</code> even when it was not offered. It notifies the person and marks the sample as awaiting a person while it waits. <code>human()</code> calls this; most protocols never need to.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L242">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L242">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb64"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb64-1"><a href="#cb64-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> ask_human(</span>
 <span id="cb64-2"><a href="#cb64-2" aria-hidden="true" tabindex="-1"></a>    <span class="va">self</span>,</span>
@@ -2188,7 +2188,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="humananswer">HumanAnswer</h3>
 <p>What a person answered when <code>Host.ask_human</code> asked them about a step.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_host.py#L25">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_host.py#L25">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb65"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb65-1"><a href="#cb65-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb65-2"><a href="#cb65-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> HumanAnswer</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -2219,7 +2219,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>The text of a tool call: every string in its arguments.</p>
 <p>The string argument values, in the order the arguments were given, joined with newlines. Strings inside lists and dicts are included, in order (a dict’s values in insertion order); empty strings and values that are not strings, such as numbers, are left out. This knows nothing about particular tools: for <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.tool.html#bash">bash()</a></span> it is the <code>command</code>, and for <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.tool.html#text_editor">text_editor()</a></span> it is the <code>command</code> (such as <code>"create"</code>) as well as the path and the file’s text.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_rules.py#L13">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_rules.py#L13">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb66"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb66-1"><a href="#cb66-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> call_text(call: ToolCall) <span class="op">-&gt;</span> <span class="bu">str</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <dl>
@@ -2234,7 +2234,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Whether the call’s tool name matches any of the patterns.</p>
 <p>A pattern is a tool name or a glob (<code>*</code>, <code>?</code>, <code>[seq]</code>) that must match the whole name: <code>"bash"</code> matches <code>bash</code> and not <code>bash_session</code>, while <code>"bash*"</code> matches both. Matching is case-sensitive by default and the same on every platform; pass <code>case_sensitive=False</code> for tools whose names differ only in case, such as inspect_ai’s <code>bash</code> and a bridged agent’s <code>Bash</code>. Unlike the <code>tools</code> of an <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.approval.html#approvalpolicy">ApprovalPolicy</a></span> in inspect_ai, a pattern is not extended with a trailing <code>*</code> and is not split on commas.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_rules.py#L38">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_rules.py#L38">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb67"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb67-1"><a href="#cb67-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> tool_matches(call: ToolCall, <span class="op">*</span>patterns: <span class="bu">str</span>, case_sensitive: <span class="bu">bool</span> <span class="op">=</span> <span class="va">True</span>) <span class="op">-&gt;</span> <span class="bu">bool</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <dl>
@@ -2257,7 +2257,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>The words that appear in the text as whole words.</p>
 <p>A word matches where it is not part of a longer word: the characters on either side of it are not letters, digits or underscores. So <code>"rm"</code> matches <code>rm -rf x</code> and <code>/bin/rm x</code> but not <code>platform</code>, and a word that starts or ends with punctuation works too: <code>"-delete"</code> matches <code>find . -delete</code>. A space in a word matches any run of whitespace, so <code>"pip install"</code> also matches <code>pip</code> and <code>install</code> separated by a tab or several spaces.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_rules.py#L58">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_rules.py#L58">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb68"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb68-1"><a href="#cb68-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> find_words(</span>
 <span id="cb68-2"><a href="#cb68-2" aria-hidden="true" tabindex="-1"></a>    text: <span class="bu">str</span>, words: Iterable[<span class="bu">str</span>], <span class="op">*</span>, case_sensitive: <span class="bu">bool</span> <span class="op">=</span> <span class="va">True</span></span>
@@ -2282,7 +2282,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>The tool call’s result as text, as inspect_ai’s human review shows it.</p>
 <p>Content other than text, such as an image, appears as its type in brackets (<code>[image]</code>). A call that failed reads <code>"Error (&lt;type&gt;): &lt;message&gt;"</code>.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_rules.py#L85">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_rules.py#L85">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb69"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb69-1"><a href="#cb69-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> result_text(step: AfterToolCall) <span class="op">-&gt;</span> <span class="bu">str</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <dl>
@@ -2300,7 +2300,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="humanstandin">HumanStandIn</h3>
 <p>A stand-in for the person <code>human()</code> asks, in a replay: handed the step, the escalations and the choices, as <code>Host.ask_human</code> is, and answering as the person would. An oracle built from labels, or a model.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_replay.py#L35">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_replay.py#L35">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb70"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb70-1"><a href="#cb70-1" aria-hidden="true" tabindex="-1"></a>HumanStandIn: TypeAlias <span class="op">=</span> Callable[</span>
 <span id="cb70-2"><a href="#cb70-2" aria-hidden="true" tabindex="-1"></a>    [ReplayStep, Escalations, Sequence[<span class="bu">str</span>]], Awaitable[HumanAnswer]</span>
@@ -2315,7 +2315,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>What a monitor shows a model about a step.</p>
 <p><code>preprocess_step()</code> applies it, in this order: the windows to <code>input</code>, <code>history</code> and <code>agent_messages</code>, then the omissions to every message the step holds, then <code>transform</code>, which sees the result. By default <code>input</code> is shown whole, while <code>history</code> and <code>agent_messages</code> are omitted, even when the host could not provide them, so a default prompt is the same live and in replay. A scaffold may keep hidden instructions out of its own list but send them in <code>input</code> and <code>history</code>. To omit the request lists and show the agent’s own list, use <code>StepPreprocessor(input_window=None, history_window=None, agent_messages_window=AllMessages())</code>; this requires the conversation-owning scaffold to be the outermost <code>@agent</code> agent function. Other stage content remains: every stage renders the request’s tools and tool choice while <code>input</code> is known (a tool stage’s are the producing request’s); <code>AfterGenerate</code> renders the reply, including reasoning by default before the scaffold has curated it; both tool stages render the assistant text and call; and <code>AfterToolCall</code> renders the result. Strict blindness also needs a stage-specific <code>transform</code> or a custom prompt that curates these surfaces; a transform can clear <code>tools</code> and <code>tool_choice</code>.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L93">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L93">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb71"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb71-1"><a href="#cb71-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>, kw_only<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb71-2"><a href="#cb71-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> StepPreprocessor(Generic[S])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -2358,7 +2358,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="window">Window</h3>
 <p>How much of one conversation, <code>input</code>, <code>history</code> or <code>agent_messages</code>, to show.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L89">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L89">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb72"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb72-1"><a href="#cb72-1" aria-hidden="true" tabindex="-1"></a>Window: TypeAlias <span class="op">=</span> AllMessages <span class="op">|</span> LastTurns <span class="op">|</span> LastMessages <span class="op">|</span> NewSinceLastReport</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
@@ -2366,7 +2366,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="allmessages">AllMessages</h3>
 <p>Keep all of a conversation.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L44">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L44">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb73"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb73-1"><a href="#cb73-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb73-2"><a href="#cb73-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> AllMessages</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -2375,7 +2375,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="lastturns">LastTurns</h3>
 <p>Keep the last <code>n</code> turns of a conversation: everything from the <code>n</code>th assistant message from the end. A conversation with no more than <code>n</code> assistant messages is kept whole. <code>n=0</code> keeps nothing.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L49">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L49">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb74"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb74-1"><a href="#cb74-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb74-2"><a href="#cb74-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> LastTurns</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -2394,7 +2394,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Keep the last <code>n</code> messages of a conversation.</p>
 <p>The cut can fall between a tool call and its result, so the kept messages can start with a result whose call is not shown, and the monitor model sees output without the command that produced it. Prefer <code>LastTurns</code>, which keeps each call with its result, unless the count of messages matters more than that.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L61">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L61">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb75"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb75-1"><a href="#cb75-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb75-2"><a href="#cb75-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> LastMessages</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -2414,7 +2414,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>An incremental prompt chooses <code>input_window</code> as well: <code>StepPreprocessor</code> shows all of <code>input</code> by default, so <code>StepPreprocessor(history_window=NewSinceLastReport(context))</code> still sends the monitor model the whole request at every step. To judge what was already sent, at <code>AfterGenerate</code> or a tool stage, where <code>history</code> holds the request, window <code>history</code> and omit or bound <code>input</code>: <code>StepPreprocessor(input_window=None, history_window=NewSinceLastReport(context))</code>. At <code>BeforeGenerate</code>, <code>history</code> does not yet hold the request about to go out, so a monitor that judges that request keeps <code>input</code>: <code>StepPreprocessor(input_window=NewSinceLastReport(context))</code> shows only what is new in it. <code>history</code> only grows and is resumed where it was; over <code>input</code> or <code>agent_messages</code>, which can be rewritten, each step rereads the whole list to find what is new, though it shows only that.</p>
 <p>The last message shown is recorded by id and position in the monitor’s store (by <code>context.path</code>), separately for each conversation, for each list it windows, and for each function of the monitor. It is recorded only when the function returns or decides final and the runner accepts what it returned, so a function that raises or is cancelled is shown those messages again at the next step. <code>history</code>, which only grows, is resumed where it was without reading what was shown before; <code>input</code> and <code>agent_messages</code> can be rewritten, as by a compaction, so for them the whole list is read to find the message shown last, a cost linear in the list at each step. An edited version of a message, which <code>history</code> holds again under the same id, is new. A conversation whose recorded message is gone, as after a compaction, is kept whole. Preprocess with it from the monitor or protocol function the runner is running; elsewhere preprocessing raises <code>RuntimeError</code>.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L76">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L76">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb76"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb76-1"><a href="#cb76-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span>(frozen<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb76-2"><a href="#cb76-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> NewSinceLastReport</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -2433,7 +2433,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p><code>step</code>, thinned as <code>preprocessor</code> says (<code>StepPreprocessor()</code> when None).</p>
 <p>Each window cuts its list as it is. A list with no window becomes <code>[]</code>, even one the host could not provide; a windowed list the host could not provide stays None. The omissions apply to <code>input</code>, <code>history</code>, <code>agent_messages</code>, a tool call’s result and a generate’s reply.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L125">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L125">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb77"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb77-1"><a href="#cb77-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> preprocess_step(</span>
 <span id="cb77-2"><a href="#cb77-2" aria-hidden="true" tabindex="-1"></a>    step: S, preprocessor: StepPreprocessor[S] <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span></span>
@@ -2454,7 +2454,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Render <code>step</code> for a monitor’s prompt, numbering its messages <code>[M1]</code>, <code>[M2]</code> and so on, and return the text with a function that turns those cites in a model’s answer into references.</p>
 <p>Everything is in one block, marked <code>[BEGIN AGENT STEP - ...]</code> and <code>[END AGENT STEP - ...]</code> and named for the stage: <code>TOOL CALL REQUEST</code> before a tool call, <code>TOOL CALL RESULT</code> after one, <code>MODEL REQUEST</code> before a generate, and <code>MODEL REPLY</code> after one. Inside it are blocks between <code>[BEGIN ...]</code> and <code>[END ...]</code> lines, each left out when it is empty. At every stage: <code>HISTORY</code> (<code>step.history</code>, every message the agent has sent its model), <code>AGENT MESSAGES</code> (<code>step.agent_messages</code>, the outermost running agent function’s own message list, which its scaffold may curate), then the model request, as <code>INPUT</code>, <code>TOOLS</code> (the tools offered, as JSON) and a one-line <code>[TOOL CHOICE] "auto"</code>; at a tool stage, the request that produced the call. Then after a generate, <code>REPLY</code>; at a tool stage, <code>CALL</code> (the assistant’s text and the call) and, after the call, <code>RESULT</code>. A list the host could not provide (None) is named in its block (<code>preprocess_step()</code> leaves a list with no window empty, so only a windowed one is named); at a tool stage whose input is not known, the tools and tool choice are left out. With a <code>nonce</code>, every <code>[BEGIN ...]</code> and <code>[END ...]</code> line, and the <code>[TOOL CHOICE]</code> line, carries it in parentheses, as <code>[BEGIN INPUT (3f9a1c7e)]</code>, and so does every message header. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_preprocess.py#L180">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/b5469a943eda0545f6f17f2f19de8ec96c5922dd/src/inspect_sentinel/_preprocess.py#L180">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb78"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb78-1"><a href="#cb78-1" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> step_as_str(</span>
 <span id="cb78-2"><a href="#cb78-2" aria-hidden="true" tabindex="-1"></a>    step: Step, <span class="op">*</span>, nonce: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span></span>
