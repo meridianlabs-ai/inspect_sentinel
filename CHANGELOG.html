@@ -2,13 +2,12 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.10.18">
+<meta name="generator" content="quarto-1.10.19">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
-<meta name="description" content="Model calls from monitors and protocols through context.host, and the monitor and trusted model roles.">
 
-<title>The Host and Model Roles – Inspect Sentinel</title>
+<title>changelog – Inspect Sentinel</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -37,15 +36,13 @@ ul.task-list li input[type="checkbox"] {
 <script src="site_libs/quarto-search/fuse.min.js"></script>
 <script src="site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="./">
-<link href="./composition.html" rel="next">
-<link href="./state.html" rel="prev">
 <script src="site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
 <script src="site_libs/quarto-html/popper.min.js"></script>
 <script src="site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="site_libs/quarto-html/anchor.min.js"></script>
 <link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-bf27225e3a48a9273f3daa8f8e829971.css" rel="stylesheet" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
 <link href="site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
@@ -89,7 +86,7 @@ ul.task-list li input[type="checkbox"] {
 <meta name="twitter:card" content="summary">
 </head>
 
-<body class="nav-sidebar docked nav-fixed quarto-light">
+<body class="nav-fixed quarto-light">
 
 <div id="quarto-search-results"></div>
   <header id="quarto-header" class="headroom fixed-top">
@@ -116,29 +113,29 @@ ul.task-list li input[type="checkbox"] {
  <span class="dropdown-text">Basics</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./monitors.html">
- <span class="dropdown-text">Writing Sentinels</span></a>
-  </li>  
-        <li>
-    <a class="dropdown-item" href="./composition.html">
- <span class="dropdown-text">Composing</span></a>
+    <a class="dropdown-item" href="./stages.html">
+ <span class="dropdown-text">Components</span></a>
   </li>  
         <li>
     <a class="dropdown-item" href="./configuration.html">
  <span class="dropdown-text">Running</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./calibration.html">
+    <a class="dropdown-item" href="./replay.html">
  <span class="dropdown-text">Development</span></a>
   </li>  
     </ul>
   </li>
   <li class="nav-item">
-    <a class="nav-link active" href="./reference/index.html" aria-current="page"> 
+    <a class="nav-link" href="./reference/index.html"> 
 <span class="menu-text">Reference</span></a>
   </li>  
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link active" href="./CHANGELOG.html" aria-current="page"> 
+<span class="menu-text">Changelog</span></a>
+  </li>  
   <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_sentinel"> <i class="bi bi-github" role="img">
 </i> 
@@ -150,184 +147,59 @@ ul.task-list li input[type="checkbox"] {
 </div>
       </div> <!-- /container-fluid -->
     </nav>
-  <nav class="quarto-secondary-nav">
-    <div class="container-fluid d-flex">
-      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
-        <i class="bi bi-layout-text-sidebar-reverse"></i>
-      </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./monitors.html">Writing Sentinels</a></li><li class="breadcrumb-item"><a href="./host.html">Host and Model Roles</a></li></ol></nav>
-        <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
-        </a>
-    </div>
-  </nav>
 </header>
 <!-- content -->
 <div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
 <!-- sidebar -->
-  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto">
-    <div class="sidebar-menu-container"> 
-    <ul class="list-unstyled mt-1">
-        <li class="sidebar-item sidebar-item-section">
-      <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true">
- <span class="menu-text">Basics</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true" aria-label="Toggle section">
-            <i class="bi bi-chevron-right ms-2"></i>
-          </a> 
-      </div>
-      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./index.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Getting Started</span></a>
-  </div>
-</li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./transcript.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Transcript and Viewer</span></a>
-  </div>
-</li>
-      </ul>
-  </li>
-        <li class="sidebar-item sidebar-item-section">
-      <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
- <span class="menu-text">Writing Sentinels</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
-            <i class="bi bi-chevron-right ms-2"></i>
-          </a> 
-      </div>
-      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./monitors.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Monitors</span></a>
-  </div>
-</li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./protocols.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Protocols and Rules</span></a>
-  </div>
-</li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./state.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">State</span></a>
-  </div>
-</li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./host.html" class="sidebar-item-text sidebar-link active">
- <span class="menu-text">Host and Model Roles</span></a>
-  </div>
-</li>
-      </ul>
-  </li>
-        <li class="sidebar-item sidebar-item-section">
-      <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true">
- <span class="menu-text">Composing</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
-            <i class="bi bi-chevron-right ms-2"></i>
-          </a> 
-      </div>
-      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./composition.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Composition</span></a>
-  </div>
-</li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./final-decisions.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Final Decisions and Humans</span></a>
-  </div>
-</li>
-      </ul>
-  </li>
-        <li class="sidebar-item sidebar-item-section">
-      <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
- <span class="menu-text">Running</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
-            <i class="bi bi-chevron-right ms-2"></i>
-          </a> 
-      </div>
-      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 show">  
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./configuration.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Configuration</span></a>
-  </div>
-</li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./approval.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Approval and Review</span></a>
-  </div>
-</li>
-      </ul>
-  </li>
-        <li class="sidebar-item sidebar-item-section">
-      <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true">
- <span class="menu-text">Development</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true" aria-label="Toggle section">
-            <i class="bi bi-chevron-right ms-2"></i>
-          </a> 
-      </div>
-      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth1 show">  
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./calibration.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Calibration</span></a>
-  </div>
-</li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./deployment.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Deployment</span></a>
-  </div>
-</li>
-      </ul>
-  </li>
-        <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./reference/index.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Reference</span></a>
-  </div>
-</li>
-    </ul>
-    </div>
-</nav>
-<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
 <!-- margin-sidebar -->
     <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
         <nav id="TOC" role="doc-toc" class="toc-active" data-toc-expanded="1">
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a></li>
-  <li><a href="#planned-sections" id="toc-planned-sections" class="nav-link" data-scroll-target="#planned-sections">Planned Sections</a></li>
+  <li><a href="#section" id="toc-section" class="nav-link active" data-scroll-target="#section">0.3.0 (2026-10-27)</a>
+  <ul class="collapse">
+  <li><a href="#breaking-changes" id="toc-breaking-changes" class="nav-link" data-scroll-target="#breaking-changes">⚠ BREAKING CHANGES</a></li>
+  <li><a href="#bug-fixes" id="toc-bug-fixes" class="nav-link" data-scroll-target="#bug-fixes">Bug Fixes</a></li>
+  </ul></li>
+  <li><a href="#section-1" id="toc-section-1" class="nav-link" data-scroll-target="#section-1">0.2.0 (2026-10-21)</a>
+  <ul class="collapse">
+  <li><a href="#breaking-changes-1" id="toc-breaking-changes-1" class="nav-link" data-scroll-target="#breaking-changes-1">⚠ BREAKING CHANGES</a></li>
+  <li><a href="#features" id="toc-features" class="nav-link" data-scroll-target="#features">Features</a></li>
+  <li><a href="#bug-fixes-1" id="toc-bug-fixes-1" class="nav-link" data-scroll-target="#bug-fixes-1">Bug Fixes</a></li>
+  <li><a href="#miscellaneous" id="toc-miscellaneous" class="nav-link" data-scroll-target="#miscellaneous">Miscellaneous</a></li>
+  </ul></li>
+  <li><a href="#section-2" id="toc-section-2" class="nav-link" data-scroll-target="#section-2">0.1.4 (2026-10-19)</a>
+  <ul class="collapse">
+  <li><a href="#breaking-changes-2" id="toc-breaking-changes-2" class="nav-link" data-scroll-target="#breaking-changes-2">Breaking Changes</a></li>
+  <li><a href="#features-1" id="toc-features-1" class="nav-link" data-scroll-target="#features-1">Features</a></li>
+  <li><a href="#miscellaneous-1" id="toc-miscellaneous-1" class="nav-link" data-scroll-target="#miscellaneous-1">Miscellaneous</a></li>
+  </ul></li>
+  <li><a href="#section-3" id="toc-section-3" class="nav-link" data-scroll-target="#section-3">0.1.3 (2026-10-15)</a>
+  <ul class="collapse">
+  <li><a href="#features-2" id="toc-features-2" class="nav-link" data-scroll-target="#features-2">Features</a></li>
+  </ul></li>
+  <li><a href="#section-4" id="toc-section-4" class="nav-link" data-scroll-target="#section-4">0.1.2 (2026-10-14)</a>
+  <ul class="collapse">
+  <li><a href="#features-3" id="toc-features-3" class="nav-link" data-scroll-target="#features-3">Features</a></li>
+  </ul></li>
+  <li><a href="#section-5" id="toc-section-5" class="nav-link" data-scroll-target="#section-5">0.1.1 (2026-10-12)</a>
+  <ul class="collapse">
+  <li><a href="#features-4" id="toc-features-4" class="nav-link" data-scroll-target="#features-4">Features</a></li>
+  <li><a href="#bug-fixes-2" id="toc-bug-fixes-2" class="nav-link" data-scroll-target="#bug-fixes-2">Bug Fixes</a></li>
+  </ul></li>
+  <li><a href="#section-6" id="toc-section-6" class="nav-link" data-scroll-target="#section-6">0.1.0 (2026-10-10)</a></li>
   </ul>
 </nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./monitors.html">Writing Sentinels</a></li><li class="breadcrumb-item"><a href="./host.html">Host and Model Roles</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
-<h1 class="title">The Host and Model Roles</h1>
+<h1 class="title">Changelog</h1>
 </div>
 
-<div>
-  <div class="description">
-    Model calls from monitors and protocols through context.host, and the monitor and trusted model roles.
-  </div>
-</div>
 
 
 <div class="quarto-title-meta">
@@ -342,35 +214,138 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
-<div class="callout callout-style-default callout-warning callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-<span class="screen-reader-only">Warning</span>Outline
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>This page is an outline: a summary and the sections planned for it, not yet the documentation. See <a href="./index.html">Getting Started</a> for a worked example.</p>
-</div>
-</div>
-<section id="overview" class="level2">
-<h2 class="anchored" data-anchor-id="overview">Overview</h2>
-<p>How a monitor or protocol calls a model. Covers <code>context.host.generate()</code> and why it is used instead of <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#get_model">get_model()</a></span>, the <code>model=</code> and <code>role=</code> convention for LLM monitors, the <code>monitor</code> model role and its fallback, how monitor usage is recorded and kept off the agent’s limits, and structured output. Outbound HTTP through <code>fetch</code> is planned.</p>
-</section>
-<section id="planned-sections" class="level2">
-<h2 class="anchored" data-anchor-id="planned-sections">Planned Sections</h2>
+<section id="section" class="level2">
+<h2 class="anchored" data-anchor-id="section"><a href="https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.2.0...0.3.0">0.3.0</a> (2026-10-27)</h2>
+<section id="breaking-changes" class="level3">
+<h3 class="anchored" data-anchor-id="breaking-changes">⚠ BREAKING CHANGES</h3>
 <ul>
-<li><code>context.host.generate()</code>: prompts, messages, tools and <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#generateconfig">GenerateConfig</a></span></li>
-<li><code>model=</code> and <code>role=</code> on an LLM monitor’s factory</li>
-<li>The <code>monitor</code> role: <code>--model-role monitor=...</code> and <code>Task(model_roles=...)</code>, and the fallback to the agent’s model</li>
-<li>The <code>trusted</code> role for <code>defer_to_trusted()</code> and <code>resample()</code> (planned)</li>
-<li>Structured output with <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#responseschema">ResponseSchema</a></span></li>
-<li>Usage: monitor calls recorded separately and not charged to the agent’s limits</li>
-<li>Treating agent text as untrusted in prompts</li>
-<li>Other effects: <code>fetch</code> (planned), and calling inspect_ai APIs directly at the cost of portability</li>
+<li>a proceed no longer contests a concurrent modify (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/154">#154</a>)</li>
+<li>threshold proceeds when no monitor reported (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/153">#153</a>)</li>
 </ul>
+</section>
+<section id="bug-fixes" class="level3">
+<h3 class="anchored" data-anchor-id="bug-fixes">Bug Fixes</h3>
+<ul>
+<li>a proceed no longer contests a concurrent modify (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/154">#154</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/c5fef76f9c47de7f42d1d40dead917c62fc69274">c5fef76</a>)</li>
+<li><strong>sidecar:</strong> regenerate the endpoint schema for inspect_ai’s new docs link (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/147">#147</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/d78583a21a939904f28f0dff02c71101092da72c">d78583a</a>)</li>
+<li>threshold proceeds when no monitor reported (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/153">#153</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/d6e04048ff2cdacd531f3922d920055bdb06d7ac">d6e0404</a>)</li>
+</ul>
+</section>
+</section>
+<section id="section-1" class="level2">
+<h2 class="anchored" data-anchor-id="section-1"><a href="https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.4...0.2.0">0.2.0</a> (2026-10-21)</h2>
+<section id="breaking-changes-1" class="level3">
+<h3 class="anchored" data-anchor-id="breaking-changes-1">⚠ BREAKING CHANGES</h3>
+<ul>
+<li>StepPreprocessor replaces excerpts for what a monitor shows a model (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/109">#109</a>)</li>
+</ul>
+</section>
+<section id="features" class="level3">
+<h3 class="anchored" data-anchor-id="features">Features</h3>
+<ul>
+<li><strong>sidecar:</strong> give each step the history its conversation has sent the model (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/125">#125</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/6ad7998cc03c63e0649d592225c393f3276c6972">6ad7998</a>)</li>
+<li><strong>sidecar:</strong> judge model traffic behind Envoy, through an ext_proc shim (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/128">#128</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/a0f4590e0122c8e8f9addfccb52a2d86f9df3d63">a0f4590</a>)</li>
+<li><strong>sidecar:</strong> release a streamed reply as it arrives, behind Envoy and LiteLLM (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/132">#132</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/bfc62355e2cd9b9b262e4102c8c3a31a6d218fbb">bfc6235</a>)</li>
+<li><strong>sidecar:</strong> serve the endpoint for evals, and reject or modify one call of a turn (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/120">#120</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/08d50f083945ccfe672562c506635849eddf9f6f">08d50f0</a>)</li>
+<li>StepPreprocessor replaces excerpts for what a monitor shows a model (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/109">#109</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/ffb264d3e2ed66f783cc53036607e70ef413a31b">ffb264d</a>)</li>
+</ul>
+</section>
+<section id="bug-fixes-1" class="level3">
+<h3 class="anchored" data-anchor-id="bug-fixes-1">Bug Fixes</h3>
+<ul>
+<li>depend on inspect_scout at runtime, so Host.score works from a PyPI install (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/131">#131</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/b39bec4e9769ca627dcd00517f675f417656cfa0">b39bec4</a>)</li>
+</ul>
+</section>
+<section id="miscellaneous" class="level3">
+<h3 class="anchored" data-anchor-id="miscellaneous">Miscellaneous</h3>
+<ul>
+<li>release 0.1.5 (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/144">#144</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/0c1513a12aea5fe022a35f898aa20be36cd7c540">0c1513a</a>)</li>
+<li>release 0.2.0 (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/146">#146</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/b755040c8e42e547d19ae70c51cee1ecfea21d45">b755040</a>)</li>
+</ul>
+</section>
+</section>
+<section id="section-2" class="level2">
+<h2 class="anchored" data-anchor-id="section-2"><a href="https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.3...0.1.4">0.1.4</a> (2026-10-19)</h2>
+<section id="breaking-changes-2" class="level3">
+<h3 class="anchored" data-anchor-id="breaking-changes-2">Breaking Changes</h3>
+<ul>
+<li>Protocols take escalations as a third parameter, <code>(step, context, escalations)</code>, instead of reading them from the step (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/97">#97</a>)</li>
+<li><code>step.history</code> now holds the messages the agent sent; the agent loop’s own list is <code>step.agent_messages</code> (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/98">#98</a>)</li>
+</ul>
+</section>
+<section id="features-1" class="level3">
+<h3 class="anchored" data-anchor-id="features-1">Features</h3>
+<ul>
+<li>Host.score marks every block and message header in its prompt with a nonce (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/105">#105</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/8e8ff62a2a1f81ef67acbbe9a50949fdbc65e48a">8e8ff62</a>)</li>
+<li>protocols receive escalations as a third parameter, and monitors no longer see them (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/97">#97</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/dacdef344faf58c5e8278e016637fcffcdcef322">dacdef3</a>)</li>
+<li><strong>sidecar:</strong> read, judge and serve model traffic beside a proxy (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/102">#102</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/68394d3556a4cac27298401702bc11889107fa52">68394d3</a>)</li>
+<li><strong>sidecar:</strong> tell an Inspect eval what its sentinel decided, through a LiteLLM guardrail (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/116">#116</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/a414ebe9f6a9c7afbff54634f2df6bc9ec9e1dd6">a414ebe</a>)</li>
+<li>step.history holds every message the agent sent; the agent loop’s list is step.agent_messages (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/98">#98</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/a2012bd54465c5911748526c167cc602822eb79b">a2012bd</a>)</li>
+<li>steps carry the decisions a person made through human() earlier in the conversation (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/96">#96</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/b5a51e8fad9232ae0f7466ddef1c474899163608">b5a51e8</a>)</li>
+</ul>
+</section>
+<section id="miscellaneous-1" class="level3">
+<h3 class="anchored" data-anchor-id="miscellaneous-1">Miscellaneous</h3>
+<ul>
+<li>release 0.1.4 instead of 0.2.0 (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/118">#118</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/44ebb6fac08ab6871bb82a702a92e7af50064114">44ebb6f</a>)</li>
+</ul>
+</section>
+</section>
+<section id="section-3" class="level2">
+<h2 class="anchored" data-anchor-id="section-3"><a href="https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.2...0.1.3">0.1.3</a> (2026-10-15)</h2>
+<section id="features-2" class="level3">
+<h3 class="anchored" data-anchor-id="features-2">Features</h3>
+<ul>
+<li>Host.score, with excerpts for what a monitor shows a model (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/87">#87</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/8cdb257cac864d287c8c156e4ad5772fc2f69710">8cdb257</a>)</li>
+<li>require Python 3.11 and test on Python 3.14 (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/95">#95</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/dd3f25094136e698f88f579009816dd3a1a7fe6c">dd3f250</a>)</li>
+</ul>
+</section>
+</section>
+<section id="section-4" class="level2">
+<h2 class="anchored" data-anchor-id="section-4"><a href="https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.1...0.1.2">0.1.2</a> (2026-10-14)</h2>
+<section id="features-3" class="level3">
+<h3 class="anchored" data-anchor-id="features-3">Features</h3>
+<ul>
+<li>human() can ask a person about a whole assistant turn, before its tool calls run (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/89">#89</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/a3faeea182539252abe49cd9f83cc3447d739aab">a3faeea</a>)</li>
+<li>step.history is None when the host can’t provide the caller’s message list (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/86">#86</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/5948f5766365f5f284677ccb81231d291c58492c">5948f57</a>)</li>
+<li>tool-stage monitors see the offered tools and whether the result was truncated (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/88">#88</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/00130a9a26afd4c14434eed522d78011a53e4235">00130a9</a>)</li>
+</ul>
+</section>
+</section>
+<section id="section-5" class="level2">
+<h2 class="anchored" data-anchor-id="section-5"><a href="https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.1.0...0.1.1">0.1.1</a> (2026-10-12)</h2>
+<section id="features-4" class="level3">
+<h3 class="anchored" data-anchor-id="features-4">Features</h3>
+<ul>
+<li>monitors watch every agent loop’s model calls (generate stages) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/42">#42</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/3d3ce8e1acb82fa481df57e963385e716b0ad64a">3d3ce8e</a>)</li>
+<li>add handle_escalation() and terminate an unhandled root escalate (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/74">#74</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/85234ba34cc8d37e46c1fb188727c434ec0e2d2d">85234ba</a>)</li>
+<li>step.input is None when no model call produced the call or its record is gone (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/83">#83</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/f30b236945b537f38189f458d0f22a8b428beb4e">f30b236</a>)</li>
+<li>threshold escalates or terminates on scores without reject (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/79">#79</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/9d4ac618b51c4452be7778c5021932e799ec0da6">9d4ac61</a>)</li>
+</ul>
+</section>
+<section id="bug-fixes-2" class="level3">
+<h3 class="anchored" data-anchor-id="bug-fixes-2">Bug Fixes</h3>
+<ul>
+<li>run the children a composition was configured with (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/82">#82</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/559843b01197ffe8e30986bb93a6d384a8d83a25">559843b</a>)</li>
+<li>let a factory return another factory’s configured instance (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/75">#75</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/e30a7c987136229fff8b0521142ef2231c8939ec">e30a7c9</a>)</li>
+<li>name a protocol’s own escalation in the unhandled explanation (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/78">#78</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/8afeeb98da459b47c676f4527339876f7e6bda86">8afeeb9</a>)</li>
+<li>name the action that lets a step go ahead proceed, matching Decision.proceed() (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/issues/84">#84</a>) (<a href="https://github.com/meridianlabs-ai/inspect_sentinel/commit/09913cd1be7ebb8ca13c1a3e0edbadc62872df10">09913cd</a>)</li>
+</ul>
+</section>
+</section>
+<section id="section-6" class="level2">
+<h2 class="anchored" data-anchor-id="section-6">0.1.0 (2026-10-10)</h2>
+<p>First release. Inspect Sentinel adds monitors and control protocols that watch an agent’s tool calls during an Inspect eval and decide whether each call goes ahead. It is under active development and its API may change between 0.x releases.</p>
+<ul>
+<li>Install with <code>pip install inspect-sentinel</code>. Requires <code>inspect-ai&gt;=0.3.278</code>.</li>
+<li>Give a task a sentinel with <code>Task(sentinel=...)</code>, override it with <code>eval(sentinel=...)</code> or <code>eval_set(sentinel=...)</code>, or pass a YAML/JSON configuration with <code>inspect eval --sentinel</code>. The configuration is recorded in the log, so <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_retry">eval_retry()</a></span> rebuilds the same sentinel.</li>
+<li><strong>Monitors</strong> (<code>@monitor</code>) observe a tool call before it runs, or its result afterwards, and report a suspicion score. They never act.</li>
+<li><strong>Protocols</strong> (<code>@protocol</code>) decide what happens: proceed, reject, modify, terminate or escalate. They can consult monitors first; a protocol with no monitors is a rule.</li>
+<li>Shipped protocols: <code>threshold()</code>, <code>observe_only()</code>, <code>concurrent()</code>, <code>sequential()</code> and <code>human()</code>.</li>
+<li>Helpers for rules: <code>call_text()</code>, <code>tool_matches()</code>, <code>find_words()</code> and <code>result_text()</code>.</li>
+<li>Every observation and decision is recorded in the eval log and shown in the viewer, along with the version of the monitor or protocol that produced it.</li>
+</ul>
+<p>Documentation: https://meridianlabs-ai.github.io/inspect_sentinel</p>
 
 
 </section>
@@ -888,18 +863,6 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
   </script>
-<nav class="page-navigation">
-  <div class="nav-page nav-page-previous">
-      <a href="./state.html" class="pagination-link" aria-label="State">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">State</span>
-      </a>          
-  </div>
-  <div class="nav-page nav-page-next">
-      <a href="./composition.html" class="pagination-link" aria-label="Composition">
-        <span class="nav-page-text">Composition</span> <i class="bi bi-arrow-right-short"></i>
-      </a>
-  </div>
-</nav>
 </div> <!-- /content -->
 <footer class="footer">
   <div class="nav-footer">

@@ -2,11 +2,11 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.10.18">
+<meta name="generator" content="quarto-1.10.19">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
-<meta name="description" content="Configuring a sentinel from Python, YAML or JSON files, and the command line, and how it is recorded for eval_retry().">
+<meta name="description" content="Giving a task its sentinel in Python, in a YAML or JSON file, or on the command line, and how the sentinel is recorded in the log.">
 
 <title>Configuration – Inspect Sentinel</title>
 <style>
@@ -27,6 +27,41 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
 </style>
 
 
@@ -38,14 +73,14 @@ ul.task-list li input[type="checkbox"] {
 <script src="site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="./">
 <link href="./approval.html" rel="next">
-<link href="./final-decisions.html" rel="prev">
+<link href="./state.html" rel="prev">
 <script src="site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
 <script src="site_libs/quarto-html/popper.min.js"></script>
 <script src="site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="site_libs/quarto-html/anchor.min.js"></script>
 <link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-bf27225e3a48a9273f3daa8f8e829971.css" rel="stylesheet" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
 <link href="site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
@@ -116,19 +151,15 @@ ul.task-list li input[type="checkbox"] {
  <span class="dropdown-text">Basics</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./monitors.html">
- <span class="dropdown-text">Writing Sentinels</span></a>
-  </li>  
-        <li>
-    <a class="dropdown-item" href="./composition.html">
- <span class="dropdown-text">Composing</span></a>
+    <a class="dropdown-item" href="./stages.html">
+ <span class="dropdown-text">Components</span></a>
   </li>  
         <li>
     <a class="dropdown-item" href="./configuration.html">
  <span class="dropdown-text">Running</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./calibration.html">
+    <a class="dropdown-item" href="./replay.html">
  <span class="dropdown-text">Development</span></a>
   </li>  
     </ul>
@@ -139,6 +170,10 @@ ul.task-list li input[type="checkbox"] {
   </li>  
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./CHANGELOG.html"> 
+<span class="menu-text">Changelog</span></a>
+  </li>  
   <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_sentinel"> <i class="bi bi-github" role="img">
 </i> 
@@ -179,13 +214,19 @@ ul.task-list li input[type="checkbox"] {
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="./index.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Getting Started</span></a>
+ <span class="menu-text">Welcome</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./tutorial.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Tutorial</span></a>
   </div>
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="./transcript.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Transcript and Viewer</span></a>
+ <span class="menu-text">Log Viewer</span></a>
   </div>
 </li>
       </ul>
@@ -193,12 +234,18 @@ ul.task-list li input[type="checkbox"] {
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
             <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
- <span class="menu-text">Writing Sentinels</span></a>
+ <span class="menu-text">Components</span></a>
           <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
       <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./stages.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Stages and Steps</span></a>
+  </div>
+</li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="./monitors.html" class="sidebar-item-text sidebar-link">
@@ -207,8 +254,20 @@ ul.task-list li input[type="checkbox"] {
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
+  <a href="./llm-monitors.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">LLM Monitors</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
   <a href="./protocols.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Protocols and Rules</span></a>
+ <span class="menu-text">Protocols</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./human-decisions.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Human Decisions</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -217,46 +276,17 @@ ul.task-list li input[type="checkbox"] {
  <span class="menu-text">State</span></a>
   </div>
 </li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./host.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Host and Model Roles</span></a>
-  </div>
-</li>
       </ul>
   </li>
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
             <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true">
- <span class="menu-text">Composing</span></a>
+ <span class="menu-text">Running</span></a>
           <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
       <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./composition.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Composition</span></a>
-  </div>
-</li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./final-decisions.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Final Decisions and Humans</span></a>
-  </div>
-</li>
-      </ul>
-  </li>
-        <li class="sidebar-item sidebar-item-section">
-      <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
- <span class="menu-text">Running</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
-            <i class="bi bi-chevron-right ms-2"></i>
-          </a> 
-      </div>
-      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="./configuration.html" class="sidebar-item-text sidebar-link active">
@@ -273,33 +303,72 @@ ul.task-list li input[type="checkbox"] {
   </li>
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true">
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
  <span class="menu-text">Development</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./replay.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Replay</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Reference</span></a>
           <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
       <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/config.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Python API</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth2 ">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/config.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Configuration</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-7" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-7" class="collapse list-unstyled sidebar-section depth3 ">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./calibration.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Calibration</span></a>
+  <a href="./reference/config.html#sentinel_config" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">sentinel_config</span></a>
   </div>
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./deployment.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Deployment</span></a>
+  <a href="./reference/config.html#sentinel_from_config" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">sentinel_from_config</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/config.html#watched_stages" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">watched_stages</span></a>
   </div>
 </li>
       </ul>
   </li>
-        <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./reference/index.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Reference</span></a>
-  </div>
-</li>
+      </ul>
+  </li>
+      </ul>
+  </li>
     </ul>
     </div>
 </nav>
@@ -311,7 +380,17 @@ ul.task-list li input[type="checkbox"] {
    
   <ul>
   <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a></li>
-  <li><a href="#planned-sections" id="toc-planned-sections" class="nav-link" data-scroll-target="#planned-sections">Planned Sections</a></li>
+  <li><a href="#task-sentinel" id="toc-task-sentinel" class="nav-link" data-scroll-target="#task-sentinel">Task Sentinel</a></li>
+  <li><a href="#overriding-the-sentinel" id="toc-overriding-the-sentinel" class="nav-link" data-scroll-target="#overriding-the-sentinel">Overriding the Sentinel</a></li>
+  <li><a href="#configuration-files" id="toc-configuration-files" class="nav-link" data-scroll-target="#configuration-files">Configuration Files</a>
+  <ul class="collapse">
+  <li><a href="#lists-and-mappings" id="toc-lists-and-mappings" class="nav-link" data-scroll-target="#lists-and-mappings">Lists and Mappings</a></li>
+  </ul></li>
+  <li><a href="#registered-names" id="toc-registered-names" class="nav-link" data-scroll-target="#registered-names">Registered Names</a></li>
+  <li><a href="#how-names-are-found" id="toc-how-names-are-found" class="nav-link" data-scroll-target="#how-names-are-found">How Names Are Found</a></li>
+  <li><a href="#configuration-errors" id="toc-configuration-errors" class="nav-link" data-scroll-target="#configuration-errors">Configuration Errors</a></li>
+  <li><a href="#model-roles" id="toc-model-roles" class="nav-link" data-scroll-target="#model-roles">Model Roles</a></li>
+  <li><a href="#the-sentinel-in-the-log" id="toc-the-sentinel-in-the-log" class="nav-link" data-scroll-target="#the-sentinel-in-the-log">The Sentinel in the Log</a></li>
   </ul>
 </nav>
     </div>
@@ -325,7 +404,7 @@ ul.task-list li input[type="checkbox"] {
 
 <div>
   <div class="description">
-    Configuring a sentinel from Python, YAML or JSON files, and the command line, and how it is recorded for eval_retry().
+    Giving a task its sentinel in Python, in a YAML or JSON file, or on the command line, and how the sentinel is recorded in the log.
   </div>
 </div>
 
@@ -342,36 +421,183 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
-<div class="callout callout-style-default callout-warning callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-<span class="screen-reader-only">Warning</span>Outline
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>This page is an outline: a summary and the sections planned for it, not yet the documentation. See <a href="./index.html">Getting Started</a> for a worked example.</p>
-</div>
-</div>
 <section id="overview" class="level2">
 <h2 class="anchored" data-anchor-id="overview">Overview</h2>
-<p>The ways to give a task its sentinel. Covers <code>Task(sentinel=...)</code>, overriding it with <code>eval(sentinel=...)</code> and <code>eval_set(sentinel=...)</code>, configuration files in YAML or JSON passed with <code>--sentinel</code>, a registered name on the command line, how factory parameters and nested children are written, and how the configuration is recorded in the log so that <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_retry">eval_retry()</a></span> rebuilds the same sentinel.</p>
+<p>A task has one sentinel. You can give it one in three ways:</p>
+<ol type="1">
+<li>In Python, with <code>Task(sentinel=...)</code>, when the sentinel is part of the task’s design.</li>
+<li>With <code>eval(sentinel=...)</code>, <code>eval_set(sentinel=...)</code> or <code>inspect eval --sentinel</code>, to replace the task’s sentinel for one run, for example to try a different monitor on the same task.</li>
+<li>In a YAML or JSON configuration file, so that you can change thresholds and swap monitors without editing code.</li>
+</ol>
+<p>The eval log records the sentinel as a configuration, and <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_retry">eval_retry()</a></span> rebuilds the same sentinel from it.</p>
+<p>The examples on this page use the rules and monitors from the repository’s <code>examples/</code> directory, the <code>no_network()</code> and <code>triage()</code> rules from the <a href="./tutorial.html">Tutorial</a>, <code>protected()</code> from <a href="./protocols.html#final-decisions">Final Decisions</a>, and the <code>suspicion()</code> LLM monitor.</p>
 </section>
-<section id="planned-sections" class="level2">
-<h2 class="anchored" data-anchor-id="planned-sections">Planned Sections</h2>
+<section id="task-sentinel" class="level2">
+<h2 class="anchored" data-anchor-id="task-sentinel">Task Sentinel</h2>
+<p><code>Task(sentinel=...)</code> takes one of three forms. The first is one protocol:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>sentinel<span class="op">=</span>threshold(suspicion(), reject_at<span class="op">=</span><span class="fl">0.8</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The second is a list of monitors and protocols, with at least one protocol:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>sentinel<span class="op">=</span>[no_network(), protected()]</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The third is a mapping of instance names to monitors and protocols, again with at least one protocol:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>sentinel<span class="op">=</span>{</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"guard"</span>: concurrent({<span class="st">"network"</span>: no_network(), <span class="st">"protected"</span>: protected()}),</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"audit"</span>: suspicion(),</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A list or a mapping runs under a <code>concurrent()</code> protocol that you don’t need to write: every protocol in it runs, and the strongest decision wins. Monitors in a list or mapping have their suspicion scores recorded, but no protocol acts on them. A mapping lets you choose the instance names that appear in the log. See <a href="./protocols.html">Protocols</a> for how <code>concurrent()</code> combines decisions.</p>
+<p>A sentinel made only of monitors is an error, because nothing decides what happens at each step. Put the monitors under <code>threshold()</code> to act on their scores, or under <code>observe_only()</code> to record them without acting.</p>
+</section>
+<section id="overriding-the-sentinel" class="level2">
+<h2 class="anchored" data-anchor-id="overriding-the-sentinel">Overriding the Sentinel</h2>
+<p>To run a task with a different sentinel, pass <code>sentinel</code> to <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval">eval()</a></span>. It replaces the task’s sentinel for that run:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_ai <span class="im">import</span> <span class="bu">eval</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_sentinel <span class="im">import</span> threshold</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> llm_suspicion <span class="im">import</span> llm_suspicion, suspicion</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="bu">eval</span>(</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    llm_suspicion(),</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span><span class="st">"openai/gpt-5-mini"</span>,</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    sentinel<span class="op">=</span>threshold(suspicion(), reject_at<span class="op">=</span><span class="fl">0.5</span>),</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>eval_set(sentinel=...)</code> works the same way. On the command line, pass <code>--sentinel</code> a configuration file or a registered name, both described below:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">inspect</span> eval examples/llm_suspicion.py <span class="at">--model</span> openai/gpt-5-mini <span class="dt">\</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--sentinel</span> sentinel.yaml</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="configuration-files" class="level2">
+<h2 class="anchored" data-anchor-id="configuration-files">Configuration Files</h2>
+<p>A configuration file is YAML or JSON with one top-level key, <code>sentinel</code>. Each monitor or protocol is an <em>entry</em>: a mapping with a <code>name</code> and optional <code>params</code>. Here is the sentinel from <code>examples/llm_suspicion.py</code>, <code>threshold(suspicion(), reject_at=0.8)</code>, as a file:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>sentinel.yaml</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6" data-filename="sentinel.yaml"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sentinel</span><span class="kw">:</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">name</span><span class="kw">:</span><span class="at"> threshold</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">params</span><span class="kw">:</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">reject_at</span><span class="kw">:</span><span class="at"> </span><span class="fl">0.8</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">monitors</span><span class="kw">:</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="kw">-</span><span class="at"> </span><span class="fu">name</span><span class="kw">:</span><span class="at"> suspicion</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>The keys of an entry are:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Key</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>name</code></td>
+<td>The registered name of the monitor or protocol factory, such as <code>threshold</code> or <code>suspicion</code>.</td>
+</tr>
+<tr class="even">
+<td><code>params</code></td>
+<td>The factory’s arguments, other than the monitors and protocols under it.</td>
+</tr>
+<tr class="odd">
+<td>The name of a factory parameter that takes monitors or protocols</td>
+<td>The entries under it, written the same way. This is <code>monitors</code> for <code>threshold()</code> and <code>observe_only()</code>, and <code>children</code> for <code>concurrent()</code> and <code>sequential()</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>An entry is built by calling its factory with these arguments, so a misspelled parameter fails as it would in Python. To run the task with this file:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">inspect</span> eval examples/llm_suspicion.py <span class="at">--model</span> openai/gpt-5-mini <span class="dt">\</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--sentinel</span> sentinel.yaml</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>You can also pass the file’s path to <code>Task(sentinel=...)</code>, <code>eval(sentinel=...)</code> or <code>eval_set(sentinel=...)</code>.</p>
+<section id="lists-and-mappings" class="level3">
+<h3 class="anchored" data-anchor-id="lists-and-mappings">Lists and Mappings</h3>
+<p>The value of <code>sentinel</code>, and of each key that holds monitors or protocols, can be one entry, a list of entries, or a mapping of instance names to entries, as in Python. This file is the mapping from <code>examples/nested.py</code>, with a <code>concurrent()</code> that has a mapping of its own:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>nested.yaml</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8" data-filename="nested.yaml"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sentinel</span><span class="kw">:</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">guard</span><span class="kw">:</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">name</span><span class="kw">:</span><span class="at"> concurrent</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">children</span><span class="kw">:</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">network</span><span class="kw">:</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="at">        </span><span class="fu">name</span><span class="kw">:</span><span class="at"> no_network</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">protected</span><span class="kw">:</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="at">        </span><span class="fu">name</span><span class="kw">:</span><span class="at"> protected</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">audit</span><span class="kw">:</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">name</span><span class="kw">:</span><span class="at"> suspicion</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>This file is the <code>sequential()</code> from <code>examples/escalate_to_human.py</code>. Its children are a list: the <code>triage()</code> rule, then <code>human()</code>, which asks a person about the tool calls that <code>triage()</code> escalates. A parameter whose value is a list, such as <code>stages</code> for <code>human()</code>, is written as a YAML list:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>human.yaml</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9" data-filename="human.yaml"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sentinel</span><span class="kw">:</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">name</span><span class="kw">:</span><span class="at"> sequential</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">children</span><span class="kw">:</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="kw">-</span><span class="at"> </span><span class="fu">name</span><span class="kw">:</span><span class="at"> triage</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="kw">-</span><span class="at"> </span><span class="fu">name</span><span class="kw">:</span><span class="at"> human</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">params</span><span class="kw">:</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="at">        </span><span class="fu">stages</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="at">tool_call</span><span class="kw">]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>The same format works in JSON. This file is a list of two rules:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>rules.json</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10" data-filename="rules.json"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">"sentinel"</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">"name"</span><span class="fu">:</span> <span class="st">"no_network"</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">"name"</span><span class="fu">:</span> <span class="st">"protected"</span><span class="fu">}</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>In Python, <code>Task(sentinel=...)</code> and <code>eval(sentinel=...)</code> also accept these structures directly, as a list or a mapping of entry dictionaries.</p>
+</section>
+</section>
+<section id="registered-names" class="level2">
+<h2 class="anchored" data-anchor-id="registered-names">Registered Names</h2>
+<p>To use one monitor or protocol with no file, pass its registered name to <code>--sentinel</code>. Pass the factory’s arguments with <code>--sentinel-arg key=value</code>, once for each argument:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="ex">inspect</span> eval examples/no_network.py <span class="at">--model</span> openai/gpt-5-mini <span class="dt">\</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--sentinel</span> human <span class="at">--sentinel-arg</span> <span class="st">'stages=[tool_call]'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>This replaces the task’s <code>no_network()</code> rule with <code>human(stages=["tool_call"])</code>, which asks a person about every tool call. Values are parsed as YAML, as <code>-T</code> task arguments are, so <code>stages=[tool_call]</code> is a list and <code>0.8</code> is a number.</p>
+<p>A registered name works only for a factory whose arguments are all plain values. A factory that takes monitors or protocols, such as <code>threshold()</code>, needs a configuration file. <code>--sentinel-arg</code> can’t be used with a configuration file: put the arguments under <code>params</code> in the file instead.</p>
+<p>The <code>INSPECT_EVAL_SENTINEL</code> and <code>INSPECT_EVAL_SENTINEL_ARGS</code> environment variables set <code>--sentinel</code> and <code>--sentinel-arg</code>.</p>
+</section>
+<section id="how-names-are-found" class="level2">
+<h2 class="anchored" data-anchor-id="how-names-are-found">How Names Are Found</h2>
+<p>A name in a configuration file or on the command line is looked up among the registered monitor and protocol factories:</p>
 <ul>
-<li><code>Task(sentinel=...)</code>: one instance, a list, or a mapping</li>
-<li>Overriding a task’s sentinel: <code>eval(sentinel=...)</code>, <code>eval_set(sentinel=...)</code></li>
-<li><code>inspect eval --sentinel sentinel.yaml</code> and <code>--sentinel &lt;name&gt;</code></li>
-<li>The file format: <code>name</code>, <code>params</code>, and nested keys named for the factory’s parameter (<code>monitors:</code>, <code>children:</code>)</li>
-<li>Lists, mappings and single entries in YAML</li>
-<li>How names are found: registered names and the <code>inspect_sentinel/</code> prefix</li>
-<li>Configuration errors and the entry paths they name</li>
-<li>The sentinel in the log, and <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_retry">eval_retry()</a></span></li>
-<li>Model roles from the command line</li>
+<li><p>The built-in protocols (<code>threshold</code>, <code>concurrent</code>, <code>sequential</code>, <code>observe_only</code>, <code>human</code> and <code>handle_escalation</code>) are registered as <code>inspect_sentinel/threshold</code> and so on. The bare name <code>threshold</code> finds the same factory.</p></li>
+<li><p>The <code>@monitor</code> and <code>@protocol</code> decorators register a factory in your own code under its function name when its module is imported. Running a task file imports it, so a configuration for that task can name the factories the task file defines or imports. <code>examples/nested.py</code> imports <code>suspicion</code> and <code>no_network</code>, so both names work with it.</p></li>
+<li><p>A factory in an installed package is registered as <code>package/name</code>, such as <code>my_rules/no_network</code>. Inspect finds it when the package declares an <code>inspect_ai</code> entry point in its <code>pyproject.toml</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode toml code-with-copy"><code class="sourceCode toml"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[project.entry-points.inspect_ai]</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="dt">my_rules</span> <span class="op">=</span> <span class="st">"my_rules"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div></li>
 </ul>
+<p>Use <code>@monitor(name=...)</code> or <code>@protocol(name=...)</code> to register a factory under a different name.</p>
+</section>
+<section id="configuration-errors" class="level2">
+<h2 class="anchored" data-anchor-id="configuration-errors">Configuration Errors</h2>
+<p>Inspect validates a configuration when the eval starts, before any sample runs. An error names the entry by its position in the configuration. For example, a misspelled parameter in the monitor under <code>threshold</code>:</p>
+<pre class="text"><code>TypeError: sentinel.monitors[0]: suspicion() got an unexpected keyword argument 'modle'. Did you mean 'model'?</code></pre>
+<p>And an unknown name in the <code>concurrent()</code> under the instance named <code>guard</code>:</p>
+<pre class="text"><code>ValueError: sentinel.guard.children[0]: 'nope' is not a registered monitor or protocol.</code></pre>
+</section>
+<section id="model-roles" class="level2">
+<h2 class="anchored" data-anchor-id="model-roles">Model Roles</h2>
+<p>An LLM monitor gets its model from a model role, <code>monitor</code> by default. Set the role’s model on the command line with <code>--model-role</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb15"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="ex">inspect</span> eval examples/llm_suspicion.py <span class="at">--model</span> openai/gpt-5-mini <span class="dt">\</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--model-role</span> monitor=anthropic/claude-haiku-4-5</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>In Python, pass <code>model_roles={"monitor": "anthropic/claude-haiku-4-5"}</code> to <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval">eval()</a></span> or <code>Task()</code>. Because the model is set outside the configuration, one configuration file works with any monitor model. See <a href="./llm-monitors.html">LLM Monitors</a> for choosing the monitor model.</p>
+</section>
+<section id="the-sentinel-in-the-log" class="level2">
+<h2 class="anchored" data-anchor-id="the-sentinel-in-the-log">The Sentinel in the Log</h2>
+<p>The log records the sentinel that ran in <code>eval.config.sentinel</code>, whether it came from the task, from <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval">eval()</a></span> or from the command line. The record uses the configuration file format:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_ai.log <span class="im">import</span> read_eval_log</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>log <span class="op">=</span> read_eval_log(<span class="st">"logs/&lt;file&gt;.eval"</span>)</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(log.<span class="bu">eval</span>.config.sentinel.model_dump_json(indent<span class="op">=</span><span class="dv">2</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_retry">eval_retry()</a></span> and <code>inspect eval-retry</code> rebuild the sentinel from this record, so a retried eval runs the same monitors and protocols under the same instance paths. The names in the record must still be registered when you retry, which running the task file again does for the factories it defines or imports.</p>
+<p>If a factory declares a version with <code>@monitor(version=...)</code> or <code>@protocol(version=...)</code>, the record includes it. When the recorded version differs from the installed factory’s, Inspect rebuilds the entry anyway and logs a warning that names both versions.</p>
 
 
 </section>
@@ -891,8 +1117,8 @@ document.addEventListener("DOMContentLoaded", function () {
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="./final-decisions.html" class="pagination-link" aria-label="Final Decisions and Humans">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Final Decisions and Humans</span>
+      <a href="./state.html" class="pagination-link" aria-label="State">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">State</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">

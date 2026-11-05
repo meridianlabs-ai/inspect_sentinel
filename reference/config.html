@@ -2,13 +2,13 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.10.18">
+<meta name="generator" content="quarto-1.10.19">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
-<meta name="description" content="Developing, validating and calibrating monitors over transcripts with Inspect Scout.">
+<meta name="description" content="A sentinel as the configuration an eval log records, and the stages it watches.">
 
-<title>Calibration – Inspect Sentinel</title>
+<title>Configuration – Inspect Sentinel</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -27,28 +27,63 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
 </style>
 
 
-<script src="site_libs/quarto-nav/quarto-nav.js"></script>
-<script src="site_libs/quarto-nav/headroom.min.js"></script>
-<script src="site_libs/clipboard/clipboard.min.js"></script>
-<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
-<script src="site_libs/quarto-search/fuse.min.js"></script>
-<script src="site_libs/quarto-search/quarto-search.js"></script>
-<meta name="quarto:offset" content="./">
-<link href="./deployment.html" rel="next">
-<link href="./approval.html" rel="prev">
-<script src="site_libs/quarto-html/quarto.js" type="module"></script>
-<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
-<script src="site_libs/quarto-html/popper.min.js"></script>
-<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
-<script src="site_libs/quarto-html/anchor.min.js"></script>
-<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
-<script src="site_libs/bootstrap/bootstrap.min.js"></script>
-<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script src="../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../">
+<link href="../reference/config.qmd#sentinel_config" rel="next">
+<link href="../reference/index.html" rel="prev">
+<script src="../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../site_libs/quarto-html/popper.min.js"></script>
+<script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-bf27225e3a48a9273f3daa8f8e829971.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -76,9 +111,9 @@ ul.task-list li input[type="checkbox"] {
     "search-label": "Search"
   }
 }</script>
-<link rel="alternate" type="text/markdown" title="LLM-readable docs index" href="./llms.txt">
-<link rel="alternate" type="text/markdown" title="LLM-readable docs (full)" href="./llms-full.txt">
-<link rel="alternate" type="text/markdown" title="LLM-readable docs (user guide)" href="./llms-guide.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs index" href="../llms.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs (full)" href="../llms-full.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs (user guide)" href="../llms-guide.txt">
 
 
 <meta property="og:title" content="Inspect Sentinel">
@@ -96,7 +131,7 @@ ul.task-list li input[type="checkbox"] {
     <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
       <div class="navbar-container container-fluid">
       <div class="navbar-brand-container mx-auto">
-    <a class="navbar-brand" href="./index.html">
+    <a class="navbar-brand" href="../index.html">
     <span class="navbar-title">Inspect Sentinel</span>
     </a>
   </div>
@@ -112,33 +147,33 @@ ul.task-list li input[type="checkbox"] {
     </a>
     <ul class="dropdown-menu" aria-labelledby="nav-menu-user-guide">    
         <li>
-    <a class="dropdown-item" href="./index.html">
+    <a class="dropdown-item" href="../index.html">
  <span class="dropdown-text">Basics</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./monitors.html">
- <span class="dropdown-text">Writing Sentinels</span></a>
+    <a class="dropdown-item" href="../stages.html">
+ <span class="dropdown-text">Components</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./composition.html">
- <span class="dropdown-text">Composing</span></a>
-  </li>  
-        <li>
-    <a class="dropdown-item" href="./configuration.html">
+    <a class="dropdown-item" href="../configuration.html">
  <span class="dropdown-text">Running</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./calibration.html">
+    <a class="dropdown-item" href="../replay.html">
  <span class="dropdown-text">Development</span></a>
   </li>  
     </ul>
   </li>
   <li class="nav-item">
-    <a class="nav-link active" href="./reference/index.html" aria-current="page"> 
+    <a class="nav-link active" href="../reference/index.html" aria-current="page"> 
 <span class="menu-text">Reference</span></a>
   </li>  
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../CHANGELOG.html"> 
+<span class="menu-text">Changelog</span></a>
+  </li>  
   <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_sentinel"> <i class="bi bi-github" role="img">
 </i> 
@@ -155,7 +190,7 @@ ul.task-list li input[type="checkbox"] {
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./calibration.html">Development</a></li><li class="breadcrumb-item"><a href="./calibration.html">Calibration</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../reference/index.html">Reference</a></li><li class="breadcrumb-item"><a href="../reference/config.html">Python API</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
     </div>
@@ -178,14 +213,20 @@ ul.task-list li input[type="checkbox"] {
       <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./index.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Getting Started</span></a>
+  <a href="../index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Welcome</span></a>
   </div>
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./transcript.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Transcript and Viewer</span></a>
+  <a href="../tutorial.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Tutorial</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../transcript.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Log Viewer</span></a>
   </div>
 </li>
       </ul>
@@ -193,7 +234,7 @@ ul.task-list li input[type="checkbox"] {
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
             <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
- <span class="menu-text">Writing Sentinels</span></a>
+ <span class="menu-text">Components</span></a>
           <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
@@ -201,26 +242,38 @@ ul.task-list li input[type="checkbox"] {
       <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./monitors.html" class="sidebar-item-text sidebar-link">
+  <a href="../stages.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Stages and Steps</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../monitors.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Monitors</span></a>
   </div>
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./protocols.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Protocols and Rules</span></a>
+  <a href="../llm-monitors.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">LLM Monitors</span></a>
   </div>
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./state.html" class="sidebar-item-text sidebar-link">
+  <a href="../protocols.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Protocols</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../human-decisions.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Human Decisions</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../state.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">State</span></a>
-  </div>
-</li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./host.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Host and Model Roles</span></a>
   </div>
 </li>
       </ul>
@@ -228,7 +281,7 @@ ul.task-list li input[type="checkbox"] {
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
             <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true">
- <span class="menu-text">Composing</span></a>
+ <span class="menu-text">Running</span></a>
           <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
@@ -236,36 +289,13 @@ ul.task-list li input[type="checkbox"] {
       <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./composition.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Composition</span></a>
-  </div>
-</li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./final-decisions.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Final Decisions and Humans</span></a>
-  </div>
-</li>
-      </ul>
-  </li>
-        <li class="sidebar-item sidebar-item-section">
-      <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
- <span class="menu-text">Running</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
-            <i class="bi bi-chevron-right ms-2"></i>
-          </a> 
-      </div>
-      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 show">  
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./configuration.html" class="sidebar-item-text sidebar-link">
+  <a href="../configuration.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Configuration</span></a>
   </div>
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./approval.html" class="sidebar-item-text sidebar-link">
+  <a href="../approval.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Approval and Review</span></a>
   </div>
 </li>
@@ -273,33 +303,72 @@ ul.task-list li input[type="checkbox"] {
   </li>
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true">
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
  <span class="menu-text">Development</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../replay.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Replay</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="../reference/index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Reference</span></a>
           <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
       <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="../reference/config.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">Python API</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth2 show">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="../reference/config.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">Configuration</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-7" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-7" class="collapse list-unstyled sidebar-section depth3 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./calibration.html" class="sidebar-item-text sidebar-link active">
- <span class="menu-text">Calibration</span></a>
+  <a href="../reference/config.html#sentinel_config" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">sentinel_config</span></a>
   </div>
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./deployment.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Deployment</span></a>
+  <a href="../reference/config.html#sentinel_from_config" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">sentinel_from_config</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../reference/config.html#watched_stages" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">watched_stages</span></a>
   </div>
 </li>
       </ul>
   </li>
-        <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./reference/index.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Reference</span></a>
-  </div>
-</li>
+      </ul>
+  </li>
+      </ul>
+  </li>
     </ul>
     </div>
 </nav>
@@ -310,22 +379,23 @@ ul.task-list li input[type="checkbox"] {
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a></li>
-  <li><a href="#planned-sections" id="toc-planned-sections" class="nav-link" data-scroll-target="#planned-sections">Planned Sections</a></li>
+  <li><a href="#sentinel_config" id="toc-sentinel_config" class="nav-link active" data-scroll-target="#sentinel_config">sentinel_config</a></li>
+  <li><a href="#sentinel_from_config" id="toc-sentinel_from_config" class="nav-link" data-scroll-target="#sentinel_from_config">sentinel_from_config</a></li>
+  <li><a href="#watched_stages" id="toc-watched_stages" class="nav-link" data-scroll-target="#watched_stages">watched_stages</a></li>
   </ul>
 </nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./calibration.html">Development</a></li><li class="breadcrumb-item"><a href="./calibration.html">Calibration</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../reference/index.html">Reference</a></li><li class="breadcrumb-item"><a href="../reference/config.html">Python API</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">Calibration</h1>
+<h1 class="title">Configuration</h1>
 </div>
 
 <div>
   <div class="description">
-    Developing, validating and calibrating monitors over transcripts with Inspect Scout.
+    A sentinel as the configuration an eval log records, and the stages it watches.
   </div>
 </div>
 
@@ -342,35 +412,53 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
-<div class="callout callout-style-default callout-warning callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
+<p>Tools that run a sentinel somewhere other than an eval, such as a scan that replays it over logs, use these to carry it between processes as its configuration and to tell which steps it reads. See <a href="../configuration.html">Configuration</a> for the configuration’s shape.</p>
+<section id="sentinel_config" class="level3">
+<h3 class="anchored" data-anchor-id="sentinel_config">sentinel_config</h3>
+<p>Record constructed monitors and protocols as the configuration that rebuilds them.</p>
+<p>The inverse of <span class="element-type-name ref-interlink"><a href="../reference/config.html#sentinel_from_config">sentinel_from_config()</a></span>, for the eval log and retry: each instance becomes an entry with its registry name, the params it was created with, and its factory’s version unless that is 0, and a param holding monitors or protocols becomes nested entries. A package monitor or protocol is recorded by its bare name when that finds it unambiguously. A lone instance is recorded as a lone entry, so it rebuilds as the root it was.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_config.py#L262">Source</a>
 </div>
-<div class="callout-title-container flex-fill">
-<span class="screen-reader-only">Warning</span>Outline
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>This page is an outline: a summary and the sections planned for it, not yet the documentation. The feature it describes is planned and not yet built. See <a href="./index.html">Getting Started</a> for a worked example.</p>
-</div>
-</div>
-<section id="overview" class="level2">
-<h2 class="anchored" data-anchor-id="overview">Overview</h2>
-<p>How to measure a monitor before anything acts on it, by replaying it over transcripts with Inspect Scout. Covers running a monitor as a Scout scanner, labelling steps to build a validation set, precision and recall, turning a benign score distribution into a threshold, and versioning monitors so a calibration records what it measured.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> sentinel_config(sentinels: Sentinels) <span class="op">-&gt;</span> SentinelConfig</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">sentinels</code> <span class="element-type"><span class="element-type-name">Sentinels</span></span></dt>
+<dd>
+<p>One monitor or protocol, or a sequence or mapping of instance names to them, as <code>Task(sentinel=)</code> accepts.</p>
+</dd>
+</dl>
 </section>
-<section id="planned-sections" class="level2">
-<h2 class="anchored" data-anchor-id="planned-sections">Planned Sections</h2>
-<ul>
-<li>The development loop: record, replay, label, validate, calibrate</li>
-<li>Recording a benign distribution with <span class="element-type-name ref-interlink"><a href="./reference/index.html#observe">observe()</a></span> (available now)</li>
-<li>A monitor as a Scout scanner, <code>as_scanner()</code> (planned)</li>
-<li>Validation sets: labelling steps in Scout View; step ids</li>
-<li>Precision, recall and F1 over the validation set</li>
-<li><code>calibrate()</code>: thresholds from a benign distribution, per dimension (planned)</li>
-<li>Versioning a monitor with <code>@monitor(version=...)</code></li>
-<li>Transcripts from other sources: proxies, coding agents</li>
-</ul>
+<section id="sentinel_from_config" class="level3">
+<h3 class="anchored" data-anchor-id="sentinel_from_config">sentinel_from_config</h3>
+<p>Build the monitors and protocols a configuration describes.</p>
+<p>Each entry is constructed through the registry with its <code>params</code> and its nested entries, which are built first. An entry whose recorded <code>version</code> differs from the installed factory’s is built anyway, with a warning naming both versions; its <code>meta</code> is ignored. One entry, or a bare registered name, builds one instance, so it resolves as the root itself; a list or mapping builds a list or mapping. The result is not resolved into its root: it is what <code>Task(sentinel=)</code> takes.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_config.py#L44">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> sentinel_from_config(</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    config: <span class="bu">str</span> <span class="op">|</span> SentinelConfig <span class="op">|</span> Sequence[Mapping[<span class="bu">str</span>, Any]] <span class="op">|</span> Mapping[<span class="bu">str</span>, Any],</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Sentinels</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">config</code> <span class="element-type"><span class="element-type-name">str</span> | <span class="element-type-name">SentinelConfig</span> | <span class="element-type-name">Sequence</span>[<span class="element-type-name">Mapping</span>[<span class="element-type-name">str</span>, <span class="element-type-name">Any</span>]] | <span class="element-type-name">Mapping</span>[<span class="element-type-name">str</span>, <span class="element-type-name">Any</span>]</span></dt>
+<dd>
+<p>A YAML or JSON file whose only key is <code>sentinel</code>, a registered monitor or protocol name, or the configuration itself: one entry, a list of entries, or a mapping of instance names to entries.</p>
+</dd>
+</dl>
+</section>
+<section id="watched_stages" class="level3">
+<h3 class="anchored" data-anchor-id="watched_stages">watched_stages</h3>
+<p>The step payload types a configured monitor or protocol, or any monitor or protocol given to its factory, watches.</p>
+<p>A composition that only forwards the step to its children, such as <code>concurrent</code>, <code>sequential</code> or <code>observe_only</code>, watches what its children watch, and <code>handle_escalation</code>, which only answers escalations from earlier links, watches nothing of its own. Any other function watches the stages it accepts, so a protocol annotated <code>Step</code> watches every stage.</p>
+<div class="source-link">
+<a href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/5e7b6470495de1113088a4e5b0fc813b1aab35b9/src/inspect_sentinel/_decorators.py#L250">Source</a>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> watched_stages(sentinel: Sentinel) <span class="op">-&gt;</span> <span class="bu">frozenset</span>[<span class="bu">type</span>[Any]]</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<dl>
+<dt><code class="ref-definition">sentinel</code> <span class="element-type"><span class="element-type-name">Sentinel</span></span></dt>
+<dd>
+<p>An instance returned by a <code>@monitor</code> or <code>@protocol</code> factory.</p>
+</dd>
+</dl>
 
 
 </section>
@@ -890,13 +978,13 @@ document.addEventListener("DOMContentLoaded", function () {
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="./approval.html" class="pagination-link" aria-label="Approval and Review">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Approval and Review</span>
+      <a href="../reference/index.html" class="pagination-link" aria-label="Reference">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Reference</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">
-      <a href="./deployment.html" class="pagination-link" aria-label="Deployment">
-        <span class="nav-page-text">Deployment</span> <i class="bi bi-arrow-right-short"></i>
+      <a href="../reference/config.html#sentinel_config" class="pagination-link" aria-label="sentinel_config">
+        <span class="nav-page-text">sentinel_config</span> <i class="bi bi-arrow-right-short"></i>
       </a>
   </div>
 </nav>

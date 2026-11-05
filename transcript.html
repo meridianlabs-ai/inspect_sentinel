@@ -2,13 +2,13 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.10.18">
+<meta name="generator" content="quarto-1.10.19">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
-<meta name="description" content="What a sentinel records in the transcript, how the log viewer shows it, and reading it in code.">
+<meta name="description" content="What a sentinel records in the log, how Inspect View shows it on each tool call, and how to read the records in code.">
 
-<title>Transcript and Viewer – Inspect Sentinel</title>
+<title>Log Viewer – Inspect Sentinel</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -27,6 +27,41 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
 </style>
 
 
@@ -37,15 +72,15 @@ ul.task-list li input[type="checkbox"] {
 <script src="site_libs/quarto-search/fuse.min.js"></script>
 <script src="site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="./">
-<link href="./monitors.html" rel="next">
-<link href="./index.html" rel="prev">
+<link href="./stages.html" rel="next">
+<link href="./tutorial.html" rel="prev">
 <script src="site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
 <script src="site_libs/quarto-html/popper.min.js"></script>
 <script src="site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="site_libs/quarto-html/anchor.min.js"></script>
 <link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-bf27225e3a48a9273f3daa8f8e829971.css" rel="stylesheet" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
 <link href="site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
@@ -116,19 +151,15 @@ ul.task-list li input[type="checkbox"] {
  <span class="dropdown-text">Basics</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./monitors.html">
- <span class="dropdown-text">Writing Sentinels</span></a>
-  </li>  
-        <li>
-    <a class="dropdown-item" href="./composition.html">
- <span class="dropdown-text">Composing</span></a>
+    <a class="dropdown-item" href="./stages.html">
+ <span class="dropdown-text">Components</span></a>
   </li>  
         <li>
     <a class="dropdown-item" href="./configuration.html">
  <span class="dropdown-text">Running</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./calibration.html">
+    <a class="dropdown-item" href="./replay.html">
  <span class="dropdown-text">Development</span></a>
   </li>  
     </ul>
@@ -139,6 +170,10 @@ ul.task-list li input[type="checkbox"] {
   </li>  
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./CHANGELOG.html"> 
+<span class="menu-text">Changelog</span></a>
+  </li>  
   <li class="nav-item compact">
     <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_sentinel"> <i class="bi bi-github" role="img">
 </i> 
@@ -155,7 +190,7 @@ ul.task-list li input[type="checkbox"] {
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./index.html">Basics</a></li><li class="breadcrumb-item"><a href="./transcript.html">Transcript and Viewer</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./index.html">Basics</a></li><li class="breadcrumb-item"><a href="./transcript.html">Log Viewer</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
     </div>
@@ -179,13 +214,19 @@ ul.task-list li input[type="checkbox"] {
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="./index.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Getting Started</span></a>
+ <span class="menu-text">Welcome</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./tutorial.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Tutorial</span></a>
   </div>
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="./transcript.html" class="sidebar-item-text sidebar-link active">
- <span class="menu-text">Transcript and Viewer</span></a>
+ <span class="menu-text">Log Viewer</span></a>
   </div>
 </li>
       </ul>
@@ -193,12 +234,18 @@ ul.task-list li input[type="checkbox"] {
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
             <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
- <span class="menu-text">Writing Sentinels</span></a>
+ <span class="menu-text">Components</span></a>
           <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
       <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./stages.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Stages and Steps</span></a>
+  </div>
+</li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="./monitors.html" class="sidebar-item-text sidebar-link">
@@ -207,8 +254,20 @@ ul.task-list li input[type="checkbox"] {
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
+  <a href="./llm-monitors.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">LLM Monitors</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
   <a href="./protocols.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Protocols and Rules</span></a>
+ <span class="menu-text">Protocols</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./human-decisions.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Human Decisions</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -217,46 +276,17 @@ ul.task-list li input[type="checkbox"] {
  <span class="menu-text">State</span></a>
   </div>
 </li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./host.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Host and Model Roles</span></a>
-  </div>
-</li>
       </ul>
   </li>
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
             <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true">
- <span class="menu-text">Composing</span></a>
+ <span class="menu-text">Running</span></a>
           <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
       <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./composition.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Composition</span></a>
-  </div>
-</li>
-          <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./final-decisions.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Final Decisions and Humans</span></a>
-  </div>
-</li>
-      </ul>
-  </li>
-        <li class="sidebar-item sidebar-item-section">
-      <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
- <span class="menu-text">Running</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
-            <i class="bi bi-chevron-right ms-2"></i>
-          </a> 
-      </div>
-      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="./configuration.html" class="sidebar-item-text sidebar-link">
@@ -273,33 +303,72 @@ ul.task-list li input[type="checkbox"] {
   </li>
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true">
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
  <span class="menu-text">Development</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./replay.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Replay</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Reference</span></a>
           <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
       <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/config.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Python API</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth2 ">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/config.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Configuration</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-7" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-7" class="collapse list-unstyled sidebar-section depth3 ">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./calibration.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Calibration</span></a>
+  <a href="./reference/config.html#sentinel_config" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">sentinel_config</span></a>
   </div>
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./deployment.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Deployment</span></a>
+  <a href="./reference/config.html#sentinel_from_config" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">sentinel_from_config</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/config.html#watched_stages" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">watched_stages</span></a>
   </div>
 </li>
       </ul>
   </li>
-        <li class="sidebar-item">
-  <div class="sidebar-item-container"> 
-  <a href="./reference/index.html" class="sidebar-item-text sidebar-link">
- <span class="menu-text">Reference</span></a>
-  </div>
-</li>
+      </ul>
+  </li>
+      </ul>
+  </li>
     </ul>
     </div>
 </nav>
@@ -311,21 +380,31 @@ ul.task-list li input[type="checkbox"] {
    
   <ul>
   <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a></li>
-  <li><a href="#planned-sections" id="toc-planned-sections" class="nav-link" data-scroll-target="#planned-sections">Planned Sections</a></li>
+  <li><a href="#viewing-a-checked-tool-call" id="toc-viewing-a-checked-tool-call" class="nav-link" data-scroll-target="#viewing-a-checked-tool-call">Viewing a Checked Tool Call</a>
+  <ul class="collapse">
+  <li><a href="#summary-row" id="toc-summary-row" class="nav-link" data-scroll-target="#summary-row">Summary Row</a></li>
+  <li><a href="#checks" id="toc-checks" class="nav-link" data-scroll-target="#checks">Checks</a></li>
+  <li><a href="#rejected-tool-calls" id="toc-rejected-tool-calls" class="nav-link" data-scroll-target="#rejected-tool-calls">Rejected Tool Calls</a></li>
+  <li><a href="#monitor-model-calls" id="toc-monitor-model-calls" class="nav-link" data-scroll-target="#monitor-model-calls">Monitor Model Calls</a></li>
+  </ul></li>
+  <li><a href="#sentinelevent" id="toc-sentinelevent" class="nav-link" data-scroll-target="#sentinelevent">SentinelEvent</a></li>
+  <li><a href="#statuses" id="toc-statuses" class="nav-link" data-scroll-target="#statuses">Statuses</a></li>
+  <li><a href="#reading-events" id="toc-reading-events" class="nav-link" data-scroll-target="#reading-events">Reading Events</a></li>
+  <li><a href="#monitor-token-usage" id="toc-monitor-token-usage" class="nav-link" data-scroll-target="#monitor-token-usage">Monitor Token Usage</a></li>
   </ul>
 </nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./index.html">Basics</a></li><li class="breadcrumb-item"><a href="./transcript.html">Transcript and Viewer</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./index.html">Basics</a></li><li class="breadcrumb-item"><a href="./transcript.html">Log Viewer</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">Transcript and Viewer</h1>
+<h1 class="title">Log Viewer</h1>
 </div>
 
 <div>
   <div class="description">
-    What a sentinel records in the transcript, how the log viewer shows it, and reading it in code.
+    What a sentinel records in the log, how Inspect View shows it on each tool call, and how to read the records in code.
   </div>
 </div>
 
@@ -342,35 +421,223 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
-<div class="callout callout-style-default callout-warning callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-<span class="screen-reader-only">Warning</span>Outline
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>This page is an outline: a summary and the sections planned for it, not yet the documentation. See <a href="./index.html">Getting Started</a> for a worked example.</p>
-</div>
-</div>
 <section id="overview" class="level2">
 <h2 class="anchored" data-anchor-id="overview">Overview</h2>
-<p>What a sentinel leaves in the log and how to read it. Covers the <code>SentinelEvent</code> (one per report, per layer), its fields and statuses, how Inspect View shows the checks inside each tool call, and reading the events with <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.log.html#read_eval_log">read_eval_log()</a></span> for analysis.</p>
+<p>Every observation and decision a sentinel makes is recorded in the sample’s transcript as a <code>SentinelEvent</code>, next to the tool call or model call it was about. Inspect View shows these events inside the tool call they belong to, so as you read a sample you can see:</p>
+<ol type="1">
+<li>Which tool calls the sentinel checked, and what decision took effect.</li>
+<li>The score and explanation from every monitor and protocol that reported.</li>
+<li>What the agent was told when a tool call was rejected.</li>
+<li>The prompts the monitor sent to the monitor model, and its answers.</li>
+</ol>
+<p>The same events are available in code through <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.log.html#read_eval_log">read_eval_log()</a></span>, for analysis across samples and logs.</p>
 </section>
-<section id="planned-sections" class="level2">
-<h2 class="anchored" data-anchor-id="planned-sections">Planned Sections</h2>
-<ul>
-<li><code>SentinelEvent</code>: <code>factory</code>, <code>path</code>, <code>function</code>, <code>kind</code>, <code>status</code>, <code>suspicion</code>, <code>action</code>, <code>message</code>, <code>explanation</code>, <code>references</code></li>
-<li>One event per report, the ones that lost included</li>
-<li>Statuses: reported, cancelled, bypassed, superseded</li>
-<li>The viewer: the summary row, the checks tree, <em>Did not run</em>, monitor model calls, the flagged chip</li>
-<li>Cites in explanations that link to messages</li>
-<li>Reading events with <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.log.html#read_eval_log">read_eval_log()</a></span></li>
-<li>Monitor usage in <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#modelusage">ModelUsage</a></span> and the eval summary</li>
-<li>Threshold comparisons in the viewer (planned)</li>
-</ul>
+<section id="viewing-a-checked-tool-call" class="level2">
+<h2 class="anchored" data-anchor-id="viewing-a-checked-tool-call">Viewing a Checked Tool Call</h2>
+<p>Run an eval with a sentinel, then open the log viewer:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">inspect</span> view</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Open a sample and look at its tool calls. Each tool call the sentinel checked shows the results inside the tool call’s card. Results from before the tool call ran appear with its input, and results from after it returned appear below its output.</p>
+<!-- screenshot: a tool call card with a summary row (Rejected, path, score, explanation), the "3 checks" pill, and the monitor model call line -->
+<section id="summary-row" class="level3">
+<h3 class="anchored" data-anchor-id="summary-row">Summary Row</h3>
+<p>The first row names the action that took effect: <strong>Proceeded</strong>, <strong>Rejected</strong>, <strong>Modified</strong>, <strong>Terminated</strong>, or <strong>Escalated</strong>. It also shows the explanation, the suspicion score if there is one, and the instance path of the protocol that decided, when that protocol is not at the top. A step where only monitors reported, as under <code>observe_only()</code>, shows <strong>Observed</strong> with the monitors’ scores.</p>
+<p>A rejected tool call is tinted, so it stands out as you scroll. A decision made with <code>audit=True</code> shows a <strong>flagged</strong> marker.</p>
+</section>
+<section id="checks" class="level3">
+<h3 class="anchored" data-anchor-id="checks">Checks</h3>
+<p>When more than one monitor or protocol reported, the summary row ends in an <strong>N checks</strong> pill. Expand it for a tree of every monitor and protocol by instance path, such as <code>network</code>, <code>llm</code> and <code>llm/suspicion</code>, with the top-level decision shown as <strong>(top)</strong>. Each row shows its decision or score. A score with several dimensions shows its first dimension and a count of the rest. Click a row to see its full explanation and every score.</p>
+<p>Rows for monitors and protocols that did not report are muted and labelled with their status: <strong>cancelled</strong>, <strong>bypassed</strong> or <strong>superseded</strong> (see <a href="#statuses">Statuses</a>). A monitor that raised an exception shows as a failed row with the error.</p>
+<p>References such as <code>[M22]</code> in an explanation link to the message or event they cite.</p>
+</section>
+<section id="rejected-tool-calls" class="level3">
+<h3 class="anchored" data-anchor-id="rejected-tool-calls">Rejected Tool Calls</h3>
+<p>When a tool call is rejected, the tool does not run. In place of its output, the card says <strong>Did not run</strong>, followed by the message the agent received as the tool result. For a <code>terminate</code>, the card says that the sample was terminated.</p>
+<p>For a <code>modify</code>, the card shows the tool call that ran, with the agent’s original tool call struck through.</p>
+</section>
+<section id="monitor-model-calls" class="level3">
+<h3 class="anchored" data-anchor-id="monitor-model-calls">Monitor Model Calls</h3>
+<p>Below the checks, a line such as <strong>1 monitor model call</strong> expands to the model calls that LLM monitors made at this step: the prompt sent to the monitor model and its answer. These calls do not appear in the agent’s conversation.</p>
+<!-- screenshot: the expanded monitor model call under a tool call, showing the score() prompt and the monitor model's answer-tool call -->
+</section>
+</section>
+<section id="sentinelevent" class="level2">
+<h2 class="anchored" data-anchor-id="sentinelevent">SentinelEvent</h2>
+<p><code>SentinelEvent</code> is part of Inspect, in <code>inspect_ai.event</code>. A step produces one event for every monitor’s observation and every protocol’s decision, including decisions that did not take effect. Within a step, the monitors and protocols under a protocol are recorded before it, so the top-level decision comes last.</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>factory</code></td>
+<td>Registry name of the factory that made the monitor or protocol, such as <code>no_network</code> or <code>inspect_sentinel/threshold</code>.</td>
+</tr>
+<tr class="even">
+<td><code>path</code></td>
+<td>Instance path, such as <code>llm/suspicion</code>. The top of the sentinel is the empty string.</td>
+</tr>
+<tr class="odd">
+<td><code>function</code></td>
+<td>Name of the function that reported, for a monitor or protocol whose factory returns several. <code>None</code> for <code>cancelled</code> and <code>bypassed</code> events.</td>
+</tr>
+<tr class="even">
+<td><code>step_id</code></td>
+<td>The step examined. For a tool stage, the tool call’s id. For a generate stage, the id of the model call’s first <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.event.html#modelevent">ModelEvent</a></span>, shared by both generate stages.</td>
+</tr>
+<tr class="odd">
+<td><code>conversation</code></td>
+<td>The agent conversation the step belongs to.</td>
+</tr>
+<tr class="even">
+<td><code>stage</code></td>
+<td><code>"model_input"</code>, <code>"model_output"</code>, <code>"tool_call"</code> or <code>"tool_result"</code>: the <code>BeforeGenerate</code>, <code>AfterGenerate</code>, <code>BeforeToolCall</code> and <code>AfterToolCall</code> stages.</td>
+</tr>
+<tr class="odd">
+<td><code>kind</code></td>
+<td><code>"observation"</code> from a monitor, <code>"decision"</code> from a protocol.</td>
+</tr>
+<tr class="even">
+<td><code>status</code></td>
+<td>What happened to the report (see <a href="#statuses">Statuses</a>).</td>
+</tr>
+<tr class="odd">
+<td><code>suspicion</code></td>
+<td>The suspicion score of an observation: a number from 0.0 to 1.0, or a dict of scores by dimension.</td>
+</tr>
+<tr class="even">
+<td><code>action</code></td>
+<td>The action of a decision: <code>"proceed"</code>, <code>"reject"</code>, <code>"modify"</code>, <code>"terminate"</code> or <code>"escalate"</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>audit</code></td>
+<td>Whether the report flagged this step for extra oversight.</td>
+</tr>
+<tr class="even">
+<td><code>modified</code></td>
+<td>The replacement tool call, for a <code>modify</code> decision.</td>
+</tr>
+<tr class="odd">
+<td><code>message</code></td>
+<td>What the agent was told, for a <code>reject</code> decision.</td>
+</tr>
+<tr class="even">
+<td><code>explanation</code></td>
+<td>Why, for the log. The agent never sees it.</td>
+</tr>
+<tr class="odd">
+<td><code>references</code></td>
+<td>Messages and events the report cites, linked from references such as <code>[M22]</code> in the explanation.</td>
+</tr>
+<tr class="even">
+<td><code>error</code></td>
+<td>The exception a monitor raised, as its type and message, for an <code>error</code> event.</td>
+</tr>
+<tr class="odd">
+<td><code>metadata</code></td>
+<td>The report’s own metadata.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="statuses" class="level2">
+<h2 class="anchored" data-anchor-id="statuses">Statuses</h2>
+<p>The <code>status</code> field says what happened to a report:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 19%">
+<col style="width: 80%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>reported</code></td>
+<td>The monitor or protocol reported. The event carries its observation or decision.</td>
+</tr>
+<tr class="even">
+<td><code>cancelled</code></td>
+<td>The monitor or protocol was cancelled before it finished, because another one beside it decided <code>terminate</code>, called <code>decide_final()</code>, or raised. The event records no report.</td>
+</tr>
+<tr class="odd">
+<td><code>bypassed</code></td>
+<td>A <code>decide_final()</code> from a protocol below passed this protocol without running its decision logic. The event records no report.</td>
+</tr>
+<tr class="even">
+<td><code>superseded</code></td>
+<td>A decision from <code>decide_final()</code> that lost to another final decision, or to an exception, in the same layer. It did not take effect.</td>
+</tr>
+<tr class="odd">
+<td><code>error</code></td>
+<td>A monitor raised an exception instead of reporting, and <code>error</code> holds it. At the empty path, it records that the sentinel itself raised at this step.</td>
+</tr>
+</tbody>
+</table>
+<p>A decision with status <code>reported</code> did not necessarily take effect. In a <code>concurrent()</code>, every protocol’s decision is <code>reported</code>, and only the strongest takes effect, through the decision at the top. When a protocol calls <code>decide_final()</code>, the step ends with its decision. The protocols above it are recorded as <code>bypassed</code>, and then the final decision is recorded at its own path.</p>
+</section>
+<section id="reading-events" class="level2">
+<h2 class="anchored" data-anchor-id="reading-events">Reading Events</h2>
+<p>To work with the events in code, read the log with <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.log.html#read_eval_log">read_eval_log()</a></span> and select the <code>SentinelEvent</code>s from each sample’s events. This script prints every observation and decision from a run of the <a href="./tutorial.html">Tutorial</a>’s <code>llm_suspicion.py</code>, grouped by step:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>sentinel_events.py</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="annotated-cell-2" data-filename="sentinel_events.py"><pre class="sourceCode python code-annotation-code code-with-copy code-annotated"><code class="sourceCode python"><span id="annotated-cell-2-1"><a href="#annotated-cell-2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> sys</span>
+<span id="annotated-cell-2-2"><a href="#annotated-cell-2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="annotated-cell-2-3"><a href="#annotated-cell-2-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_ai.event <span class="im">import</span> SentinelEvent</span>
+<span id="annotated-cell-2-4"><a href="#annotated-cell-2-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_ai.log <span class="im">import</span> read_eval_log</span>
+<span id="annotated-cell-2-5"><a href="#annotated-cell-2-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="annotated-cell-2-6"><a href="#annotated-cell-2-6" aria-hidden="true" tabindex="-1"></a>log <span class="op">=</span> read_eval_log(sys.argv[<span class="dv">1</span>])</span>
+<span id="annotated-cell-2-7"><a href="#annotated-cell-2-7" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> sample <span class="kw">in</span> log.samples <span class="kw">or</span> []:</span>
+<span id="annotated-cell-2-8"><a href="#annotated-cell-2-8" aria-hidden="true" tabindex="-1"></a>    steps: <span class="bu">dict</span>[<span class="bu">tuple</span>[<span class="bu">str</span>, <span class="bu">str</span>], <span class="bu">list</span>[SentinelEvent]] <span class="op">=</span> {}</span>
+<span id="annotated-cell-2-9"><a href="#annotated-cell-2-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> event <span class="kw">in</span> sample.events:</span>
+<span id="annotated-cell-2-10"><a href="#annotated-cell-2-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="bu">isinstance</span>(event, SentinelEvent):</span>
+<button class="code-annotation-anchor" data-target-cell="annotated-cell-2" data-target-annotation="1">1</button><span id="annotated-cell-2-11" class="code-annotation-target"><a href="#annotated-cell-2-11" aria-hidden="true" tabindex="-1"></a>            steps.setdefault((event.stage, event.step_id), []).append(event)</span>
+<span id="annotated-cell-2-12"><a href="#annotated-cell-2-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> (stage, step_id), events <span class="kw">in</span> steps.items():</span>
+<span id="annotated-cell-2-13"><a href="#annotated-cell-2-13" aria-hidden="true" tabindex="-1"></a>        <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>sample<span class="sc">.</span><span class="bu">id</span><span class="sc">}</span><span class="ss"> </span><span class="sc">{</span>stage<span class="sc">}</span><span class="ss"> </span><span class="sc">{</span>step_id<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="annotated-cell-2-14"><a href="#annotated-cell-2-14" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> event <span class="kw">in</span> events:</span>
+<button class="code-annotation-anchor" data-target-cell="annotated-cell-2" data-target-annotation="2">2</button><span id="annotated-cell-2-15" class="code-annotation-target"><a href="#annotated-cell-2-15" aria-hidden="true" tabindex="-1"></a>            result <span class="op">=</span> event.action <span class="cf">if</span> event.kind <span class="op">==</span> <span class="st">"decision"</span> <span class="cf">else</span> event.suspicion</span>
+<span id="annotated-cell-2-16"><a href="#annotated-cell-2-16" aria-hidden="true" tabindex="-1"></a>            <span class="bu">print</span>(<span class="ss">f"  </span><span class="sc">{</span>event<span class="sc">.</span>path <span class="kw">or</span> <span class="st">'(top)'</span><span class="sc">}</span><span class="ss">: </span><span class="sc">{</span>event<span class="sc">.</span>status<span class="sc">}</span><span class="ss"> </span><span class="sc">{</span>result<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="annotated-cell-2-17"><a href="#annotated-cell-2-17" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> event.explanation:</span>
+<span id="annotated-cell-2-18"><a href="#annotated-cell-2-18" aria-hidden="true" tabindex="-1"></a>                <span class="bu">print</span>(<span class="ss">f"    </span><span class="sc">{</span>event<span class="sc">.</span>explanation<span class="sc">}</span><span class="ss">"</span>)</span><div class="code-annotation-gutter-bg"></div><div class="code-annotation-gutter"></div></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<dl class="code-annotation-container-hidden code-annotation-container-grid">
+<dt data-target-cell="annotated-cell-2" data-target-annotation="1">1</dt>
+<dd>
+<span data-code-cell="annotated-cell-2" data-code-lines="11" data-code-annotation="1">A step is identified by its stage and step id. Tool calls that run in parallel can interleave their events, so the script groups events by that pair rather than by position.</span>
+</dd>
+<dt data-target-cell="annotated-cell-2" data-target-annotation="2">2</dt>
+<dd>
+<span data-code-cell="annotated-cell-2" data-code-lines="15" data-code-annotation="2">A decision has an <code>action</code> and an observation has a <code>suspicion</code>. Events with status <code>cancelled</code> or <code>bypassed</code> have neither, so they print <code>None</code>.</span>
+</dd>
+</dl>
+<p>Run it on a log file:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> sentinel_events.py logs/<span class="op">&lt;</span>file<span class="op">&gt;</span>.eval</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>For a rejected tool call in the <code>cleanup</code> sample, the output looks like this:</p>
+<pre class="text"><code>cleanup tool_call call_8Fq2
+  suspicion: reported {'files': 0.95, 'network': 0.0}
+    The command deletes /var/log/app, outside /work.
+  (top): reported reject
+    suspicion 0.95 from suspicion: The command deletes /var/log/app, outside /work.</code></pre>
+<p>Note that reading <code>sample.events</code> loads whole samples into memory. For large logs, use <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.log.html#read_eval_log_samples">read_eval_log_samples()</a></span> to read one sample at a time; see <a href="https://inspect.aisi.org.uk/eval-logs.html">Log Files</a> in the Inspect documentation.</p>
+</section>
+<section id="monitor-token-usage" class="level2">
+<h2 class="anchored" data-anchor-id="monitor-token-usage">Monitor Token Usage</h2>
+<p>Model calls made through <code>context.host.generate()</code> or <code>context.host.score()</code> are recorded separately from the agent’s. They do not count toward the sample’s token, turn or working-time limits, but cost limits still apply.</p>
+<p>The eval summary reports token usage by model role, so the <code>monitor</code> role’s usage appears apart from the agent’s. In code, read it from <code>role_usage</code> on the eval and on each sample:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_ai.log <span class="im">import</span> read_eval_log</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>log <span class="op">=</span> read_eval_log(<span class="st">"logs/&lt;file&gt;.eval"</span>)</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(log.stats.role_usage.get(<span class="st">"monitor"</span>))</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> sample <span class="kw">in</span> log.samples <span class="kw">or</span> []:</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(sample.<span class="bu">id</span>, sample.role_usage.get(<span class="st">"monitor"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A monitor’s model call is recorded under the role it used, <code>monitor</code> by default. A call that passes a <code>model</code> and no <code>role</code> is recorded under the role <code>sentinel</code>.</p>
 
 
 </section>
@@ -890,13 +1157,13 @@ document.addEventListener("DOMContentLoaded", function () {
   </script>
 <nav class="page-navigation">
   <div class="nav-page nav-page-previous">
-      <a href="./index.html" class="pagination-link" aria-label="Getting Started">
-        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Getting Started</span>
+      <a href="./tutorial.html" class="pagination-link" aria-label="Tutorial">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Tutorial</span>
       </a>          
   </div>
   <div class="nav-page nav-page-next">
-      <a href="./monitors.html" class="pagination-link" aria-label="Monitors">
-        <span class="nav-page-text">Monitors</span> <i class="bi bi-arrow-right-short"></i>
+      <a href="./stages.html" class="pagination-link" aria-label="Stages and Steps">
+        <span class="nav-page-text">Stages and Steps</span> <i class="bi bi-arrow-right-short"></i>
       </a>
   </div>
 </nav>

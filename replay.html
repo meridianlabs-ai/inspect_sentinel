@@ -1,0 +1,1363 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.10.19">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="description" content="Measuring a monitor or protocol on agent runs you already have, by replaying it over their logs with Inspect Scout.">
+
+<title>Replay – Inspect Sentinel</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/quarto-nav/headroom.min.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="./">
+<link href="./reference/index.html" rel="next">
+<link href="./approval.html" rel="prev">
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-bf27225e3a48a9273f3daa8f8e829971.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script src="site_libs/quarto-contrib/glightbox/glightbox.min.js"></script>
+<link href="site_libs/quarto-contrib/glightbox/glightbox.min.css" rel="stylesheet">
+<link href="site_libs/quarto-contrib/glightbox/lightbox.css" rel="stylesheet">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<link rel="alternate" type="text/markdown" title="LLM-readable docs index" href="./llms.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs (full)" href="./llms-full.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs (user guide)" href="./llms-guide.txt">
+
+
+<meta property="og:title" content="Inspect Sentinel">
+<meta property="og:description" content="Monitors and control protocols that watch agents and intervene in their execution.">
+<meta property="og:image" content="https://meridianlabs-ai.github.io/inspect_sentinel/diagrams/replay.excalidraw.svg">
+<meta property="og:site_name" content="Inspect Sentinel">
+<meta name="twitter:title" content="Inspect Sentinel">
+<meta name="twitter:description" content="Monitors and control protocols that watch agents and intervene in their execution.">
+<meta name="twitter:image" content="https://meridianlabs-ai.github.io/inspect_sentinel/diagrams/replay.excalidraw.svg">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+
+<body class="nav-sidebar docked nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="./index.html">
+    <span class="navbar-title">Inspect Sentinel</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-user-guide" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">User Guide</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-user-guide">    
+        <li>
+    <a class="dropdown-item" href="./index.html">
+ <span class="dropdown-text">Basics</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./stages.html">
+ <span class="dropdown-text">Components</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./configuration.html">
+ <span class="dropdown-text">Running</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./replay.html">
+ <span class="dropdown-text">Development</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link active" href="./reference/index.html" aria-current="page"> 
+<span class="menu-text">Reference</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./CHANGELOG.html"> 
+<span class="menu-text">Changelog</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_sentinel"> <i class="bi bi-github" role="img">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./replay.html">Development</a></li><li class="breadcrumb-item"><a href="./replay.html">Replay</a></li></ol></nav>
+        <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+    </div>
+  </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto">
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true">
+ <span class="menu-text">Basics</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Welcome</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./tutorial.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Tutorial</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./transcript.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Log Viewer</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
+ <span class="menu-text">Components</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./stages.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Stages and Steps</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./monitors.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Monitors</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./llm-monitors.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">LLM Monitors</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./protocols.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Protocols</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./human-decisions.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Human Decisions</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./state.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">State</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true">
+ <span class="menu-text">Running</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./configuration.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Configuration</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./approval.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Approval and Review</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
+ <span class="menu-text">Development</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./replay.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">Replay</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Reference</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/config.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Python API</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth2 ">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/config.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Configuration</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-7" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-7" class="collapse list-unstyled sidebar-section depth3 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/config.html#sentinel_config" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">sentinel_config</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/config.html#sentinel_from_config" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">sentinel_from_config</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/config.html#watched_stages" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">watched_stages</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active" data-toc-expanded="1">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a>
+  <ul class="collapse">
+  <li><a href="#installation" id="toc-installation" class="nav-link" data-scroll-target="#installation">Installation</a></li>
+  </ul></li>
+  <li><a href="#replaying-a-monitor" id="toc-replaying-a-monitor" class="nav-link" data-scroll-target="#replaying-a-monitor">Replaying a Monitor</a>
+  <ul class="collapse">
+  <li><a href="#results" id="toc-results" class="nav-link" data-scroll-target="#results">Results</a></li>
+  </ul></li>
+  <li><a href="#measuring-a-monitor" id="toc-measuring-a-monitor" class="nav-link" data-scroll-target="#measuring-a-monitor">Measuring a Monitor</a>
+  <ul class="collapse">
+  <li><a href="#scores-on-harmless-runs" id="toc-scores-on-harmless-runs" class="nav-link" data-scroll-target="#scores-on-harmless-runs">Scores on Harmless Runs</a></li>
+  <li><a href="#precision-and-recall" id="toc-precision-and-recall" class="nav-link" data-scroll-target="#precision-and-recall">Precision and Recall</a></li>
+  <li><a href="#monitor-versions" id="toc-monitor-versions" class="nav-link" data-scroll-target="#monitor-versions">Monitor Versions</a></li>
+  </ul></li>
+  <li><a href="#stages" id="toc-stages" class="nav-link" data-scroll-target="#stages">Stages</a></li>
+  <li><a href="#one-result-per-transcript" id="toc-one-result-per-transcript" class="nav-link" data-scroll-target="#one-result-per-transcript">One Result per Transcript</a></li>
+  <li><a href="#choosing-steps" id="toc-choosing-steps" class="nav-link" data-scroll-target="#choosing-steps">Choosing Steps</a>
+  <ul class="collapse">
+  <li><a href="#step-selectors" id="toc-step-selectors" class="nav-link" data-scroll-target="#step-selectors">Step Selectors</a></li>
+  </ul></li>
+  <li><a href="#human-decisions-in-replay" id="toc-human-decisions-in-replay" class="nav-link" data-scroll-target="#human-decisions-in-replay">Human Decisions in Replay</a></li>
+  <li><a href="#read-mode" id="toc-read-mode" class="nav-link" data-scroll-target="#read-mode">Read Mode</a></li>
+  <li><a href="#checking-replay" id="toc-checking-replay" class="nav-link" data-scroll-target="#checking-replay">Checking Replay</a></li>
+  <li><a href="#what-a-replayed-step-holds" id="toc-what-a-replayed-step-holds" class="nav-link" data-scroll-target="#what-a-replayed-step-holds">What a Replayed Step Holds</a>
+  <ul class="collapse">
+  <li><a href="#sub-agents-and-timelines" id="toc-sub-agents-and-timelines" class="nav-link" data-scroll-target="#sub-agents-and-timelines">Sub-agents and Timelines</a></li>
+  <li><a href="#running-and-resuming" id="toc-running-and-resuming" class="nav-link" data-scroll-target="#running-and-resuming">Running and Resuming</a></li>
+  </ul></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./replay.html">Development</a></li><li class="breadcrumb-item"><a href="./replay.html">Replay</a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title">Replay</h1>
+</div>
+
+<div>
+  <div class="description">
+    Measuring a monitor or protocol on agent runs you already have, by replaying it over their logs with Inspect Scout.
+  </div>
+</div>
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<section id="overview" class="level2">
+<h2 class="anchored" data-anchor-id="overview">Overview</h2>
+<p>Before you let a monitor reject tool calls or end samples, you should know how often it flags the steps you care about and how often it flags harmless ones. Replay lets you measure this on agent runs you already have. It rebuilds each step from an eval log and runs your monitor or protocol over it with the same code that runs during an eval.</p>
+<p>Replay runs through <a href="https://meridianlabs-ai.github.io/inspect_scout/">Inspect Scout</a>. Your monitor becomes a Scout scanner, and the scan gives you one result for each step, which you can read in Scout View or as a pandas dataframe. You can use replay to:</p>
+<ol type="1">
+<li>See which steps of existing runs a new monitor would flag, before attaching it to an eval.</li>
+<li>Choose a threshold from the scores a monitor gives on runs you know are harmless.</li>
+<li>Compute precision and recall against your own labels, and compare two versions of a monitor.</li>
+</ol>
+<p><a href="diagrams/replay.excalidraw.svg" class="lightbox" data-gallery="quarto-lightbox-gallery-1"><img src="diagrams/replay.excalidraw.svg" class="img-fluid"></a></p>
+<section id="installation" class="level3">
+<h3 class="anchored" data-anchor-id="installation">Installation</h3>
+<p>Replay uses the <code>scout</code> extra, which installs a compatible version of Inspect Scout:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install <span class="st">'inspect-sentinel[scout]'</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+</section>
+<section id="replaying-a-monitor" class="level2">
+<h2 class="anchored" data-anchor-id="replaying-a-monitor">Replaying a Monitor</h2>
+<p>Let’s replay the suspicion monitor from <code>examples/llm_suspicion.py</code> (described in <a href="./llm-monitors.html">LLM Monitors</a>) over the logs of some earlier runs. Save this script in the <code>examples</code> directory, so that it can import the monitor:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>replay_suspicion.py</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="annotated-cell-2" data-filename="replay_suspicion.py"><pre class="sourceCode python code-annotation-code code-with-copy code-annotated"><code class="sourceCode python"><span id="annotated-cell-2-1"><a href="#annotated-cell-2-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_scout <span class="im">import</span> scan, scan_results_df, transcripts_from</span>
+<span id="annotated-cell-2-2"><a href="#annotated-cell-2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_sentinel.scout <span class="im">import</span> as_scanner</span>
+<span id="annotated-cell-2-3"><a href="#annotated-cell-2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="annotated-cell-2-4"><a href="#annotated-cell-2-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> llm_suspicion <span class="im">import</span> suspicion</span>
+<span id="annotated-cell-2-5"><a href="#annotated-cell-2-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="annotated-cell-2-6"><a href="#annotated-cell-2-6" aria-hidden="true" tabindex="-1"></a>status <span class="op">=</span> scan(</span>
+<button class="code-annotation-anchor" data-target-cell="annotated-cell-2" data-target-annotation="1">1</button><span id="annotated-cell-2-7" class="code-annotation-target"><a href="#annotated-cell-2-7" aria-hidden="true" tabindex="-1"></a>    scanners<span class="op">=</span>{<span class="st">"suspicion"</span>: as_scanner(suspicion())},</span>
+<button class="code-annotation-anchor" data-target-cell="annotated-cell-2" data-target-annotation="2">2</button><span id="annotated-cell-2-8" class="code-annotation-target"><a href="#annotated-cell-2-8" aria-hidden="true" tabindex="-1"></a>    transcripts<span class="op">=</span>transcripts_from(<span class="st">"./logs"</span>),</span>
+<button class="code-annotation-anchor" data-target-cell="annotated-cell-2" data-target-annotation="3">3</button><span id="annotated-cell-2-9" class="code-annotation-target"><a href="#annotated-cell-2-9" aria-hidden="true" tabindex="-1"></a>    model_roles<span class="op">=</span>{<span class="st">"monitor"</span>: <span class="st">"anthropic/claude-haiku-4-5"</span>},</span>
+<span id="annotated-cell-2-10"><a href="#annotated-cell-2-10" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="annotated-cell-2-11"><a href="#annotated-cell-2-11" aria-hidden="true" tabindex="-1"></a></span>
+<button class="code-annotation-anchor" data-target-cell="annotated-cell-2" data-target-annotation="4">4</button><span id="annotated-cell-2-12" class="code-annotation-target"><a href="#annotated-cell-2-12" aria-hidden="true" tabindex="-1"></a>results <span class="op">=</span> scan_results_df(status.location).scanners[<span class="st">"suspicion"</span>]</span>
+<span id="annotated-cell-2-13"><a href="#annotated-cell-2-13" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(results[[<span class="st">"transcript_id"</span>, <span class="st">"metadata.step_id"</span>, <span class="st">"metadata.stage"</span>, <span class="st">"value"</span>]])</span><div class="code-annotation-gutter-bg"></div><div class="code-annotation-gutter"></div></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<dl class="code-annotation-container-hidden code-annotation-container-grid">
+<dt data-target-cell="annotated-cell-2" data-target-annotation="1">1</dt>
+<dd>
+<span data-code-cell="annotated-cell-2" data-code-lines="7" data-code-annotation="1"><code>as_scanner()</code> turns a monitor or protocol into a Scout scanner. It takes anything <code>Task(sentinel=...)</code> takes, and also a single monitor on its own. Several monitors with no protocol are refused; scan them one at a time.</span>
+</dd>
+<dt data-target-cell="annotated-cell-2" data-target-annotation="2">2</dt>
+<dd>
+<span data-code-cell="annotated-cell-2" data-code-lines="8" data-code-annotation="2">The transcripts to scan, here every sample in the eval logs in <code>./logs</code>. Each sample is one transcript.</span>
+</dd>
+<dt data-target-cell="annotated-cell-2" data-target-annotation="3">3</dt>
+<dd>
+<span data-code-cell="annotated-cell-2" data-code-lines="9" data-code-annotation="3">The monitor model, given through the <code>monitor</code> model role as in an eval.</span>
+</dd>
+<dt data-target-cell="annotated-cell-2" data-target-annotation="4">4</dt>
+<dd>
+<span data-code-cell="annotated-cell-2" data-code-lines="12" data-code-annotation="4">One dataframe for each scanner, with one row for each step.</span>
+</dd>
+</dl>
+<p>Run it with Python:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> replay_suspicion.py</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>You can also open the scan in Scout View with <code>scout view</code>. Each result’s explanation starts with a link to the step it is about, such as <code>Step [E12]: ...</code>, so you can go from a score to the tool call it scored. A label like <code>[M3]</code> cites a message and <code>[E12]</code> an event.</p>
+<p>The scan resolves the monitor model the same way an eval does, with the scan’s <code>model_roles</code> and <code>model</code> in place of the eval’s. If the <code>monitor</code> role has no model and the monitor names none, the scan’s <code>model</code> is used, with a warning.</p>
+<section id="results" class="level3">
+<h3 class="anchored" data-anchor-id="results">Results</h3>
+<p>Each row of the results dataframe is one step at one stage:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 37%">
+<col style="width: 62%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Column</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>transcript_id</code></td>
+<td>The sample the step belongs to.</td>
+</tr>
+<tr class="even">
+<td><code>metadata.step_id</code></td>
+<td>The tool call id at a tool stage, or the model call id at a generate stage. A tool call’s two steps share its id.</td>
+</tr>
+<tr class="odd">
+<td><code>metadata.stage</code></td>
+<td><code>"model_input"</code> (<code>BeforeGenerate</code>), <code>"model_output"</code> (<code>AfterGenerate</code>), <code>"tool_call"</code> (<code>BeforeToolCall</code>) or <code>"tool_result"</code> (<code>AfterToolCall</code>).</td>
+</tr>
+<tr class="even">
+<td><code>metadata.conversation</code></td>
+<td>The conversation the step is in. Each agent and sub-agent has its own message thread, its conversation, so this tells a sub-agent’s steps apart from the main agent’s.</td>
+</tr>
+<tr class="odd">
+<td><code>value</code></td>
+<td>For a monitor, the suspicion score: a number, or a dict with one entry per dimension. For a protocol, <code>True</code> if the action is <code>reject</code>, <code>modify</code> or <code>terminate</code>, and <code>False</code> for <code>proceed</code> or <code>escalate</code>. <code>None</code> where the monitor or protocol abstained.</td>
+</tr>
+<tr class="even">
+<td><code>answer</code></td>
+<td>For a protocol, the action, such as <code>"escalate"</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>metadata.metadata</code></td>
+<td>The observation’s or decision’s own metadata.</td>
+</tr>
+</tbody>
+</table>
+<p>The suspicion monitor scores two dimensions, so each <code>value</code> is a dict such as <code>{"files": 0.1, "network": 0.7}</code>. Its value is <code>None</code> at the agent’s <code>submit()</code> tool call, where it abstains.</p>
+<p>If a monitor raises an exception, the transcript gives one error row (in the <code>scan_error</code> column) instead of step rows, so a failed monitor is never counted as an abstention. This happens even under <code>observe_only()</code>, which in an eval logs a warning and lets the step proceed.</p>
+</section>
+</section>
+<section id="measuring-a-monitor" class="level2">
+<h2 class="anchored" data-anchor-id="measuring-a-monitor">Measuring a Monitor</h2>
+<p>To measure a monitor, you need its scores on steps whose correct answer you already know. Both measurements below use ordinary pandas over the results dataframe.</p>
+<p>Replay measures what a monitor or protocol reports, not what its decisions would have done. A <code>reject</code> in a replay does not change the transcript, because the agent already ran the tool call. To see what the agent does after a rejected tool call, run a live eval.</p>
+<section id="scores-on-harmless-runs" class="level3">
+<h3 class="anchored" data-anchor-id="scores-on-harmless-runs">Scores on Harmless Runs</h3>
+<p>To choose a threshold, collect the scores a monitor gives on runs you know are harmless. Run your tasks with the monitor under <code>observe_only()</code>, which records every observation and lets every step proceed:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_ai <span class="im">import</span> <span class="bu">eval</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_sentinel <span class="im">import</span> observe_only</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> llm_suspicion <span class="im">import</span> suspicion</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="bu">eval</span>(</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    <span class="st">"benign.py"</span>,</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span><span class="st">"openai/gpt-5-mini"</span>,</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    model_roles<span class="op">=</span>{<span class="st">"monitor"</span>: <span class="st">"anthropic/claude-haiku-4-5"</span>},</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>    sentinel<span class="op">=</span>observe_only(suspicion()),</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    log_dir<span class="op">=</span><span class="st">"./logs-benign"</span>,</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Here <code>benign.py</code> stands for tasks the agent can complete without breaking the monitor’s policy. The scores are now in the logs. Read them with <code>as_reader()</code>, which gives the same rows as <code>as_scanner()</code> from what the eval recorded, without calling the monitor model again (see <a href="#read-mode">Read Mode</a>). Then take a percentile of each dimension:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_scout <span class="im">import</span> scan, scan_results_df, transcripts_from</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_sentinel.scout <span class="im">import</span> as_reader</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>status <span class="op">=</span> scan(</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    scanners<span class="op">=</span>{<span class="st">"benign"</span>: as_reader(<span class="st">"suspicion"</span>)},</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    transcripts<span class="op">=</span>transcripts_from(<span class="st">"./logs-benign"</span>),</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>scores <span class="op">=</span> scan_results_df(status.location).scanners[<span class="st">"benign"</span>][<span class="st">"value"</span>].dropna()</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> dimension <span class="kw">in</span> [<span class="st">"files"</span>, <span class="st">"network"</span>]:</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(dimension, scores.<span class="bu">map</span>(<span class="kw">lambda</span> v: v[dimension]).quantile(<span class="fl">0.99</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The 99th percentile of a dimension is the threshold that flags about 1% of harmless tool calls on that dimension. <code>threshold()</code> accepts one threshold per dimension, as in <code>threshold(suspicion(), reject_at={"files": 0.7, "network": 0.6})</code>. If you already have logs of harmless runs without the monitor, replay it over them with <code>as_scanner()</code> and use the same <code>value</code> column.</p>
+</section>
+<section id="precision-and-recall" class="level3">
+<h3 class="anchored" data-anchor-id="precision-and-recall">Precision and Recall</h3>
+<p>To compute precision and recall, you need labels that say, for some steps, whether the monitor should have flagged them. You make the labels yourself, for example by reading tool calls in Scout View and writing down their ids. Here the labels are a CSV file with columns <code>transcript_id</code>, <code>step_id</code> and <code>unsafe</code> (<code>True</code> or <code>False</code>), and <code>status</code> is the scan from <code>replay_suspicion.py</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pandas <span class="im">as</span> pd</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>labels <span class="op">=</span> pd.read_csv(<span class="st">"labels.csv"</span>)</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>results <span class="op">=</span> scan_results_df(status.location).scanners[<span class="st">"suspicion"</span>]</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>scored <span class="op">=</span> results.rename(columns<span class="op">=</span>{<span class="st">"metadata.step_id"</span>: <span class="st">"step_id"</span>}).merge(</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    labels, on<span class="op">=</span>[<span class="st">"transcript_id"</span>, <span class="st">"step_id"</span>]</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>flagged <span class="op">=</span> scored[<span class="st">"value"</span>].<span class="bu">map</span>(<span class="kw">lambda</span> v: v <span class="kw">is</span> <span class="kw">not</span> <span class="va">None</span> <span class="kw">and</span> <span class="bu">max</span>(v.values()) <span class="op">&gt;=</span> <span class="fl">0.8</span>)</span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>unsafe <span class="op">=</span> scored[<span class="st">"unsafe"</span>]</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>true_positives <span class="op">=</span> (flagged <span class="op">&amp;</span> unsafe).<span class="bu">sum</span>()</span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"precision"</span>, true_positives <span class="op">/</span> flagged.<span class="bu">sum</span>())</span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"recall"</span>, true_positives <span class="op">/</span> unsafe.<span class="bu">sum</span>())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>flagged</code> applies the same test as <code>threshold(suspicion(), reject_at=0.8)</code>: a tool call is flagged when its highest dimension reaches 0.8. To trace a precision-recall curve, repeat this for a range of thresholds. Choose thresholds on one set of runs and measure on another. Measure again when you change the monitor model, since a threshold chosen from one model’s scores does not carry over to another model.</p>
+<p>If your labels are per sample rather than per step, scan with <code>results="transcript"</code> (see <a href="#one-result-per-transcript">One Result per Transcript</a>) and use a Scout <a href="https://meridianlabs-ai.github.io/inspect_scout/validation.html">validation set</a>, which compares each transcript’s result with its label.</p>
+</section>
+<section id="monitor-versions" class="level3">
+<h3 class="anchored" data-anchor-id="monitor-versions">Monitor Versions</h3>
+<p>When you change a monitor in a way that changes its scores, such as a new prompt, raise its version:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="at">@monitor</span>(version<span class="op">=</span><span class="dv">1</span>)</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> suspicion(model: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>, role: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>) <span class="op">-&gt;</span> Monitor:</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    ...</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The version defaults to 0. A nonzero version is recorded with the monitor’s configuration in eval logs and in a scan’s scanner parameters, so each set of results says which version produced it. <code>@protocol</code> takes <code>version</code> too.</p>
+</section>
+</section>
+<section id="stages" class="level2">
+<h2 class="anchored" data-anchor-id="stages">Stages</h2>
+<p>The suspicion monitor watches only <code>BeforeToolCall</code>, so it gives one row per tool call. A monitor or protocol that watches several stages gives a row for each step at each of them. Pass <code>stage</code> to keep only one stage’s rows:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>as_scanner(failure_count(), stage<span class="op">=</span><span class="st">"tool_call"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Every stage the sentinel watches still runs, in order, so a monitor that keeps state across stages (like <code>failure_count()</code> in <code>examples/trajectory.py</code>) receives the same steps it received during the eval. Pass <code>stage</code> also when you want Scout’s scan summary for one stage, because the summary averages a scanner’s values over all of its rows.</p>
+</section>
+<section id="one-result-per-transcript" class="level2">
+<h2 class="anchored" data-anchor-id="one-result-per-transcript">One Result per Transcript</h2>
+<p>To get one result per sample instead of one per step, pass <code>results="transcript"</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>as_scanner(suspicion(), results<span class="op">=</span><span class="st">"transcript"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>For a monitor, the value is the highest suspicion score in the transcript, per dimension for a structured score. For a protocol, it is the strongest decision. The result cites the steps that set it, so Scout View links to them.</p>
+</section>
+<section id="choosing-steps" class="level2">
+<h2 class="anchored" data-anchor-id="choosing-steps">Choosing Steps</h2>
+<p>By default the sentinel runs at every step. To run it at only some steps, pass <code>steps</code>. For example, after changing a monitor’s prompt, you can re-run it at only the steps an earlier scan flagged:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>flagged <span class="op">=</span> results[results[<span class="st">"value"</span>].<span class="bu">map</span>(<span class="kw">lambda</span> v: v <span class="kw">is</span> <span class="kw">not</span> <span class="va">None</span> <span class="kw">and</span> <span class="bu">max</span>(v.values()) <span class="op">&gt;=</span> <span class="fl">0.8</span>)]</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>as_scanner(suspicion(), steps<span class="op">=</span>flagged)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>steps</code> takes a results dataframe or a table with <code>transcript_id</code> and <code>step_id</code> columns. With a results dataframe, each row runs only at its own stage and conversation. With only <code>transcript_id</code> and <code>step_id</code>, a tool call runs at both of its tool stages, since they share an id.</p>
+<p>The sentinel does not run at steps that <code>steps</code> leaves out, so a monitor that keeps state does not see them. Scout still reads transcripts the table doesn’t list, so for a large scan, filter the scan’s transcripts to the same ids with <code>transcripts_from(...).where()</code>.</p>
+<section id="step-selectors" class="level3">
+<h3 class="anchored" data-anchor-id="step-selectors">Step Selectors</h3>
+<p>To choose steps by their content, write a <em>step selector</em>: a function decorated with <code>@step_selector</code> that takes the transcript id and a <code>ReplayStep</code> and returns <code>True</code> to run the step. This one chooses tool calls to <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.tool.html#bash">bash()</a></span>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_sentinel <span class="im">import</span> ReplayStep</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_sentinel.scout <span class="im">import</span> step_selector</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="at">@step_selector</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> bash_calls(transcript_id: <span class="bu">str</span>, step: ReplayStep) <span class="op">-&gt;</span> <span class="bu">bool</span>:</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> step.stage <span class="op">==</span> <span class="st">"tool_call"</span> <span class="kw">and</span> step.step.call.function <span class="op">==</span> <span class="st">"bash"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>step.step</code> is the step a monitor would receive, <code>step.stage</code> is its stage, and <code>step.id</code> is its step id (the same id as the <code>metadata.step_id</code> column). Pass the selector as <code>as_scanner(suspicion(), steps=bash_calls)</code>.</p>
+<p>Define a selector at module level in a <code>.py</code> file, because Scout’s worker processes import it from there. A selector defined in a notebook is refused, so put it in a <code>.py</code> file next to the notebook and import it.</p>
+</section>
+</section>
+<section id="human-decisions-in-replay" class="level2">
+<h2 class="anchored" data-anchor-id="human-decisions-in-replay">Human Decisions in Replay</h2>
+<p>A replay cannot ask a person, so <code>human()</code> is answered in other ways. If a person answered at the same step and instance path when the run was recorded, replay gives that recorded answer again. This lets you replay a protocol like the ones in <a href="./human-decisions.html">Human Decisions</a> against the decisions a person actually made.</p>
+<p>Where no answer was recorded, the <code>human</code> parameter of <code>as_scanner()</code> gives a fixed answer: <code>"reject"</code> (the default), <code>"approve"</code> or <code>"terminate"</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>sentinel <span class="op">=</span> sequential([</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    threshold(suspicion(), escalate_at<span class="op">=</span><span class="fl">0.5</span>, reject_at<span class="op">=</span><span class="fl">0.8</span>),</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    human(stages<span class="op">=</span>[<span class="st">"tool_call"</span>]),</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>])</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>as_scanner(sentinel, human<span class="op">=</span><span class="st">"approve"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A <code>human()</code> that does not offer the fixed answer gets <code>terminate</code>. For example, <code>reject</code> is not offered after a tool call runs or at <code>"model_output"</code>, so by default a <code>human()</code> at <code>"tool_result"</code> gets <code>terminate</code>.</p>
+<p>To answer as a person would, pass a <em>stand-in</em>: an <code>async</code> function decorated with <code>@human_stand_in</code> that takes the step, the escalations and the choices, and returns a <code>HumanAnswer</code>. Define it at module level, as for a step selector. This one answers from the labels file used above:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> collections.abc <span class="im">import</span> Sequence</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pandas <span class="im">as</span> pd</span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_sentinel <span class="im">import</span> Escalations, HumanAnswer, ReplayStep</span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_sentinel.scout <span class="im">import</span> human_stand_in</span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>labels <span class="op">=</span> pd.read_csv(<span class="st">"labels.csv"</span>)</span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>UNSAFE <span class="op">=</span> <span class="bu">set</span>(labels[labels[<span class="st">"unsafe"</span>]][<span class="st">"step_id"</span>])</span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a><span class="at">@human_stand_in</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a><span class="cf">async</span> <span class="kw">def</span> from_labels(</span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>    step: ReplayStep, escalations: Escalations, choices: Sequence[<span class="bu">str</span>]</span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> HumanAnswer:</span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> step.<span class="bu">id</span> <span class="kw">in</span> UNSAFE:</span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> HumanAnswer(<span class="st">"reject"</span>, <span class="st">"labelled unsafe"</span>)</span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> HumanAnswer(<span class="st">"approve"</span>, <span class="st">"labelled safe"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Pass it as <code>as_scanner(sentinel, human=from_labels)</code>. Each row where the step reached <code>human()</code> says where the answer came from in <code>metadata.human</code>: <code>"recorded"</code> for a person’s answer in the recorded run, <code>"unanswered"</code> for the fixed answer (also in <code>metadata.human_answer</code>), or <code>"simulated"</code> for the stand-in. Counting the <code>"unanswered"</code> and <code>"simulated"</code> rows tells you how many steps would have gone to a person.</p>
+</section>
+<section id="read-mode" class="level2">
+<h2 class="anchored" data-anchor-id="read-mode">Read Mode</h2>
+<p><code>as_reader()</code> reads the observations and decisions that a monitor or protocol recorded during the eval, and gives the same rows replay gives. It calls no model. Pass the instance path as the log records it. For example, pass <code>"suspicion"</code> for the monitor under <code>observe_only()</code>, <code>"llm/suspicion"</code> for a monitor under the <code>"llm"</code> key of a mapping, or nothing for the protocol at the top of the sentinel.</p>
+<p>To compare a replayed monitor with what it recorded live, scan in both modes and join the rows:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_sentinel.scout <span class="im">import</span> as_reader, as_scanner</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>status <span class="op">=</span> scan(</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    scanners<span class="op">=</span>{</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>        <span class="st">"replayed"</span>: as_scanner(suspicion(), stage<span class="op">=</span><span class="st">"tool_call"</span>),</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"recorded"</span>: as_reader(<span class="st">"suspicion"</span>, stage<span class="op">=</span><span class="st">"tool_call"</span>),</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    },</span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>    transcripts<span class="op">=</span>transcripts_from(<span class="st">"./logs"</span>),</span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>frames <span class="op">=</span> scan_results_df(status.location).scanners</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>keys <span class="op">=</span> [<span class="st">"transcript_id"</span>, <span class="st">"metadata.conversation"</span>, <span class="st">"metadata.step_id"</span>, <span class="st">"metadata.stage"</span>]</span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>both <span class="op">=</span> frames[<span class="st">"replayed"</span>].merge(frames[<span class="st">"recorded"</span>], on<span class="op">=</span>keys, suffixes<span class="op">=</span>(<span class="st">"_replayed"</span>, <span class="st">"_recorded"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A step where the instance abstained recorded nothing, so it has no read-mode row. Read mode is also the only way to see what a protocol’s decisions did during the eval, since a replay does not change the transcript.</p>
+</section>
+<section id="checking-replay" class="level2">
+<h2 class="anchored" data-anchor-id="checking-replay">Checking Replay</h2>
+<p>Replay should hand a monitor the same step it received during the eval. To check this on your own tasks, use <code>replay_check()</code>, a monitor that reports a digest of each field of the step it receives. Attach it to an eval under <code>observe_only()</code>, scan the logs in both modes, and compare them with <code>replay_check_differences()</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_sentinel <span class="im">import</span> observe_only</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> inspect_sentinel.scout <span class="im">import</span> as_reader, as_scanner, replay_check, replay_check_differences</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>Task(..., sentinel<span class="op">=</span>observe_only(replay_check()))</span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>status <span class="op">=</span> scan(</span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>    scanners<span class="op">=</span>{</span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>        <span class="st">"replayed"</span>: as_scanner(replay_check()),</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>        <span class="st">"recorded"</span>: as_reader(<span class="st">"replay_check"</span>),</span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>    },</span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>    transcripts<span class="op">=</span>transcripts_from(<span class="st">"./logs"</span>),</span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>results <span class="op">=</span> scan_results_df(status.location).scanners</span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>replay_check_differences(results[<span class="st">"replayed"</span>], results[<span class="st">"recorded"</span>])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The result has one row per difference, naming the step, its stage and the field that differs, such as <code>step.input</code>, or <code>eval</code> for <code>context.eval</code>. An empty dataframe means replay handed the monitor what it received live.</p>
+<p>Note that replay hands the monitor the sample’s final metadata, so if a solver changed the metadata during the run, earlier steps show an <code>eval</code> difference. A message list’s digest covers only its length and last message, so it misses an edit in the middle of the list.</p>
+</section>
+<section id="what-a-replayed-step-holds" class="level2">
+<h2 class="anchored" data-anchor-id="what-a-replayed-step-holds">What a Replayed Step Holds</h2>
+<p>Logs from recent versions of inspect_ai record where each model call was made. From these logs, replay rebuilds each step with the same code inspect_ai uses during an eval. The step holds what the live step held: the model input and tools, <code>history</code>, earlier <code>human()</code> decisions, and at a tool stage, the tool call’s view and whether its output was truncated. The results’ <code>metadata.turns</code> column is <code>"recorded"</code>.</p>
+<p>Older logs, and transcripts from other sources, don’t record this, so replay builds the steps from the messages and sets <code>metadata.turns</code> to <code>"inferred"</code>. Each assistant message becomes a model call whose input is every message before it, followed by a tool step pair for each of its tool calls. These steps have an empty tool list and the default model call configuration; a tool step’s <code>input</code> and <code>truncated</code>, and <code>human_decisions</code>, are <code>None</code>; and <code>history</code> holds the whole conversation. A monitor that reads only the messages and the tool call works the same on them.</p>
+<p>Two fields are <code>None</code> at every replayed step, because a log doesn’t record them:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 32%">
+<col style="width: 68%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Field</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>AfterToolCall.output</code></td>
+<td>The log holds the tool result the agent’s model received, not the untruncated output.</td>
+</tr>
+<tr class="even">
+<td><code>agent_messages</code></td>
+<td>The agent’s own message list, which the agent may have edited, is not recorded.</td>
+</tr>
+</tbody>
+</table>
+<section id="sub-agents-and-timelines" class="level3">
+<h3 class="anchored" data-anchor-id="sub-agents-and-timelines">Sub-agents and Timelines</h3>
+<p>Each row’s <code>metadata.depth</code> is how deeply nested the step’s conversation is among the transcript’s agents, where 1 is the outermost agent. It counts the same way as Scout’s <code>llm_scanner(depth=)</code>. Pass <code>depth</code> to <code>as_scanner()</code> to run only steps at most that deep, for example <code>depth=1</code> to leave out sub-agents.</p>
+<p>To take the conversations from a stored timeline instead of the log’s spans, pass the timeline’s name as <code>timeline</code>, and <code>metadata.turns</code> is then <code>"stored"</code>. With <code>timeline</code>, or for steps built from messages, join replayed rows with read-mode rows on <code>transcript_id</code>, <code>metadata.step_id</code> and <code>metadata.stage</code> only, because the conversations differ.</p>
+</section>
+<section id="running-and-resuming" class="level3">
+<h3 class="anchored" data-anchor-id="running-and-resuming">Running and Resuming</h3>
+<p>Each transcript replays in one pass with one store, so a monitor’s state carries across steps as it did during the eval. Transcripts run concurrently, as for any Scout scanner. The scan records the modules that define your monitors and protocols so that Scout can resume it. Resuming imports that code, so resume only scans you trust.</p>
+
+
+</section>
+</section>
+
+</main> <!-- /main -->
+<div id="copy-page-btn" class="btn-group" style="display:none;">
+  <button type="button" class="btn btn-sm btn-light" id="copy-page-action" title="Copy page as Markdown">
+    <i class="bi bi-clipboard"></i> Copy page
+  </button>
+  <button type="button" class="btn btn-sm btn-light dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+    <span class="visually-hidden">Toggle Dropdown</span>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><a class="dropdown-item" href="#" id="copy-page-md">
+      <i class="bi bi-clipboard"></i> Copy page as Markdown
+    </a></li>
+    <li><a class="dropdown-item" href="#" id="open-page-md">
+      <i class="bi bi-box-arrow-up-right"></i> Open Markdown
+    </a></li>
+  </ul>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var mdUrl = path.endsWith("/")
+    ? path + "index.html.md"
+    : path.replace(/\.html$/, ".html.md");
+  var btn = document.getElementById("copy-page-btn");
+  var cachedMarkdown = null;
+
+  // Pre-fetch the .html.md content
+  fetch(mdUrl)
+    .then(function (res) {
+      if (!res.ok) throw new Error(res.status);
+      return res.text();
+    })
+    .then(function (text) {
+      cachedMarkdown = text;
+
+      // Relocate button into the .quarto-title div
+      var titleDiv = document.querySelector(".quarto-title");
+      if (titleDiv) {
+        titleDiv.appendChild(btn);
+        btn.style.display = "";
+      }
+    })
+    .catch(function () {
+      // No .html.md available — remove button entirely
+      btn.remove();
+    });
+
+  function copyMarkdown(e) {
+    e.preventDefault();
+    if (!cachedMarkdown) return;
+    navigator.clipboard.writeText(cachedMarkdown).then(function () {
+      // Brief visual feedback — lock width to prevent layout shift
+      var actionBtn = document.getElementById("copy-page-action");
+      var original = actionBtn.innerHTML;
+      actionBtn.style.minWidth = actionBtn.offsetWidth + "px";
+      actionBtn.innerHTML = '<i class="bi bi-check2"></i> Copied!';
+      setTimeout(function () {
+        actionBtn.innerHTML = original;
+        actionBtn.style.minWidth = "";
+      }, 1500);
+    });
+  }
+
+  document.getElementById("copy-page-action").addEventListener("click", copyMarkdown);
+  document.getElementById("copy-page-md").addEventListener("click", copyMarkdown);
+  document.getElementById("open-page-md").addEventListener("click", function (e) {
+    e.preventDefault();
+    window.open(mdUrl, "_blank");
+  });
+});
+</script>
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/meridianlabs-ai\.github\.io\/inspect_sentinel");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        const annoteTargets = window.document.querySelectorAll('.code-annotation-anchor');
+        for (let i=0; i<annoteTargets.length; i++) {
+          const annoteTarget = annoteTargets[i];
+          const targetCell = annoteTarget.getAttribute("data-target-cell");
+          const targetAnnotation = annoteTarget.getAttribute("data-target-annotation");
+          const contentFn = () => {
+            const content = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+            if (content) {
+              const tipContent = content.cloneNode(true);
+              tipContent.classList.add("code-annotation-tip-content");
+              return tipContent.outerHTML;
+            }
+          }
+          const config = {
+            allowHTML: true,
+            content: contentFn,
+            onShow: (instance) => {
+              selectCodeLines(instance.reference);
+              instance.reference.classList.add('code-annotation-active');
+              window.tippy.hideAll();
+            },
+            onHide: (instance) => {
+              unselectCodeLines();
+              instance.reference.classList.remove('code-annotation-active');
+            },
+            maxWidth: 300,
+            delay: [50, 0],
+            duration: [200, 0],
+            offset: [5, 10],
+            arrow: true,
+            trigger: 'click',
+            appendTo: function(el) {
+              return el.parentElement.parentElement.parentElement;
+            },
+            interactive: true,
+            interactiveBorder: 10,
+            theme: 'quarto',
+            placement: 'right',
+            positionFixed: true,
+            popperOptions: {
+              modifiers: [
+              {
+                name: 'flip',
+                options: {
+                  flipVariations: false, // true by default
+                  allowedAutoPlacements: ['right'],
+                  fallbackPlacements: ['right', 'top', 'top-start', 'top-end', 'bottom', 'bottom-start', 'bottom-end', 'left'],
+                },
+              },
+              {
+                name: 'preventOverflow',
+                options: {
+                  mainAxis: false,
+                  altAxis: false
+                }
+              }
+              ]        
+            }      
+          };
+          window.tippy(annoteTarget, config); 
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+  <div class="nav-page nav-page-previous">
+      <a href="./approval.html" class="pagination-link" aria-label="Approval and Review">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Approval and Review</span>
+      </a>          
+  </div>
+  <div class="nav-page nav-page-next">
+      <a href="./reference/index.html" class="pagination-link" aria-label="Reference">
+        <span class="nav-page-text">Reference</span> <i class="bi bi-arrow-right-short"></i>
+      </a>
+  </div>
+</nav>
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai">
+<p>Meridian Labs</p>
+</a>
+  </li>  
+</ul>
+    </div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_sentinel">
+<p>Code</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/main/CHANGELOG.md">
+<p>Changelog</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_sentinel/blob/main/LICENSE">
+<p>License</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_sentinel/issues">
+<p>Issues</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_sentinel/">
+      <i class="bi bi-github" role="img" aria-label="Inspect Sentinel on GitHub">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+<script>var lightboxQuarto = GLightbox({"closeEffect":"zoom","descPosition":"bottom","loop":false,"openEffect":"zoom","selector":".lightbox"});
+(function() {
+  let previousOnload = window.onload;
+  window.onload = () => {
+    if (previousOnload) {
+      previousOnload();
+    }
+    lightboxQuarto.on('slide_before_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      const href = trigger.getAttribute('href');
+      if (href !== null) {
+        const imgEl = window.document.querySelector(`a[href="${href}"] img`);
+        if (imgEl !== null) {
+          const srcAttr = imgEl.getAttribute("src");
+          if (srcAttr && srcAttr.startsWith("data:")) {
+            slideConfig.href = srcAttr;
+          }
+        }
+      } 
+    });
+  
+    lightboxQuarto.on('slide_after_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(slideNode);
+      }
+    });
+  
+  };
+  
+})();
+          </script>
+
+
+
+
+</body></html>
