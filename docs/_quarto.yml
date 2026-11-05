@@ -15,10 +15,8 @@ inspect-docs:
         menu:
           - text: Basics
             href: index.qmd
-          - text: Writing Sentinels
-            href: monitors.qmd
-          - text: Composing
-            href: composition.qmd
+          - text: Components
+            href: stages.qmd
           - text: Running
             href: configuration.qmd
           - text: Development
@@ -28,20 +26,18 @@ inspect-docs:
   navigation:
     - text: Basics
       contents:
-        - text: Getting Started
+        - text: Welcome
           href: index.qmd
+        - href: tutorial.qmd
         - href: transcript.qmd
-    - text: Writing Sentinels
+    - text: Components
       contents:
+        - href: stages.qmd
         - href: monitors.qmd
+        - href: llm-monitors.qmd
         - href: protocols.qmd
+        - href: human-decisions.qmd
         - href: state.qmd
-        - text: Host and Model Roles
-          href: host.qmd
-    - text: Composing
-      contents:
-        - href: composition.qmd
-        - href: final-decisions.qmd
     - text: Running
       contents:
         - href: configuration.qmd
@@ -49,9 +45,6 @@ inspect-docs:
     - text: Development
       contents:
         - href: replay.qmd
-        - href: calibration.qmd
-        - href: deployment.qmd
-        - href: portability.qmd
   sidebar: unified
   external_refs:
     inspect_ai: https://inspect.aisi.org.uk

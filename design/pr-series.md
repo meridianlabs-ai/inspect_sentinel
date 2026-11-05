@@ -624,6 +624,10 @@ Built in inspect_ai #5986 (2026-10-21), with this repository's docs and docstrin
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands. Grouped by priority, decided by the maintainer on 2026-10-02, in the order to take them.
 
+### Next: viewer pairing
+
+- **A before-call sentinel step renders as its own row instead of inside the tool card (found 2026-11-05).** In a one-sample run of `no_network()` plus `observe_only(suspicion())` (inspect_ai 0.3.288.dev70, bundled viewer at ts-mono 91f2be58, which matches ts-mono main for `transform/toolSentinels.ts`, `ToolEventView.tsx` and `SentinelEventView.tsx`), the rejected `bash()` call shows **Did not run** in its card and the sentinel step as a separate **SENTINEL before call** row below it. The three `SentinelEvent`s sit in a sentinel span, have `stage="tool_call"` and `step_id` equal to the `ToolEvent`'s `id`, and come before it, so `pairToolSentinels()` should pair them into the card. Find out why it doesn't, fix it, then retake `docs/images/viewer-rejected-tool-call.png` (kept locally, not committed) and place it on the Log Viewer page (`docs/transcript.qmd`), whose text describes the in-card layout.
+
 ### R7 replay: waiting on other PRs
 
 - **Replay without recorded origins (R7 PR 5, waiting on R7 PR 6).** A transcript whose model events record no `origin` replays from its messages (`scout/_steps.py`, `transcript_steps`), with `"turns": "inferred"`, and `as_scanner(timeline=)` raises for it, until inspect_ai infers its turns from the timeline; `as_scanner(human_approvers=)` comes with it.

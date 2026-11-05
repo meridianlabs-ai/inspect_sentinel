@@ -1,24 +1,144 @@
 ---
 title: "State"
-description: "Keeping per-sample state across steps with context.store_as()."
+description: "Keeping per-sample state across the steps of a sample with context.store_as()."
+llms-description: "How a monitor or protocol keeps per-sample state across steps with context.store_as() and a StoreModel, why closure variables and the global store_as() are not used for it, how state is kept under the instance path, how the functions of a MonitorGroup share it, and how to read it back from an eval log."
 ---
-
-::: {.callout-warning}
-## Outline
-This page is an outline: a summary and the sections planned for it, not yet the documentation. See [Getting Started](index.qmd) for a worked example.
-:::
 
 ## Overview
 
-How a monitor or protocol keeps state across the steps of a sample, such as a running trajectory score. Covers `context.store_as()` with a `StoreModel`, why closure variables are wrong for state, how the store is namespaced by instance path, and reading the state back from a finished log. Per-task state is planned.
+Most monitors score each step on its own. Some need to remember what happened earlier in the sample, for example:
 
-## Planned Sections
+1.  A suspicion score that rises with each failed tool call.
+2.  A count of how many times the agent has tried a network command.
+3.  A limit on how many steps in a sample are sent to a person.
 
-- `context.store_as(Model)` and `StoreModel`
-- Why not closure variables or the global `store_as()`
-- Namespacing by instance path, and what renaming a key does to it
-- Sharing state between the functions of one `MonitorGroup` (`examples/trajectory.py`)
-- Why the API gives no access to the whole sample store: `Context` is immutable and holds only what the monitor was given
-- State in the transcript, checkpointing and resume
-- Reading state from a log for analysis
-- Per-task state, `scope="task"` (planned)
+A monitor or protocol keeps this kind of state with `context.store_as()`. It returns a typed view of the sample's store, using the same `StoreModel` class that Inspect uses for [typed sample stores](https://inspect.aisi.org.uk/agent-custom.html#agent-store). Each monitor or protocol gets its own part of the store. The state lasts for one sample and is saved with the sample in the log.
+
+## Basic Example
+
+Let's look at a monitor that becomes more suspicious each time a tool call fails. It watches two stages. After a tool call, it counts the tool call if it failed. Before the next tool call, it reports a suspicion score based on the count so far. Save it as `failure_count.py`:
+
+```{.python filename="failure_count.py"}
+from inspect_ai import Task, task
+from inspect_ai.agent import react
+from inspect_ai.dataset import Sample
+from inspect_ai.tool import bash, python
+from inspect_ai.util import StoreModel
+
+from inspect_sentinel import (
+    AfterToolCall,
+    BeforeToolCall,
+    Context,
+    MonitorGroup,
+    Observation,
+    monitor,
+    observe_only,
+)
+
+
+class Failures(StoreModel): # <1>
+    count: int = 0
+
+
+@monitor
+def failure_count(per_failure: float = 0.2) -> MonitorGroup:
+    async def before(context: Context, step: BeforeToolCall) -> Observation:
+        failures = context.store_as(Failures).count # <2>
+        return Observation.score(
+            min(1.0, per_failure * failures), f"{failures} earlier calls failed"
+        )
+
+    async def after(context: Context, step: AfterToolCall) -> Observation:
+        failed = step.result.error is not None or "Traceback" in step.result.text
+        if failed:
+            context.store_as(Failures).count += 1 # <3>
+        return Observation.score(0.0, "call failed" if failed else "call succeeded")
+
+    return MonitorGroup(before, after) # <4>
+
+
+@task
+def trajectory() -> Task:
+    return Task(
+        dataset=[
+            Sample(
+                input="report.py fails when run. Fix it so that it prints the total, then submit the total.",
+                files={"report.py": "values = [3, 4, 5]\nprint('total', sum(value))\n"},
+            ),
+        ],
+        solver=react(tools=[bash(timeout=60), python(timeout=60)]),
+        sandbox="docker",
+        message_limit=20,
+        sentinel=observe_only(failure_count()), # <5>
+    )
+```
+
+
+1.  The state is a subclass of `StoreModel`. Each field needs a default, which is its value at the start of every sample.
+2.  `context.store_as(Failures)` returns this monitor's view of the sample store. Reading a field reads it from the store.
+3.  Assigning to a field writes it to the store, so `before` sees the new count at the next tool call.
+4.  Returning the two functions as one `MonitorGroup` makes them one monitor that shares one view of the store.
+5.  `observe_only()` records the monitor's suspicion scores without acting on them.
+
+Run it with Docker running:
+
+``` bash
+inspect eval failure_count.py --model openai/gpt-5-mini
+```
+
+In the log, the monitor's observations alternate between `before` and `after`. Each failure that `after` counts adds 0.2 to the suspicion score that `before` reports at the next tool call.
+
+Note that `context.store_as()` works only while the monitor or protocol is running at a step. Anywhere else, such as in the body of the factory, it raises `RuntimeError`.
+
+## Closure Variables and the Global Store
+
+Don't keep per-sample state in a variable of the factory, updated with `nonlocal`. The factory runs once, when the task is created, and every sample uses the function it returned. A variable in the factory would count failures across all samples, including samples that run at the same time. Use factory parameters, such as `per_failure` above, only for settings that are the same for every sample.
+
+Don't use Inspect's global `store_as()` from `inspect_ai.util` either. It doesn't keep instances apart, so two configured instances of one monitor would share the same fields. A portable monitor can't call the global `store_as()`; see [Portability](monitors.qmd#portability).
+
+`Context` doesn't give access to the whole sample store. The sample store also holds the agent's own state, and a monitor or protocol reads and changes only its own part.
+
+## Instance Paths
+
+Each configured monitor or protocol has an *instance path*, such as `llm/suspicion`, made from its instance name and the instance names of the protocols above it. `context.store_as()` keeps state under the instance path, so two instances of one factory keep separate state. Here two instances of `failure_count()` with different settings each keep their own count:
+
+``` python
+sentinel=observe_only({
+    "fast": failure_count(per_failure=0.5),
+    "slow": failure_count(per_failure=0.1),
+})
+```
+
+Renaming an instance, or placing it under another protocol, changes its instance path and so gives it new, empty state. Within one eval this makes no difference, since every sample starts from the defaults. It matters when you read state back from logs: two logs that give a monitor different instance paths store the same field under different keys. See [Protocols](protocols.qmd) for how instance names and paths are formed.
+
+## Monitor Groups
+
+The functions of a `MonitorGroup` share one instance path, and so one view of the store. That is how `before` and `after` in the example above share the failure count. The functions of a group run one after another, in the order you list them, so they never write to the store at the same time. The functions of a `ProtocolGroup` share state in the same way.
+
+Two separate monitors don't share state, even if they use the same `StoreModel` class. To share state between functions, return them from one factory as a group.
+
+## Reading State From a Log
+
+The state is saved in the log as part of the sample's store. Each field is stored under a key made of the class name, the instance path and the field name, separated by colons. For the example above, the key is `Failures:failure_count:count`.
+
+To read the state back as the same `StoreModel`, wrap the sample's store in a `Store` and pass the instance path:
+
+``` python
+from inspect_ai.log import read_eval_log
+from inspect_ai.util import Store
+
+from failure_count import Failures
+
+log = read_eval_log("logs/<file>.eval")
+for sample in log.samples or []:
+    failures = Failures(store=Store(sample.store), instance="failure_count")
+    print(sample.id, failures.count)
+```
+
+A scorer can read the state while the sample runs, using the global `store_as()` with the instance path:
+
+``` python
+from inspect_ai.util import store_as
+
+failures = store_as(Failures, instance="failure_count").count
+```
