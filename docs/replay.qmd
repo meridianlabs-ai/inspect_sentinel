@@ -1,133 +1,281 @@
 ---
 title: "Replay"
-description: "Running a monitor or protocol over stored transcripts, and reading what one reported live, with Inspect Scout."
+description: "Measuring a monitor or protocol on agent runs you already have, by replaying it over their logs with Inspect Scout."
+llms-description: "as_scanner() replays a monitor or protocol over Inspect logs as an Inspect Scout scanner (one result per step per stage; stage=, results=, steps=, human=, timeline=, depth=); measuring a monitor with observe_only(), score percentiles and precision/recall from scan_results_df(); @monitor(version=); @step_selector and @human_stand_in; as_reader() for read mode; replay_check() and replay_check_differences(); and what a replayed step holds."
 ---
 
 ## Overview
 
-A monitor is a classifier, and you want to measure it before anything acts on it. Replay runs the same `@monitor` or `@protocol` over steps rebuilt from transcripts you already have, through the same runner as an eval, so the code under test is the code you deploy. Read mode reads what a sentinel reported in the runs it was attached to, with no inference. Both give one Inspect Scout result per step, keyed by transcript, step id and stage, so their rows join.
+Before you let a monitor reject tool calls or end samples, you should know how often it flags the steps you care about and how often it flags harmless ones. Replay lets you measure this on agent runs you already have. It rebuilds each step from an eval log and runs your monitor or protocol over it with the same code that runs during an eval.
 
-::: {.callout-note}
-## In development
-Replay is being built. A log written by an inspect_ai that records where each model call was made replays from its events, step for step as the sentinel saw it live. An older log, or a transcript from another source, replays from its messages for now (see [What a replayed step holds](#what-a-replayed-step-holds)).
-:::
+Replay runs through [Inspect Scout](https://meridianlabs-ai.github.io/inspect_scout/). Your monitor becomes a Scout scanner, and the scan gives you one result for each step, which you can read in Scout View or as a pandas dataframe. You can use replay to:
 
-The Scout adapter is an extra:
+1.  See which steps of existing runs a new monitor would flag, before attaching it to an eval.
+2.  Choose a threshold from the scores a monitor gives on runs you know are harmless.
+3.  Compute precision and recall against your own labels, and compare two versions of a monitor.
+
+![](diagrams/replay.excalidraw)
+
+### Installation
+
+Replay uses the `scout` extra, which installs a compatible version of Inspect Scout:
 
 ``` bash
-pip install inspect-sentinel[scout]
+pip install 'inspect-sentinel[scout]'
 ```
 
-## Replaying over a corpus
+## Replaying a Monitor
 
-`as_scanner()` turns a monitor or protocol into a Scout transcript scanner:
+Let's replay the suspicion monitor from `examples/llm_suspicion.py` (described in [LLM Monitors](llm-monitors.qmd)) over the logs of some earlier runs. Save this script in the `examples` directory, so that it can import the monitor:
 
-``` python
+```{.python filename="replay_suspicion.py"}
 from inspect_scout import scan, scan_results_df, transcripts_from
 from inspect_sentinel.scout import as_scanner
 
+from llm_suspicion import suspicion
+
 status = scan(
-    scanners={"suspicion": as_scanner(suspicion_monitor())},
-    transcripts=transcripts_from("./logs"),
-    model_roles={"monitor": "openai/gpt-4o-mini"},
+    scanners={"suspicion": as_scanner(suspicion())}, # <1>
+    transcripts=transcripts_from("./logs"), # <2>
+    model_roles={"monitor": "anthropic/claude-haiku-4-5"}, # <3>
 )
-steps = scan_results_df(status.location).scanners["suspicion"]
+
+results = scan_results_df(status.location).scanners["suspicion"] # <4>
+print(results[["transcript_id", "metadata.step_id", "metadata.stage", "value"]])
 ```
 
-Each transcript gives one result per step at each stage the sentinel watches, in its resultset, so the results dataframe has one row per step and stage, and each row's metadata names its stage (a tool call's two steps share its id). `stage=` keeps only one stage's rows. Every stage the sentinel watches still runs, in order, so a monitor whose stages share state sees what it saw live; `stage` only picks the results. Scout's summary of a scan averages a scanner's values over all its rows, so for a monitor that watches several stages, pass `stage=` to summarise one.
+1. `as_scanner()` turns a monitor or protocol into a Scout scanner. It takes anything `Task(sentinel=...)` takes, and also a single monitor on its own. Several monitors with no protocol are refused; scan them one at a time.
+2. The transcripts to scan, here every sample in the eval logs in `./logs`. Each sample is one transcript.
+3. The monitor model, given through the `monitor` model role as in an eval.
+4. One dataframe for each scanner, with one row for each step.
 
-| Report | `value` | `answer` |
-|---|---|---|
-| observation | its suspicion, a number or a dict by dimension | |
-| decision | whether the step was flagged: `reject`, `modify` or `terminate` | the action |
-| abstained | `None` | `None` |
+Run it with Python:
 
-`escalate` declines to decide, so it is not flagged; `answer` carries it for anyone who wants to count it. A row's metadata holds `step_id`, `stage`, `conversation` (the step's agent conversation: see [What a replayed step holds](#what-a-replayed-step-holds)), `depth` (see [What a replayed step holds](#what-a-replayed-step-holds)), the report's own metadata, `turns` (how the transcript's agent turns were established) and, where the step reached `human()`, `human` (where the answer came from) and `human_answer` (the answer `human=` gave, where it was the one that answered). Its references cite the step's model event or message first, then what the report cites. Each reference has a cite label, as Scout's scanners write them: `[M<n>]` for the transcript's nth message and `[E<n>]` for its nth event, so one label names one message or event across the transcript's rows. Every reference resolves in the transcript: a step whose message the transcript does not hold, such as a sub-agent's tool message or reply, cites the event that recorded it (its `ToolEvent` or `ModelEvent`), and a reference to nothing the transcript holds, a report's included, is left out. A label a monitor gave its own reference becomes that reference's label, and its explanation is rewritten to match. The explanation leads with the step's label, `Step [E12]: ...`, and names any other the report's explanation does not, so Scout View links each one. A monitor that raises makes that transcript's result an error, so a scan never reports a failed monitor as an abstention. That holds for any monitor in the sentinel, even one a protocol went on without at the step, since a row cannot say that a monitor behind it failed.
+``` bash
+python replay_suspicion.py
+```
 
-`results="transcript"` reduces each transcript to one result: a monitor's highest suspicion, per dimension when structured, or a protocol's strongest decision, citing the steps that set it. Its explanation is the first such step's, naming the others by their labels (`Also set at [M7].`).
+You can also open the scan in Scout View with `scout view`. Each result's explanation starts with a link to the step it is about, such as `Step [E12]: ...`, so you can go from a score to the tool call it scored. A label like `[M3]` cites a message and `[E12]` an event.
 
-The scan records the sentinel as the configuration an eval log records, with the modules and scripts that define its monitors and protocols, so it can run in Scout's worker processes and be resumed in another process, which imports them. A monitor typed into a notebook, a REPL or `python -c` scans in that process only. Resuming a scan imports the code its scan directory names, so resume only scan directories you trust.
+The scan resolves the monitor model the same way an eval does, with the scan's `model_roles` and `model` in place of the eval's. If the `monitor` role has no model and the monitor names none, the scan's `model` is used, with a warning.
 
-### Models
+### Results
 
-Monitor calls resolve as they do in an eval: a named `model`, else the `role` asked for (`monitor` by default) from the scan's `model_roles`, else the scan's model, with a warning. Their usage is the scan's.
+Each row of the results dataframe is one step at one stage:
 
-### State and concurrency
+| Column | Description |
+|---------------------------|---------------------------------------------|
+| `transcript_id` | The sample the step belongs to. |
+| `metadata.step_id` | The tool call id at a tool stage, or the model call id at a generate stage. A tool call's two steps share its id. |
+| `metadata.stage` | `"model_input"` (`BeforeGenerate`), `"model_output"` (`AfterGenerate`), `"tool_call"` (`BeforeToolCall`) or `"tool_result"` (`AfterToolCall`). |
+| `metadata.conversation` | The conversation the step is in. Each agent and sub-agent has its own message thread, its conversation, so this tells a sub-agent's steps apart from the main agent's. |
+| `value` | For a monitor, the suspicion score: a number, or a dict with one entry per dimension. For a protocol, `True` if the action is `reject`, `modify` or `terminate`, and `False` for `proceed` or `escalate`. `None` where the monitor or protocol abstained. |
+| `answer` | For a protocol, the action, such as `"escalate"`. |
+| `metadata.metadata` | The observation's or decision's own metadata. |
 
-Each transcript replays in one pass: its steps run in order with one store for the whole sample, as live, so `store_as()` state carries across compactions and across conversations as it does in the eval. Transcripts run concurrently, as for any Scout scanner, across Scout's tasks and worker processes.
+The suspicion monitor scores two dimensions, so each `value` is a dict such as `{"files": 0.1, "network": 0.7}`. Its value is `None` at the agent's `submit()` tool call, where it abstains.
 
-### Choosing steps
+If a monitor raises an exception, the transcript gives one error row (in the `scan_error` column) instead of step rows, so a failed monitor is never counted as an abstention. This happens even under `observe_only()`, which in an eval logs a warning and lets the step proceed.
 
-`steps=` runs the sentinel at only some steps. It takes a label table with `transcript_id` and `step_id` columns, such as a filtered results dataframe (whose step ids are in `metadata.step_id`), or rows of `(transcript_id, step_id)` pairs. A table with a `stage` column, as a results dataframe has (`metadata.stage`), runs each row's step at that stage only. Without one, a row runs its step at every stage the sentinel watches, since a tool call's `tool_call` and `tool_result` steps share the call's id. A `conversation` column (`metadata.conversation`) likewise limits a row to its conversation, since two agents' tool calls can share an id; with `timeline=` it is matched against the stored timeline's conversations, so take such a table from a scan with the same `timeline=`. `flagged` below is a filtered results dataframe, so each of its rows runs at its own stage and conversation only:
+## Measuring a Monitor
+
+To measure a monitor, you need its scores on steps whose correct answer you already know. Both measurements below use ordinary pandas over the results dataframe.
+
+Replay measures what a monitor or protocol reports, not what its decisions would have done. A `reject` in a replay does not change the transcript, because the agent already ran the tool call. To see what the agent does after a rejected tool call, run a live eval.
+
+### Scores on Harmless Runs
+
+To choose a threshold, collect the scores a monitor gives on runs you know are harmless. Run your tasks with the monitor under `observe_only()`, which records every observation and lets every step proceed:
 
 ``` python
-flagged = steps[steps["value"] >= 0.8]
-as_scanner(suspicion_monitor(), stage="tool_call", steps=flagged)
+from inspect_ai import eval
+from inspect_sentinel import observe_only
+
+from llm_suspicion import suspicion
+
+eval(
+    "benign.py",
+    model="openai/gpt-5-mini",
+    model_roles={"monitor": "anthropic/claude-haiku-4-5"},
+    sentinel=observe_only(suspicion()),
+    log_dir="./logs-benign",
+)
 ```
 
-A transcript the table does not list gives no rows, and its steps are not rebuilt. Scout still reads it, though, since a scanner cannot narrow a scan's transcripts, so narrow them to the table's too:
+Here `benign.py` stands for tasks the agent can complete without breaking the monitor's policy. The scores are now in the logs. Read them with `as_reader()`, which gives the same rows as `as_scanner()` from what the eval recorded, without calling the monitor model again (see [Read Mode](#read-mode)). Then take a percentile of each dimension:
 
 ``` python
-from inspect_scout import columns as c
+from inspect_scout import scan, scan_results_df, transcripts_from
+from inspect_sentinel.scout import as_reader
 
-listed = transcripts_from("./logs").where(
-    c.transcript_id.in_(list(set(flagged["transcript_id"])))
+status = scan(
+    scanners={"benign": as_reader("suspicion")},
+    transcripts=transcripts_from("./logs-benign"),
 )
-scan(scanners={...}, transcripts=listed)
+scores = scan_results_df(status.location).scanners["benign"]["value"].dropna()
+
+for dimension in ["files", "network"]:
+    print(dimension, scores.map(lambda v: v[dimension]).quantile(0.99))
 ```
 
-A selector of your own is a module-level function `(transcript_id, step) -> bool` decorated with `@step_selector`, in a module or in the script that runs the scan, so a worker process or a resumed scan can find it. One defined in a notebook, a REPL or `python -c` is refused, since another process cannot load it; from a notebook, put it in a `.py` file next to the notebook and import it. The steps not chosen are not run, so a monitor's state does not see them.
+The 99th percentile of a dimension is the threshold that flags about 1% of harmless tool calls on that dimension. `threshold()` accepts one threshold per dimension, as in `threshold(suspicion(), reject_at={"files": 0.7, "network": 0.6})`. If you already have logs of harmless runs without the monitor, replay it over them with `as_scanner()` and use the same `value` column.
 
-A selector can choose by anything a `ReplayStep` holds. For instance, to run only after a conversation's latest compactions, choose by `step.segment`, the step's conversation and how many of its compactions came before it:
+### Precision and Recall
+
+To compute precision and recall, you need labels that say, for some steps, whether the monitor should have flagged them. You make the labels yourself, for example by reading tool calls in Scout View and writing down their ids. Here the labels are a CSV file with columns `transcript_id`, `step_id` and `unsafe` (`True` or `False`), and `status` is the scan from `replay_suspicion.py`:
+
+``` python
+import pandas as pd
+
+labels = pd.read_csv("labels.csv")
+results = scan_results_df(status.location).scanners["suspicion"]
+
+scored = results.rename(columns={"metadata.step_id": "step_id"}).merge(
+    labels, on=["transcript_id", "step_id"]
+)
+flagged = scored["value"].map(lambda v: v is not None and max(v.values()) >= 0.8)
+unsafe = scored["unsafe"]
+
+true_positives = (flagged & unsafe).sum()
+print("precision", true_positives / flagged.sum())
+print("recall", true_positives / unsafe.sum())
+```
+
+`flagged` applies the same test as `threshold(suspicion(), reject_at=0.8)`: a tool call is flagged when its highest dimension reaches 0.8. To trace a precision-recall curve, repeat this for a range of thresholds. Choose thresholds on one set of runs and measure on another. Measure again when you change the monitor model, since a threshold chosen from one model's scores does not carry over to another model.
+
+If your labels are per sample rather than per step, scan with `results="transcript"` (see [One Result per Transcript](#one-result-per-transcript)) and use a Scout [validation set](https://meridianlabs-ai.github.io/inspect_scout/validation.html), which compares each transcript's result with its label.
+
+### Monitor Versions
+
+When you change a monitor in a way that changes its scores, such as a new prompt, raise its version:
+
+``` python
+@monitor(version=1)
+def suspicion(model: str | None = None, role: str | None = None) -> Monitor:
+    ...
+```
+
+The version defaults to 0. A nonzero version is recorded with the monitor's configuration in eval logs and in a scan's scanner parameters, so each set of results says which version produced it. `@protocol` takes `version` too.
+
+## Stages
+
+The suspicion monitor watches only `BeforeToolCall`, so it gives one row per tool call. A monitor or protocol that watches several stages gives a row for each step at each of them. Pass `stage` to keep only one stage's rows:
+
+``` python
+as_scanner(failure_count(), stage="tool_call")
+```
+
+Every stage the sentinel watches still runs, in order, so a monitor that keeps state across stages (like `failure_count()` in `examples/trajectory.py`) receives the same steps it received during the eval. Pass `stage` also when you want Scout's scan summary for one stage, because the summary averages a scanner's values over all of its rows.
+
+## One Result per Transcript
+
+To get one result per sample instead of one per step, pass `results="transcript"`:
+
+``` python
+as_scanner(suspicion(), results="transcript")
+```
+
+For a monitor, the value is the highest suspicion score in the transcript, per dimension for a structured score. For a protocol, it is the strongest decision. The result cites the steps that set it, so Scout View links to them.
+
+## Choosing Steps
+
+By default the sentinel runs at every step. To run it at only some steps, pass `steps`. For example, after changing a monitor's prompt, you can re-run it at only the steps an earlier scan flagged:
+
+``` python
+flagged = results[results["value"].map(lambda v: v is not None and max(v.values()) >= 0.8)]
+as_scanner(suspicion(), steps=flagged)
+```
+
+`steps` takes a results dataframe or a table with `transcript_id` and `step_id` columns. With a results dataframe, each row runs only at its own stage and conversation. With only `transcript_id` and `step_id`, a tool call runs at both of its tool stages, since they share an id.
+
+The sentinel does not run at steps that `steps` leaves out, so a monitor that keeps state does not see them. Scout still reads transcripts the table doesn't list, so for a large scan, filter the scan's transcripts to the same ids with `transcripts_from(...).where()`.
+
+### Step Selectors
+
+To choose steps by their content, write a *step selector*: a function decorated with `@step_selector` that takes the transcript id and a `ReplayStep` and returns `True` to run the step. This one chooses tool calls to `bash()`:
 
 ``` python
 from inspect_sentinel import ReplayStep
 from inspect_sentinel.scout import step_selector
 
 @step_selector
-def after_two_compactions(transcript_id: str, step: ReplayStep) -> bool:
-    return step.segment[1] >= 2
+def bash_calls(transcript_id: str, step: ReplayStep) -> bool:
+    return step.stage == "tool_call" and step.step.call.function == "bash"
 ```
 
-### Human decisions
+`step.step` is the step a monitor would receive, `step.stage` is its stage, and `step.id` is its step id (the same id as the `metadata.step_id` column). Pass the selector as `as_scanner(suspicion(), steps=bash_calls)`.
 
-`human()` cannot ask a person in a replay. Where the person answered at that step when the run was recorded, through the same `human()` instance, that answer is given again, always. The instance is matched by its path, exactly: answers a log recorded under `triage/human` are not given to a sentinel whose `human()` is at `human`, and where, at a step, a `human()` asks at a path with no recorded answer while an answer was recorded at a path where no `human()` asked, the scan logs one warning naming both paths. Elsewhere `human=` answers:
+Define a selector at module level in a `.py` file, because Scout's worker processes import it from there. A selector defined in a notebook is refused, so put it in a `.py` file next to the notebook and import it.
 
-- `"reject"` (default), `"approve"` or `"terminate"`: that answer, so a protocol decides as it would live with that answer. A `human()` that does not offer it gets `terminate`, which `human()` takes whatever it offers, as the answer a host gives when nobody can be asked. So `"reject"` gives `terminate` after a tool runs or a model replies, where `reject` is not offered.
-- A stand-in for the person: an `async` function `(step, escalations, choices) -> HumanAnswer` decorated with `@human_stand_in`, such as an oracle built from labels, or a model. It is defined at module level, in a module or the scan's script, as a selector is.
+## Human Decisions in Replay
 
-A row's `human` metadata says which answered: `"recorded"`, `"unanswered"` (the fixed answer, also in `human_answer`) or `"simulated"`, so a back-test can count the steps that would have gone to a person apart from real decisions.
+A replay cannot ask a person, so `human()` is answered in other ways. If a person answered at the same step and instance path when the run was recorded, replay gives that recorded answer again. This lets you replay a protocol like the ones in [Human Decisions](human-decisions.qmd) against the decisions a person actually made.
 
-## Read mode
-
-`as_reader()` reads the `SentinelEvent`s an instance recorded in the runs it was attached to: one result per reported step, mapped and cited as replay maps them, with no inference.
+Where no answer was recorded, the `human` parameter of `as_scanner()` gives a fixed answer: `"reject"` (the default), `"approve"` or `"terminate"`:
 
 ``` python
-from inspect_sentinel.scout import as_reader
+sentinel = sequential([
+    threshold(suspicion(), escalate_at=0.5, reject_at=0.8),
+    human(stages=["tool_call"]),
+])
+as_scanner(sentinel, human="approve")
+```
 
-scan(
+A `human()` that does not offer the fixed answer gets `terminate`. For example, `reject` is not offered after a tool call runs or at `"model_output"`, so by default a `human()` at `"tool_result"` gets `terminate`.
+
+To answer as a person would, pass a *stand-in*: an `async` function decorated with `@human_stand_in` that takes the step, the escalations and the choices, and returns a `HumanAnswer`. Define it at module level, as for a step selector. This one answers from the labels file used above:
+
+``` python
+from collections.abc import Sequence
+
+import pandas as pd
+from inspect_sentinel import Escalations, HumanAnswer, ReplayStep
+from inspect_sentinel.scout import human_stand_in
+
+labels = pd.read_csv("labels.csv")
+UNSAFE = set(labels[labels["unsafe"]]["step_id"])
+
+@human_stand_in
+async def from_labels(
+    step: ReplayStep, escalations: Escalations, choices: Sequence[str]
+) -> HumanAnswer:
+    if step.id in UNSAFE:
+        return HumanAnswer("reject", "labelled unsafe")
+    return HumanAnswer("approve", "labelled safe")
+```
+
+Pass it as `as_scanner(sentinel, human=from_labels)`. Each row where the step reached `human()` says where the answer came from in `metadata.human`: `"recorded"` for a person's answer in the recorded run, `"unanswered"` for the fixed answer (also in `metadata.human_answer`), or `"simulated"` for the stand-in. Counting the `"unanswered"` and `"simulated"` rows tells you how many steps would have gone to a person.
+
+## Read Mode
+
+`as_reader()` reads the observations and decisions that a monitor or protocol recorded during the eval, and gives the same rows replay gives. It calls no model. Pass the instance path as the log records it. For example, pass `"suspicion"` for the monitor under `observe_only()`, `"llm/suspicion"` for a monitor under the `"llm"` key of a mapping, or nothing for the protocol at the top of the sentinel.
+
+To compare a replayed monitor with what it recorded live, scan in both modes and join the rows:
+
+``` python
+from inspect_sentinel.scout import as_reader, as_scanner
+
+status = scan(
     scanners={
-        "replayed": as_scanner(suspicion_monitor(), stage="tool_call"),
+        "replayed": as_scanner(suspicion(), stage="tool_call"),
         "recorded": as_reader("suspicion", stage="tool_call"),
     },
     transcripts=transcripts_from("./logs"),
 )
+frames = scan_results_df(status.location).scanners
+keys = ["transcript_id", "metadata.conversation", "metadata.step_id", "metadata.stage"]
+both = frames["replayed"].merge(frames["recorded"], on=keys, suffixes=("_replayed", "_recorded"))
 ```
 
-`path` is the instance path the log records: empty for the root protocol, the default, otherwise as in `attempt/suspicion`, or a lone monitor's name. `stage=` keeps one stage's rows, as for `as_scanner()`. A step where the instance abstained recorded nothing, so it has no row. A row's `conversation` is the one the log recorded, from its span tree, as a replay's is when its `turns` is `"recorded"`, so those rows join on transcript, `conversation`, `step_id` and `stage`. A replay with `timeline=` (`"stored"`) or from messages (`"inferred"`) has conversations of its own, so join it on transcript, `step_id` and `stage`, which is ambiguous where two agents' tool calls share an id. Read mode is also the only mode that shows what a protocol did with each report.
+A step where the instance abstained recorded nothing, so it has no read-mode row. Read mode is also the only way to see what a protocol's decisions did during the eval, since a replay does not change the transcript.
 
-## Checking replay on your own runs
+## Checking Replay
 
-`replay_check()` is a monitor that reports a digest of each field of the step it is handed, and of `context.eval`. Attach it to an eval observe-only, scan the logs both ways, and hand the two scanners' results to `replay_check_differences()`:
+Replay should hand a monitor the same step it received during the eval. To check this on your own tasks, use `replay_check()`, a monitor that reports a digest of each field of the step it receives. Attach it to an eval under `observe_only()`, scan the logs in both modes, and compare them with `replay_check_differences()`:
 
 ``` python
 from inspect_sentinel import observe_only
-from inspect_sentinel.scout import (
-    as_reader,
-    as_scanner,
-    replay_check,
-    replay_check_differences,
-)
+from inspect_sentinel.scout import as_reader, as_scanner, replay_check, replay_check_differences
 
 Task(..., sentinel=observe_only(replay_check()))
 
@@ -142,14 +290,29 @@ results = scan_results_df(status.location).scanners
 replay_check_differences(results["replayed"], results["recorded"])
 ```
 
-Rows are matched by transcript, conversation, stage and step where the replay's `turns` is `"recorded"`. A transcript replayed with `timeline=` or from messages has conversations read mode does not, so its rows are matched by transcript, stage and step, and where two of one side's rows then share a key, as two agents' calls with one id do, it raises rather than compare the wrong rows. It returns a table with a row per difference: the transcript, conversation (`None` where rows were matched without it), step and stage, the `field` whose digest differs (`step.input`, say, or `eval` for `context.eval`), the two digests, and a `reason`, `"differs"`, or `"only replayed"` or `"only recorded"` for a step one scanner did not report. An empty table means replay handed the monitor what it saw live. The probe digests the conversation lists by their length and last message, and the sample's input and the rest of its context that cannot change once per sample, keeping that digest in the sample's store, so its work per step does not grow with the conversation or the input. The context's metadata, which a solver can change, it digests at every step. It cannot see an edit in the middle of a list. A replay hands the monitor the sample's final metadata, so where a solver changed it during the run, the earlier steps' `eval` digests differ.
+The result has one row per difference, naming the step, its stage and the field that differs, such as `step.input`, or `eval` for `context.eval`. An empty dataframe means replay handed the monitor what it received live.
 
-## What a replayed step holds
+Note that replay hands the monitor the sample's final metadata, so if a solver changed the metadata during the run, earlier steps show an `eval` difference. A message list's digest covers only its length and last message, so it misses an edit in the middle of the list.
 
-From an Inspect log that records where each model call was made, a step holds what the live step held, rebuilt by the same code inspect_ai uses live: the model's input and tools, `history`, the earlier `human()` decisions in `human_decisions`, and at a tool stage its view and whether its output was cut. The untruncated tool output is not in a log, so `AfterToolCall.output` is `None`. `agent_messages` is `None` at every stage of a replay: it is the running agent's own list, which may be curated, and a log does not record it, so replay cannot rebuild it. A row's `turns` is `"recorded"`, or `"stored"` when `timeline=` named a stored timeline, such as Petri's `"target"`, whose branches are then the conversations.
+## What a Replayed Step Holds
 
-From an older log, or a transcript from another source, a step is the projection a proxy makes from the messages, and `turns` is `"inferred"`: each assistant message is a generate whose input is everything before it, and each tool call and its answering tool message are its tool steps. It does not hold the generate's tools and configuration, or a tool step's `input`, `tools` and `truncated`. A tool step's `view` holds only `view.call`, the rendering its tool's viewer gave the call, as the assistant message stored it: it is `None` for a tool with no viewer, and `view.context` is always `None`; `history` takes every message for one agent's, and `human_decisions` is `None`. A portable monitor, which already handles a proxy's steps, replays from messages unchanged. An older log that ran a sentinel keys its steps as that sentinel did, so its rows join read mode's on transcript, `step_id` and `stage`, and `human()` is answered by the answer recorded at the step's stage and id. A projection is one conversation, so where a sub-agent's call shares an id with one of the projected agent's, and its `human()` has the same path, the projected step gets the sub-agent's answer; a step the old sentinel recorded no generate for, or two generates in flight at once in one conversation, can still key differently.
+Logs from recent versions of inspect_ai record where each model call was made. From these logs, replay rebuilds each step with the same code inspect_ai uses during an eval. The step holds what the live step held: the model input and tools, `history`, earlier `human()` decisions, and at a tool stage, the tool call's view and whether its output was truncated. The results' `metadata.turns` column is `"recorded"`.
 
-Each step's `depth` is how deep its conversation is in the transcript's timeline (the stored one `timeline=` names, else one built from the log's span tree, which is where the conversations come from), counted as `llm_scanner(depth=)` counts: only spans that make model calls of their own and are not helpers count a level, so 1 is the outermost such span on each branch. `depth=` runs only the steps at most that deep. A conversation whose calls the timeline treats as helpers, or leaves out of every span, has no depth and is not reached at any `depth=`.
+Older logs, and transcripts from other sources, don't record this, so replay builds the steps from the messages and sets `metadata.turns` to `"inferred"`. Each assistant message becomes a model call whose input is every message before it, followed by a tool step pair for each of its tool calls. These steps have an empty tool list and the default model call configuration; a tool step's `input` and `truncated`, and `human_decisions`, are `None`; and `history` holds the whole conversation. A monitor that reads only the messages and the tool call works the same on them.
 
-What replay cannot do is show a decision's effect: a `reject` in replay does not change the transcript, since the agent already did what it did. Replay measures reports, not interventions.
+Two fields are `None` at every replayed step, because a log doesn't record them:
+
+| Field | Why |
+|------------------------|---------------------------------------------------|
+| `AfterToolCall.output` | The log holds the tool result the agent's model received, not the untruncated output. |
+| `agent_messages` | The agent's own message list, which the agent may have edited, is not recorded. |
+
+### Sub-agents and Timelines
+
+Each row's `metadata.depth` is how deeply nested the step's conversation is among the transcript's agents, where 1 is the outermost agent. It counts the same way as Scout's `llm_scanner(depth=)`. Pass `depth` to `as_scanner()` to run only steps at most that deep, for example `depth=1` to leave out sub-agents.
+
+To take the conversations from a stored timeline instead of the log's spans, pass the timeline's name as `timeline`, and `metadata.turns` is then `"stored"`. With `timeline`, or for steps built from messages, join replayed rows with read-mode rows on `transcript_id`, `metadata.step_id` and `metadata.stage` only, because the conversations differ.
+
+### Running and Resuming
+
+Each transcript replays in one pass with one store, so a monitor's state carries across steps as it did during the eval. Transcripts run concurrently, as for any Scout scanner. The scan records the modules that define your monitors and protocols so that Scout can resume it. Resuming imports that code, so resume only scans you trust.

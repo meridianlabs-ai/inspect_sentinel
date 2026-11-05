@@ -624,6 +624,10 @@ Built in inspect_ai #5986 (2026-10-21), with this repository's docs and docstrin
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands. Grouped by priority, decided by the maintainer on 2026-10-02, in the order to take them.
 
+### Next: viewer pairing
+
+- **Viewer pairing fix ships in inspect_ai (found 2026-11-05).** In a real log, a before-call sentinel step rendered as its own row instead of inside its tool card, because the timeline sorts the `ToolEvent` (stamped when the call starts) ahead of its sentinel span. Fixed in ts-mono #834. Until inspect_ai bumps its ts-mono submodule past it, the Log Viewer page's screenshot (`docs/images/viewer-rejected-tool-call.png`, taken with the fix) shows a layout the released viewer doesn't. Remove this entry after the bump.
+
 ### R7 replay: waiting on other PRs
 
 - **Replay without recorded origins (R7 PR 5, waiting on R7 PR 6).** A transcript whose model events record no `origin` replays from its messages (`scout/_steps.py`, `transcript_steps`), with `"turns": "inferred"`, and `as_scanner(timeline=)` raises for it, until inspect_ai infers its turns from the timeline; `as_scanner(human_approvers=)` comes with it.
