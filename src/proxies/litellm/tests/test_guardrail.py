@@ -1850,7 +1850,9 @@ def test_guardrail_made_outside_litellms_proxy_adds_no_route() -> None:
     assert made.stdout.strip() == "False"
 
 
-def _sidecar_for_evals(seen: list[dict[str, Any]]) -> Starlette:
+def _sidecar_for_evals(
+    seen: list[dict[str, Any]], answers_after: float = 0.0
+) -> Starlette:
     """A stand-in for the sidecar's endpoint for evals that says what it was sent."""
 
     async def answer(http: HttpRequest) -> JSONResponse:
@@ -1863,6 +1865,8 @@ def _sidecar_for_evals(seen: list[dict[str, Any]]) -> Starlette:
                 "body": (await http.body()).decode(),
             }
         )
+        if answers_after:
+            await asyncio.sleep(answers_after)
         return JSONResponse({"answered": http.url.path}, status_code=201)
 
     return Starlette(
@@ -1878,6 +1882,35 @@ def _without_eval_route(proxy: Any) -> None:
         for route in proxy.app.router.routes
         if getattr(route, "path", None) != "/sentinel/{rest:path}"
     ]
+
+
+def test_eval_routes_wait_past_the_guardrails_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `request_result` holds its answer while a call is judged, longer than an
+    # operator may give the guardrail to judge a call
+    proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
+    _without_eval_route(proxy)
+    seen: list[dict[str, Any]] = []
+
+    async def ask() -> Any:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=proxy.app), base_url="http://litellm"
+        ) as client:
+            return await client.post(
+                "/sentinel/v1",
+                content=b'{"jsonrpc": "2.0"}',
+                headers={"authorization": "Bearer sk-caller"},
+                timeout=10,
+            )
+
+    with _serving(_sidecar_for_evals(seen, answers_after=0.6)) as url:
+        guardrail = _make(monkeypatch, url, timeout=0.2)
+        guardrail.serve_eval_routes()
+        asked = asyncio.run(ask())
+        asyncio.run(guardrail.aclose())
+
+    assert (asked.status_code, asked.json()) == (201, {"answered": "/sentinel/v1"})
 
 
 def test_eval_routes_reach_the_sidecar_through_litellm(
