@@ -1006,11 +1006,7 @@ class Handler:
             )
             if _ends(await self._judge(held, run, after)):
                 if output.choices:
-                    # the whole turn was judged, so every call in it is acted on
-                    calls = output.message.tool_calls or []
-                    _withhold_ended(
-                        held, output.message, frozenset(call.id for call in calls)
-                    )
+                    _withhold_ended(held, output.message)
                 return self._end(held, run, "at the model's reply")
 
         if not output.choices:
@@ -1040,7 +1036,7 @@ class Handler:
             if decision is None or decision.action == "proceed":
                 continue
             if decision.action == "terminate":
-                _withhold_ended(held, message, frozenset({call.id}))
+                _withhold_ended(held, message, call.id, rejected, modified)
                 return self._end(held, run, f"at the call to {call.function}")
             if decision.action == "modify" and decision.modified is not None:
                 modified[call.id] = decision.modified
@@ -1332,15 +1328,27 @@ class Handler:
 
 
 def _withhold_ended(
-    held: Held, message: ChatMessageAssistant, acted_on: frozenset[str]
+    held: Held,
+    message: ChatMessageAssistant,
+    ended_at: str | None = None,
+    rejected: Sequence[tuple[ToolCall, Decision]] = (),
+    modified: Mapping[str, ToolCall] | None = None,
 ) -> None:
-    # the client records the turn the run ended at, as an in-process sentinel
-    # leaves it in the transcript; none of its calls runs, and the calls the
-    # run was ended for are redacted
+    # The client records the turn the run ended at, as an in-process sentinel
+    # leaves it in the transcript. None of its calls runs, so a changed call
+    # isn't shown as it ran. Every call a decision acted on is redacted: the
+    # one the run ended at, and those rejected or changed before it. A run
+    # ended at the reply had every call acted on. A call judged to proceed, or
+    # never judged, keeps its arguments.
+    calls = message.tool_calls or []
+    acted_on: list[str]
+    if ended_at is None:
+        acted_on = [call.id for call in calls]
+    else:
+        acted_on = [ended_at, *(call.id for call, _ in rejected), *(modified or {})]
+    redacted = frozenset(acted_on)
     held.exchange.withheld = Withheld(
-        message,
-        {call.id: _ENDED for call in message.tool_calls or []},
-        redacted=acted_on,
+        message, {call.id: _ENDED for call in calls}, redacted=redacted
     )
 
 
