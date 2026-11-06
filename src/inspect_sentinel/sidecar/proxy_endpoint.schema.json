@@ -100,7 +100,8 @@
                 "time_limit",
                 "error",
                 "provider_error",
-                "cut_off"
+                "cut_off",
+                "replaced_attempt"
               ],
               "type": "string"
             },

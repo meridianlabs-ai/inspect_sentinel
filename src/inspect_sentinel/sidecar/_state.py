@@ -31,12 +31,26 @@ DROPPED_IDS = 1_000_000
 """How many ids of requests whose records were dropped are kept, so that a request can be told apart from one never seen."""
 
 NotJudged: TypeAlias = Literal[
-    "unreadable", "unregistered", "time_limit", "error", "provider_error", "cut_off"
+    "unreadable",
+    "unregistered",
+    "time_limit",
+    "error",
+    "provider_error",
+    "cut_off",
+    "replaced_attempt",
 ]
 """Why a request or its reply was not judged."""
 
 Outcome: TypeAlias = Literal["proceed", "reject", "terminate"]
 """What an exchange came to."""
+
+
+@dataclass(frozen=True)
+class Dropped:
+    """A request whose attempts were kept and no longer are."""
+
+    eval_id: str | None
+    """The eval its latest attempt's `x-inspect-context` named, the only one told it was dropped."""
 
 
 @dataclass
@@ -325,16 +339,20 @@ class State(Protocol):
         """
         ...
 
-    async def attempts(self, request: str) -> list[Attempt] | Literal["dropped"] | None:
-        """The attempts at a request in order, `dropped` if they were kept and no longer are, or None if the request was never seen."""
+    async def attempts(self, request: str) -> list[Attempt] | Dropped | None:
+        """The attempts at a request in order, `Dropped` if they were kept and no longer are, or None if the request was never seen."""
         ...
 
     async def eval_token(self, eval_id: str) -> str | None:
         """The secret an eval presents to the endpoint for evals, or None if none is kept. Asking counts as the eval being named, so it is kept for its expiry from now."""
         ...
 
-    async def keep_eval_token(self, eval_id: str, token: str) -> None:
-        """Keep the secret an eval presents to the endpoint for evals, for as long as a run is kept once no call names the eval."""
+    async def keep_eval_token(self, eval_id: str, token: str) -> str:
+        """Keep the secret an eval presents to the endpoint for evals, unless one is kept for it already, for as long as a run is kept once no call names the eval.
+
+        Returns:
+            The secret kept: `token`, or the one kept already.
+        """
         ...
 
 
@@ -354,9 +372,12 @@ class MemoryState:
         self._ended = _Expiring[Run](expiry)
         # a request's id outlives its attempts, so the eval can be told they
         # were dropped and not that the request was never seen
-        self._dropped = _Expiring[bool](expiry, limit=DROPPED_IDS)
+        self._dropped = _Expiring[Dropped](expiry, limit=DROPPED_IDS)
         self._attempts = _Expiring[list[Attempt]](
-            expiry, dropped=lambda key: self._dropped.put(key, True)
+            expiry,
+            dropped=lambda key, attempts: self._dropped.put(
+                key, Dropped(attempts[-1].eval_id if attempts else None)
+            ),
         )
         # each registration has an expiry of its own, and there are few, so
         # they are swept whole
@@ -440,17 +461,21 @@ class MemoryState:
         attempts.append(attempt)
         return attempt
 
-    async def attempts(self, request: str) -> list[Attempt] | Literal["dropped"] | None:
+    async def attempts(self, request: str) -> list[Attempt] | Dropped | None:
         attempts = self._attempts.get(request)
         if attempts is not None:
             return attempts
-        return "dropped" if self._dropped.get(request) is not None else None
+        return self._dropped.get(request)
 
     async def eval_token(self, eval_id: str) -> str | None:
         return self._tokens.get(eval_id)
 
-    async def keep_eval_token(self, eval_id: str, token: str) -> None:
+    async def keep_eval_token(self, eval_id: str, token: str) -> str:
+        kept = self._tokens.get(eval_id)
+        if kept is not None:
+            return kept
         self._tokens.put(eval_id, token)
+        return token
 
     def _expire_tasks(self) -> None:
         now = time.monotonic()
@@ -466,7 +491,7 @@ class _Expiring(Generic[V]):
         expiry: float,
         *,
         limit: int | None = None,
-        dropped: Callable[[str], None] | None = None,
+        dropped: Callable[[str, V], None] | None = None,
     ) -> None:
         self._expiry = expiry
         self._limit = limit
@@ -501,6 +526,6 @@ class _Expiring(Generic[V]):
             key, (used, _) = next(iter(self._kept.items()))
             if now - used < self._expiry:
                 return
-            del self._kept[key]
+            _, value = self._kept.pop(key)
             if self._dropped is not None:
-                self._dropped(key)
+                self._dropped(key, value)

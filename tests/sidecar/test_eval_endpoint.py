@@ -115,9 +115,7 @@ def _asked(id: str, irid: str = "irid-1", **sample: Any) -> Request:
 
 async def _eval(handler: Handler, eval_id: str = "eval_789") -> dict[str, str]:
     # what every call for the eval presents, as its first registration gave it
-    kept = await handler._state.eval_token(eval_id)  # pyright: ignore[reportPrivateUsage]
-    token = kept if kept is not None else await handler.eval_token(eval_id, None)
-    return {"eval_id": eval_id, "token": token}
+    return {"eval_id": eval_id, "token": await handler.keep_eval_token(eval_id)}
 
 
 async def _registered(client: httpx.AsyncClient, **changes: Any) -> dict[str, str]:
@@ -582,6 +580,24 @@ async def test_a_request_whose_records_were_dropped_says_so_for_a_while(
     assert forgotten == {"id": "irid-1", "records": "unknown"}
 
 
+@pytest.mark.anyio
+async def test_a_request_dropped_is_unknown_to_another_eval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_state, "time", _Clock)
+    _Clock.now = 0.0
+    handler = Handler(weather_rule(), state=MemoryState(expiry=100))
+    await handler.request(_asked("x"))
+
+    _Clock.now = 150.0
+    other = await _eval(handler, "eval_other")
+    async with _client(handler) as client:
+        answered = await _call(client, "request_result", {"id": "irid-1"} | other)
+
+    # nothing says that another eval's request ever existed
+    assert answered["result"] == {"id": "irid-1", "records": "unknown"}
+
+
 class _Tally(StoreModel):
     lookups: int = 0
 
@@ -996,6 +1012,24 @@ async def test_a_request_of_another_eval_is_unknown() -> None:
 
     # nothing says that the request exists
     assert answered["result"] == {"id": "irid-1", "records": "unknown"}
+
+
+@pytest.mark.anyio
+async def test_a_registration_that_fails_leaves_no_token_behind() -> None:
+    # had the failed registration kept a token it never gave out, the eval
+    # could never register again, once there was room
+    handler = Handler(weather_rule(), max_task_registrations=1)
+    async with _client(handler) as client:
+        await _call(client, "register_task", _REGISTRATION | {"eval_id": "eval_a"})
+        full = await _call(
+            client, "register_task", _REGISTRATION | {"eval_id": "eval_b"}
+        )
+        again = await _call(
+            client, "register_task", _REGISTRATION | {"eval_id": "eval_b"}
+        )
+
+    assert full["error"]["code"] == REGISTRATIONS_FULL
+    assert again["error"]["code"] == REGISTRATIONS_FULL
 
 
 @pytest.mark.anyio

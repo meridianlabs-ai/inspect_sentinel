@@ -51,8 +51,22 @@ from tests.sidecar._traffic import (
 )
 
 
-def _from_inspect(asked: Request, **changes: Any) -> Request:
-    return replace(asked, headers=inspect_headers(**changes))
+def _from_inspect(asked: Request, irid: str | None = None, **changes: Any) -> Request:
+    headers = inspect_headers(**changes)
+    return replace(asked, headers=headers | ({"x-irid": irid} if irid else {}))
+
+
+async def _not_judged(handler: Handler, irid: str) -> tuple[str, str | None, bool]:
+    # what `request_result` says of a request: its state, why it wasn't
+    # judged, and whether it has a judgment
+    found = await handler.request_result(irid, "eval_789")
+    assert not isinstance(found, str)
+    latest = found.latest
+    return (
+        latest.state,
+        latest.reason,
+        latest.judged is not None and latest.outcome is not None,
+    )
 
 
 # each calls get_weather for Paris, then Tokyo, then Lima
@@ -625,15 +639,15 @@ async def test_a_new_attempt_starts_the_runs_store_and_its_end_afresh() -> None:
 @pytest.mark.anyio
 async def test_a_replaced_attempts_requests_and_replies_are_refused_unjudged() -> None:
     handler = Handler(counts_lookups_and_ends_at_storms())
-    await handler.request(_from_inspect(request("a")))
+    await handler.request(_from_inspect(request("a"), "irid-a"))
     await handler.request(
-        _from_inspect(request("b"), attempt="attempt_2", attempt_number=2)
+        _from_inspect(request("b"), "irid-b", attempt="attempt_2", attempt_number=2)
     )
 
     # the first attempt's reply arrives after its retry began
     late = await handler.reply(reply(message(weather("Oslo", "toolu_1")), id="a"))
     # and a request of the first attempt doesn't start it again
-    again = await handler.request(_from_inspect(request("c")))
+    again = await handler.request(_from_inspect(request("c"), "irid-c"))
     counted = await handler.reply(reply(message(weather("Lima", "toolu_2")), id="b"))
 
     replaced = "A later attempt at this sample replaced this one."
@@ -644,6 +658,10 @@ async def test_a_replaced_attempts_requests_and_replies_are_refused_unjudged() -
     # the late reply was never judged, so it counted nothing
     assert isinstance(counted, Refuse)
     assert counted.message == "A sentinel rejected the call to get_weather: Lookup 1."
+    # the eval is told neither was judged, never that a sentinel ended them
+    unjudged = ("not_judged", "replaced_attempt", False)
+    assert await _not_judged(handler, "irid-a") == unjudged
+    assert await _not_judged(handler, "irid-c") == unjudged
 
 
 # set by the test that waits in a judgment
@@ -770,15 +788,20 @@ async def test_an_earlier_attempt_first_seen_after_a_later_one_is_refused() -> N
 @pytest.mark.anyio
 async def test_two_attempts_with_the_same_number_are_told_apart_by_refusal() -> None:
     handler = Handler(counts_lookups_and_ends_at_storms())
-    await handler.request(_from_inspect(request("a")))
+    await handler.request(_from_inspect(request("a"), "irid-a"))
 
     other = await handler.request(
-        _from_inspect(request("b"), attempt="attempt_other", attempt_number=1)
+        _from_inspect(request("b"), "irid-b", attempt="attempt_other", attempt_number=1)
     )
     counted = await handler.reply(reply(message(weather("Lima", "toolu_1")), id="a"))
 
     assert isinstance(other, Refuse)
     assert other.message == "Another attempt at this sample has the number 1."
+    assert await _not_judged(handler, "irid-b") == (
+        "not_judged",
+        "replaced_attempt",
+        False,
+    )
     # the attempt first seen with the number goes on
     assert isinstance(counted, Refuse)
     assert counted.message == "A sentinel rejected the call to get_weather: Lookup 1."

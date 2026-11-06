@@ -303,7 +303,7 @@ async def _answer(
 async def _answered(handler: Handler, given: BaseModel, results: bool) -> BaseModel:
     if isinstance(given, RegisterTaskParams):
         # the token first: a caller that can't present it registers nothing
-        token = await handler.eval_token(given.eval_id, given.token)
+        kept = await handler.eval_token(given.eval_id, given.token)
         registration = TaskRegistration.model_validate(
             given.model_dump(include=set(TaskRegistration.model_fields))
         )
@@ -315,6 +315,10 @@ async def _answered(handler: Handler, given: BaseModel, results: bool) -> BaseMo
             raise RpcError(REGISTRATIONS_FULL, str(ex)) from None
         except RegistrationError as ex:
             raise RpcError(REGISTRATION_REFUSED, str(ex)) from None
+        # made only now, so a registration that failed leaves none behind
+        token = (
+            kept if kept is not None else await handler.keep_eval_token(given.eval_id)
+        )
         return RegisterTaskResult(
             eval_id=given.eval_id,
             token=token,
