@@ -90,11 +90,6 @@ ipython_config.py
 #   install all needed dependencies.
 #Pipfile.lock
 
-# UV
-#   Not committed: development installs inspect_ai's and inspect_scout's main over the floors in
-#   pyproject.toml (CONTRIBUTING.md), which a lock would pin to registry releases.
-uv.lock
-
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
 #   This is especially recommended for binary packages to ensure reproducibility, and is more
@@ -219,3 +214,6 @@ src/inspect_sentinel/_version.py
 # Quarto Docs
 /.luarc.json
 
+
+# replay-trust benchmark output (python -m benchmarks.replay_trust)
+benchmarks/replay_trust/results/

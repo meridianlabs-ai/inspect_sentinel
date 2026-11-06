@@ -16,8 +16,13 @@ test:
 # environment never has. Its tests start a real sidecar from this repository's
 # environment, `.venv`, so set that up first (CONTRIBUTING.md). `uv run
 # --isolated --no-project` never reads or installs this repository's project.
+# `--no-config` keeps the cooldown in `pyproject.toml` off this environment:
+# the canary tests the newest LiteLLM, which is often less than 7 days old. It
+# also skips the user's uv config, so this environment has no cooldown. CI
+# builds the same environment with the shared install-python-dependencies
+# action (build.yaml, litellm-guardrail).
 LITELLM ?= 1.105.0
-LITELLM_ENV = cd src/proxies/litellm && uv run --isolated --no-project \
+LITELLM_ENV = cd src/proxies/litellm && uv run --isolated --no-project --no-config \
 	--with "litellm[proxy]==$(LITELLM)" --with-editable . \
 	--with pytest --with pytest-timeout --with pytest-xdist --with jsonschema \
 	--with httpx --with "anthropic>=2"
@@ -42,9 +47,8 @@ envoy-protos:
 		python scripts/generate_envoy_protos.py
 
 # The docs tools are in the `doc` extra, which `dev` leaves out, so install it
-# first. `uv pip install` leaves the inspect_ai and inspect_scout installed from
-# git in place, as they satisfy the floors.
+# first, from uv.lock, keeping the `dev` extra.
 .PHONY: docs
 docs:
-	uv pip install --python .venv/bin/python -e ".[doc]"
+	uv sync --locked --extra dev --extra doc
 	cd docs && PATH="$(CURDIR)/.venv/bin:$$PATH" ../.venv/bin/quarto render

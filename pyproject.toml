@@ -22,11 +22,11 @@ dependencies = [
     #
     # Development tracks inspect_ai's `main`, because sentinel and inspect_ai
     # co-develop and most sentinel changes need hooks that have not shipped.
-    # That is done by installing, not by this line: CI and the setup in
-    # CONTRIBUTING.md install inspect_ai from git first, and the floor below
-    # leaves that install in place. Only the Release Please release PR skips
-    # it, so a release is tested against PyPI, after release-pin-deps.yml
-    # raises this floor to the latest inspect_ai release.
+    # That is done by [tool.uv.sources] below, not by this line: only uv reads
+    # it, and the published package requires this floor. Only the Release
+    # Please release PR ignores the sources, so a release is tested against
+    # PyPI, after release-pin-deps.yml raises this floor to the release it
+    # was tested against.
     "inspect-ai>=0.3.286",
     # step_as_str, and so Host.score, renders with Scout's messages_as_str and
     # message_numbering, until message rendering moves from Scout into
@@ -135,6 +135,29 @@ local_scheme = "no-local-version" # Important for PyPI compatibility
 
 [tool.uv]
 managed = true
+# 0.11.8 is the first uv that keeps uv.lock stable with a relative exclude-newer,
+# and 0.13.4 the first that no longer trusts the compromised emSign root
+# (GHSA-hq85-5cpj-mr62).
+required-version = ">=0.13.4"
+# Only resolve releases at least 7 days old (see CONTRIBUTING.md).
+exclude-newer = "7 days"
+
+# 6 hours only for direct dependencies that are a model provider SDK or an
+# Inspect package; see CONTRIBUTING.md.
+[tool.uv.exclude-newer-package]
+anthropic = "6 hours"
+inspect-ai = "6 hours"
+inspect-scout = "6 hours"
+openai = "6 hours"
+
+# Development and CI track inspect_ai's and inspect_scout's main. uv.lock
+# records a commit of each, and CI moves both to main's latest before
+# installing (.github/actions/uv-sync). Only uv reads this; the published
+# package requires the floors above, and the release PR's CI installs the
+# newest releases instead.
+[tool.uv.sources]
+inspect-ai = { git = "https://github.com/UKGovernmentBEIS/inspect_ai", branch = "main" }
+inspect-scout = { git = "https://github.com/meridianlabs-ai/inspect_scout", branch = "main" }
 
 [tool.ruff]
 # generated code, from `make envoy-protos`
@@ -166,7 +189,7 @@ timeout = 120
 # src/proxies is left out: a proxy hook imports its proxy, which is never in
 # this environment. `make check-litellm` checks the LiteLLM guardrail in one
 # of its own.
-include = ["src/inspect_sentinel", "tests", "examples"]
+include = ["src/inspect_sentinel", "tests", "examples", "benchmarks"]
 # generated code, from `make envoy-protos`, which is read for its types but
 # not checked
 exclude = ["src/inspect_sentinel/sidecar/envoy/_proto"]
