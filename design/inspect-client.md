@@ -31,8 +31,8 @@ This PR teaches Inspect to notice the sidecar and work with it. An eval author c
 
 Inspect talks to the sidecar in two ways:
 
-1. **Inside its model calls.** Inspect adds a header to the agent's model calls, saying which sample each is for. The sidecar adds a `sentinel` field to each reply.
-2. **Through a small endpoint.** Inspect calls the sidecar directly under `/sentinel/`, through the proxy's own address. It uses this at the start of a task, at the end of a sample, and when a reply arrives without the `sentinel` field.
+1. **Inside its model calls.** Inspect adds a header to the agent's model calls, saying which sample each is for. The sidecar adds nothing to the replies: Inspect gets the provider's own reply, or an error in the provider's format.
+2. **Through a small endpoint.** Inspect calls the sidecar directly under `/sentinel/`, through the proxy's own address. It uses this at the start of a task, after every agent call to ask what was decided, and at the end of a sample.
 
 ## Words this document uses
 
@@ -51,7 +51,7 @@ Judging happens wherever the sentinel runs: client side when the sentinel runs i
 
 - **The sample store**: Inspect's key-value store for one sample in one epoch. It is client side, always. It exists only while that sample runs, and its final contents are saved in the eval log. Tools, solvers and scorers use it.
 - **Monitor state**: what a monitor or protocol keeps between steps, with `context.store_as()`, such as a count of failed calls. When the sentinel runs inside Inspect, it is a slice of the sample store, client side, named by the monitor's place in the sentinel. Through a sidecar, it is server side, kept for each run: one sample in one epoch, named by the `sample_uuid` in `x-inspect-context`. The sidecar drops it at `end_sample`, or a day after the run's last request.
-- **The sidecar's records**: server side. What the sentinel reported for each model call, by the call's `x-irid`. They reach Inspect in the `sentinel` field, or through `request_result`. When the sentinel runs inside Inspect, the same history is the transcript's `SentinelEvent`s, client side.
+- **The sidecar's records**: server side. What the sentinel reported for each model call, by the call's `x-irid`. They reach Inspect through `request_result`, which Inspect calls after every agent call. When the sentinel runs inside Inspect, the same history is the transcript's `SentinelEvent`s, client side.
 
 ## 1. Finding the sidecar
 
@@ -85,6 +85,8 @@ What each probe answer means:
 **Off unless set.** An eval that doesn't set `sentinel_proxy` sends exactly the requests it sends today: no probe, no header, and no call under `/sentinel/`. A deployment with a sidecar sets `auto` or `required` for its evals, for example in its runner, or with `INSPECT_EVAL_SENTINEL_PROXY`. `auto` can't guarantee that the sidecar is used, so a deployment that relies on its sidecar sets `required`.
 
 **Proposed: credentials.** The probe and every call under `/sentinel/` reuse the authentication configured for the model's endpoint, in whatever form Inspect uses for that model. The proxy checks them as it checks a model call.
+
+**Decided: the eval's token.** Every call under `/sentinel/` after `register_task` also carries the eval's `eval_id` and a token the sidecar gave the eval (section 2), as parameters. The sidecar answers it only for that eval's requests and samples. Inspect keeps the token in its own process: it is never put into a model request, a sandbox or the eval log, so an agent that can reach `/sentinel/` can't read the eval's results ([sidecar.md, the eval's token](sidecar.md#the-evals-token)).
 
 **Not in PR 11: a separate port for the endpoint.** A sidecar can serve its endpoint for evals on a port of its own, with its own token. Inspect can't find that from the model's address, so PR 11 doesn't support it.
 
@@ -129,7 +131,9 @@ Inspect calls `register_task` either way. A pre-registered task runs only sample
 
 Before each epoch of a sample, and before each retry, Inspect then calls `complete_registration` with the sample's input, description and metadata (F below).
 
-The sidecar gives one of four answers.
+**Decided: the token.** `register_task` returns `token`, a random secret for the eval. Inspect keeps the latest token it was given, and presents it in every later call for the eval: `complete_registration`, `request_result`, `sample_result`, `end_sample`, and `register_task` for the eval's other tasks. When the sidecar keeps no token for the eval, as after a restart or once the token expired, `complete_registration` answers `unknown_task`, and Inspect registers the task again and is given a new token (F below).
+
+The sidecar gives one of five answers.
 
 | Answer | What it means | What Inspect does |
 | --- | --- | --- |
@@ -137,6 +141,7 @@ The sidecar gives one of four answers.
 | Registered, `fixed: true` | An admin registered this task beforehand, in the sidecar's tasks folder. | Starts the task. |
 | `registration_refused` | The sidecar runs only the tasks its admin registered, and this isn't one. | Fails the task before any sample starts, with an error that names the task and says the sidecar runs only the tasks its admin registered. The error is shown as the eval runs and written to the task's log. |
 | `registrations_full` | The sidecar already keeps as many registrations as it takes. | Treats it as a failure, like an endpoint that can't be reached: the task fails, as below. |
+| `unauthorized` | The sidecar keeps a token for this eval, and the call didn't present it. | Treats it as a failure: the task fails, as below. |
 
 **When registration fails.** The endpoint may be down, may not answer, or may answer `registrations_full`.
 
@@ -174,7 +179,7 @@ This is an advanced setup, described in sidecar.md section 9:
 - **agent turns**, the calls the sentinel would judge if it ran inside Inspect. Calls made by a scorer's grader, an approver or a compaction summary are not.
 - **to an endpoint where a probe found a sidecar**, whatever the model (section 1).
 
-`x-irid` is unchanged: Inspect sends it on every model call, as it does today.
+`x-irid` is unchanged: Inspect sends it on every model call, as it does today. It is unique to one logical model call. The provider SDK's own retries of a call reuse it, and the sidecar answers `request_result` for the latest attempt, which is the reply Inspect got.
 
 **In the plan.**
 
@@ -210,71 +215,56 @@ The proxy removes both headers before the request reaches the provider.
 
 ## 4. What comes back
 
-**Short version:** every reply Inspect gets falls into one of four cases. Inspect handles each as it would if the sentinel ran inside Inspect.
+**Short version:** after every agent call that went to a sidecar, Inspect asks the sidecar what was decided. Every answer falls into one of four cases. Inspect handles each as it would if the sentinel ran inside Inspect.
 
-**Case A: the reply goes on.** The reply carries `outcome: proceed`.
+**Decided: Inspect always asks.** No reply, refusal or stream event carries anything of the sidecar's. After every agent call that went to a sidecar, whether it came back as a reply or as an error, Inspect calls `request_result` at `POST /sentinel/v1`, with the eval's `eval_id` and token, the call's `x-irid`, and a `wait` ([sidecar.md, the methods](sidecar.md#the-methods)). It acts on the answer's `judgment` and writes it into the log before the agent is given anything.
 
-Some calls may have been taken out or changed. The field's `proposed` holds the model's turn as the model wrote it. Inspect then:
+**Case A: the reply goes on.** The judgment says `outcome: proceed`.
 
-- keeps the model's own turn in the conversation
+Some calls may have been taken out or changed. The judgment's `proposed` holds the model's turn, with each call taken out redacted and each changed call as it ran. Inspect then:
+
+- keeps that turn in the conversation
 - answers each call that was taken out with an approval error, as in process
-- runs each changed call with its new arguments, while the model's turn keeps the original
+- runs each changed call with its new arguments
 
-**Case B: the whole turn is rejected.** Every call in the turn was rejected, so the proxy sends an error, with the field and `outcome: reject`. The field's `withheld` holds the model's turn, and its `usage` what the provider billed for the reply, which Inspect counts as it counts any model call's usage.
+**Case B: the whole turn is rejected.** Every call in the turn was rejected, so the proxy sends an error, and the judgment says `outcome: reject`. The judgment's `withheld` holds the model's turn, with each rejected call redacted, and its `usage` what the provider billed for the reply, which Inspect counts as it counts any model call's usage.
 
 Inspect turns that error into an ordinary model output. The output holds the model's turn, and each call gets an approval error. The agent then goes on, as it would in process.
 
-This is a change. Today, Inspect only sees an HTTP error. It retries only when the sidecar is set to answer with 503.
+**Case C: the run is ended.** The judgment says `outcome: terminate`. Inspect ends the sample, as in process: the sample's limit is recorded as `operator`, and Inspect's scorers still grade the sample.
 
-**Case C: the run is ended.** The field says `outcome: terminate`. Inspect ends the sample, as in process: the sample's limit is recorded as `operator`, and Inspect's scorers still grade the sample.
+**Case D: no decision.** See the next section.
 
-**Case D: no field.** See the next section.
+**Decided: rejected calls are redacted.** A rejected call's arguments never reach Inspect. In `withheld` and `proposed`, each call a decision acted on (a rejected call, the call a `terminate` was decided at, or every call of a turn ended at `AfterGenerate`) has its id and function, arguments `{}`, and no view or parse error, and the turn's `redacted` lists their ids. Inspect holds those calls redacted in its conversation and log, with the approval error as the result. The eval log then shows that a call was rejected, and to which function, but not its arguments. On each later request, the sidecar puts the model's original call back in place of each redacted call before the request goes on, so the provider always gets the model's own turn, signed thinking included. A changed call that Inspect holds as it ran is given the model's original arguments back by the sidecar too. A monitor's explanation in the records can still quote a call's arguments ([sidecar.md, redacted calls](sidecar.md#redacted-calls)).
 
-**In the plan: where the field is.** It depends on the provider format, and on whether the reply is streamed.
+**Decided: the status carries nothing for Inspect.** The HTTP status of a model call is for clients other than Inspect, and for the provider SDKs' own retries. Inspect never reads the decision from it. A refused turn is answered with the sidecar's `--reject-status`, 400 by default. With an Inspect client, that must be a status the provider SDKs don't retry themselves. They retry 408, 409, 429 and every 5xx, so under such a status a refusal is retried away inside the SDK, and Inspect sees only the retry.
 
-| Format | Not streamed | Streamed | On an error |
-| --- | --- | --- | --- |
-| Anthropic Messages | top level of the reply | the last `message_delta` event | either place, below |
-| OpenAI Chat | top level of the reply | the last chunk | either place, below |
-| OpenAI Responses | top level of the reply | `response.completed`, or `response.incomplete` when the reply was cut short | either place, below |
+**Proposed: the transcript.** Each monitor and protocol report in the judgment becomes a `SentinelEvent`, as it does in process. How each report is tied to Inspect's messages and calls is in E below.
 
-**On an error, Inspect checks two places**, because the proxy decides where the field goes:
+## 5. When there is no decision
 
-- the top level, beside `error`, as Envoy sends it;
-- `error.provider_specific_fields.sentinel`, as LiteLLM sends it.
+**Short version:** an answer without a decision doesn't mean the call was allowed. Inspect records what the sidecar says happened.
 
-Inspect has to read the field while it reads the stream. The provider SDKs drop it when they put the stream together.
-
-**Proposed: the transcript.** Each monitor and protocol report in the field becomes a `SentinelEvent`, as it does in process. How each report is tied to Inspect's messages and calls is in E below.
-
-## 5. When the field is missing
-
-**Short version:** a reply without the field doesn't mean the call was allowed. Inspect asks the sidecar what happened.
-
-Some ways the field goes missing:
+Some ways a call ends up without a decision:
 
 - the proxy gave up waiting for the sidecar and sent its own error
 - the sidecar couldn't be reached, and the proxy let the reply through unjudged
 - the connection dropped before the reply ended
-
-**In the plan.** Inspect calls `request_result` with the request's `x-irid`.
 
 **Proposed: what Inspect does with each answer.** The model call came back either as a reply or as an error.
 
 | Answer | What it means | With a reply | With an error |
 | --- | --- | --- | --- |
 | `decided` | the sidecar judged the call | acts on the decision, as in section 4 | a rejection or a `terminate`: acts on it, as in section 4. A `proceed`: the reply itself was lost on the way, so the call stays a failed call, and Inspect retries it as it does today |
-| `judging` | it's still being judged | waits, then asks again (question D) | waits, then asks again (question D) |
+| `judging` | it's still being judged | asks again (question D) | asks again (question D) |
 | `awaiting_reply` | the sidecar judged the request and hasn't been handed the reply | the proxy passed the reply on without the sidecar, which hands it to the sidecar first otherwise: as for `dropped` | the sidecar never received the reply: as for `unknown` |
 | `not_judged`, with a reason | the sidecar saw the call but couldn't judge it | uses the reply, since the proxy chose to let it through, and records why it wasn't judged | fails the sample with that reason |
 | `dropped` | the sidecar once held the call's records, and no longer keeps them. The sidecar's judging may not have finished | `auto`: uses the reply, and records the protocol decision as unavailable. `required`: fails the sample | fails the sample |
-| `unknown` | the sidecar never saw the call | as for `dropped` | fails the sample |
+| `unknown` | the sidecar never saw the call for this eval | as for `dropped` | fails the sample |
 | no answer | `request_result` itself failed | as for `dropped` | fails the sample |
 
 - **Ordinary retries stay.** Inspect still retries the provider and network failures it retries today. Once `request_result` confirms that the sidecar couldn't judge a call that came back as an error, the sample fails, with no extra retry on top.
 - **None of these is permission to go on.** `dropped`, `unknown` and a failed lookup say nothing about what the sentinel decided. Under `auto`, the reply is used as it would be with no sidecar, and the transcript says the sidecar's protocol decision is unavailable.
-
-**Decided: the same answer as the field.** Once the sidecar has decided, `request_result` gives the `sentinel` field the reply or refusal carried, step by step, so Inspect acts on it exactly as it would on the field ([sidecar.md, the methods](sidecar.md#the-methods)).
 
 ## 6. The end of a sample
 
@@ -301,7 +291,7 @@ Inspect skips `end_sample` when it will retry the sample, since a sample the eva
 
 **Short version:** PR 11 works with a sidecar that holds whole replies. Early release waits for PR 12.
 
-**Decided.** PR 11 is built and tested for `release: whole`, where the proxy holds the whole reply until the sidecar has judged it. A whole reply can still travel as a stream: Inspect reads the stream, and the `sentinel` field is in its last event (section 4).
+**Decided.** PR 11 is built and tested for `release: whole`, where the proxy holds the whole reply until the sidecar has judged it. A whole reply can still travel as a stream: Inspect reads the stream as it would the provider's, and asks `request_result` once it has ended (section 4).
 
 `release: early`, where text arrives while the rest is held, is [PR 12](sidecar-plan.md#pr-12-inspect-incremental-streaming). That covers a refusal arriving as an error event after some text, streams that are cut off, cancellation, and partial output shown while streaming.
 
@@ -311,7 +301,7 @@ Running as if there were no sidecar would be unsafe. Inspect's completion cache 
 
 ## Not built
 
-**A response header.** If some proxy can't pass the `sentinel` field through, the sidecar could add a header saying it judged the request. No proxy we know of needs one, so none is designed.
+**`x-should-retry`.** The Anthropic and OpenAI SDKs also obey a response header that isn't part of HTTP, `x-should-retry: true` or `false`, and retry or not as it says, whatever the status. The sidecar doesn't set it, so the status alone decides whether an SDK retries a refusal (section 4). Whether the proxies pass the header on to the client hasn't been probed.
 
 ## The proposals in detail
 
@@ -319,7 +309,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 ### A. A sample the admin didn't register
 
-- The sidecar refuses the sample's first model call with a 400 and no `sentinel` field. Inspect then asks `request_result`, which answers `not_judged` with the reason `unregistered`.
+- The sidecar refuses the sample's first model call with a 400. Inspect then asks `request_result`, as after every call, which answers `not_judged` with the reason `unregistered`.
 
 - Inspect raises `SampleRefusedError`, a new sample error in inspect_ai that means the sample can't run here. It is never retried, since a retry would be refused the same way. It is never scored, even with `score_on_error`, since the sample never ran. It counts toward `fail_on_error`, like any other sample error.
 
@@ -327,7 +317,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 ### B. Where Inspect acts on the sidecar's protocol decisions
 
-- Inspect acts when the reply arrives. It puts each call the sidecar took out back into the model's turn, from the field's `proposed`, with an approval error, and runs each changed call with its new arguments ([sidecar.md, the `sentinel` field](sidecar.md#the-sentinel-field)). Inspect's approval already works this way for bridged agents, which run their own tools (inspect_ai's `docs/approval.qmd`). Taking only the rejected call out of the reply, so the rest of the turn runs, is Meridian's plan for the bridge and the sidecar ([pr-series.md, "Rejecting one call, not the whole turn"](pr-series.md#then-hosts-in-process-bridge-sidecar)).
+- Inspect acts when the reply arrives, once `request_result` has answered. It puts each call the sidecar took out back into the model's turn, redacted, from the judgment's `proposed`, with an approval error, and runs each changed call with its new arguments ([sidecar.md, the judgment](sidecar.md#the-judgment)). Inspect's approval already works this way for bridged agents, which run their own tools (inspect_ai's `docs/approval.qmd`). Taking only the rejected call out of the reply, so the rest of the turn runs, is Meridian's plan for the bridge and the sidecar ([pr-series.md, "Rejecting one call, not the whole turn"](pr-series.md#then-hosts-in-process-bridge-sidecar)).
 
 - Two differences from a sentinel inside Inspect, to be stated in the user docs:
   - An approver never sees a call the sidecar took out. Inside Inspect, an approver sees every call before the sentinel judges it.
@@ -345,7 +335,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 ### D. Waiting while the sidecar is still judging
 
-- When `request_result` says the sidecar is still judging, Inspect asks again, backing off: after half a second, doubling each time, up to about 10 seconds. inspect_ai already backs off this way when it retries model calls (`_util/retry.py`). Only `judging` is waited on: a state this version of Inspect doesn't know, as from a newer sidecar, is taken as an answer, the judgment being unavailable.
+- Inspect calls `request_result` with `wait`, in seconds. While the latest attempt is `judging`, the sidecar holds its answer until the state changes or `wait` passes, whichever comes first, and waits at most 30 seconds. While the answer is still `judging`, Inspect calls again. Only `judging` is waited on: a state this version of Inspect doesn't know, as from a newer sidecar, is taken as an answer, the judgment being unavailable.
 
 - Inspect offers the same settings as for a sentinel inside it, which is none. While Inspect waits, the sample's token, turn and working limits are paused, and its time limit still applies, as they are while a sentinel inside Inspect runs. That follows Meridian's decision that a sentinel's monitors count as waiting, not working (inspect_ai's `design/working-time-concurrency.md`). The one limit on judging itself is the sidecar's `--time-limit`, which is the operator's and off by default.
 
@@ -355,13 +345,13 @@ Each item says what this design proposes. Where something is still needed from s
 
 ### E. The sidecar's reports in Inspect's transcript
 
-- Each suspicion rating and protocol decision in the field becomes a `SentinelEvent`, as it does inside Inspect. This follows Meridian's aims that the same monitors give "the same decisions and events in inspect_ai's host and in the proxy host" ([proxy-host.md](proxy-host.md#8-testing)), and that the sidecar's records carry "the step id and conversation, as `SentinelEvent` does, so the two can be shown in one viewer" ([pr-series.md](pr-series.md#then-hosts-in-process-bridge-sidecar)).
+- Each suspicion rating and protocol decision in the judgment becomes a `SentinelEvent`, as it does inside Inspect. This follows Meridian's aims that the same monitors give "the same decisions and events in inspect_ai's host and in the proxy host" ([proxy-host.md](proxy-host.md#8-testing)), and that the sidecar's records carry "the step id and conversation, as `SentinelEvent` does, so the two can be shown in one viewer" ([pr-series.md](pr-series.md#then-hosts-in-process-bridge-sidecar)).
 
-- The field comes back on the reply to the model call Inspect sent with that `x-irid`, so Inspect knows which call, and which assistant message, each report belongs to. Within the turn, reports match their tool calls by the tool calls' own ids. Inspect writes the events with its own ids.
+- Inspect asks for the judgment by the `x-irid` of the model call it sent, so it knows which call, and which assistant message, each report belongs to. Within the turn, reports match their tool calls by the tool calls' own ids. Inspect writes the events with its own ids.
 
 - A report trimmed by a sidecar started with `--no-eval-results` says it was trimmed, so it never looks like a monitor that had nothing to say.
 
-- Each event records where it came from: inside Inspect, or a sidecar. For a sidecar, it also records the proxy address, the endpoint version and release mode from the probe, the call's `x-irid`, whether the report was trimmed, and the models the step's monitors and protocols called, by role, from the field's `models`. These go in the event's `metadata`, under `sentinel_sidecar`, so inspect_ai's log format doesn't change; a trimmed report has an empty `function`. `sentinel_proxy` isn't recorded in the log either, so `inspect eval-retry` is told it again. Typed log fields for both follow the first PR ([#167](https://github.com/meridianlabs-ai/inspect_sentinel/issues/167)), as changing the log format means regenerating the schema in inspect_ai, ts-mono and inspect_scout.
+- Each event records where it came from: inside Inspect, or a sidecar. For a sidecar, it also records the proxy address, the endpoint version and release mode from the probe, the call's `x-irid`, whether the report was trimmed, and the models the step's monitors and protocols called, by role, from the judgment's `models`. These go in the event's `metadata`, under `sentinel_sidecar`, so inspect_ai's log format doesn't change; a trimmed report has an empty `function`. `sentinel_proxy` isn't recorded in the log either, so `inspect eval-retry` is told it again. Typed log fields for both follow the first PR ([#167](https://github.com/meridianlabs-ai/inspect_sentinel/issues/167)), as changing the log format means regenerating the schema in inspect_ai, ts-mono and inspect_scout.
 
 - The sidecar takes a role's model from its own configuration, not from the eval's model roles ([sidecar.md, section 8](sidecar.md#what-holds-something-else-in-the-sidecar)). When a step's monitors used a role the eval also set, to another model, Inspect warns once, naming both models.
 
@@ -412,7 +402,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 - Inspect's headers go only on agent calls to an endpoint where a sidecar answered. Every other endpoint gets plain model calls, as today.
 
-- Each sidecar gets its own `register_task`, `complete_registration` and `end_sample`, and `request_result` goes to the sidecar the call went to. A registration that fails mid-run fails that sample, not the task.
+- Each sidecar gets its own `register_task`, `complete_registration` and `end_sample`, and gives the eval a token of its own, which Inspect presents only to that sidecar. `request_result` goes to the sidecar the call went to. A registration that fails mid-run fails that sample, not the task.
 
 - `required` covers only the assigned model's endpoint. An agent call to another endpoint with no sidecar behind it goes through unjudged. Inspect says so: a warning once per model, and a note in the sample's transcript the first time each attempt calls it.
 
