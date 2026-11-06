@@ -406,7 +406,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 - `required` covers only the assigned model's endpoint. An agent call to another endpoint with no sidecar behind it goes through unjudged. Inspect says so: a warning once per model, and a note in the sample's transcript the first time each attempt calls it.
 
-- **Waiting on:** Meridian's answer to I, for monitor state from more than one sidecar. If it is copied, it is copied from each sidecar, and Inspect fails the sample if two sentinels write the same key, a sentinel inside Inspect and one in a sidecar included: the copy would otherwise overwrite the value the sentinel inside Inspect carries on from.
+- **Waiting on:** Meridian's answer to I, for monitor state from more than one sidecar. If it is copied, it is copied from each sidecar, and Inspect fails the sample if two sentinels write the same key, a sentinel inside Inspect and one in a sidecar included: the copy would otherwise overwrite the value the sentinel inside Inspect carries on from. A key already in the sample store is taken for the sentinel inside Inspect's only when the task has one. A scorer that reads monitor state with `store_as()` before the sidecar has written any, as a scorer run between an agent's attempts can, puts the model's defaults into the store, and the copy must not take those for another sentinel's state. With both kinds of sentinel on one task, such a key the sentinel inside Inspect doesn't keep still fails the sample; telling the two apart needs the keys the sentinel inside Inspect keeps, which it doesn't declare.
 
 ### K. Model calls that aren't the agent's
 
