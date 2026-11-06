@@ -17,7 +17,7 @@ from ._exchange import Refuse, Request
 from ._host import ListRecorder, Record
 from ._inspect_client import Exchange
 from ._registration import RegisteredTask
-from ._wire import Amendment, Edited, Format, Offered, Turn
+from ._wire import Amendment, Edited, EntryDigest, Format, Offered, Turn
 
 V = TypeVar("V")
 
@@ -207,7 +207,7 @@ class Run:
     """For a run no eval names: the marks of the requests the run was ended at, each with what a request that continues from it is refused with."""
 
     ended_on: list["EndedOn"] = field(default_factory=list["EndedOn"])
-    """For a run no eval names: the last entry of each request the run was ended at. A request that continues from it with blocks added to that entry, as a client adds the user's next message to the one that holds the last results, is refused as well."""
+    """For a run no eval names: the last entry of each request the run was ended at, in digests. A request that continues from it with blocks added to that entry, as a client adds the user's next message to the one that holds the last results, is refused as well."""
 
     eval: EvalContext | None = None
     """The sample the run is, as its task was registered when the run first found it. A registration made later doesn't reach it."""
@@ -229,8 +229,8 @@ class EndedOn:
     """How many entries come before it."""
     before: str
     """The mark of those entries."""
-    entry: object
-    """The entry, as its mark was taken of it."""
+    digest: EntryDigest
+    """The entry, as its mark was taken of it, in digests."""
     refusal: Refuse
     """What a request that adds to it is refused with."""
 
@@ -266,8 +266,8 @@ class Held:
     """The attempt at the request, for an eval that names its requests."""
     exchange: Exchange = field(default_factory=Exchange)
     """What was decided so far during the exchange, for an Inspect eval's judgment of it."""
-    last: object = None
-    """For a run no eval names, the last entry the client sent, as its mark was taken of it, or None for a request with none."""
+    last: EntryDigest | None = None
+    """For a run no eval names, the last entry the client sent, as its mark was taken of it, in digests, or None for a request with none, or whose last entry nothing can be added to."""
     request: Request | None = None
     """For a run no eval names, the request as the client sent it, so that a run ended meanwhile by another exchange refuses its reply when it continues the ended conversation with blocks added to its last entry."""
 
