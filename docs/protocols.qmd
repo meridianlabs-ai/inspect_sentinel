@@ -291,6 +291,16 @@ A `modify` decision runs the tool call with new arguments. Build the replacement
 ``` python
 from dataclasses import replace
 
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Decision,
+    Escalations,
+    Protocol,
+    protocol,
+)
+
+
 @protocol
 def in_work_dir() -> Protocol:
     async def decide(
@@ -320,6 +330,17 @@ A `modify` may change only the tool call's arguments: the replacement's `id` and
 `Decision.terminate()` ends the sample. It is allowed at every stage, so it is the action to use after a tool call has run:
 
 ``` python
+from inspect_sentinel import (
+    AfterToolCall,
+    Context,
+    Decision,
+    Escalations,
+    Protocol,
+    protocol,
+    result_text,
+)
+
+
 @protocol
 def leaked_keys() -> Protocol:
     async def decide(
@@ -341,6 +362,16 @@ def leaked_keys() -> Protocol:
 This protocol answers escalations. It ends the sample when the protocol named `network` escalated, rejects the tool call when another protocol escalated, and abstains when nothing escalated:
 
 ``` python
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Decision,
+    Escalations,
+    Protocol,
+    protocol,
+)
+
+
 @protocol
 def escalation_policy() -> Protocol:
     async def decide(
@@ -365,6 +396,18 @@ A protocol receives escalations only from the children before it in the same `se
 A protocol runs monitors with `run_monitors()`, passing its own `context` and the step. Taking the monitor as a factory parameter lets each task choose which monitor to use. This protocol rejects tool calls with a high score, escalates tool calls with a middling score, and lets the rest proceed:
 
 ``` python
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Decision,
+    Escalations,
+    Monitor,
+    Protocol,
+    protocol,
+    run_monitors,
+)
+
+
 @protocol
 def screened(
     monitor: Monitor, escalate_at: float = 0.5, reject_at: float = 0.8
@@ -428,6 +471,17 @@ The protocols above a protocol can combine or override the decision it returns. 
 Let's look at `examples/nested.py`. Its `protected()` rule rejects any `bash()` command that mentions `/etc` or `~/.aws`, using `decide_final()`:
 
 ```{.python filename="examples/nested.py"}
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Decision,
+    Escalations,
+    Protocol,
+    call_text,
+    decide_final,
+    protocol,
+)
+
 PROTECTED_PATHS = ["/etc", "~/.aws"]
 
 
@@ -452,8 +506,11 @@ def protected() -> Protocol:
         return Decision.proceed()
 
     return decide
+```
 
+The task runs `protected()` beside `no_network()`, with the `suspicion()` monitor as an audit:
 
+``` python
 Task(
     ...,
     sentinel={

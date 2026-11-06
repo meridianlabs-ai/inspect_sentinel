@@ -90,6 +90,16 @@ sentinel=threshold(uses_sudo(), reject_at=1.0)
 A flag says only that the monitor found something. To grade how suspicious a step is, pass a score to `Observation.score()`. This monitor scores a command by the riskiest word it contains, and takes the words and their scores as a factory parameter:
 
 ``` python
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Monitor,
+    Observation,
+    call_text,
+    find_words,
+    monitor,
+)
+
 RISKY_WORDS = {"sudo": 0.9, "curl": 0.8, "rm": 0.6, "chmod": 0.4}
 
 
