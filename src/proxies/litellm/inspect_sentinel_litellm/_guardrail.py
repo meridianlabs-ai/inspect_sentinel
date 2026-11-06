@@ -125,6 +125,9 @@ _NOT_SHOWN = frozenset(
     }
 )
 _JSON = "application/json"
+
+_NO_TIMEOUT = aiohttp.ClientTimeout(total=None)
+"""No limit, for a call the sidecar's endpoint for evals bounds itself."""
 _LINE_END = re.compile(r"\r\n|\r|\n")
 _STREAM = "text/event-stream"
 # A request's own fields that LiteLLM rewrites the request from after this
@@ -432,6 +435,9 @@ class LiteLLMGuardrail(CustomGuardrail):
             # only the body and what it is: the caller's key was LiteLLM's to
             # check, and is never the sidecar's to see
             headers = {"content-type": request.headers.get("content-type", _JSON)}
+            # Not the guardrail's timeout, which is for judging a call: the
+            # sidecar bounds these itself, and `request_result` holds its
+            # answer for up to 30 seconds while a call is still being judged.
             try:
                 async with session.request(
                     request.method,
@@ -439,7 +445,7 @@ class LiteLLMGuardrail(CustomGuardrail):
                     params=list(request.query_params.multi_items()),
                     data=await request.body(),
                     headers=headers,
-                    timeout=self._timeout,
+                    timeout=_NO_TIMEOUT,
                 ) as answer:
                     return Response(
                         content=await answer.read(),
