@@ -1424,15 +1424,25 @@ async def test_sentinel_is_given_the_run_the_eval_names(
 
 
 @pytest.mark.anyio
-async def test_a_reply_in_flight_when_its_conversation_ended_is_refused() -> None:
+@pytest.mark.parametrize(
+    "follow_up",
+    [None, _again_beside],
+    ids=["the same request", "with the user's next message beside the results"],
+)
+async def test_a_reply_in_flight_when_its_conversation_ended_is_refused(
+    follow_up: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None,
+) -> None:
     # a run with no name, whose conversation has had a reply passed on, sends
-    # the same request twice before either is answered
+    # a second request before the first is answered: the same one again, or
+    # one with the user's next message added, as when the user interrupts
     handler = Handler(weather_rule("terminate", "Tokyo"))
     looked = ran("Oslo", "rain", "toolu_1")
     await handler.request(request("a"))
     await handler.reply(reply(message(weather("Oslo")), id="a"))
     await handler.request(request("b", then=looked))
-    await handler.request(request("c", then=looked))
+    await handler.request(
+        request("c", then=follow_up(looked) if follow_up is not None else looked)
+    )
 
     ended = await handler.reply(reply(message(weather("Tokyo")), id="b"))
     late = await handler.reply(reply(message(weather("Lima")), id="c"))

@@ -802,6 +802,7 @@ class Handler:
             last=None
             if named
             else last_entry(request.provider, request.body, request.format),
+            request=None if named else request,
         )
         said = call_texts(request.provider, request.body, request.format)
         # a changed call's result is of the call that ran, whichever the client holds
@@ -902,7 +903,7 @@ class Handler:
                 while (judging := self._judging.get(key)) is not None:
                     await judging.wait()
                 # the judgment waited for may have ended the run
-                refusal = _ended(run, held.marks, held.sample_attempt)
+                refusal = _ended(run, held.marks, held.sample_attempt, held.request)
                 if refusal is not None:
                     return refusal
             # a rejection the client put back itself is the sidecar's own
@@ -981,7 +982,7 @@ class Handler:
         conversation.noted = noted
         # billed whatever is decided, so a client refused the reply still counts it
         held.exchange.usage = output.usage
-        refusal = _ended(run, held.marks, held.sample_attempt)
+        refusal = _ended(run, held.marks, held.sample_attempt, held.request)
         if refusal is not None:
             # a sentinel ended the run while the model was answering, or a
             # later attempt replaced this one
@@ -1282,7 +1283,7 @@ class Handler:
 
     def _ended_meanwhile(self, held: Held, run: Run) -> Refuse | None:
         # another exchange of the run may have ended it while this one waited
-        refusal = _ended(run, held.marks, held.sample_attempt)
+        refusal = _ended(run, held.marks, held.sample_attempt, held.request)
         if refusal is not None:
             held.exchange.ended = True
             held.exchange.replaced = refusal is _REPLACED
