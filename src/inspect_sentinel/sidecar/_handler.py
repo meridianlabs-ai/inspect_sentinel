@@ -330,15 +330,12 @@ class Handler:
             attempt.not_judged("provider_error")
         elif not isinstance(answer, Refuse):
             attempt.decide("proceed")
-            attempt.proposed = held.exchange.proposed
         elif held.exchange.replaced:
             attempt.not_judged("replaced_attempt")
         elif held.exchange.ended:
             attempt.decide("terminate")
-            attempt.withheld = held.exchange.withheld
         else:
             attempt.decide("reject", held.exchange.message)
-            attempt.withheld = held.exchange.withheld
         return answer
 
     def reply_stream(

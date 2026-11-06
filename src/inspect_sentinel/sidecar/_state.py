@@ -15,7 +15,7 @@ from pydantic import JsonValue
 from .._context import EvalContext, ProxyContext
 from ._exchange import Refuse, Request
 from ._host import ListRecorder, Record
-from ._inspect_client import Exchange, Withheld
+from ._inspect_client import Exchange
 from ._registration import RegisteredTask
 from ._wire import Amendment, Edited, Format, Offered, Turn
 
@@ -74,12 +74,6 @@ class Attempt:
 
     message: str | None = None
     """What the model is told, for a rejection."""
-
-    withheld: Withheld | None = None
-    """The model's turn, when the client was refused it because a call in it was rejected, or because a sentinel ended the run at the reply or at a call in it."""
-
-    proposed: Withheld | None = None
-    """The model's turn as it proposed it, when the client was handed it with calls taken out."""
 
     judged: Exchange | None = None
     """What was decided during the attempt, for an Inspect eval, from which `request_result` writes its judgment."""
