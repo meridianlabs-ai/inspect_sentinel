@@ -65,9 +65,7 @@ class EvalClient:
 
     async def recover(self, irid: str) -> Recovered:
         # the token the eval's registration would have been given
-        token = await self._handler._state.eval_token("eval_789")  # pyright: ignore[reportPrivateUsage]
-        if token is None:
-            token = await self._handler.eval_token("eval_789", None)
+        token = await self._handler.keep_eval_token("eval_789")
         answered = await self._http.post(
             EVAL_PATH,
             json={

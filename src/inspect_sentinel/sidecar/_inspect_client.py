@@ -95,6 +95,8 @@ class Exchange:
     """What the model is told of the rejection, if the turn was refused for one."""
     ended: bool = False
     """Whether the reply was refused because the run ended, by a sentinel's decision while it was judged or before, rather than for a rejection."""
+    replaced: bool = False
+    """Whether the request or reply was refused unjudged because it is of an attempt at the sample that another replaced, or of another attempt with the same number: not a sentinel's decision, and nobody waits for it."""
     usage: ModelUsage | None = None
     """What the provider billed for the model's reply, for a client that is refused it."""
 

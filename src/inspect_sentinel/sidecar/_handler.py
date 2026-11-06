@@ -74,6 +74,7 @@ from ._state import (
     MADE_KEPT,
     Attempt,
     Conversation,
+    Dropped,
     Held,
     Made,
     MemoryState,
@@ -244,7 +245,7 @@ class Handler:
 
         A request with `x-inspect-context` belongs to the sample it names, which is its run. A request whose header can't be read is refused, rather than judged as another client's would be: it says it is an eval's, and a proxy set to let through what can't be judged would let it through unjudged.
 
-        A conversation belongs to one attempt at the sample. A new attempt starts afresh, as Inspect starts the sample store afresh for it: its conversations, its count of rejected turns in a row, the sentinel's store, and the run's end if a sentinel ended the attempt before. A sample the eval has ended stays ended. Attempts are ordered by the number the header gives each. Once a later attempt has begun, a request of an earlier one is refused unjudged, as nobody waits for it, and so is one of another attempt with the same number. A client that retries a request within the attempt keeps the attempt's conversation.
+        A conversation belongs to one attempt at the sample. A new attempt starts afresh, as Inspect starts the sample store afresh for it: its conversations, its count of rejected turns in a row, the sentinel's store, and the run's end if a sentinel ended the attempt before. A sample the eval has ended stays ended. Attempts are ordered by the number the header gives each. Once a later attempt has begun, a request of an earlier one is refused unjudged, as nobody waits for it, and so is one of another attempt with the same number: `request_result` says it was not judged, with the reason `replaced_attempt`, so an eval never takes it for a sentinel's terminate. A client that retries a request within the attempt keeps the attempt's conversation.
 
         A request of a run that a sentinel has ended is refused, and the sentinel is not asked again. For a run no eval names, that is a request which continues the conversation the run was ended in.
 
@@ -283,11 +284,13 @@ class Handler:
                 attempt.not_judged(_not_judged(ex))
             raise
         if attempt is not None:
-            if isinstance(answer, Refuse):
-                # a request is refused only when its run has ended
-                attempt.decide("terminate")
-            else:
+            if not isinstance(answer, Refuse):
                 attempt.state = "awaiting_reply"
+            elif attempt.judged is not None and attempt.judged.replaced:
+                attempt.not_judged("replaced_attempt")
+            else:
+                # otherwise a request is refused only when its run has ended
+                attempt.decide("terminate")
         return answer
 
     async def reply(self, reply: Reply, *, released: bytes = b"") -> Answer:
@@ -325,6 +328,8 @@ class Handler:
         elif not isinstance(answer, Refuse):
             attempt.decide("proceed")
             attempt.proposed = held.exchange.proposed
+        elif held.exchange.replaced:
+            attempt.not_judged("replaced_attempt")
         elif held.exchange.ended:
             attempt.decide("terminate")
             attempt.withheld = held.exchange.withheld
@@ -372,23 +377,22 @@ class Handler:
         if held is not None and held.attempt is not None:
             held.attempt.not_judged(reason)
 
-    async def eval_token(self, eval_id: str, presented: str | None) -> str:
-        """The secret an eval presents on every later call to the endpoint for evals, given when it registers a task.
-
-        A sidecar that keeps no secret for the eval makes one: at the eval's first registration, or once a restart or the expiry has lost the one it had. One that keeps a secret gives it only to a caller that presents it, so nothing but the eval that registered first can register for the eval again or read its results.
+    async def eval_token(self, eval_id: str, presented: str | None) -> str | None:
+        """The secret the sidecar keeps for an eval, which a caller registering a task for the eval must present.
 
         Args:
             eval_id: The eval's id.
             presented: The secret the caller holds for the eval, if it holds one.
+
+        Returns:
+            The secret kept, which the caller presented; or None if none is kept, at the eval's first registration or once a restart or the expiry has lost it.
 
         Raises:
             UnauthorizedError: If the sidecar keeps a secret for the eval, and the caller didn't present it.
         """
         kept = await self._state.eval_token(eval_id)
         if kept is None:
-            made = secrets.token_urlsafe(32)
-            await self._state.keep_eval_token(eval_id, made)
-            return made
+            return None
         if presented is None or not hmac.compare_digest(
             presented.encode(), kept.encode()
         ):
@@ -396,6 +400,16 @@ class Handler:
                 f"The eval {eval_id!r} registered with another token."
             )
         return kept
+
+    async def keep_eval_token(self, eval_id: str) -> str:
+        """Make and keep a secret for an eval whose registration succeeded, unless one is kept already, as when two registrations made it at once.
+
+        Made only once a registration succeeds, so a registration that fails leaves no secret its caller was never given.
+
+        Returns:
+            The secret kept for the eval, which every later call for it presents.
+        """
+        return await self._state.keep_eval_token(eval_id, secrets.token_urlsafe(32))
 
     async def holds_eval(self, eval_id: str, token: str) -> bool:
         """Whether the sidecar keeps a secret for the eval, which the caller must present.
@@ -431,8 +445,9 @@ class Handler:
             attempts = await self._state.attempts(id)
             if attempts is None:
                 return "unknown"
-            if attempts == "dropped":
-                return "dropped"
+            if isinstance(attempts, Dropped):
+                # told only to the eval the request was of
+                return "dropped" if attempts.eval_id == eval_id else "unknown"
             if any(attempt.eval_id != eval_id for attempt in attempts):
                 return "unknown"
             latest = attempts[-1]
@@ -666,7 +681,7 @@ class Handler:
         if sample is not None:
             clash = _begin_attempt(run, sample)
             if clash is not None:
-                return self._judged(clash, proxy, Exchange(), attempt)
+                return self._judged(clash, proxy, Exchange(replaced=True), attempt)
             if run.eval_id is None:
                 run.eval_id = sample.eval_id
             # the eval holds the calls a decision acted on without their
@@ -962,8 +977,10 @@ class Handler:
         held.exchange.usage = output.usage
         refusal = _ended(run, held.marks, held.sample_attempt)
         if refusal is not None:
-            # a sentinel ended the run while the model was answering
+            # a sentinel ended the run while the model was answering, or a
+            # later attempt replaced this one
             held.exchange.ended = True
+            held.exchange.replaced = refusal is _REPLACED
             return refusal
 
         if AfterGenerate in self._watched:
@@ -1250,7 +1267,9 @@ class Handler:
         exchange: Exchange,
         attempt: Attempt | None,
     ) -> Refuse:
-        # an Inspect eval asks what was decided, by `request_result`
+        # an Inspect eval asks what was decided, by `request_result`; a
+        # request of a replaced attempt was never judged
+        exchange.replaced = exchange.replaced or refusal is _REPLACED
         if proxy.inspect is not None and attempt is not None:
             attempt.judged = exchange
         return refusal
@@ -1260,6 +1279,7 @@ class Handler:
         refusal = _ended(run, held.marks, held.sample_attempt)
         if refusal is not None:
             held.exchange.ended = True
+            held.exchange.replaced = refusal is _REPLACED
         return refusal
 
     def _end(self, held: Held, run: Run, where: str) -> Refuse:
