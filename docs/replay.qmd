@@ -88,7 +88,7 @@ A row's references cite the step's model event or message first, then what the r
 
 Every reference resolves in the transcript. A step whose message the transcript doesn't hold (e.g. a sub-agent's tool message or reply) cites the event that recorded it, its `ToolEvent` or `ModelEvent`. A reference to anything the transcript doesn't hold, a report's included, is left out.
 
-A label a monitor gave its own reference becomes that reference's label, and the monitor's explanation is rewritten to match. The explanation leads with the step's label and names any other reference the report's explanation doesn't, so Scout View links each one.
+A label a monitor gave its own reference is replaced with that reference's transcript label, and the monitor's explanation is rewritten to match. The explanation leads with the step's label and names any other reference the report's explanation doesn't, so Scout View links each one.
 
 ## Measuring a Monitor
 
@@ -239,7 +239,7 @@ def after_two_compactions(transcript_id: str, step: ReplayStep) -> bool:
     return step.segment[1] >= 2
 ```
 
-Define a selector at module level in a `.py` file (a module, or the script that runs the scan), because Scout's worker processes import it from there. A selector defined in a notebook, a REPL or `python -c` is refused, so from a notebook, put it in a `.py` file next to the notebook and import it. A function of the wrong shape is a type error at the `as_scanner()` call.
+Define a selector at module level in a `.py` file (a module, or the script that runs the scan). A selector defined in a notebook, a REPL or `python -c` is refused, so from a notebook, put it in a `.py` file next to the notebook and import it. A function of the wrong shape is a type error at the `as_scanner()` call. See [Running and Resuming](#running-and-resuming) for how Scout loads the function.
 
 ## Human Decisions in Replay
 
@@ -415,8 +415,10 @@ Everything above assumes a log written by a recent inspect_ai, which records eac
 
 A log written before inspect_ai recorded origins has its agent turns inferred from its span tree, the structure Scout and Inspect View show, and a row's `metadata.turns` is `"inferred"`. The rules are:
 
--   A model call made in the scorers' span is a scorer's, and one in a tool's span is a tool's.
--   A call the timeline shows as a helper isn't a turn (e.g. a warm-up, a single-turn sub-agent with a prompt of its own, or, by following which calls carry on the earlier calls' output, a side call or a compaction's summary).
+-   Calls made by the sentinel itself are left out.
+-   A model call made in the scoring phase is a scorer's, including calls nested in tools or agents there. Otherwise, a call in a tool's span is a tool's.
+-   Of the remaining calls, one in the setup (`init`) span is setup's. If the log records phase spans (`init`, `solvers` or `scorers`), a call outside every phase span, such as one in a lifecycle hook or `Task.cleanup`, is setup's too. These calls are not agent turns.
+-   A remaining call the timeline shows as a helper isn't a turn (e.g. a warm-up, a single-turn sub-agent with a prompt of its own, or, by following which calls carry on the earlier calls' output, a side call or a compaction's summary).
 -   The rest are the agent's turns.
 
 A step then holds what it holds from a newer log, with its `history` built from the inferred turns. Where inference differs from what happened live, so does replay. In particular:
@@ -437,7 +439,7 @@ A transcript where an approver changed a tool call, but the log records a differ
 
 ### Transcripts From Messages
 
-A transcript Scout imported from another source, one with no model events, or one from a log written by inspect_ai before 0.3.100 replays from its messages, with `metadata.turns` `"inferred"`. Each assistant message becomes a model call whose input is every message before it, followed by a tool step pair for each of its tool calls, the tool call and its answering tool message. The whole transcript is one conversation.
+A transcript Scout imported from another source, one with no model events, or one from a log written by inspect_ai before 0.3.100 replays from its messages, with `metadata.turns` `"inferred"`. Each assistant message becomes a model call whose input is every message before it. Each of its tool calls gives a `tool_call` step; a `tool_result` step is added only if an answering tool message follows it. The whole transcript is one conversation.
 
 A step from messages holds less than one from an Inspect log:
 
