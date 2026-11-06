@@ -303,6 +303,57 @@ async def test_a_run_ended_at_a_call_is_the_last_step() -> None:
 
 
 @protocol
+def acts_on_paris_and_ends_at_tokyo(action: str = "reject") -> Protocol:
+    """Reject or change a lookup of Paris, end the run at one of Tokyo, and let the rest go."""
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        city = step.call.arguments.get("location")
+        if city == "Tokyo":
+            return Decision.terminate("a lookup of Tokyo")
+        if city != "Paris":
+            return Decision.proceed()
+        if action == "reject":
+            return Decision.reject("a lookup of Paris", message="Paris is not allowed.")
+        changed = replace(step.call, arguments={"location": "Oslo"})
+        return Decision(action="modify", modified=changed)
+
+    return decide
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("action", ["reject", "modify"])
+async def test_a_run_ended_at_a_call_redacts_the_calls_decided_before_it(
+    action: str,
+) -> None:
+    handler = Handler(acts_on_paris_and_ends_at_tokyo(action))
+    asked, answered = _exchange("anthropic")
+    await handler.request(asked)
+
+    answer = await handler.reply(answered)
+
+    assert isinstance(answer, Refuse)
+    field = await _judged(handler)
+    assert field["outcome"] == "terminate"
+    # judging stopped at the call the run ended at: the third was never judged
+    assert _stages(field) == [("tool_call", action), ("tool_call", "terminate")]
+    # none of the turn ran, so the call decided before the end is redacted
+    # too, whether rejected or changed, and the call never judged keeps its
+    # arguments
+    withheld = field["withheld"]
+    assert [
+        (call["id"], call["arguments"]) for call in withheld["message"]["tool_calls"]
+    ] == [
+        ("toolu_1", {}),
+        ("toolu_2", {}),
+        ("toolu_3", {"location": "Lima"}),
+    ]
+    assert withheld["redacted"] == ["toolu_1", "toolu_2"]
+    assert set(withheld["results"].values()) == {_ENDED}
+
+
+@protocol
 def ends_at_the_reply() -> Protocol:
     """End the run at the model's reply."""
 
