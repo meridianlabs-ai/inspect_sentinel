@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypeAlias, cast
+from typing import Any, Literal, NamedTuple, TypeAlias, cast
 
 from inspect_ai.model import (
     ChatMessage,
@@ -694,42 +694,61 @@ def request_marks(
     return marks
 
 
-def last_entry(provider: str, body: bytes, format: Format | None = None) -> object:
-    """The last entry of a request's conversation, as its mark is taken of it, or None for a request with none."""
-    request = json_object(body, "request")
-    api = _api(provider, request, format)
-    entries = _conversation(request, api)
-    return api.settled(entries[-1]) if entries else None
+class EntryDigest(NamedTuple):
+    """An entry of a request's conversation, as its mark is taken of it, in digests, so that an ended run can keep every entry it was ended at without keeping what the entries hold."""
+
+    fields: str
+    """A digest of the entry without its content."""
+    blocks: list[str]
+    """A digest of each of its content blocks, in order."""
 
 
-def grows_entry(
-    provider: str, body: bytes, format: Format | None, at: int, entry: object
-) -> bool:
-    """Whether a request's entry at `at` is `entry` with content blocks added after its own.
+def entry_digests(
+    provider: str, body: bytes, format: Format | None = None
+) -> list[EntryDigest | None]:
+    """A digest of each entry of a request's conversation, as its mark is taken of it.
 
-    A client may add the user's next message to the one that holds the last results, as Claude Code does, rather than send it as a message of its own. Everything else about the entry must be as it was, and its own blocks must come first, unchanged, as its mark was taken of them.
+    Returns:
+        One for each entry, or None for an entry that isn't an object or whose content isn't a list of blocks, which nothing is added to.
     """
     request = json_object(body, "request")
     api = _api(provider, request, format)
-    entries = _conversation(request, api)
-    if at >= len(entries):
-        return False
-    grown = api.settled(entries[at])
-    if not isinstance(grown, dict) or not isinstance(entry, dict):
-        return False
-    now = cast("dict[str, Any]", grown)
-    then = cast("dict[str, Any]", entry)
-    content, before = now.get("content"), then.get("content")
-    if not isinstance(content, list) or not isinstance(before, list):
-        return False
-    blocks = cast("list[object]", content)
-    kept = cast("list[object]", before)
+    digests: list[EntryDigest | None] = []
+    for entry in _conversation(request, api):
+        settled = api.settled(entry)
+        if not isinstance(settled, dict):
+            digests.append(None)
+            continue
+        fields = cast("dict[str, Any]", settled)
+        content = fields.get("content")
+        if not isinstance(content, list):
+            digests.append(None)
+            continue
+        digests.append(
+            EntryDigest(
+                _digest(
+                    {key: value for key, value in fields.items() if key != "content"}
+                ),
+                [_digest(block) for block in cast("list[object]", content)],
+            )
+        )
+    return digests
+
+
+def grows(now: EntryDigest, then: EntryDigest) -> bool:
+    """Whether the entry `now` is the entry `then` with content blocks added after its own.
+
+    A client may add the user's next message to the one that holds the last results, as Claude Code does, rather than send it as a message of its own. Everything else about the entry must be as it was, and its own blocks must come first, unchanged, as its mark was taken of them.
+    """
     return (
-        {key: value for key, value in now.items() if key != "content"}
-        == {key: value for key, value in then.items() if key != "content"}
-        and len(blocks) > len(kept)
-        and blocks[: len(kept)] == kept
+        now.fields == then.fields
+        and len(now.blocks) > len(then.blocks)
+        and now.blocks[: len(then.blocks)] == then.blocks
     )
+
+
+def _digest(value: object) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
 # inspect_ai's providers write an item's `internal` into its text in this

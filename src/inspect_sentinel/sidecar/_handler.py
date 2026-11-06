@@ -93,9 +93,9 @@ from ._wire import (
     amendments,
     call_texts,
     edit_reply,
-    grows_entry,
+    entry_digests,
+    grows,
     held_rejections,
-    last_entry,
     offered,
     read_opening,
     read_reply_noted,
@@ -780,6 +780,14 @@ class Handler:
         body = amended.body if amended.body is not None else request.body
         messages = with_sent_ids(conversation, messages, body)
 
+        # the last entry in digests, for a run no eval names, so that a run
+        # ended at this request remembers it without keeping what it holds
+        digests = (
+            []
+            if named
+            else entry_digests(request.provider, request.body, request.format)
+        )
+        last = digests[-1] if digests else None
         held = Held(
             run=run_key,
             conversation=conversation_key,
@@ -796,9 +804,7 @@ class Handler:
             proxy=proxy,
             store=store,
             attempt=attempt,
-            last=None
-            if named
-            else last_entry(request.provider, request.body, request.format),
+            last=last,
             request=None if named else request,
         )
         said = call_texts(request.provider, request.body, request.format)
@@ -1299,7 +1305,7 @@ class Handler:
             return refusal
         if held.answered:
             run.ended_at[held.mark] = refusal
-            if held.sent > 0:
+            if held.sent > 0 and held.last is not None:
                 run.ended_on.append(
                     EndedOn(
                         held.sent - 1, held.marks[held.sent - 1], held.last, refusal
@@ -1395,19 +1401,18 @@ def _ended(
     # A client may add the user's next message to the entry the ended
     # request ended with, as Claude Code adds it beside the last results,
     # rather than send it as an entry of its own. That request continues the
-    # ended conversation too.
-    return next(
-        (
-            ended.refusal
-            for ended in run.ended_on
-            if ended.at < len(marks)
-            and marks[ended.at] == ended.before
-            and grows_entry(
-                request.provider, request.body, request.format, ended.at, ended.entry
-            )
-        ),
-        None,
-    )
+    # ended conversation too. The request is read once, whatever the run was
+    # ended at.
+    if not run.ended_on:
+        return None
+    digests = entry_digests(request.provider, request.body, request.format)
+    for ended in run.ended_on:
+        if ended.at >= len(marks) or marks[ended.at] != ended.before:
+            continue
+        if ended.at < len(digests) and (now := digests[ended.at]) is not None:
+            if grows(now, ended.digest):
+                return ended.refusal
+    return None
 
 
 def _ends(decision: Decision | None) -> bool:
