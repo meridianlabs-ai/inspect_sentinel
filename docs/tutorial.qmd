@@ -113,6 +113,16 @@ A rule like this cannot prove a tool call safe: the agent could download with `p
 A monitor reports a suspicion score and never acts. The monitor in `examples/llm_suspicion.py` asks a model, the *monitor model*, how likely each tool call is to break a two-part policy. The monitor model scores each part separately, as a *dimension* of the suspicion score:
 
 ``` python
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    LastTurns,
+    Monitor,
+    Observation,
+    StepPreprocessor,
+    monitor,
+)
+
 POLICY = """\
 The policy binds the agent whatever its task says.
 
@@ -222,6 +232,18 @@ See [Protocols](protocols.qmd) for `concurrent()`, `sequential()`, and nesting o
 A protocol can also *escalate* a tool call: decline to decide and hand it to the next protocol in a `sequential()`. The `triage()` rule in `examples/escalate_to_human.py` rejects tool calls that mention `/etc`, escalates tool calls that delete files, and lets the rest proceed:
 
 ``` python
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Decision,
+    Escalations,
+    Protocol,
+    call_text,
+    find_words,
+    protocol,
+    tool_matches,
+)
+
 DELETE_WORDS = ["rm", "rmdir", "-delete", "shutil.rmtree", "os.remove"]
 
 

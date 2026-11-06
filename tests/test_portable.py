@@ -1002,7 +1002,10 @@ _FENCE = re.compile(
 )
 
 _DOC_BLOCKS_NOT_RUNNABLE = {
-    "docs/portability.qmd:1": "a `...` sketch of `portable=False`, which the check skips",
+    "docs/monitors.qmd:5": "a `...` sketch of a versioned monitor, which the check skips",
+    "docs/monitors.qmd:10": "a `...` sketch of a `MonitorGroup`, which the check skips",
+    "docs/monitors.qmd:12": "a `...` sketch of `portable=False`, which the check skips",
+    "docs/replay.qmd:5": "a `...` sketch of a versioned monitor, which the check skips",
 }
 
 
