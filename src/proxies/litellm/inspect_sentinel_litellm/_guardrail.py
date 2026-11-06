@@ -1172,12 +1172,10 @@ def _released(data: bytes, format: str, held: list[Any]) -> list[Any]:
         events = _events(data)
         released = [
             # LiteLLM writes a chunk of its own class without a field the
-            # class doesn't have, so a chunk with the sentinel field, and an
-            # error the sidecar wrote, are ones that keep every field
+            # class doesn't have, so an error the sidecar wrote is one that
+            # keeps every field
             _Written(**event)
-            if "error" in event
-            or (format == _CHAT and "sentinel" in event)
-            or event.get("type") not in classes
+            if "error" in event or event.get("type") not in classes
             else classes[event.get("type")](**event)
             for event in events
         ]
@@ -1252,18 +1250,12 @@ def _refusal(answer: dict[str, Any]) -> HTTPException:
         # whatever `unreachable_fallback` says of a failure
         logger.warning("The sentinel sidecar's refusal could not be read.")
         return HTTPException(503, "The sentinel sidecar's refusal could not be read.")
-    refused = HTTPException(status, message)
-    field = answer.get("sentinel")
-    if isinstance(field, dict):
-        # LiteLLM writes these into the error it answers with, beside its own
-        # fields, at `error.provider_specific_fields`
-        setattr(refused, "provider_specific_fields", {"sentinel": field})  # noqa: B010
-    return refused
+    return HTTPException(status, message)
 
 
 def _refused_stream(held: list[Any], refused: HTTPException, format: str) -> Any:
     # A refusal raised here reaches the caller as LiteLLM writes an error in a
-    # stream: a 500 without the sentinel field in some versions, and in others
+    # stream: a 500 in some versions, and in others
     # an error whose body the provider's SDK keeps only as text. Every version
     # instead answers a stream whose first event is an error with that error
     # alone, as JSON, under the status the event names. LiteLLM then logs the
@@ -1277,9 +1269,6 @@ def _refused_stream(held: list[Any], refused: HTTPException, format: str) -> Any
         "param": None,
         "code": refused.status_code,
     }
-    extra = getattr(refused, "provider_specific_fields", None)
-    if isinstance(extra, dict):
-        error["provider_specific_fields"] = extra
     # written, since LiteLLM finds an error in a stream's first event only in
     # what is written
     return f"data: {json.dumps({'error': error})}\n\n"
@@ -1287,7 +1276,7 @@ def _refused_stream(held: list[Any], refused: HTTPException, format: str) -> Any
 
 def _response_failed(held: list[Any], refused: HTTPException) -> _Written:
     # the event that ends a Responses stream that failed, built on the
-    # response the stream began, with the refusal and the sentinel field
+    # response the stream began, with the refusal
     events = [
         chunk.model_dump(exclude_none=True)
         for chunk in held
@@ -1308,18 +1297,13 @@ def _response_failed(held: list[Any], refused: HTTPException) -> _Written:
     }
     sequence = max((event.get("sequence_number", 0) for event in events), default=0)
     # The OpenAI SDK raises on an event with an error at its top, keeping
-    # only that error, so the sentinel field goes in it; a client that reads
-    # the events sees the response fail with the same error.
+    # only that error; a client that reads the events sees the response fail
+    # with the same error.
     error: dict[str, Any] = {
         **response["error"],
         "type": response["error"]["code"],
         "param": None,
     }
-    extra = getattr(refused, "provider_specific_fields", None)
-    if isinstance(extra, dict) and "sentinel" in extra:
-        error["provider_specific_fields"] = {
-            "sentinel": cast("dict[str, Any]", extra)["sentinel"]
-        }
     event: dict[str, Any] = {
         "type": "response.failed",
         "sequence_number": sequence + 1,

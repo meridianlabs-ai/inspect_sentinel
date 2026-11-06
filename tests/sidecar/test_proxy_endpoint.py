@@ -142,7 +142,8 @@ _FROM_INSPECT = {
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("city", ["Oslo", "Tokyo"])
-async def test_an_inspect_client_is_told_what_was_decided(city: str) -> None:
+async def test_an_inspect_client_is_answered_as_any_client(city: str) -> None:
+    # it asks what was decided at the endpoint for evals
     async with _client() as client:
         asked = await _call(
             client, "judge_request", _REQUEST | {"headers": _FROM_INSPECT}
@@ -153,14 +154,13 @@ async def test_an_inspect_client_is_told_what_was_decided(city: str) -> None:
     result = answered["result"]
     assert _fits(_SCHEMA["methods"]["judge_reply"]["result"], result)
     if city == "Oslo":
-        assert result["action"] == "replace"
-        field = json.loads(base64.b64decode(result["body"]))["sentinel"]
+        assert result == {"action": "pass"}
     else:
-        assert result["action"] == "refuse"
-        field = result["sentinel"]
-    assert [step["decision"]["action"] for step in field["steps"]] == [
-        "proceed" if city == "Oslo" else "reject",
-    ]
+        assert result == {
+            "action": "refuse",
+            "status": 400,
+            "message": "A sentinel rejected the call to get_weather: Tokyo is not allowed.",
+        }
 
 
 @pytest.mark.anyio
@@ -247,11 +247,7 @@ async def test_run_that_a_sentinel_ended_is_refused_from_then_on() -> None:
         later = await _call(client, "judge_request", _REQUEST | named | {"id": "y"})
         other = await _call(client, "judge_request", _REQUEST | {"id": "z"})
 
-    assert [
-        {key: value for key, value in result.items() if key != "sentinel"}
-        for result in (ended["result"], later["result"])
-    ] == [refused, refused]
-    assert later["result"]["sentinel"]["outcome"] == "terminate"
+    assert [ended["result"], later["result"]] == [refused, refused]
     assert other["result"] == {"action": "pass"}
 
 

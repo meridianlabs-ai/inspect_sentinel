@@ -22,6 +22,7 @@ from inspect_sentinel._step import BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, Refuse
 from inspect_sentinel.sidecar._eval_endpoint import TOKEN_VARIABLE
+from inspect_sentinel.sidecar._inspect_client import judgment
 from inspect_sentinel.sidecar._proxy_endpoint import proxy_app
 from inspect_sentinel.sidecar._registration import (
     RegistrationError,
@@ -160,15 +161,16 @@ async def test_an_inspect_client_can_be_sent_only_what_it_acts_on() -> None:
         "attempt": "attempt_1",
         "attempt_number": 1,
     }
-    await handler.request(
-        replace(request(), headers={"x-inspect-context": json.dumps(sample)})
-    )
+    headers = {"x-inspect-context": json.dumps(sample), "x-irid": "irid-1"}
+    await handler.request(replace(request(), headers=headers))
 
     answer = await handler.reply(reply(message(weather("Tokyo"))))
 
     assert isinstance(answer, Refuse)
-    assert answer.sentinel is not None
-    assert answer.sentinel["trimmed"] is True
+    result = await handler.request_result("irid-1", "eval_789")
+    assert not isinstance(result, str) and result.latest.judged is not None
+    judged = judgment(result.latest.judged, "reject", trimmed=not handler.eval_results)
+    assert judged.trimmed is True
 
 
 @pytest.mark.parametrize("role", ["monitor", "=mockllm/model", "monitor="])

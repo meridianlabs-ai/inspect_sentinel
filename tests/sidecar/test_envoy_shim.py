@@ -252,7 +252,7 @@ def _reply(*parts: bytes, **headers: str) -> list[pb.ProcessingRequest]:
 
 
 async def _not_judged(handler: Handler) -> tuple[str, str | None]:
-    result = await handler.request_result("request_456")
+    result = await handler.request_result("request_456", "eval_789")
     assert isinstance(result, RequestResult)
     return result.latest.state, result.latest.reason
 

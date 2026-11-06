@@ -1,6 +1,4 @@
 import json
-import re
-from dataclasses import replace
 
 import anyio
 import pytest
@@ -104,30 +102,6 @@ def _expected(answer: Answer, body: bytes) -> list[Output]:
     return [Release(answer.body if isinstance(answer, Replace) else body), Finished()]
 
 
-def _comparable(outputs: list[Output]) -> list[Output]:
-    # inspect_ai gives a message it reads a new id each time, so a withheld
-    # turn's id differs between two handlers that judged the same reply
-    return [
-        Release(
-            re.sub(rb'("proposed": \{"message": \{"id": )"[^"]*"', rb'\1"id"', o.data)
-        )
-        if isinstance(o, Release)
-        else _without_turn_id(o)
-        if isinstance(o, Refuse)
-        else o
-        for o in outputs
-    ]
-
-
-def _without_turn_id(refused: Refuse) -> Refuse:
-    if refused.sentinel is None or "withheld" not in refused.sentinel:
-        return refused
-    withheld = refused.sentinel["withheld"]
-    message = {**withheld["message"], "id": "id"}
-    sentinel = {**refused.sentinel, "withheld": {**withheld, "message": message}}
-    return replace(refused, sentinel=sentinel)
-
-
 @pytest.mark.anyio
 @pytest.mark.parametrize("name", _RECORDED)
 @pytest.mark.parametrize(
@@ -151,7 +125,7 @@ async def test_a_reply_held_whole_comes_out_as_reply_answers_it(
         streaming.reply_stream(_start(answered)), answered.body, size
     )
 
-    assert _comparable(outputs) == _comparable(_expected(answer, answered.body))
+    assert outputs == _expected(answer, answered.body)
 
 
 @pytest.mark.anyio
@@ -399,6 +373,6 @@ async def test_bytes_after_the_end_are_a_mistake() -> None:
 
 
 async def _not_judged(handler: Handler) -> tuple[str, str | None]:
-    result = await handler.request_result("request_456")
+    result = await handler.request_result("request_456", "eval_789")
     assert isinstance(result, RequestResult)
     return result.latest.state, result.latest.reason
