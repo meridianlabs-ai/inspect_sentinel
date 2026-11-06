@@ -1,34 +1,20 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from inspect_ai.model import ChatMessageAssistant, ModelUsage
 from inspect_ai.tool import ToolCall
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .._context import InspectSample
 from .._report import Decision, Failed, Reported
 from ._host import ModelUsed, Record, Stage
-from ._wire import (
-    StreamEvent,
-    UnreadableError,
-    json_object,
-    write_events,
-    written_events,
-)
+from ._wire import UnreadableError
 
 INSPECT_CONTEXT = "x-inspect-context"
 """The header an Inspect eval names the sample of each model request in."""
-
-# the events a field can go in, which the provider's SDK reads: the last of
-# them in a stream is the one
-_LAST_EVENTS = frozenset(
-    {"message_delta", "response.completed", "response.incomplete", "response.failed"}
-)
-_TOOL_CALL = TypeAdapter(ToolCall)
 
 
 class _Header(BaseModel):
@@ -68,7 +54,7 @@ def inspect_sample(headers: Mapping[str, str]) -> InspectSample | None:
 
 @dataclass
 class Judged:
-    """One step judged during an exchange, for the `sentinel` field."""
+    """One step judged during an exchange, for the eval's judgment of it."""
 
     stage: Stage
     call: str | None
@@ -79,22 +65,25 @@ class Judged:
     """What was recorded while the step was judged."""
     models: Sequence[ModelUsed] = ()
     """The models the step's monitors and protocols called."""
-    original: ToolCall | None = None
-    """The call the model proposed, where the client is not handed it as proposed."""
 
 
 @dataclass(frozen=True)
 class Withheld:
-    """A turn the client was refused, which the sidecar adds to the later requests of its conversation."""
+    """A turn the client was refused, or handed with calls taken out or changed, which the sidecar adds to or puts back in the later requests of its conversation."""
 
     message: ChatMessageAssistant
+    """The model's turn, as it proposed it."""
     told: Mapping[str, str]
-    """What the model is told happened to each of its calls, by call id."""
+    """What the model is told happened to each call taken out, by call id."""
+    redacted: frozenset[str] = frozenset()
+    """The calls a decision acted on, by id, whose arguments an eval is never handed: an eval holds each with its id and function only, and the sidecar puts the model's own call back in each later request."""
+    ran: Mapping[str, ToolCall] = field(default_factory=dict[str, ToolCall])
+    """The changed calls, as they ran, by id: what an eval holds in place of the model's own."""
 
 
 @dataclass
 class Exchange:
-    """What was decided during one exchange, for the `sentinel` field."""
+    """What was decided during one exchange, for the eval's judgment of it."""
 
     judged: list[Judged] = field(default_factory=list[Judged])
     """The steps judged, in order."""
@@ -129,10 +118,6 @@ class SentinelStep(BaseModel):
     call: str | None = Field(
         default=None, description="The id of the tool call, at a tool stage."
     )
-    original: dict[str, Any] | None = Field(
-        default=None,
-        description="The call the model proposed, as Inspect writes a tool call. There only when the client is not handed the call as the model proposed it.",
-    )
     decision: dict[str, Any] = Field(
         description="The step's final decision, as the core package writes a `Decision`."
     )
@@ -147,26 +132,30 @@ class SentinelStep(BaseModel):
 
 
 class WithheldTurn(BaseModel):
-    """The model's turn, which the client was refused."""
+    """The model's turn, which the client was refused or handed with calls taken out or changed."""
 
     message: dict[str, Any] = Field(
-        description="The model's message, every call in it included, as Inspect writes a `ChatMessageAssistant`."
+        description="The model's message, as Inspect writes a `ChatMessageAssistant`, every call in it included, each redacted call with its id and function only, and each changed call as it ran."
     )
     results: dict[str, str] = Field(
-        description="What the model is told happened to each of its calls, by call id. The sidecar adds the turn and these results to each later request of the conversation that doesn't already hold the turn."
+        description="What the model is told happened to each call taken out, by call id. The sidecar adds the turn and these results to each later request of the conversation that doesn't already hold them."
+    )
+    redacted: list[str] = Field(
+        default_factory=list[str],
+        description="The calls a decision acted on, by id, whose arguments an eval is never handed. Each is in `message` with no arguments and no view. An eval holds it that way, and the sidecar puts the model's own call back in each later request of the conversation.",
     )
 
 
-class SentinelField(BaseModel):
-    """What a sentinel decided during one exchange, for an Inspect client: the `sentinel` field."""
+class Judgment(BaseModel):
+    """What a sentinel decided during one exchange, for an Inspect eval, which asks for it with `request_result`."""
 
-    version: Literal[1] = Field(default=1, description="The version of the field.")
+    version: Literal[1] = Field(default=1, description="The version of the judgment.")
     outcome: Literal["proceed", "reject", "terminate"] = Field(
         description="What the exchange came to: `proceed` when the reply goes on, `reject` when the model's turn was refused and the run goes on, and `terminate` when the run has ended, in this exchange or before it."
     )
     trimmed: bool | None = Field(
         default=None,
-        description="True when the sidecar was told not to send results, so each step holds only what Inspect acts on: its stage, its call, `original`, and its decision's action, message and modified call.",
+        description="True when the sidecar was told not to send results, so each step holds only what Inspect acts on: its stage, its call, and its decision's action, message and modified call.",
     )
     steps: list[SentinelStep] = Field(
         description="Every step judged during the exchange, in the order they were judged. A step that ended the run is the last. Empty when the run had already ended."
@@ -177,7 +166,7 @@ class SentinelField(BaseModel):
     )
     proposed: WithheldTurn | None = Field(
         default=None,
-        description="The model's turn as it proposed it, when the client was handed it with calls taken out because they were rejected. `results` holds what the model is told of each call taken out. The sidecar puts those calls and results back in each later request of the conversation that doesn't already hold them.",
+        description="The model's turn, when the client was handed it with calls taken out because they were rejected, or changed. Each call taken out is redacted, each changed call is as it ran, and `results` holds what the model is told of each call taken out. The sidecar puts those calls and results back in each later request of the conversation that doesn't already hold them.",
     )
     usage: dict[str, Any] | None = Field(
         default=None,
@@ -185,13 +174,13 @@ class SentinelField(BaseModel):
     )
 
 
-def sentinel_field(
+def judgment(
     exchange: Exchange,
     outcome: Literal["proceed", "reject", "terminate"],
     *,
     trimmed: bool,
-) -> dict[str, Any]:
-    """The `sentinel` field for an exchange.
+) -> Judgment:
+    """What was decided during an exchange, for the eval.
 
     Args:
         exchange: What was decided during the exchange.
@@ -205,13 +194,6 @@ def sentinel_field(
             SentinelStep(
                 stage=step.stage,
                 call=step.call,
-                original=(
-                    _TOOL_CALL.dump_python(
-                        step.original, mode="json", exclude_none=True
-                    )
-                    if step.original is not None
-                    else None
-                ),
                 decision=decision.model_dump(
                     mode="json",
                     exclude_defaults=True,
@@ -224,7 +206,7 @@ def sentinel_field(
             )
         )
     withheld, proposed = exchange.withheld, exchange.proposed
-    written = SentinelField(
+    return Judgment(
         outcome=outcome,
         trimmed=True if trimmed else None,
         steps=steps,
@@ -237,55 +219,33 @@ def sentinel_field(
             else None
         ),
     )
-    return written.model_dump(mode="json", exclude_none=True)
 
 
 def withheld_turn(withheld: Withheld) -> WithheldTurn:
-    """A turn the client was refused, as the `sentinel` field and the endpoint for evals write it."""
+    """A turn as an eval is handed it: each redacted call with its id and function only, and each changed call as it ran."""
+    calls = [
+        redacted(call)
+        if call.id in withheld.redacted
+        else withheld.ran.get(call.id, call)
+        for call in withheld.message.tool_calls or []
+    ]
+    message = withheld.message.model_copy(
+        update={"tool_calls": calls} if withheld.message.tool_calls else {}
+    )
     return WithheldTurn(
-        message=withheld.message.model_dump(mode="json", exclude_none=True),
+        message=message.model_dump(mode="json", exclude_none=True),
         results=dict(withheld.told),
+        redacted=[call.id for call in calls if call.id in withheld.redacted],
     )
 
 
-def with_sentinel(content_type: str, body: bytes, field: Mapping[str, Any]) -> bytes:
-    """A reply with the `sentinel` field added, beside the provider's own fields, so the provider's SDK still reads it.
-
-    A stream has the field in its last event that the SDK reads: Anthropic's `message_delta`, the Responses API's `response.completed` (or the event that ends a response that didn't complete), or the last chunk of a Chat Completions stream. Every other event is left as it was.
-
-    Raises:
-        UnreadableError: If the reply isn't JSON, or is a stream with no event the field can go in.
-    """
-    if not content_type.startswith("text/event-stream"):
-        reply = json_object(body, "reply")
-        reply["sentinel"] = field
-        return json.dumps(reply).encode()
-    events = written_events(body)
-    target = _last_event(events)
-    if target is None:
-        raise UnreadableError("The reply stream has no event the field can go in.")
-    assert target.data is not None
-    target.data["sentinel"] = field
-    target.changed = True
-    return write_events(events)
-
-
-def _last_event(events: list[StreamEvent]) -> StreamEvent | None:
-    # the event the field goes in
-    found: StreamEvent | None = None
-    chunk: StreamEvent | None = None
-    for event in events:
-        if event.data is None:
-            continue
-        if event.data.get("type") in _LAST_EVENTS:
-            found = event
-        elif event.data.get("object") == "chat.completion.chunk":
-            chunk = event
-    return found if found is not None else chunk
+def redacted(call: ToolCall) -> ToolCall:
+    """A call as an eval holds one a decision acted on: its id and function, with no arguments and nothing made from them."""
+    return replace(call, arguments={}, parse_error=None, view=None)
 
 
 def record_json(record: Record) -> dict[str, Any]:
-    """A record, as the endpoint for evals and the `sentinel` field write it."""
+    """A record, as the endpoint for evals writes it."""
     written: dict[str, Any] = {
         "kind": record.kind,
         "path": record.path,

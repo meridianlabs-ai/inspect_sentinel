@@ -334,7 +334,7 @@ async def amend_request(
 
     Each rejected turn, the model's message followed by a result for each of its calls saying why it didn't run, goes where the client would have put it had it been handed the reply: after the entries the client had sent when the turn was rejected.
 
-    Each edited turn the request holds has the model's own calls put back: a call taken out goes back in its place, with its rejection beside the client's results, and a changed call has the model's arguments again. A client that has put them back itself, as an Inspect eval does from the `sentinel` field, has nothing added. A request that doesn't hold an edited turn, such as a retry of the request it was handed for, is left as it is.
+    Each edited turn the request holds has the model's own calls put back: a call taken out goes back in its place, with its rejection beside the client's results, and a changed call has the model's arguments again. A client that has put them back itself, as an Inspect eval does from the judgment it asks for, has nothing added. A request that doesn't hold an edited turn, such as a retry of the request it was handed for, is left as it is.
 
     Nothing else in the request is changed, though the body is written out again.
 
@@ -394,6 +394,66 @@ async def amend_request(
         return Amended(None, frozenset(restored))
     request[api.conversation] = sent
     return Amended(json.dumps(request).encode(), frozenset(restored))
+
+
+def unredacted(
+    provider: str,
+    body: bytes,
+    originals: Mapping[str, Any],
+    format: Format | None = None,
+) -> bytes | None:
+    """A request with the model's own call put back in place of each call an eval holds redacted, or None if it holds none.
+
+    An eval is never handed the arguments of a call a decision acted on. It holds such a call with its id and function and no arguments, so the call is put back as the model made it before anything else reads the request, and the provider is sent the model's own turn. Nothing else in the request is changed, though the body is written out again.
+
+    Args:
+        provider: Whose API the body is written for.
+        body: The request body.
+        originals: The model's own calls, each as the request's format writes it, by call id.
+        format: Which API the body is written in, if the proxy said.
+    """
+    if not originals:
+        return None
+    request = json_object(body, "request")
+    api = _api(provider, request, format)
+    entries = _conversation(request, api)
+    restored = list(entries)
+    changed = False
+    for index, entry in enumerate(entries):
+        if not set(api.call_ids(entry)) & set(originals):
+            continue
+        if api.call_of(entry)[0] is not None:
+            # a Responses call is an entry of its own
+            if _held_redacted(api, entry, originals):
+                restored[index] = originals[api.call_of(entry)[0] or ""]
+                changed = True
+            continue
+        found = api.turn_at(entries, index)
+        if found is None:
+            continue
+        calls = [
+            originals[api.call_of(element)[0] or ""]
+            if _held_redacted(api, element, originals)
+            else element
+            for element in found.calls
+        ]
+        if calls != found.calls:
+            # the turn's own entry, the first its rebuild writes
+            restored[index] = found.rebuild(calls, found.results)[0]
+            changed = True
+    if not changed:
+        return None
+    request[api.conversation] = restored
+    return json.dumps(request).encode()
+
+
+def _held_redacted(api: _Api, element: object, originals: Mapping[str, Any]) -> bool:
+    # a call the eval holds as it was handed: its id, and no arguments
+    id, kind, name, arguments = api.call_of(element)
+    if id is None or id not in originals:
+        return False
+    original = api.call_of(originals[id])
+    return (kind, name) == original[1:3] and arguments in ({}, None)
 
 
 @dataclass(frozen=True)
@@ -495,7 +555,7 @@ def held_rejections(
     written: Mapping[str, Amendment],
     format: Format | None = None,
 ) -> frozenset[str]:
-    """The calls of refused turns whose rejections a client put back itself, exactly as the sidecar writes them, as an Inspect eval does from the `sentinel` field. Their results are the sidecar's, not results of calls that ran.
+    """The calls of refused turns whose rejections a client put back itself, exactly as the sidecar writes them, as an Inspect eval does from the judgment it asks for. Their results are the sidecar's, not results of calls that ran.
 
     Args:
         provider: Whose API the body is written for.

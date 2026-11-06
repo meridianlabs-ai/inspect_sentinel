@@ -33,7 +33,6 @@ from tests.sidecar._traffic import (
     anthropic_recorded,
     every_call_rule,
     message,
-    plain,
     ran,
     reply,
     request,
@@ -1212,7 +1211,7 @@ async def test_every_later_request_of_a_sample_that_ended_is_refused() -> None:
     )
     other = await handler.request(request("d", sample="sample-2"))
 
-    assert [plain(answer) for answer in (ended, again, subagent)] == [_ENDED] * 3
+    assert [answer for answer in (ended, again, subagent)] == [_ENDED] * 3
     assert other == Pass()
     # the sentinel was not asked again
     assert not await handler.records("b")
@@ -1228,7 +1227,7 @@ async def test_a_sample_ended_at_a_result_is_refused_without_that_result() -> No
     later = await handler.request(request("b", sample="sample-1"))
 
     assert isinstance(ended, Refuse)
-    assert plain(later) == plain(ended)
+    assert later == ended
 
 
 @pytest.mark.anyio
@@ -1241,7 +1240,7 @@ async def test_a_sample_ended_while_the_model_answered_is_refused() -> None:
 
     late = await handler.reply(reply(message(weather("Oslo")), id="a"))
 
-    assert (plain(ended), plain(late)) == (_ENDED, _ENDED)
+    assert (ended, late) == (_ENDED, _ENDED)
 
 
 @pytest.mark.anyio
@@ -1327,7 +1326,7 @@ async def test_a_reply_in_flight_when_its_conversation_ended_is_refused() -> Non
     ended = await handler.reply(reply(message(weather("Tokyo")), id="b"))
     late = await handler.reply(reply(message(weather("Lima")), id="c"))
 
-    assert (plain(ended), plain(late)) == (_ENDED, _ENDED)
+    assert (ended, late) == (_ENDED, _ENDED)
 
 
 @pytest.mark.anyio
@@ -1439,7 +1438,7 @@ async def test_a_reply_judged_while_its_run_ended_is_refused() -> None:
         group.start_soon(judge, "a", "Oslo")
         group.start_soon(judge, "b", "Tokyo")
 
-    assert {id: plain(answer) for id, answer in answers.items()} == {
+    assert {id: answer for id, answer in answers.items()} == {
         "a": _ENDED,
         "b": _ENDED,
     }
@@ -1465,7 +1464,7 @@ async def test_a_request_judged_while_its_run_ended_is_refused() -> None:
         group.start_soon(ask)
         group.start_soon(end)
 
-    assert {id: plain(answer) for id, answer in answers.items()} == {
+    assert {id: answer for id, answer in answers.items()} == {
         "a": _ENDED,
         "b": _ENDED,
     }

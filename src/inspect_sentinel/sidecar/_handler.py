@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import secrets
+import time
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal
@@ -30,7 +33,7 @@ from .._step import (
 )
 from .._types import Sentinels
 from ..config import watched_stages
-from ._errors import TimeLimitError
+from ._errors import TimeLimitError, UnauthorizedError
 from ._errors import not_judged as _not_judged
 from ._exchange import (
     MAX_BODY_BYTES,
@@ -51,8 +54,6 @@ from ._inspect_client import (
     Judged,
     Withheld,
     inspect_sample,
-    sentinel_field,
-    with_sentinel,
 )
 from ._registration import (
     MAX_TASK_EXPIRY,
@@ -97,10 +98,17 @@ from ._wire import (
     read_request,
     request_format,
     request_marks,
+    unredacted,
 )
 
 # rejected turns in a row before the run is ended, as inspect_ai's bridge has
 # it: a model that keeps proposing rejected calls would otherwise never stop
+MAX_RESULT_WAIT = 30.0
+"""The longest `request_result` waits for a request still being judged, in seconds."""
+
+# how often a waiting `request_result` looks again for a new attempt
+_RESULT_POLL = 0.05
+
 _MAX_CONSECUTIVE_REJECTIONS = 3
 
 _REPLACED = Refuse(400, "A later attempt at this sample replaced this one.")
@@ -146,7 +154,7 @@ class Handler:
 
     The four steps are found in the traffic. A request carries the results of the tool calls the client ran, judged as `AfterToolCall`, and is judged as `BeforeGenerate` before it goes to the provider. A reply is judged as `AfterGenerate`, and each tool call in it as `BeforeToolCall`, before the client is handed any of it.
 
-    An Inspect eval names the sample of each request in its `x-inspect-context` header, and the sample is the run. It is told what was decided in the `sentinel` field: on a refusal, and on every reply, which is then answered with `Replace`. Any other client is handed the provider's reply as it was.
+    An Inspect eval names the sample of each request in its `x-inspect-context` header, and the sample is the run. It asks what was decided of each request with `request_result`, by the request's `x-irid`. Every client, the eval included, is handed the provider's reply as it was, or as the sentinel edited it.
     """
 
     def __init__(
@@ -175,7 +183,7 @@ class Handler:
             state: Where runs are kept. Defaults to this process's memory.
             reject_status: The HTTP status a rejected turn is refused with. The default, 400, is one a client takes as final. A status a client retries by itself, such as 503, brings the client back with the same request, which then goes on with the rejection added.
             time_limit: The longest the sentinel may take to judge one request or one reply, in seconds, after which it is cancelled. None, the default, is no limit.
-            eval_results: Whether an Inspect client's `sentinel` field holds the results: the explanations, references and metadata of the decisions, and what each monitor and protocol recorded. Without them, it holds only what Inspect acts on. A monitor's explanation tells an agent what the monitor looks for, so a client that can't be trusted is not sent them.
+            eval_results: Whether the judgment `request_result` gives an Inspect eval holds the results: the explanations, references and metadata of the decisions, and what each monitor and protocol recorded. Without them, it holds only what Inspect acts on. A monitor's explanation tells an agent what the monitor looks for, so an eval that can't be trusted is not sent them.
             tasks: Tasks registered beforehand, by name, as the tasks folder's files hold them. Nothing an eval registers replaces one, and a request for a sample one doesn't hold is refused.
             runtime_task_registration: Whether an eval may register its tasks itself, at task init.
             strictness: How strict the handler is about a request it can't place. `open`, the default, judges every request, without the task's facts where it holds none. `known_tasks` refuses a request whose `x-inspect-context` names a task the handler doesn't hold, and judges one without the header. `registered_only` refuses any request that doesn't name a sample the handler holds, in an epoch the task's registration runs, including one without the header, and refuses a sample's registration that the task's registration doesn't name.
@@ -234,7 +242,7 @@ class Handler:
 
         If turns were rejected earlier in the conversation this request continues, they are added where they happened, so the model is still told.
 
-        A request with `x-inspect-context` belongs to the sample it names, which is its run. A refusal then carries the `sentinel` field. A request whose header can't be read is refused, rather than judged as another client's would be: it says it is an eval's, and a proxy set to let through what can't be judged would let it through unjudged.
+        A request with `x-inspect-context` belongs to the sample it names, which is its run. A request whose header can't be read is refused, rather than judged as another client's would be: it says it is an eval's, and a proxy set to let through what can't be judged would let it through unjudged.
 
         A conversation belongs to one attempt at the sample. A new attempt starts afresh, as Inspect starts the sample store afresh for it: its conversations, its count of rejected turns in a row, the sentinel's store, and the run's end if a sentinel ended the attempt before. A sample the eval has ended stays ended. Attempts are ordered by the number the header gives each. Once a later attempt has begun, a request of an earlier one is refused unjudged, as nobody waits for it, and so is one of another attempt with the same number. A client that retries a request within the attempt keeps the attempt's conversation.
 
@@ -261,6 +269,11 @@ class Handler:
             if attempt is not None:
                 attempt.not_judged("unreadable")
             return Refuse(400, str(ex))
+        if sample is not None:
+            if attempt is not None:
+                attempt.eval_id = sample.eval_id
+            # a request that names the eval keeps its token
+            await self._state.eval_token(sample.eval_id)
         try:
             answer = await self._within_limit(
                 self._request(request, sample, attempt), "request", request.id
@@ -282,7 +295,7 @@ class Handler:
 
         The reply is put to the sentinel as an `AfterGenerate` step, then each tool call in it as a `BeforeToolCall` step, in order, leaving out a stage nothing in the sentinel watches. Every call is judged, as in Inspect's own process, unless one ends the run. The rejected calls are taken out of the reply and the rest of the turn goes on, answered with `Replace`, as the other calls of a turn still run in Inspect's own process. Each later request of the conversation that holds the turn has the calls taken out put back, each with its rejection as its result. A turn whose every call is rejected is refused whole, as is one that can't be edited, and its rejections are added to the later requests of its conversation. The third turn refused whole in a row within an attempt at a sample ends the run; a turn in which a call ran starts the count again. A provider's error, a reply in a status outside 2xx, is passed on unjudged; a reply in any 2xx is the model's, and judged, as the provider's SDK reads it so.
 
-        For an Inspect client, a reply that goes on is answered with `Replace`, the reply with the `sentinel` field added, and a refusal carries the field. The field holds every step judged during the exchange, the request's first. A reply that goes on but has no event the field can go in, such as a stream that never sends its last event, is handed over as judged, without the field.
+        For an Inspect eval, what was decided is kept for `request_result`: every step judged during the exchange, the request's first. A turn handed over with calls taken out or changed, or refused, is kept with the calls a decision acted on redacted, as the eval is handed them.
 
         Args:
             reply: The reply, as the proxy handed it over.
@@ -359,22 +372,77 @@ class Handler:
         if held is not None and held.attempt is not None:
             held.attempt.not_judged(reason)
 
+    async def eval_token(self, eval_id: str, presented: str | None) -> str:
+        """The secret an eval presents on every later call to the endpoint for evals, given when it registers a task.
+
+        A sidecar that keeps no secret for the eval makes one: at the eval's first registration, or once a restart or the expiry has lost the one it had. One that keeps a secret gives it only to a caller that presents it, so nothing but the eval that registered first can register for the eval again or read its results.
+
+        Args:
+            eval_id: The eval's id.
+            presented: The secret the caller holds for the eval, if it holds one.
+
+        Raises:
+            UnauthorizedError: If the sidecar keeps a secret for the eval, and the caller didn't present it.
+        """
+        kept = await self._state.eval_token(eval_id)
+        if kept is None:
+            made = secrets.token_urlsafe(32)
+            await self._state.keep_eval_token(eval_id, made)
+            return made
+        if presented is None or not hmac.compare_digest(
+            presented.encode(), kept.encode()
+        ):
+            raise UnauthorizedError(
+                f"The eval {eval_id!r} registered with another token."
+            )
+        return kept
+
+    async def holds_eval(self, eval_id: str, token: str) -> bool:
+        """Whether the sidecar keeps a secret for the eval, which the caller must present.
+
+        Returns:
+            True if the caller presented the eval's secret; False if the sidecar keeps none for the eval, so it holds nothing of the eval for anyone, as after a restart.
+
+        Raises:
+            UnauthorizedError: If the sidecar keeps a secret for the eval, and `token` isn't it.
+        """
+        kept = await self._state.eval_token(eval_id)
+        if kept is None:
+            return False
+        if not hmac.compare_digest(token.encode(), kept.encode()):
+            raise UnauthorizedError(f"The token isn't the eval {eval_id!r}'s.")
+        return True
+
     async def request_result(
-        self, id: str
+        self, id: str, eval_id: str, wait: float = 0
     ) -> RequestResult | Literal["dropped", "unknown"]:
         """What happened to a request an eval names, by the eval's id for it.
 
         Args:
             id: The eval's id for the request, as its `x-irid` header gave it. A client that retries a request sends it again under the same id.
+            eval_id: The eval asking. A request whose `x-inspect-context` named another eval, or none, reads as unknown.
+            wait: How long to wait, in seconds, while the latest attempt is still being judged, at most `MAX_RESULT_WAIT`.
 
         Returns:
-            Where the latest attempt stands, and every attempt's records in order; `dropped` if they were kept and no longer are; or `unknown` if the request was never seen.
+            Where the latest attempt stands, and every attempt's records in order; `dropped` if they were kept and no longer are; or `unknown` if the request was never seen, or isn't the eval's.
         """
-        attempts = await self._state.attempts(id)
-        if attempts is None:
-            return "unknown"
-        if attempts == "dropped":
-            return "dropped"
+        deadline = time.monotonic() + min(max(wait, 0), MAX_RESULT_WAIT)
+        while True:
+            attempts = await self._state.attempts(id)
+            if attempts is None:
+                return "unknown"
+            if attempts == "dropped":
+                return "dropped"
+            if any(attempt.eval_id != eval_id for attempt in attempts):
+                return "unknown"
+            latest = attempts[-1]
+            left = deadline - time.monotonic()
+            if latest.state != "judging" or left <= 0:
+                break
+            # woken at once by a decision, and looking again now and then,
+            # as a retry of the request may have begun another attempt
+            with anyio.move_on_after(min(left, _RESULT_POLL)):
+                await latest.settled.wait()
         records: list[Record] = []
         for attempt in attempts:
             kept = await self._state.records(attempt.exchange)
@@ -383,33 +451,39 @@ class Handler:
             records.extend(kept)
         return RequestResult(attempts[-1], records)
 
-    async def sample_result(self, sample_uuid: str) -> SampleResult | None:
+    async def sample_result(
+        self, sample_uuid: str, eval_id: str
+    ) -> SampleResult | None:
         """What an eval's sample came to, and the sentinel's store, for the eval to copy into the sample's store before scoring. The handler keeps one run for each sample in each epoch, and its store and end are those of the sample's latest attempt.
 
         Args:
             sample_uuid: The sample's uuid, as the eval names it.
+            eval_id: The eval asking. A sample of another eval reads as unknown.
 
         Returns:
-            The sample's outcome and store, or None if nothing is kept for it.
+            The sample's outcome and store, or None if nothing is kept for it, or it isn't the eval's.
         """
         kept = await self._state.existing_run(_run_key(True, sample_uuid))
-        if kept is None:
+        if kept is None or kept.eval_id != eval_id:
             return None
         return SampleResult(
             "terminate" if kept.refusal is not None else "proceed",
             dict(kept.store.items()),
         )
 
-    async def end_sample(self, sample_uuid: str) -> Literal["ended", "unknown"]:
+    async def end_sample(
+        self, sample_uuid: str, eval_id: str
+    ) -> Literal["ended", "unknown"]:
         """Drop the state kept for an eval's sample, once the eval has scored it. A later request of the sample is refused, as for a sample a sentinel ended.
 
         Args:
             sample_uuid: The sample's uuid, as the eval names it.
+            eval_id: The eval ending it. A sample of another eval is left as it is, and reads as unknown.
 
         Returns:
-            `ended`, or `unknown` for a sample the handler never saw. Ending a sample again has no effect.
+            `ended`, or `unknown` for a sample the handler never saw or that isn't the eval's. Ending a sample again has no effect.
         """
-        ended = await self._state.end_run(_run_key(True, sample_uuid))
+        ended = await self._state.end_run(_run_key(True, sample_uuid), eval_id)
         return "ended" if ended else "unknown"
 
     async def _within_limit(
@@ -588,15 +662,34 @@ class Handler:
         conversation_key = f"{key}/{sample_attempt}/{opening}" if named else key
         run_key = _run_key(named, key)
         run = await self._state.run(run_key)
+        restored = False
         if sample is not None:
             clash = _begin_attempt(run, sample)
             if clash is not None:
-                return self._with_field(clash, proxy, Exchange(), "terminate", attempt)
+                return self._judged(clash, proxy, Exchange(), attempt)
+            if run.eval_id is None:
+                run.eval_id = sample.eval_id
+            # the eval holds the calls a decision acted on without their
+            # arguments: the model's own go back before anything reads them
+            written = request_format(request.provider, request.body, request.format)
+            body = unredacted(
+                request.provider,
+                request.body,
+                {
+                    id: call
+                    for id, (format, call) in run.redacted.items()
+                    if format == written
+                },
+                request.format,
+            )
+            if body is not None:
+                request = replace(request, body=body)
+                restored = True
         marks = request_marks(request.provider, request.body, request.format)
         refusal = _ended(run, marks, sample_attempt)
         if refusal is not None:
             # the run has ended, and the sentinel is not asked again
-            return self._with_field(refusal, proxy, Exchange(), "terminate", attempt)
+            return self._judged(refusal, proxy, Exchange(), attempt)
         # the attempt's store, taken before anything below awaits, since a
         # retry may replace the run's store meanwhile
         store = run.store
@@ -611,14 +704,14 @@ class Handler:
         )
         sends = offered(request.provider, request.body, request.format)
 
-        answer: Answer = Pass()
+        answer: Answer = Replace(request.body) if restored else Pass()
         # only what the client sent holds results to judge: what the sidecar
         # adds below is its own writing
         client = messages
         # A point this request doesn't continue from is kept for the requests
         # that do: a run's key is shared by conversations that open alike. A
         # client that was handed a rejected turn, as an Inspect eval is in the
-        # sentinel field, may already have put it back itself.
+        # judgment it asked for, may already have put it back itself.
         holds = {_digest(message) for message in messages}
         continued = [
             rejected
@@ -699,7 +792,7 @@ class Handler:
             held, run, conversation, client, said, restored, ran
         )
         if ended is not None:
-            return self._with_field(ended, proxy, held.exchange, "terminate", attempt)
+            return self._judged(ended, proxy, held.exchange, attempt)
         if BeforeGenerate in self._watched:
             before = BeforeGenerate(
                 model=held.model,
@@ -714,17 +807,16 @@ class Handler:
                 config=sends.config,
             )
             if _ends(await self._judge(held, run, before)):
-                return self._with_field(
+                return self._judged(
                     self._end(held, run, "before the model was called"),
                     proxy,
                     held.exchange,
-                    "terminate",
                     attempt,
                 )
         # another exchange of the run may have ended it while this one waited
         refusal = _ended(run, marks, sample_attempt)
         if refusal is not None:
-            return self._with_field(refusal, proxy, held.exchange, "terminate", attempt)
+            return self._judged(refusal, proxy, held.exchange, attempt)
         # the request goes on to the model, as the client sent it with what
         # this sidecar added
         record_sent(conversation, messages, body)
@@ -838,27 +930,10 @@ class Handler:
         answer = await self._judge_reply(reply, held, released)
         if held is None or not succeeded(reply.status):
             return answer
-        if held.proxy.inspect is None:
-            return answer
-        if isinstance(answer, Refuse):
-            outcome = "terminate" if held.exchange.ended else "reject"
-            return self._with_field(
-                answer, held.proxy, held.exchange, outcome, held.attempt
-            )
-        if held.attempt is not None:
+        # an Inspect eval asks what was decided, by `request_result`
+        if held.proxy.inspect is not None and held.attempt is not None:
             held.attempt.judged = held.exchange
-        body = answer.body if isinstance(answer, Replace) else reply.body
-        field = self._field(held.exchange, "proceed")
-        try:
-            with_field = with_sentinel(reply.content_type, body, field)
-        except UnreadableError:
-            with_field = None
-        if with_field is None or not with_field.startswith(released):
-            # The reply was judged and goes on, and the run already counts it
-            # as passed, so the client is handed it as judged, without the
-            # field. Inspect then asks what was decided, by `request_result`.
-            return answer
-        return Replace(with_field)
+        return answer
 
     async def _judge_reply(
         self, reply: Reply, held: Held | None, released: bytes = b""
@@ -907,7 +982,11 @@ class Handler:
             )
             if _ends(await self._judge(held, run, after)):
                 if output.choices:
-                    _withhold_ended(held, output.message)
+                    # the whole turn was judged, so every call in it is acted on
+                    calls = output.message.tool_calls or []
+                    _withhold_ended(
+                        held, output.message, frozenset(call.id for call in calls)
+                    )
                 return self._end(held, run, "at the model's reply")
 
         if not output.choices:
@@ -937,10 +1016,8 @@ class Handler:
             if decision is None or decision.action == "proceed":
                 continue
             if decision.action == "terminate":
-                _withhold_ended(held, message)
+                _withhold_ended(held, message, frozenset({call.id}))
                 return self._end(held, run, f"at the call to {call.function}")
-            # the client is never handed the call as the model proposed it
-            held.exchange.judged[-1].original = call
             if decision.action == "modify" and decision.modified is not None:
                 modified[call.id] = decision.modified
             else:
@@ -1031,6 +1108,9 @@ class Handler:
             call.id: decision.message or _REJECTED for call, decision in rejected
         }
         written = await amendments(held.format, message, reasons, modified, noted)
+        if held.named:
+            for id in reasons:
+                run.redacted[id] = (held.format, written[id].call)
         body = await edit_reply(
             reply.provider,
             reply.content_type,
@@ -1057,7 +1137,11 @@ class Handler:
                 amendments=written,
             )
         )
-        held.exchange.proposed = Withheld(message, reasons)
+        # an eval is handed neither a call taken out nor a changed call's
+        # original arguments
+        held.exchange.proposed = Withheld(
+            message, reasons, redacted=frozenset(reasons), ran=dict(modified)
+        )
         handed = message.model_copy(
             update={
                 "tool_calls": [
@@ -1099,9 +1183,12 @@ class Handler:
         written = (
             None if ends else await amendments(held.format, message, told, (), noted)
         )
-        held.exchange.withheld = Withheld(message, told)
+        held.exchange.withheld = Withheld(message, told, redacted=frozenset(reasons))
         held.exchange.message = why
         run.in_a_row[held.sample_attempt] = count
+        if written is not None and held.named:
+            for id in reasons:
+                run.redacted[id] = (held.format, written[id].call)
         if written is None:
             return self._end(
                 held,
@@ -1156,26 +1243,17 @@ class Handler:
         )
         return decision
 
-    def _with_field(
+    def _judged(
         self,
         refusal: Refuse,
         proxy: ProxyContext,
         exchange: Exchange,
-        outcome: Literal["reject", "terminate"],
         attempt: Attempt | None,
     ) -> Refuse:
-        # an Inspect client is told what was decided, with the refusal, and
-        # again by `request_result` if the refusal doesn't reach it
-        if proxy.inspect is None:
-            return refusal
-        if attempt is not None:
+        # an Inspect eval asks what was decided, by `request_result`
+        if proxy.inspect is not None and attempt is not None:
             attempt.judged = exchange
-        return replace(refusal, sentinel=self._field(exchange, outcome))
-
-    def _field(
-        self, exchange: Exchange, outcome: Literal["proceed", "reject", "terminate"]
-    ) -> dict[str, Any]:
-        return sentinel_field(exchange, outcome, trimmed=not self._eval_results)
+        return refusal
 
     def _ended_meanwhile(self, held: Held, run: Run) -> Refuse | None:
         # another exchange of the run may have ended it while this one waited
@@ -1220,11 +1298,16 @@ class Handler:
         )
 
 
-def _withhold_ended(held: Held, message: ChatMessageAssistant) -> None:
+def _withhold_ended(
+    held: Held, message: ChatMessageAssistant, acted_on: frozenset[str]
+) -> None:
     # the client records the turn the run ended at, as an in-process sentinel
-    # leaves it in the transcript; none of its calls runs
+    # leaves it in the transcript; none of its calls runs, and the calls the
+    # run was ended for are redacted
     held.exchange.withheld = Withheld(
-        message, {call.id: _ENDED for call in message.tool_calls or []}
+        message,
+        {call.id: _ENDED for call in message.tool_calls or []},
+        redacted=acted_on,
     )
 
 

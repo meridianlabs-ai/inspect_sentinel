@@ -637,10 +637,10 @@ def test_a_reply_with_a_rejected_call_goes_on_without_it(
 
 def _refused(
     guardrail: Any, on: _On, data: dict[str, Any], streamed: bool, pace: float = 0.0
-) -> tuple[int, Any, Any, list[Any]]:
-    """How the guardrail refused an exchange: the status and message the caller is given, the sentinel field, and what else went out.
+) -> tuple[int, Any, list[Any]]:
+    """How the guardrail refused an exchange: the status and message the caller is given, and what else went out.
 
-    A streamed reply is refused with an event in place of the reply: on the Responses route a `response.failed` event with an error at its top, which holds the field and which LiteLLM sends on with status 200, and elsewhere an error event, which LiteLLM sends as an error under the status it names. A reply that isn't streamed is refused with an `HTTPException`, whose `provider_specific_fields` LiteLLM writes into the error.
+    A streamed reply is refused with an event in place of the reply: on the Responses route a `response.failed` event with an error at its top, which LiteLLM sends on with status 200, and elsewhere an error event, which LiteLLM sends as an error under the status it names. A reply that isn't streamed is refused with an `HTTPException`.
     """
     let_go: list[Any] = []
     if streamed:
@@ -650,23 +650,18 @@ def _refused(
             assert event["type"] == "response.failed"
             assert event["response"]["status"] == "failed"
             message = event["response"]["error"]["message"]
-            # the error the OpenAI SDK raises on and keeps, which holds the field
+            # the error the OpenAI SDK raises on and keeps
             error = event["error"]
             assert error["message"] == message
-            extra = error.get("provider_specific_fields") or {}
-            return 200, message, extra.get("sentinel"), let_go
+            assert "provider_specific_fields" not in error
+            return 200, message, let_go
         error = _error_event(let_go.pop())
-        extra: dict[str, Any] = error.get("provider_specific_fields") or {}
-        return error["code"], error["message"], extra.get("sentinel"), let_go
+        assert "provider_specific_fields" not in error
+        return error["code"], error["message"], let_go
     with pytest.raises(HTTPException) as refused:
         _exchange(guardrail, on, data, streamed, let_go)
-    extra = getattr(refused.value, "provider_specific_fields", None) or {}
-    return (
-        refused.value.status_code,
-        refused.value.detail,
-        extra.get("sentinel"),
-        let_go,
-    )
+    assert getattr(refused.value, "provider_specific_fields", None) is None
+    return refused.value.status_code, refused.value.detail, let_go
 
 
 @pytest.mark.parametrize(("on", "streamed"), _ROUTES)
@@ -678,7 +673,7 @@ def test_reply_the_sentinel_rejects_is_refused_in_its_words(
 
     # every call, so that the turn is refused whole; the first is Paris
     with _sidecar(None, tmp_path) as url:
-        status, message, _, let_go = _refused(
+        status, message, let_go = _refused(
             _make(monkeypatch, url), on, _data(on), streamed
         )
 
@@ -1102,7 +1097,7 @@ def test_reply_is_refused_as_asked(
     answers = (_result({"action": "pass"}), _result(_REFUSAL))
 
     with _serving(_scripted([], *answers)) as url:
-        status, message, field, let_go = _refused(
+        status, message, let_go = _refused(
             _make(monkeypatch, url), on, _data(on), streamed
         )
 
@@ -1110,38 +1105,7 @@ def test_reply_is_refused_as_asked(
         200 if on is _RESPONSES and streamed else 403,
         "Not allowed.",
     )
-    # a client that isn't Inspect is sent no field
-    assert field is None
     assert let_go == []
-
-
-_FIELD: dict[str, Any] = {"version": 1, "outcome": "reject", "steps": []}
-
-
-@pytest.mark.parametrize(("on", "streamed"), _ROUTES)
-def test_a_refusal_carries_the_sentinel_field(
-    monkeypatch: pytest.MonkeyPatch, on: _On, streamed: bool
-) -> None:
-    answers = (_result({"action": "pass"}), _result(_REFUSAL | {"sentinel": _FIELD}))
-
-    with _serving(_scripted([], *answers)) as url:
-        _, message, field, _ = _refused(
-            _make(monkeypatch, url), on, _data(on), streamed
-        )
-
-    assert (message, field) == ("Not allowed.", _FIELD)
-
-
-@pytest.mark.parametrize("on", [_MESSAGES, _CHAT, _RESPONSES])
-def test_a_refused_request_carries_the_sentinel_field(
-    monkeypatch: pytest.MonkeyPatch, on: _On
-) -> None:
-    with _serving(_scripted([], _result(_REFUSAL | {"sentinel": _FIELD}))) as url:
-        with pytest.raises(HTTPException) as refused:
-            _exchange(_make(monkeypatch, url), on, _data(on), False)
-
-    extra = getattr(refused.value, "provider_specific_fields", None)
-    assert extra == {"sentinel": _FIELD}
 
 
 def test_a_responses_stream_is_failed_as_the_response_it_began() -> None:
@@ -1149,7 +1113,6 @@ def test_a_responses_stream_is_failed_as_the_response_it_began() -> None:
 
     begun = _RESPONSES.stream()
     refused = HTTPException(403, "Not allowed.")
-    setattr(refused, "provider_specific_fields", {"sentinel": _FIELD})  # noqa: B010
 
     event = _written(_guardrail._response_failed(begun, refused))  # pyright: ignore[reportPrivateUsage]
 
@@ -1160,37 +1123,13 @@ def test_a_responses_stream_is_failed_as_the_response_it_began() -> None:
         "code": "permission_error",
         "message": "Not allowed.",
     }
-    # the error the OpenAI SDK raises on, the same one, with the field in it
+    # the error the OpenAI SDK raises on, the same one
     assert event["error"] == {
         "code": "permission_error",
         "message": "Not allowed.",
         "type": "permission_error",
         "param": None,
-        "provider_specific_fields": {"sentinel": _FIELD},
     }
-    assert "sentinel" not in event
-
-
-def test_a_replaced_chat_stream_sends_the_chunk_with_the_field_as_written(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    events = [_written(chunk) for chunk in _CHAT.stream()]
-    events[-1] = events[-1] | {"sentinel": _FIELD}
-    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
-    answers = (
-        _result({"action": "pass"}),
-        _result({"action": "replace", "body": base64.b64encode(body).decode()}),
-    )
-
-    with _serving(_scripted([], *answers)) as url:
-        _, let_go = _exchange(_make(monkeypatch, url), _CHAT, _data(_CHAT), True)
-
-    # LiteLLM writes its own chunks without a field they don't have, so only
-    # the chunk with the field is in a class that keeps every field
-    *chunks, last = let_go
-    assert all(isinstance(chunk, _litellm.ModelResponseStream) for chunk in chunks)
-    assert not isinstance(last, _litellm.ModelResponseStream)
-    assert _written(last) == events[-1]
 
 
 _EVENT_STREAM = "text/event-stream"
@@ -1363,7 +1302,7 @@ def _as_litellm_answers(
 @pytest.mark.parametrize(
     ("answer", "status"),
     [
-        pytest.param(_result(_REFUSAL | {"sentinel": _FIELD}), 403, id="refused"),
+        pytest.param(_result(_REFUSAL), 403, id="refused"),
         pytest.param(
             _result({"action": "replace", "body": "not base64!"}),
             503,
@@ -1372,7 +1311,7 @@ def _as_litellm_answers(
     ],
 )
 @pytest.mark.parametrize("on", [_MESSAGES, _CHAT], ids=["messages", "chat"])
-def test_a_refused_stream_is_answered_as_an_error_with_the_field_by_litellm(
+def test_a_refused_stream_is_answered_as_an_error_by_litellm(
     monkeypatch: pytest.MonkeyPatch, on: _On, answer: Any, status: int
 ) -> None:
     data = _data(on)
@@ -1386,15 +1325,15 @@ def test_a_refused_stream_is_answered_as_an_error_with_the_field_by_litellm(
     error = json.loads(body)["error"]
     if status == 403:
         assert error["message"] == "Not allowed."
-        assert error["provider_specific_fields"] == {"sentinel": _FIELD}
+        assert "provider_specific_fields" not in error
     else:
         assert error["message"] == _UNANSWERED[1]
 
 
-def test_a_refused_chat_stream_gives_the_sdk_the_field_as_data(
+def test_a_refused_chat_stream_is_raised_by_the_sdk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    answers = (_result({"action": "pass"}), _result(_REFUSAL | {"sentinel": _FIELD}))
+    answers = (_result({"action": "pass"}), _result(_REFUSAL))
     data = _data(_CHAT)
 
     with _serving(_scripted([], *answers)) as url:
@@ -1406,14 +1345,13 @@ def test_a_refused_chat_stream_gives_the_sdk_the_field_as_data(
     body: Any = refused.value.body
     assert isinstance(body, dict)
     error = cast("dict[str, Any]", body)
-    assert error["provider_specific_fields"] == {"sentinel": _FIELD}
+    assert error["message"] == "Not allowed."
 
 
-def test_a_chat_stream_with_the_field_is_read_by_the_sdk_from_what_litellm_writes(
+def test_a_replaced_chat_stream_is_read_by_the_sdk_from_what_litellm_writes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events = [_written(chunk) for chunk in _CHAT.stream()]
-    events[-1] = events[-1] | {"sentinel": _FIELD}
     body = "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
     answers = (
         _result({"action": "pass"}),
@@ -1426,8 +1364,6 @@ def test_a_chat_stream_with_the_field_is_read_by_the_sdk_from_what_litellm_write
     chunks = _read_by_the_sdk(_CHAT, _as_litellm_writes(_CHAT, let_go, data))
 
     assert len(chunks) == len(events)
-    extra: dict[str, Any] = chunks[-1].model_extra or {}
-    assert extra.get("sentinel") == _FIELD
     # LiteLLM names the model the caller asked for on every chunk
     assert {chunk.model for chunk in chunks} == {"a-model"}
 
@@ -1443,7 +1379,7 @@ def test_a_chat_stream_with_the_field_is_read_by_the_sdk_from_what_litellm_write
 def test_a_refused_responses_stream_is_read_by_the_sdk_from_what_litellm_writes(
     monkeypatch: pytest.MonkeyPatch, status: int, code: str
 ) -> None:
-    refusal = _REFUSAL | {"status": status, "sentinel": _FIELD}
+    refusal = _REFUSAL | {"status": status}
     answers = (_result({"action": "pass"}), _result(refusal))
     data = _data(_RESPONSES)
 
@@ -1458,7 +1394,7 @@ def test_a_refused_responses_stream_is_read_by_the_sdk_from_what_litellm_writes(
     error: Any = raised.value.body
     # only a server error is one a client tries again
     assert (raised.value.code, error["message"]) == (code, "Not allowed.")
-    assert error["provider_specific_fields"]["sentinel"] == _FIELD
+    assert "provider_specific_fields" not in error
 
 
 _NOT_BASE64 = {"action": "replace", "body": "not base64!"}
@@ -2326,7 +2262,7 @@ def test_a_reply_larger_than_the_sidecar_takes_goes_as_unjudged_replies_do(
                 _written(chunk) for chunk in _CHAT.stream()
             ]
         else:
-            status, message, _, let_go = _refused(
+            status, message, let_go = _refused(
                 guardrail, _CHAT, _data(_CHAT), True, pace=0.02
             )
             # as for any reply the sidecar couldn't judge

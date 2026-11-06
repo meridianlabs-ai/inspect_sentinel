@@ -4,8 +4,9 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Generic, Literal, Protocol, TypeAlias, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar
 
+import anyio
 from inspect_ai.model import ChatMessage
 from inspect_ai.tool import ToolChoice, ToolInfo
 from inspect_ai.util import Store
@@ -45,6 +46,9 @@ class Attempt:
     exchange: str
     """The proxy's id for the exchange, under which its records are kept."""
 
+    eval_id: str | None = None
+    """The eval the request's `x-inspect-context` named, the only one `request_result` answers for it. None if the header couldn't be read."""
+
     state: Literal["judging", "awaiting_reply", "decided", "not_judged"] = "judging"
     """Where the attempt stands."""
 
@@ -64,15 +68,20 @@ class Attempt:
     """The model's turn as it proposed it, when the client was handed it with calls taken out."""
 
     judged: Exchange | None = None
-    """What was decided during the attempt, for an Inspect client, from which `request_result` writes the `sentinel` field the client was sent."""
+    """What was decided during the attempt, for an Inspect eval, from which `request_result` writes its judgment."""
+
+    settled: anyio.Event = field(default_factory=anyio.Event)
+    """Set once the attempt is decided or not judged, for a `request_result` that waits."""
 
     def decide(self, outcome: Outcome, message: str | None = None) -> None:
         """Mark the attempt decided."""
         self.state, self.outcome, self.message = "decided", outcome, message
+        self.settled.set()
 
     def not_judged(self, reason: NotJudged) -> None:
         """Mark the attempt as one that judging ended without a decision for."""
         self.state, self.reason = "not_judged", reason
+        self.settled.set()
 
 
 @dataclass
@@ -192,6 +201,14 @@ class Run:
     eval: EvalContext | None = None
     """The sample the run is, as its task was registered when the run first found it. A registration made later doesn't reach it."""
 
+    eval_id: str | None = None
+    """For a run an eval names, the eval, the only one the endpoint for evals answers for the run."""
+
+    redacted: dict[str, tuple[Format, Any]] = field(
+        default_factory=dict[str, tuple[Format, Any]]
+    )
+    """For a run an eval names, the model's own calls that a decision acted on, by call id, each in the format its request was written in. The eval holds each with its id and function only, and each later request has the model's own call put back."""
+
 
 @dataclass(frozen=True)
 class Held:
@@ -223,7 +240,7 @@ class Held:
     attempt: Attempt | None = None
     """The attempt at the request, for an eval that names its requests."""
     exchange: Exchange = field(default_factory=Exchange)
-    """What was decided so far during the exchange, for an Inspect client's `sentinel` field."""
+    """What was decided so far during the exchange, for an Inspect eval's judgment of it."""
 
     @property
     def sent(self) -> int:
@@ -287,11 +304,15 @@ class State(Protocol):
         """The run's state, or None if none is kept."""
         ...
 
-    async def end_run(self, key: str) -> bool:
+    async def end_run(self, key: str, eval_id: str | None = None) -> bool:
         """Drop a run's state, and remember that it ended. A request or reply of the run still being judged finds it ended too.
 
+        Args:
+            key: The run's key.
+            eval_id: The eval ending it, if an eval is: a run of another eval is left as it is.
+
         Returns:
-            Whether the run was known: kept, or ended before.
+            Whether the run was known, and the eval's if one was given: kept, or ended before.
         """
         ...
 
@@ -306,6 +327,14 @@ class State(Protocol):
 
     async def attempts(self, request: str) -> list[Attempt] | Literal["dropped"] | None:
         """The attempts at a request in order, `dropped` if they were kept and no longer are, or None if the request was never seen."""
+        ...
+
+    async def eval_token(self, eval_id: str) -> str | None:
+        """The secret an eval presents to the endpoint for evals, or None if none is kept. Asking counts as the eval being named, so it is kept for its expiry from now."""
+        ...
+
+    async def keep_eval_token(self, eval_id: str, token: str) -> None:
+        """Keep the secret an eval presents to the endpoint for evals, for as long as a run is kept once no call names the eval."""
         ...
 
 
@@ -332,6 +361,7 @@ class MemoryState:
         # each registration has an expiry of its own, and there are few, so
         # they are swept whole
         self._tasks: dict[tuple[str, str], tuple[float, float, RegisteredTask]] = {}
+        self._tokens = _Expiring[str](expiry)
 
     async def run(self, key: str) -> Run:
         run = self._runs.get(key)
@@ -382,17 +412,23 @@ class MemoryState:
     async def existing_run(self, key: str) -> Run | None:
         return self._runs.get(key)
 
-    async def end_run(self, key: str) -> bool:
+    async def end_run(self, key: str, eval_id: str | None = None) -> bool:
+        kept = self._runs.get(key)
+        if eval_id is not None and kept is not None and kept.eval_id != eval_id:
+            return False
         run = self._runs.pop(key)
         if run is None:
             # a run never seen is left as it is, rather than refused from then on
-            return self._ended.get(key) is not None
+            ended = self._ended.get(key)
+            return ended is not None and eval_id in (None, ended.eval_id)
         run.closed = True
         if run.refusal is None:
             # held by any request or reply of the run still being judged
             run.refusal = Refuse(400, "This run has ended.")
         if self._ended.get(key) is None:
-            self._ended.put(key, Run(refusal=run.refusal, closed=True))
+            self._ended.put(
+                key, Run(refusal=run.refusal, closed=True, eval_id=run.eval_id)
+            )
         return True
 
     async def attempt(self, request: str, exchange: str) -> Attempt:
@@ -409,6 +445,12 @@ class MemoryState:
         if attempts is not None:
             return attempts
         return "dropped" if self._dropped.get(request) is not None else None
+
+    async def eval_token(self, eval_id: str) -> str | None:
+        return self._tokens.get(eval_id)
+
+    async def keep_eval_token(self, eval_id: str, token: str) -> None:
+        self._tokens.put(eval_id, token)
 
     def _expire_tasks(self) -> None:
         now = time.monotonic()

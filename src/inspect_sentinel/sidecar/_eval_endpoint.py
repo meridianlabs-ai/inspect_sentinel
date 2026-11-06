@@ -11,19 +11,15 @@ from starlette.requests import Request as HttpRequest
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from ._handler import Handler, RequestResult
+from ._errors import UnauthorizedError
+from ._handler import MAX_RESULT_WAIT, Handler, RequestResult
 from ._http import read_within
-from ._inspect_client import (
-    SentinelField,
-    WithheldTurn,
-    record_json,
-    sentinel_field,
-    withheld_turn,
-)
+from ._inspect_client import Judgment, judgment, record_json
 from ._json_rpc import (
     METHOD_NOT_FOUND,
     REGISTRATION_REFUSED,
     REGISTRATIONS_FULL,
+    UNAUTHORIZED,
     UNKNOWN_SAMPLE,
     UNKNOWN_TASK,
     RpcError,
@@ -54,10 +50,23 @@ TOKEN_VARIABLE = "INSPECT_SENTINEL_EVAL_TOKEN"
 """The environment variable the endpoint's own token is read from, when it has a port of its own."""
 
 
+class EvalCall(BaseModel):
+    """What every call for an eval, but its first registration, presents: the eval, and the token its registration gave."""
+
+    eval_id: str = Field(description="The eval's id, as its requests name it.")
+    token: str = Field(
+        description="The token `register_task` gave the eval. A call without the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps none for the eval, as after a restart, holds nothing of it for anyone."
+    )
+
+
 class RegisterTaskParams(TaskRegistration):
     """Parameters of `register_task`: a task an eval runs, and the ids of its samples, sent at task init."""
 
     eval_id: str = Field(description="The eval's id, as its requests name it.")
+    token: str | None = Field(
+        default=None,
+        description="The token an earlier registration gave the eval, if it was given one. A sidecar that keeps a token for the eval refuses a registration without it, with `unauthorized`.",
+    )
     expiry: float | None = Field(
         default=None,
         gt=0,
@@ -66,9 +75,12 @@ class RegisterTaskParams(TaskRegistration):
 
 
 class RegisterTaskResult(BaseModel):
-    """What the sidecar stored, or that the task was registered beforehand and nothing was stored."""
+    """What the sidecar stored, or that the task was registered beforehand and nothing was stored, and the eval's token."""
 
     eval_id: str
+    token: str = Field(
+        description="The eval's token, which every later call for the eval presents. It is the one presented, or a new one where the sidecar kept none for the eval. The eval keeps the latest, and never hands it to an agent."
+    )
     task: str
     samples: int = Field(description="How many samples the registration named.")
     fixed: bool = Field(
@@ -80,10 +92,9 @@ class RegisterTaskResult(BaseModel):
     )
 
 
-class CompleteRegistrationParams(SampleFacts):
+class CompleteRegistrationParams(SampleFacts, EvalCall):
     """Parameters of `complete_registration`: one sample of a registered task, sent before the sample's first epoch."""
 
-    eval_id: str = Field(description="The eval's id, as its requests name it.")
     task: str = Field(description="The task's name, as `register_task` gave it.")
 
 
@@ -98,10 +109,15 @@ class CompleteRegistrationResult(BaseModel):
     )
 
 
-class RequestResultParams(BaseModel):
+class RequestResultParams(EvalCall):
     """Parameters of `request_result`: one model request, by the eval's id for it."""
 
     id: str = Field(description="The request's `x-irid`.")
+    wait: float = Field(
+        default=0,
+        ge=0,
+        description=f"How long to wait, in seconds, while the latest attempt is still being judged, at most {MAX_RESULT_WAIT:g}. The answer comes as soon as the attempt is decided or not judged. An eval asks again while the state is still `judging`.",
+    )
 
 
 class RequestResultResult(BaseModel):
@@ -109,7 +125,7 @@ class RequestResultResult(BaseModel):
 
     id: str
     records: Literal["held", "dropped", "unknown"] = Field(
-        description="`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never saw the request."
+        description="`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never saw the request, or the request's `x-inspect-context` named another eval."
     )
     state: Literal["judging", "awaiting_reply", "decided", "not_judged"] | None = Field(
         default=None, description="Where the latest attempt stands."
@@ -125,23 +141,15 @@ class RequestResultResult(BaseModel):
     )
     recorded: list[dict[str, Any]] | None = Field(
         default=None,
-        description="What each monitor and protocol recorded, every attempt's in order.",
+        description="What each monitor and protocol recorded, every attempt's in order. Left out where the sidecar doesn't send results.",
     )
-    withheld: WithheldTurn | None = Field(
+    judgment: Judgment | None = Field(
         default=None,
-        description="The model's turn, when the latest attempt was refused it because a call in it was rejected, or because a sentinel ended the run at the reply or at a call in it, as the `sentinel` field holds it. An eval puts it into its own copy of the conversation, as it would from the field.",
-    )
-    proposed: WithheldTurn | None = Field(
-        default=None,
-        description="The model's turn as it proposed it, when the latest attempt was handed it with calls taken out because they were rejected, as the `sentinel` field holds it.",
-    )
-    sentinel: SentinelField | None = Field(
-        default=None,
-        description="The `sentinel` field of the latest attempt, once decided, as the reply or the refusal carried it, so an eval whose proxy didn't pass it on acts on it as it would have. Trimmed, as the field is, where the sidecar doesn't send results.",
+        description="What was decided during the latest attempt, once decided, which the eval acts on and logs. Trimmed where the sidecar doesn't send results.",
     )
 
 
-class SampleResultParams(BaseModel):
+class SampleResultParams(EvalCall):
     """Parameters of `sample_result`: one sample in one epoch, before it is scored."""
 
     sample_uuid: str = Field(
@@ -161,7 +169,7 @@ class SampleResultResult(BaseModel):
     )
 
 
-class EndSampleParams(BaseModel):
+class EndSampleParams(EvalCall):
     """Parameters of `end_sample`: one sample in one epoch, once it has been scored."""
 
     sample_uuid: str = Field(
@@ -208,6 +216,10 @@ _ERRORS: dict[int, tuple[str, str]] = {
         "unknown_task",
         "The sidecar holds no registration of the task by the eval: it was never registered, or is no longer kept. The eval registers the task again, then completes the sample's registration.",
     ),
+    UNAUTHORIZED: (
+        "unauthorized",
+        "The call didn't present the token the sidecar keeps for the eval, which only the eval's own registration was given.",
+    ),
 }
 
 
@@ -220,13 +232,13 @@ def eval_routes(
 ) -> list[Route]:
     """The routes of the endpoint for evals: the probe at `/sentinel/info`, and the methods at `/sentinel/v1`.
 
-    An eval registers its tasks and completes each sample's registration before the sample runs, asks what became of a request and of a sample, and ends a sample once it is scored. Every call is a JSON-RPC 2.0 request. No method allows a call, clears a tally or changes the sentinel. A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
+    An eval registers its tasks and completes each sample's registration before the sample runs, asks what became of each request and of a sample, and ends a sample once it is scored. Every call but an eval's first registration presents the token that registration gave, so only the eval reads what was decided of its requests and samples. Every call is a JSON-RPC 2.0 request. No method allows a call, clears a tally or changes the sentinel. A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
 
     Args:
         handler: The handler the proxy's requests and replies are put to.
         max_body_bytes: The largest call that is read.
         token: A credential every call to the methods must present as a bearer token, when the endpoint has a port of its own. None where it shares the proxy's port and access control.
-        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited when its proxy didn't pass on the `sentinel` field.
+        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited.
     """
 
     async def info(http: HttpRequest) -> Response:
@@ -282,7 +294,16 @@ async def _answer(
         given = _METHODS[method][0].model_validate(params)
     except ValidationError as ex:
         raise invalid_params(ex) from None
+    try:
+        return await _answered(handler, given, results)
+    except UnauthorizedError as ex:
+        raise RpcError(UNAUTHORIZED, str(ex)) from None
+
+
+async def _answered(handler: Handler, given: BaseModel, results: bool) -> BaseModel:
     if isinstance(given, RegisterTaskParams):
+        # the token first: a caller that can't present it registers nothing
+        token = await handler.eval_token(given.eval_id, given.token)
         registration = TaskRegistration.model_validate(
             given.model_dump(include=set(TaskRegistration.model_fields))
         )
@@ -296,12 +317,21 @@ async def _answer(
             raise RpcError(REGISTRATION_REFUSED, str(ex)) from None
         return RegisterTaskResult(
             eval_id=given.eval_id,
+            token=token,
             task=given.task,
             samples=len(given.sample_ids),
             fixed=granted is None,
             expiry=granted,
         )
+    assert isinstance(given, EvalCall)
+    # a sidecar that keeps no token for the eval holds nothing of it
+    holds = await handler.holds_eval(given.eval_id, given.token)
     if isinstance(given, CompleteRegistrationParams):
+        if not holds:
+            raise RpcError(
+                UNKNOWN_TASK,
+                f"The sidecar holds nothing of the eval {given.eval_id!r}, which registers the task again.",
+            )
         sample = SampleFacts.model_validate(
             given.model_dump(include=set(SampleFacts.model_fields))
         )
@@ -322,7 +352,11 @@ async def _answer(
             fixed=fixed,
         )
     if isinstance(given, RequestResultParams):
-        found = await handler.request_result(given.id)
+        found = (
+            await handler.request_result(given.id, given.eval_id, given.wait)
+            if holds
+            else "unknown"
+        )
         if not isinstance(found, RequestResult):
             return RequestResultResult(id=given.id, records=found)
         latest = found.latest
@@ -336,19 +370,11 @@ async def _answer(
             recorded=(
                 [record_json(record) for record in found.records] if results else None
             ),
-            withheld=(
-                withheld_turn(latest.withheld) if latest.withheld is not None else None
-            ),
-            proposed=(
-                withheld_turn(latest.proposed) if latest.proposed is not None else None
-            ),
-            sentinel=(
-                SentinelField.model_validate(
-                    sentinel_field(
-                        latest.judged,
-                        latest.outcome,
-                        trimmed=not (results and handler.eval_results),
-                    )
+            judgment=(
+                judgment(
+                    latest.judged,
+                    latest.outcome,
+                    trimmed=not (results and handler.eval_results),
                 )
                 if latest.state == "decided"
                 and latest.judged is not None
@@ -357,7 +383,11 @@ async def _answer(
             ),
         )
     if isinstance(given, SampleResultParams):
-        run = await handler.sample_result(given.sample_uuid)
+        run = (
+            await handler.sample_result(given.sample_uuid, given.eval_id)
+            if holds
+            else None
+        )
         if run is None:
             raise RpcError(
                 UNKNOWN_SAMPLE,
@@ -369,7 +399,11 @@ async def _answer(
     if isinstance(given, EndSampleParams):
         return EndSampleResult(
             sample_uuid=given.sample_uuid,
-            state=await handler.end_sample(given.sample_uuid),
+            state=(
+                await handler.end_sample(given.sample_uuid, given.eval_id)
+                if holds
+                else "unknown"
+            ),
         )
     raise TypeError(f"No method takes {type(given).__name__}.")
 
