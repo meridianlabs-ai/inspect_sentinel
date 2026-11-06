@@ -101,7 +101,7 @@ Envoy and LiteLLM both forward `/sentinel/` at the root. An OpenAI base URL usua
 
 **Proposed: which endpoint, and how often.**
 
-- **Under `auto`, Inspect probes only an endpoint whose base URL was set,** in any of the ways inspect_ai's `model_base_url()` reads one: `--model-base-url`, the model's `base_url` argument, the provider's base URL environment variable (such as `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`), or `INSPECT_EVAL_MODEL_BASE_URL`. A provider's own default address is never probed, because a sidecar can only sit behind a proxy that Inspect was pointed at. An eval that calls a provider directly sends the same requests as today.
+- **Under `auto`, Inspect probes only an endpoint whose base URL was set,** in any of the ways inspect_ai's `model_base_url()` reads one: `--model-base-url`, the model's `base_url` argument, the provider's base URL environment variable (such as `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`), or `INSPECT_EVAL_MODEL_BASE_URL`. A provider's own default address is never probed, because a sidecar can only sit behind a proxy that Inspect was pointed at. An eval that calls a provider directly sends the same requests as today. The probe covers inspect_ai's Anthropic provider, its OpenAI provider, and its OpenAI-compatible providers (`openai-api/<service>/<model>`, and the providers built on it, such as Together, vLLM, Ollama and OpenRouter), each only where the base URL was given or set in the environment rather than left at the provider's own address. A model of any other provider is never probed, so under `required` it fails the task, and under `auto` it is left unjudged, which the probe's reason says.
 - **Under `required`, the assigned model's endpoint is probed whatever its address,** so a task that relies on a sidecar fails if it is pointed at the provider directly.
 - **At task start, Inspect probes the endpoint of the task's assigned model:** the model the eval runs with, such as `--model`. So `required` fails the task before any sample runs.
 - **Any other endpoint is probed the first time an agent call goes to it,** such as a model given to a role that the agent hands work to. Inspect can't know these up front, because an agent can pick a model at any point.
@@ -200,7 +200,7 @@ This is an advanced setup, described in sidecar.md section 9:
   "sample_uuid": "sample_123",
   "attempt": "attempt_1",
   "attempt_number": 1,
-  "model": "openai-api/together/meta-llama-3"
+  "model": "openai/gpt-4.1-mini"
 }
 ```
 
