@@ -13,7 +13,7 @@ from inspect_ai.util import Store
 from pydantic import JsonValue
 
 from .._context import EvalContext, ProxyContext
-from ._exchange import Refuse
+from ._exchange import Refuse, Request
 from ._host import ListRecorder, Record
 from ._inspect_client import Exchange, Withheld
 from ._registration import RegisteredTask
@@ -274,6 +274,8 @@ class Held:
     """What was decided so far during the exchange, for an Inspect eval's judgment of it."""
     last: object = None
     """For a run no eval names, the last entry the client sent, as its mark was taken of it, or None for a request with none."""
+    request: Request | None = None
+    """For a run no eval names, the request as the client sent it, so that a run ended meanwhile by another exchange refuses its reply when it continues the ended conversation with blocks added to its last entry."""
 
     @property
     def sent(self) -> int:
