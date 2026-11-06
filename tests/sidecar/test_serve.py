@@ -22,8 +22,13 @@ from inspect_sentinel._step import BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, Refuse
 from inspect_sentinel.sidecar._eval_endpoint import TOKEN_VARIABLE
+from inspect_sentinel.sidecar._inspect_client import judgment
 from inspect_sentinel.sidecar._proxy_endpoint import proxy_app
-from inspect_sentinel.sidecar._registration import RegistrationError, TaskFacts
+from inspect_sentinel.sidecar._registration import (
+    RegistrationError,
+    TaskRegistration,
+    UnregisteredSampleError,
+)
 from inspect_sentinel.sidecar._serve import (
     _HealthCheckFilter,
     _quiet_health_checks,
@@ -113,6 +118,7 @@ def test_defaults_are_one_port_and_no_limits() -> None:
     assert arguments.no_eval_results is False
     assert arguments.tasks_folder is None
     assert arguments.no_runtime_task_registration is False
+    assert arguments.strictness == "open"
     assert arguments.task_expiry == 30 * 24 * 60 * 60
     assert arguments.max_task_registrations == 1000
     assert (arguments.envoy_port, arguments.envoy_header) == (None, [])
@@ -153,16 +159,18 @@ async def test_an_inspect_client_can_be_sent_only_what_it_acts_on() -> None:
         "epoch": 1,
         "sample_uuid": "sample_123",
         "attempt": "attempt_1",
+        "attempt_number": 1,
     }
-    await handler.request(
-        replace(request(), headers={"x-inspect-context": json.dumps(sample)})
-    )
+    headers = {"x-inspect-context": json.dumps(sample), "x-irid": "irid-1"}
+    await handler.request(replace(request(), headers=headers))
 
     answer = await handler.reply(reply(message(weather("Tokyo"))))
 
     assert isinstance(answer, Refuse)
-    assert answer.sentinel is not None
-    assert answer.sentinel["trimmed"] is True
+    result = await handler.request_result("irid-1", "eval_789")
+    assert not isinstance(result, str) and result.latest.judged is not None
+    judged = judgment(result.latest.judged, "reject", trimmed=not handler.eval_results)
+    assert judged.trimmed is True
 
 
 @pytest.mark.parametrize("role", ["monitor", "=mockllm/model", "monitor="])
@@ -193,14 +201,14 @@ async def test_tasks_registered_beforehand_are_read_from_the_tasks_folder(
     # already registered, so nothing is kept
     assert (
         await handler.register_task(
-            "eval_789", TaskFacts(task="philadelphia", samples=[])
+            "eval_789", TaskRegistration(task="philadelphia", sample_ids=[], epochs=1)
         )
         is None
     )
     # a task the file doesn't hold is kept no longer than the limit set
     assert (
         await handler.register_task(
-            "eval_789", TaskFacts(task="another", samples=[]), 3600
+            "eval_789", TaskRegistration(task="another", sample_ids=[], epochs=1), 3600
         )
         == 60
     )
@@ -214,8 +222,19 @@ async def test_a_sidecar_can_be_told_to_take_no_registrations() -> None:
 
     with pytest.raises(RegistrationError, match="takes no tasks"):
         await handler.register_task(
-            "eval_789", TaskFacts(task="philadelphia", samples=[])
+            "eval_789", TaskRegistration(task="philadelphia", sample_ids=[], epochs=1)
         )
+
+
+@pytest.mark.anyio
+async def test_a_sidecar_can_be_told_how_strict_to_be() -> None:
+    handler = handler_from_arguments(
+        _arguments("--sentinel", "no_tokyo", "--strictness", "registered_only")
+    )
+
+    # a request no eval names, such as a grader's
+    with pytest.raises(UnregisteredSampleError, match="no x-inspect-context"):
+        await handler.request(request())
 
 
 _STANZA = """
@@ -230,6 +249,7 @@ server:
   keepalive: 5
   eval_results: false
   runtime_task_registration: false
+  strictness: known_tasks
   task_expiry: 60
   max_task_registrations: 5
   envoy:
@@ -253,6 +273,7 @@ def test_the_server_stanza_sets_what_the_options_would(tmp_path: Path) -> None:
         True,
         True,
     )
+    assert arguments.strictness == "known_tasks"
     assert arguments.task_expiry == 60
     assert arguments.max_task_registrations == 5
     assert (arguments.envoy_port, arguments.envoy_header) == (9001, ["x-team"])

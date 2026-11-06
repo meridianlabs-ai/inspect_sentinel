@@ -9,7 +9,7 @@ from inspect_sentinel._decorators import protocol
 from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall
 from inspect_sentinel._types import Protocol
-from inspect_sentinel.sidecar import Refuse, Reply, Request
+from inspect_sentinel.sidecar import Reply, Request
 
 DATA = Path(__file__).parent / "data"
 
@@ -116,6 +116,7 @@ SAMPLE: dict[str, Any] = {
     "epoch": 2,
     "sample_uuid": "sample_123",
     "attempt": "attempt_1",
+    "attempt_number": 1,
 }
 
 
@@ -125,11 +126,6 @@ def inspect_headers(**changes: Any) -> dict[str, str]:
         "x-inspect-context": json.dumps(SAMPLE | changes),
         "x-irid": "request_456",
     }
-
-
-def plain(answer: object) -> object:
-    """An answer without the `sentinel` field, to compare what any client is told."""
-    return replace(answer, sentinel=None) if isinstance(answer, Refuse) else answer
 
 
 def reply(

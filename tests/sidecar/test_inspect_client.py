@@ -2,6 +2,7 @@ import json
 from dataclasses import replace
 from typing import Any
 
+import anyio
 import pytest
 from inspect_ai.util import StoreModel
 
@@ -9,7 +10,13 @@ from inspect_sentinel._context import Context, InspectSample, ProxyContext
 from inspect_sentinel._decorators import protocol
 from inspect_sentinel._protocols import concurrent
 from inspect_sentinel._report import Decision, Escalations
-from inspect_sentinel._step import AfterToolCall, BeforeGenerate, BeforeToolCall, Step
+from inspect_sentinel._step import (
+    AfterGenerate,
+    AfterToolCall,
+    BeforeGenerate,
+    BeforeToolCall,
+    Step,
+)
 from inspect_sentinel._types import Protocol, ProtocolGroup
 from inspect_sentinel.sidecar import (
     Handler,
@@ -21,8 +28,10 @@ from inspect_sentinel.sidecar import (
     UnreadableError,
     read_reply,
 )
-from inspect_sentinel.sidecar._inspect_client import with_sentinel
-from inspect_sentinel.sidecar._wire import stream_events
+from inspect_sentinel.sidecar._handler import _ENDED, SampleResult
+from inspect_sentinel.sidecar._host import ListRecorder, SidecarHost
+from inspect_sentinel.sidecar._inspect_client import judgment, withheld_turn
+from inspect_sentinel.sidecar._state import MemoryState
 from tests.sidecar._traffic import (
     JSON,
     SAMPLE,
@@ -42,8 +51,22 @@ from tests.sidecar._traffic import (
 )
 
 
-def _from_inspect(asked: Request, **changes: Any) -> Request:
-    return replace(asked, headers=inspect_headers(**changes))
+def _from_inspect(asked: Request, irid: str | None = None, **changes: Any) -> Request:
+    headers = inspect_headers(**changes)
+    return replace(asked, headers=headers | ({"x-irid": irid} if irid else {}))
+
+
+async def _not_judged(handler: Handler, irid: str) -> tuple[str, str | None, bool]:
+    # what `request_result` says of a request: its state, why it wasn't
+    # judged, and whether it has a judgment
+    found = await handler.request_result(irid, "eval_789")
+    assert not isinstance(found, str)
+    latest = found.latest
+    return (
+        latest.state,
+        latest.reason,
+        latest.judged is not None and latest.outcome is not None,
+    )
 
 
 # each calls get_weather for Paris, then Tokyo, then Lima
@@ -60,13 +83,6 @@ _EXCHANGES = [
         )
     ),
 ]
-
-# the event of each stream the field goes in
-_LAST_EVENT = {
-    "anthropic stream": ("type", "message_delta"),
-    "openai chat stream": ("object", "chat.completion.chunk"),
-    "openai responses stream": ("type", "response.completed"),
-}
 
 
 def _exchange(name: str, id: str = "x") -> tuple[Request, Reply]:
@@ -105,13 +121,25 @@ def _exchange(name: str, id: str = "x") -> tuple[Request, Reply]:
     return asked, answered
 
 
-def _field(content_type: str, body: bytes) -> dict[str, Any]:
-    if content_type == JSON:
-        field: dict[str, Any] = json.loads(body)["sentinel"]
-        return field
-    carrying = [event for event in stream_events(body) if "sentinel" in event]
-    assert len(carrying) == 1
-    return carrying[0]["sentinel"]
+async def _judgments(
+    handler: Handler, irid: str = "request_456"
+) -> list[dict[str, Any]]:
+    # what an eval is told of each attempt at the request, as `request_result`
+    # writes the latest's
+    attempts = await handler._state.attempts(irid)  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(attempts, list)
+    return [
+        judgment(
+            attempt.judged, attempt.outcome, trimmed=not handler.eval_results
+        ).model_dump(mode="json", exclude_none=True)
+        for attempt in attempts
+        if attempt.judged is not None and attempt.outcome is not None
+    ]
+
+
+async def _judged(handler: Handler) -> dict[str, Any]:
+    # what an eval is told of the latest attempt
+    return (await _judgments(handler))[-1]
 
 
 def _stages(field: dict[str, Any]) -> list[tuple[str, str]]:
@@ -120,7 +148,7 @@ def _stages(field: dict[str, Any]) -> list[tuple[str, str]]:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("name", _EXCHANGES)
-async def test_a_reply_that_goes_on_carries_every_step_judged(
+async def test_a_reply_that_goes_on_is_judged_at_every_step(
     name: str,
 ) -> None:
     handler = Handler(weather_rule("reject", "Cairo"))
@@ -129,8 +157,9 @@ async def test_a_reply_that_goes_on_carries_every_step_judged(
 
     answer = await handler.reply(answered)
 
-    assert isinstance(answer, Replace)
-    field = _field(answered.content_type, answer.body)
+    # handed on as the provider sent it, as to any client
+    assert answer == Pass()
+    field = await _judged(handler)
     assert (field["version"], field["outcome"]) == (1, "proceed")
     assert "withheld" not in field
     assert _stages(field) == [
@@ -144,38 +173,11 @@ async def test_a_reply_that_goes_on_carries_every_step_judged(
     assert [step.get("call") for step in field["steps"]] == [
         *(call.id for call in calls),
     ]
-    # the provider's SDK reads the reply as it read the provider's
-    output = await read_reply(answered.provider, answered.content_type, answer.body)
-    assert output.message.tool_calls == calls
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("name", list(_LAST_EVENT))
-async def test_a_stream_carries_the_field_in_its_last_event_the_sdk_reads(
-    name: str,
-) -> None:
-    handler = Handler(weather_rule("reject", "Cairo"))
-    asked, answered = _exchange(name)
-    await handler.request(asked)
-
-    answer = await handler.reply(answered)
-
-    assert isinstance(answer, Replace)
-    given = list(stream_events(answered.body))
-    sent = list(stream_events(answer.body))
-    carrying = [index for index, event in enumerate(sent) if "sentinel" in event]
-    key, value = _LAST_EVENT[name]
-    assert carrying == [
-        max(index for index, event in enumerate(given) if event.get(key) == value)
-    ]
-    # nothing else in the stream changed
-    sent[carrying[0]].pop("sentinel")
-    assert sent == given
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("name", _EXCHANGES)
-async def test_a_refused_turn_carries_the_rejected_calls_and_what_was_recorded(
+async def test_a_refused_turn_is_told_redacted_with_what_was_recorded(
     name: str,
 ) -> None:
     asked, answered = _exchange(name)
@@ -189,24 +191,25 @@ async def test_a_refused_turn_carries_the_rejected_calls_and_what_was_recorded(
     answer = await handler.reply(answered)
 
     assert isinstance(answer, Refuse)
-    assert answer.sentinel is not None
-    assert answer.sentinel["outcome"] == "reject"
-    assert _stages(dict(answer.sentinel)) == [("tool_call", "reject")] * 3
+    field = await _judged(handler)
+    assert field["outcome"] == "reject"
+    assert _stages(field) == [("tool_call", "reject")] * 3
     # the whole turn is withheld, every call in it, with what the model is told
-    # of each when the sidecar adds it to the next request
-    withheld = answer.sentinel["withheld"]
-    assert [call["id"] for call in withheld["message"]["tool_calls"]] == [
-        call.id for call in calls
-    ]
+    # of each when the sidecar adds it to the next request; each call was
+    # rejected, so none of their arguments reaches the eval
+    withheld = field["withheld"]
+    assert [
+        (call["id"], call["function"], call["arguments"])
+        for call in withheld["message"]["tool_calls"]
+    ] == [(call.id, "get_weather", {}) for call in calls]
+    assert withheld["redacted"] == [call.id for call in calls]
     assert withheld["message"]["role"] == "assistant"
     assert withheld["results"] == {
         call.id: f"{city} is not allowed."
         for call, city in zip(calls, cities, strict=True)
     }
-    rejected = answer.sentinel["steps"][1]
-    assert rejected["original"]["function"] == "get_weather"
-    assert rejected["original"]["arguments"] == {"location": cities[1]}
-    assert rejected["original"]["id"] == rejected["call"]
+    rejected = field["steps"][1]
+    assert rejected["call"] == calls[1].id
     assert rejected["decision"] == {
         "action": "reject",
         "explanation": f"lookup of {cities[1]}",
@@ -217,13 +220,16 @@ async def test_a_refused_turn_carries_the_rejected_calls_and_what_was_recorded(
         for record in rejected["recorded"]
     ] == [("record", "", "every_call_rule", rejected["call"])]
     assert rejected["recorded"][0]["report"] == rejected["decision"]
-    # every call the client is not handed has its original
-    assert all("original" in step for step in answer.sentinel["steps"])
+    # no step carries a call as the model proposed it
+    assert all("original" not in step for step in field["steps"])
+    # what the provider billed for the reply, which the refusal can't carry
+    assert output.usage is not None
+    assert field["usage"] == output.usage.model_dump(mode="json", exclude_none=True)
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("name", _EXCHANGES)
-async def test_a_turn_with_a_call_taken_out_carries_what_the_model_proposed(
+async def test_a_turn_with_a_call_taken_out_is_told_with_the_call_redacted(
     name: str,
 ) -> None:
     asked, answered = _exchange(name)
@@ -242,22 +248,29 @@ async def test_a_turn_with_a_call_taken_out_carries_what_the_model_proposed(
         calls[0].id,
         calls[2].id,
     ]
-    field = _field(answered.content_type, answer.body)
+    field = await _judged(handler)
     assert field["outcome"] == "proceed"
     assert _stages(field) == [
         ("tool_call", "proceed"),
         ("tool_call", "reject"),
         ("tool_call", "proceed"),
     ]
-    assert field["steps"][1]["original"]["arguments"] == {"location": city}
-    # the turn as the model proposed it, for the eval to put back what was
-    # taken out
+    assert "original" not in field["steps"][1]
+    # the turn for the eval to put back what was taken out, which it holds
+    # without the call's arguments
     proposed = field["proposed"]
-    assert [call["id"] for call in proposed["message"]["tool_calls"]] == [
-        call.id for call in calls
+    assert [
+        (call["id"], call["arguments"]) for call in proposed["message"]["tool_calls"]
+    ] == [
+        (calls[0].id, calls[0].arguments),
+        (calls[1].id, {}),
+        (calls[2].id, calls[2].arguments),
     ]
+    assert proposed["redacted"] == [calls[1].id]
     assert proposed["results"] == {calls[1].id: f"{city} is not allowed."}
     assert "withheld" not in field
+    # the reply that goes on carries its own usage
+    assert "usage" not in field
 
 
 @pytest.mark.anyio
@@ -269,11 +282,106 @@ async def test_a_run_ended_at_a_call_is_the_last_step() -> None:
     answer = await handler.reply(answered)
 
     assert isinstance(answer, Refuse)
-    assert answer.sentinel is not None
-    assert answer.sentinel["outcome"] == "terminate"
-    assert _stages(dict(answer.sentinel))[-1] == ("tool_call", "terminate")
-    assert "original" not in answer.sentinel["steps"][-1]
-    assert "withheld" not in answer.sentinel
+    field = await _judged(handler)
+    assert field["outcome"] == "terminate"
+    assert _stages(field)[-1] == ("tool_call", "terminate")
+    # the turn the run ended at, which the client records; none of it ran,
+    # and the call it ended at is redacted
+    withheld = field["withheld"]
+    assert [
+        (call["id"], call["arguments"]) for call in withheld["message"]["tool_calls"]
+    ] == [
+        ("toolu_1", {"location": "Paris"}),
+        ("toolu_2", {}),
+        ("toolu_3", {"location": "Lima"}),
+    ]
+    assert withheld["redacted"] == ["toolu_2"]
+    assert set(withheld["results"].values()) == {_ENDED}
+    output = await read_reply(answered.provider, answered.content_type, answered.body)
+    assert output.usage is not None
+    assert field["usage"]["input_tokens"] == output.usage.input_tokens
+
+
+@protocol
+def acts_on_paris_and_ends_at_tokyo(action: str = "reject") -> Protocol:
+    """Reject or change a lookup of Paris, end the run at one of Tokyo, and let the rest go."""
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        city = step.call.arguments.get("location")
+        if city == "Tokyo":
+            return Decision.terminate("a lookup of Tokyo")
+        if city != "Paris":
+            return Decision.proceed()
+        if action == "reject":
+            return Decision.reject("a lookup of Paris", message="Paris is not allowed.")
+        changed = replace(step.call, arguments={"location": "Oslo"})
+        return Decision(action="modify", modified=changed)
+
+    return decide
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("action", ["reject", "modify"])
+async def test_a_run_ended_at_a_call_redacts_the_calls_decided_before_it(
+    action: str,
+) -> None:
+    handler = Handler(acts_on_paris_and_ends_at_tokyo(action))
+    asked, answered = _exchange("anthropic")
+    await handler.request(asked)
+
+    answer = await handler.reply(answered)
+
+    assert isinstance(answer, Refuse)
+    field = await _judged(handler)
+    assert field["outcome"] == "terminate"
+    # judging stopped at the call the run ended at: the third was never judged
+    assert _stages(field) == [("tool_call", action), ("tool_call", "terminate")]
+    # none of the turn ran, so the call decided before the end is redacted
+    # too, whether rejected or changed, and the call never judged keeps its
+    # arguments
+    withheld = field["withheld"]
+    assert [
+        (call["id"], call["arguments"]) for call in withheld["message"]["tool_calls"]
+    ] == [
+        ("toolu_1", {}),
+        ("toolu_2", {}),
+        ("toolu_3", {"location": "Lima"}),
+    ]
+    assert withheld["redacted"] == ["toolu_1", "toolu_2"]
+    assert set(withheld["results"].values()) == {_ENDED}
+
+
+@protocol
+def ends_at_the_reply() -> Protocol:
+    """End the run at the model's reply."""
+
+    async def decide(
+        context: Context, step: AfterGenerate, escalations: Escalations
+    ) -> Decision | None:
+        return Decision.terminate("the reply")
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_run_ended_at_the_reply_carries_the_turn() -> None:
+    handler = Handler(ends_at_the_reply())
+    asked, answered = _exchange("anthropic")
+    await handler.request(asked)
+
+    answer = await handler.reply(answered)
+
+    assert isinstance(answer, Refuse)
+    field = await _judged(handler)
+    assert field["outcome"] == "terminate"
+    assert _stages(field) == [("model_output", "terminate")]
+    # the whole turn was judged, so every call in it is redacted
+    withheld = field["withheld"]
+    assert [call["arguments"] for call in withheld["message"]["tool_calls"]] == [{}] * 3
+    assert len(withheld["redacted"]) == 3
+    assert set(withheld["results"].values()) == {_ENDED}
 
 
 @pytest.mark.anyio
@@ -284,13 +392,15 @@ async def test_the_rejection_that_ends_the_run_says_the_run_ended() -> None:
         await handler.request(_from_inspect(request(id)))
         answers.append(await handler.reply(reply(message(weather("Tokyo")), id=id)))
 
-    assert [answer.sentinel["outcome"] for answer in answers] == [
+    judgments = await _judgments(handler)
+    assert all(isinstance(answer, Refuse) for answer in answers)
+    assert [field["outcome"] for field in judgments] == [
         "reject",
         "reject",
         "terminate",
     ]
     # the step itself was a rejection, the third in a row
-    assert _stages(answers[-1].sentinel)[-1] == ("tool_call", "reject")
+    assert _stages(judgments[-1])[-1] == ("tool_call", "reject")
 
 
 @pytest.mark.anyio
@@ -301,7 +411,7 @@ async def test_a_run_ended_at_a_result_is_refused_with_the_result_step() -> None
     answer = await handler.request(asked)
 
     assert isinstance(answer, Refuse)
-    assert answer.sentinel == {
+    assert await _judged(handler) == {
         "version": 1,
         "outcome": "terminate",
         "steps": [
@@ -351,15 +461,15 @@ def watches_every_stage() -> Protocol:
 
 
 @pytest.mark.anyio
-async def test_a_reply_carries_the_request_steps_before_its_own() -> None:
+async def test_a_reply_is_told_with_the_request_steps_before_its_own() -> None:
     handler = Handler(watches_every_stage())
     asked, answered = _exchange("anthropic")
     await handler.request(replace(asked, body=request(then=ran("Oslo", "Sunny.")).body))
 
     answer = await handler.reply(answered)
 
-    assert isinstance(answer, Replace)
-    assert _stages(_field(answered.content_type, answer.body)) == [
+    assert answer == Pass()
+    assert _stages(await _judged(handler)) == [
         ("tool_result", "proceed"),
         ("model_input", "proceed"),
         ("model_output", "proceed"),
@@ -376,8 +486,7 @@ async def test_a_run_ended_before_the_model_is_refused_with_the_request_steps() 
     answer = await handler.request(_from_inspect(request(then=ran("Oslo", "Sunny."))))
 
     assert isinstance(answer, Refuse)
-    assert answer.sentinel is not None
-    assert _stages(dict(answer.sentinel)) == [
+    assert _stages(await _judged(handler)) == [
         ("tool_result", "proceed"),
         ("model_input", "terminate"),
     ]
@@ -396,7 +505,7 @@ async def test_a_request_of_an_ended_run_is_refused_with_no_steps() -> None:
         answer.message
         == "A sentinel ended this run at the result of the call to get_weather."
     )
-    assert answer.sentinel == {"version": 1, "outcome": "terminate", "steps": []}
+    assert await _judged(handler) == {"version": 1, "outcome": "terminate", "steps": []}
 
 
 @pytest.mark.anyio
@@ -468,6 +577,7 @@ async def test_a_client_that_didnt_put_a_withheld_turn_back_is_told_of_it() -> N
         json.dumps(SAMPLE | {"version": 2}),
         json.dumps({k: v for k, v in SAMPLE.items() if k != "sample_uuid"}),
         json.dumps(SAMPLE | {"epoch": "2"}),
+        json.dumps({k: v for k, v in SAMPLE.items() if k != "attempt_number"}),
     ],
 )
 async def test_a_header_that_cant_be_read_is_refused(value: str) -> None:
@@ -490,7 +600,9 @@ async def test_a_new_attempt_is_not_told_of_a_turn_rejected_in_the_last() -> Non
     # a retry of the request within the attempt is told of it
     retried = await handler.request(_from_inspect(request("b")))
     # Inspect's retry of the sample opens as the attempt it replaces did
-    afresh = await handler.request(_from_inspect(request("c"), attempt="attempt_2"))
+    afresh = await handler.request(
+        _from_inspect(request("c"), attempt="attempt_2", attempt_number=2)
+    )
 
     assert isinstance(retried, Replace)
     assert afresh == Pass()
@@ -500,17 +612,21 @@ async def test_a_new_attempt_is_not_told_of_a_turn_rejected_in_the_last() -> Non
 async def test_a_new_attempt_counts_its_rejected_turns_in_a_row_afresh() -> None:
     handler = Handler(weather_rule("reject", "Tokyo"))
 
-    async def rejected(id: str, attempt: str) -> Refuse:
-        await handler.request(_from_inspect(request(id), attempt=attempt))
+    async def rejected(id: str, attempt: int) -> Refuse:
+        await handler.request(
+            _from_inspect(
+                request(id), attempt=f"attempt_{attempt}", attempt_number=attempt
+            )
+        )
         answer = await handler.reply(
             reply(message(weather("Tokyo", f"toolu_{id}")), id=id)
         )
         assert isinstance(answer, Refuse)
         return answer
 
-    await rejected("a", "attempt_1")
-    await rejected("b", "attempt_1")
-    third = await rejected("c", "attempt_2")
+    await rejected("a", 1)
+    await rejected("b", 1)
+    third = await rejected("c", 2)
 
     # the third rejected turn of the sample, but the first of its attempt
     assert third.message == (
@@ -539,26 +655,221 @@ def counts_lookups_and_ends_at_storms() -> Protocol:
 
 
 @pytest.mark.anyio
-async def test_a_new_attempt_keeps_the_runs_store_and_its_end() -> None:
+async def test_a_new_attempt_starts_the_runs_store_and_its_end_afresh() -> None:
     handler = Handler(counts_lookups_and_ends_at_storms())
     await handler.request(_from_inspect(request("a")))
     await handler.reply(reply(message(weather("Oslo", "toolu_1")), id="a"))
 
-    # the store is the sample's, across its attempts
-    await handler.request(_from_inspect(request("b"), attempt="attempt_2"))
-    counted = await handler.reply(reply(message(weather("Oslo", "toolu_2")), id="b"))
-    # and a run a sentinel ended stays ended for a later attempt
+    # each attempt has a store of its own, as the sample store is
     await handler.request(
-        _from_inspect(request("c", then=ran("Oslo", "A storm.")), attempt="attempt_2")
+        _from_inspect(request("b"), attempt="attempt_2", attempt_number=2)
     )
-    ended = await handler.request(_from_inspect(request("d"), attempt="attempt_3"))
+    counted = await handler.reply(reply(message(weather("Oslo", "toolu_2")), id="b"))
+    # and a run a sentinel ended is ended for that attempt only
+    await handler.request(
+        _from_inspect(
+            request("c", then=ran("Oslo", "A storm.")),
+            attempt="attempt_2",
+            attempt_number=2,
+        )
+    )
+    ended = await handler.sample_result("sample_123", "eval_789")
+    afresh = await handler.request(
+        _from_inspect(request("d"), attempt="attempt_3", attempt_number=3)
+    )
+    latest = await handler.sample_result("sample_123", "eval_789")
 
     assert isinstance(counted, Refuse)
-    assert counted.message == "A sentinel rejected the call to get_weather: Lookup 2."
-    assert isinstance(ended, Refuse)
-    assert ended.message == (
-        "A sentinel ended this run at the result of the call to get_weather."
+    assert counted.message == "A sentinel rejected the call to get_weather: Lookup 1."
+    assert ended is not None
+    assert ended.outcome == "terminate"
+    assert afresh == Pass()
+    assert latest == SampleResult("proceed", {})
+
+
+@pytest.mark.anyio
+async def test_a_replaced_attempts_requests_and_replies_are_refused_unjudged() -> None:
+    handler = Handler(counts_lookups_and_ends_at_storms())
+    await handler.request(_from_inspect(request("a"), "irid-a"))
+    await handler.request(
+        _from_inspect(request("b"), "irid-b", attempt="attempt_2", attempt_number=2)
     )
+
+    # the first attempt's reply arrives after its retry began
+    late = await handler.reply(reply(message(weather("Oslo", "toolu_1")), id="a"))
+    # and a request of the first attempt doesn't start it again
+    again = await handler.request(_from_inspect(request("c"), "irid-c"))
+    counted = await handler.reply(reply(message(weather("Lima", "toolu_2")), id="b"))
+
+    replaced = "A later attempt at this sample replaced this one."
+    assert isinstance(late, Refuse)
+    assert late.message == replaced
+    assert isinstance(again, Refuse)
+    assert again.message == replaced
+    # the late reply was never judged, so it counted nothing
+    assert isinstance(counted, Refuse)
+    assert counted.message == "A sentinel rejected the call to get_weather: Lookup 1."
+    # the eval is told neither was judged, never that a sentinel ended them
+    unjudged = ("not_judged", "replaced_attempt", False)
+    assert await _not_judged(handler, "irid-a") == unjudged
+    assert await _not_judged(handler, "irid-c") == unjudged
+
+
+# set by the test that waits in a judgment
+_GATE: dict[str, anyio.Event] = {}
+
+
+@protocol
+def waits_at_oslo_and_ends_at_paris() -> Protocol:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        location = step.call.arguments.get("location")
+        if location == "Oslo":
+            _GATE["started"].set()
+            await _GATE["release"].wait()
+            return None
+        lookups = context.store_as(_Lookups)
+        lookups.count += 1
+        if location == "Paris":
+            return Decision.terminate("a storm in Paris")
+        return Decision.reject("counted", message=f"Lookup {lookups.count}.")
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_judgment_that_outlives_its_attempt_leaves_the_next_alone() -> None:
+    _GATE.update(started=anyio.Event(), release=anyio.Event())
+    handler = Handler(waits_at_oslo_and_ends_at_paris())
+    await handler.request(_from_inspect(request("a")))
+    answers: dict[str, object] = {}
+
+    async def judged_slowly() -> None:
+        # Paris is judged once the next attempt has begun
+        turn = message(weather("Oslo", "toolu_1"), weather("Paris", "toolu_3"))
+        answers["a"] = await handler.reply(reply(turn, id="a"))
+
+    # the retry begins while the first attempt's reply is still being judged
+    async with anyio.create_task_group() as group:
+        group.start_soon(judged_slowly)
+        await _GATE["started"].wait()
+        await handler.request(
+            _from_inspect(request("b"), attempt="attempt_2", attempt_number=2)
+        )
+        _GATE["release"].set()
+    counted = await handler.reply(reply(message(weather("Lima", "toolu_2")), id="b"))
+    result = await handler.sample_result("sample_123", "eval_789")
+
+    # its count and its end stay with the attempt it was part of
+    assert isinstance(answers["a"], Refuse)
+    assert isinstance(counted, Refuse)
+    assert counted.message == "A sentinel rejected the call to get_weather: Lookup 1."
+    assert result is not None
+    assert result.outcome == "proceed"
+
+
+class _SlowRecorders(MemoryState):
+    """State whose second lookup of the first request's recorder waits, as a shared backend's may: the request has begun its attempt, and not yet been held."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._looked_up = 0
+
+    async def recorder(self, id: str) -> ListRecorder:
+        if id == "a":
+            self._looked_up += 1
+            if self._looked_up == 2:
+                _GATE["started"].set()
+                await _GATE["release"].wait()
+        return await super().recorder(id)
+
+
+@protocol
+def counts_requests() -> Protocol:
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
+        context.store_as(_Lookups).count += 1
+        return None
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_request_held_up_while_a_retry_begins_keeps_its_attempts_store() -> (
+    None
+):
+    _GATE.update(started=anyio.Event(), release=anyio.Event())
+    handler = Handler(counts_requests(), state=_SlowRecorders())
+
+    # the retry begins while the first attempt's request waits on the state
+    async with anyio.create_task_group() as group:
+        group.start_soon(handler.request, _from_inspect(request("a")))
+        await _GATE["started"].wait()
+        await handler.request(
+            _from_inspect(request("b"), attempt="attempt_2", attempt_number=2)
+        )
+        _GATE["release"].set()
+    result = await handler.sample_result("sample_123", "eval_789")
+
+    # only the retry's own request is counted in its store
+    assert result is not None
+    assert result.store["_Lookups::count"] == 1
+
+
+@pytest.mark.anyio
+async def test_an_earlier_attempt_first_seen_after_a_later_one_is_refused() -> None:
+    handler = Handler(counts_lookups_and_ends_at_storms())
+    await handler.request(
+        _from_inspect(request("b"), attempt="attempt_2", attempt_number=2)
+    )
+
+    # the first attempt's only request reaches the sidecar after its retry's
+    late = await handler.request(_from_inspect(request("a")))
+    counted = await handler.reply(reply(message(weather("Lima", "toolu_2")), id="b"))
+
+    assert isinstance(late, Refuse)
+    assert late.message == "A later attempt at this sample replaced this one."
+    # the retry goes on, its store its own
+    assert isinstance(counted, Refuse)
+    assert counted.message == "A sentinel rejected the call to get_weather: Lookup 1."
+
+
+@pytest.mark.anyio
+async def test_two_attempts_with_the_same_number_are_told_apart_by_refusal() -> None:
+    handler = Handler(counts_lookups_and_ends_at_storms())
+    await handler.request(_from_inspect(request("a"), "irid-a"))
+
+    other = await handler.request(
+        _from_inspect(request("b"), "irid-b", attempt="attempt_other", attempt_number=1)
+    )
+    counted = await handler.reply(reply(message(weather("Lima", "toolu_1")), id="a"))
+
+    assert isinstance(other, Refuse)
+    assert other.message == "Another attempt at this sample has the number 1."
+    assert await _not_judged(handler, "irid-b") == (
+        "not_judged",
+        "replaced_attempt",
+        False,
+    )
+    # the attempt first seen with the number goes on
+    assert isinstance(counted, Refuse)
+    assert counted.message == "A sentinel rejected the call to get_weather: Lookup 1."
+
+
+@pytest.mark.anyio
+async def test_a_sample_the_eval_ended_stays_ended_for_a_new_attempt() -> None:
+    handler = Handler(counts_lookups_and_ends_at_storms())
+    await handler.request(_from_inspect(request("a")))
+    await handler.end_sample("sample_123", "eval_789")
+
+    answer = await handler.request(
+        _from_inspect(request("b"), attempt="attempt_2", attempt_number=2)
+    )
+
+    assert isinstance(answer, Refuse)
+    assert answer.message == "This run has ended."
 
 
 @protocol
@@ -595,6 +906,7 @@ async def test_sentinel_is_given_what_the_proxy_and_the_header_say() -> None:
             epoch=2,
             sample_uuid="sample_123",
             attempt="attempt_1",
+            attempt_number=1,
         ),
     )
     # given to a monitor or protocol at any depth
@@ -611,14 +923,15 @@ async def test_a_client_without_the_header_is_handed_the_reply_as_it_was() -> No
 
 
 @pytest.mark.anyio
-async def test_a_client_without_the_header_is_refused_without_the_field() -> None:
+async def test_a_client_without_the_header_is_refused_as_an_evals_would_be() -> None:
     handler = Handler(weather_rule())
     await handler.request(request())
 
     answer = await handler.reply(reply(message(weather("Tokyo"))))
 
-    assert isinstance(answer, Refuse)
-    assert answer.sentinel is None
+    assert answer == Refuse(
+        400, "A sentinel rejected the call to get_weather: Tokyo is not allowed."
+    )
 
 
 @pytest.mark.anyio
@@ -638,42 +951,65 @@ async def test_without_eval_results_only_what_inspect_acts_on_is_sent() -> None:
     answer = await handler.reply(answered)
 
     assert isinstance(answer, Refuse)
-    assert answer.sentinel is not None
-    assert answer.sentinel["trimmed"] is True
-    assert all("recorded" not in step for step in answer.sentinel["steps"])
-    rejected = answer.sentinel["steps"][1]
+    field = await _judged(handler)
+    assert field["trimmed"] is True
+    assert all("recorded" not in step for step in field["steps"])
+    rejected = field["steps"][1]
     assert rejected["decision"] == {
         "action": "reject",
         "message": "Tokyo is not allowed.",
     }
-    assert rejected["original"]["arguments"] == {"location": "Tokyo"}
+    assert "original" not in rejected
 
 
-def test_a_stream_keeps_its_line_ends_and_each_events_other_lines() -> None:
-    stream = (
-        b"event: message_start\r\n"
-        b'data: {"type": "message_start"}\r\n\r\n'
-        b"event: message_delta\r\n"
-        b'data: {"type":\r\n'
-        b'data: "message_delta"}\r\n\r\n'
-        b"event: message_stop\r\n"
-        b'data: {"type": "message_stop"}\r\n\r\n'
-    )
+@protocol
+def asks_models() -> Protocol:
+    # a protocol that asks its role's model, then a model it names, at each call
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
+        if not isinstance(step, BeforeToolCall):
+            return None
+        await context.host.generate("Is this call suspicious?")
+        await context.host.generate("Is it?", model="mockllm/named")
+        await context.host.generate("Again?")
+        return Decision.proceed()
 
-    written = with_sentinel(STREAM, stream, {"version": 1, "steps": []})
-
-    assert written == (
-        b"event: message_start\r\n"
-        b'data: {"type": "message_start"}\r\n\r\n'
-        b"event: message_delta\r\n"
-        b'data: {"type": "message_delta", "sentinel": {"version": 1, "steps": []}}\r\n\r\n'
-        b"event: message_stop\r\n"
-        b'data: {"type": "message_stop"}\r\n\r\n'
-    )
+    return decide
 
 
 @pytest.mark.anyio
-async def test_a_reply_judged_that_cant_carry_the_field_goes_on_without_it() -> None:
+# inspect_ai calls a model on trio only once it is set up to, as an eval does;
+# the sidecar serves on asyncio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.parametrize("eval_results", [True, False], ids=["sent", "trimmed"])
+async def test_each_step_says_which_models_judged_it(eval_results: bool) -> None:
+    # the sidecar's roles, not the eval's: so the eval can tell which judged
+    handler = Handler(
+        asks_models(),
+        host=SidecarHost({"monitor": "mockllm/monitor"}),
+        eval_results=eval_results,
+    )
+    asked, answered = _exchange("anthropic")
+    await handler.request(asked)
+
+    answer = await handler.reply(answered)
+
+    assert answer == Pass()
+    steps = (await _judged(handler))["steps"]
+    assert [step["stage"] for step in steps].count("tool_call") == 3
+    for step in steps:
+        if eval_results and step["stage"] == "tool_call":
+            assert step["models"] == [
+                {"role": "monitor", "model": "mockllm/monitor"},
+                {"model": "mockllm/named"},
+            ]
+        else:
+            assert "models" not in step
+
+
+@pytest.mark.anyio
+async def test_a_stream_without_its_last_event_is_judged_and_goes_on() -> None:
     handler = Handler(weather_rule("reject", "Tokyo"))
     sent = anthropic_recorded("single-tool-call")
     # a stream whose last event never came, which is read all the same
@@ -693,11 +1029,6 @@ async def test_a_reply_judged_that_cant_carry_the_field_goes_on_without_it() -> 
     assert answer == Pass()
     assert after == Pass()
     assert await handler.records("a") is not None
-
-
-def test_a_stream_with_no_event_for_the_field_cant_carry_it() -> None:
-    with pytest.raises(UnreadableError, match="no event"):
-        with_sentinel(STREAM, b'data: {"type": "ping"}\n\n', {"version": 1})
 
 
 @protocol
@@ -810,11 +1141,14 @@ async def test_a_changed_calls_result_is_judged_as_the_call_that_ran() -> None:
     await handler.request(_from_inspect(request("a")))
     answer = await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
     assert isinstance(answer, Replace)
-    field = _field(JSON, answer.body)
-    assert field["steps"][0]["original"]["arguments"] == {"location": "Tokyo"}
+    field = await _judged(handler)
+    assert "original" not in field["steps"][0]
     assert field["steps"][0]["decision"]["modified"]["arguments"] == {
         "location": "Oslo"
     }
+    # the eval holds the call as it ran, never the model's arguments
+    (held,) = field["proposed"]["message"]["tool_calls"]
+    assert held["arguments"] == {"location": "Oslo"}
 
     # the eval keeps the model's call in its conversation, as in its own
     # process, with the result of the call that ran
@@ -871,3 +1205,231 @@ async def test_another_result_for_a_refused_call_is_unreadable() -> None:
         await handler.request(
             _from_inspect(request("b", then=_refused_turn_put_back("Rain.")))
         )
+
+
+@pytest.mark.anyio
+async def test_a_changed_call_the_eval_holds_as_it_ran_goes_to_the_model_as_made() -> (
+    None
+):
+    handler = Handler(changes_tokyo_and_ends_at_its_result())
+    await handler.request(_from_inspect(request("a")))
+    await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
+
+    answer = await handler.request(
+        _from_inspect(request("b", then=ran("Oslo", "Snow.", "toolu_1")))
+    )
+
+    # the model is sent its own call, and the result was judged as Oslo's
+    assert isinstance(answer, Replace)
+    assert _calls_sent(answer.body) == [("toolu_1", {"location": "Tokyo"})]
+
+
+def _redacted(id: str) -> dict[str, Any]:
+    # a call as an eval holds one a decision acted on
+    return {"type": "tool_use", "id": id, "name": "get_weather", "input": {}}
+
+
+def _calls_sent(body: bytes) -> list[tuple[str, Any]]:
+    # the calls in the request the model is sent
+    return [
+        (block["id"], block["input"])
+        for entry in json.loads(body)["messages"]
+        if entry["role"] == "assistant" and isinstance(entry["content"], list)
+        for block in entry["content"]
+        if block.get("type") == "tool_use"
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_call_taken_out_that_the_eval_holds_redacted_goes_back_as_made() -> (
+    None
+):
+    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    await handler.request(_from_inspect(request("a")))
+    await handler.reply(
+        reply(message(weather("Tokyo", "toolu_1"), weather("Paris", "toolu_2")), id="a")
+    )
+
+    held = [
+        {
+            "role": "assistant",
+            "content": [_redacted("toolu_1"), weather("Paris", "toolu_2")],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "Tokyo is not allowed.",
+                    "is_error": True,
+                },
+                {"type": "tool_result", "tool_use_id": "toolu_2", "content": "Sunny."},
+            ],
+        },
+    ]
+    answer = await handler.request(_from_inspect(request("b", then=held)))
+
+    # the model is sent the call it made, and no result for Tokyo was judged
+    assert isinstance(answer, Replace)
+    assert _calls_sent(answer.body) == [
+        ("toolu_1", {"location": "Tokyo"}),
+        ("toolu_2", {"location": "Paris"}),
+    ]
+
+
+def _openai_from_inspect(
+    api: str, id: str, then: list[dict[str, Any]] | None = None
+) -> Request:
+    # an OpenAI request from the Inspect sample, its conversation followed by `then`
+    return replace(
+        request(id),
+        provider="openai",
+        model="gpt-test",
+        body=json.dumps(openai_request(api, then or [])).encode(),
+        headers=inspect_headers(),
+    )
+
+
+def _openai_held(
+    api: str, calls: list[dict[str, Any]], written: dict[str, tuple[Any, ...]]
+) -> list[dict[str, Any]]:
+    # the turn as the eval holds it in the request's format: each call as
+    # Inspect was handed it, then its result, the sidecar's own rejection for
+    # a call taken out
+    def result(call: dict[str, Any]) -> list[dict[str, Any]]:
+        if call["id"] in written:
+            return list(written[call["id"]])
+        if api == "chat":
+            return [{"role": "tool", "tool_call_id": call["id"], "content": "Sunny."}]
+        return [
+            {"type": "function_call_output", "call_id": call["id"], "output": "Sunny."}
+        ]
+
+    if api == "chat":
+        turn: list[dict[str, Any]] = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": call["id"],
+                        "type": "function",
+                        "function": {
+                            "name": call["function"],
+                            "arguments": json.dumps(call["arguments"]),
+                        },
+                    }
+                    for call in calls
+                ],
+            }
+        ]
+    else:
+        turn = [
+            {
+                "type": "function_call",
+                "call_id": call["id"],
+                "name": call["function"],
+                "arguments": json.dumps(call["arguments"]),
+            }
+            for call in calls
+        ]
+    return turn + [entry for call in calls for entry in result(call)]
+
+
+def _openai_calls_sent(api: str, body: bytes) -> list[tuple[str, Any]]:
+    # the calls in the request the model is sent, each with its arguments read
+    sent = json.loads(body)
+    if api == "chat":
+        return [
+            (call["id"], json.loads(call["function"]["arguments"]))
+            for entry in sent["messages"]
+            if entry.get("role") == "assistant"
+            for call in entry.get("tool_calls", [])
+        ]
+    return [
+        (item["call_id"], json.loads(item["arguments"]))
+        for item in sent["input"]
+        if item.get("type") == "function_call"
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("api", ["chat", "responses"])
+async def test_a_call_taken_out_that_the_eval_holds_redacted_goes_back_as_made_on_openai(
+    api: str,
+) -> None:
+    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    await handler.request(_openai_from_inspect(api, "a"))
+    content_type, body = openai_recorded(api)
+    await handler.reply(
+        replace(
+            reply(body, id="a", content_type=content_type),
+            provider="openai",
+            model="gpt-test",
+        )
+    )
+
+    # the turn as the eval was handed it, Tokyo's call with its id and
+    # function only, and the rejection as the sidecar wrote it
+    found = await handler.request_result("request_456", "eval_789")
+    assert not isinstance(found, str) and found.latest.judged is not None
+    proposed = found.latest.judged.proposed
+    assert proposed is not None
+    (redacted,) = proposed.redacted
+    calls = withheld_turn(proposed).message["tool_calls"]
+    run = await handler._state.existing_run("sample:sample_123")  # pyright: ignore[reportPrivateUsage]
+    assert run is not None
+    (conversation,) = run.conversations.values()
+    written = {
+        id: amendment.result
+        for id, amendment in conversation.edited[0].amendments.items()
+    }
+    held = _openai_held(api, calls, written)
+    answer = await handler.request(_openai_from_inspect(api, "b", held))
+
+    # the model is sent the call it made, and no result for Tokyo was judged
+    assert isinstance(answer, Replace)
+    assert _openai_calls_sent(api, answer.body) == [
+        (
+            call["id"],
+            {"location": "Tokyo"} if call["id"] == redacted else call["arguments"],
+        )
+        for call in calls
+    ]
+    assert redacted not in [record.call for record in await handler.records("b") or []]
+
+
+@pytest.mark.anyio
+async def test_a_refused_turn_that_the_eval_holds_redacted_goes_back_as_made() -> None:
+    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    await handler.request(_from_inspect(request("a")))
+    refused = await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
+    assert isinstance(refused, Refuse)
+
+    held = _refused_turn_put_back("Tokyo is not allowed.")
+    held[0]["content"] = [_redacted("toolu_1")]
+    answer = await handler.request(_from_inspect(request("b", then=held)))
+
+    # not added again, sent as the model made it, and not judged as a result
+    assert isinstance(answer, Replace)
+    assert _calls_sent(answer.body) == [("toolu_1", {"location": "Tokyo"})]
+
+
+@pytest.mark.anyio
+async def test_a_call_no_decision_acted_on_is_never_put_back() -> None:
+    # an empty call of the eval's own is left as it is
+    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    held = [
+        {"role": "assistant", "content": [_redacted("toolu_9")]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_9", "content": "Sunny."}
+            ],
+        },
+    ]
+
+    answer = await handler.request(_from_inspect(request("a", then=held)))
+
+    assert answer == Pass()

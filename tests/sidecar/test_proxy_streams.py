@@ -332,7 +332,7 @@ async def test_a_proxy_hook_that_doesnt_collect_holds_back_its_chunks() -> None:
 
 
 async def _latest(handler: Handler) -> tuple[str, str | None]:
-    result = await handler.request_result("request_456")
+    result = await handler.request_result("request_456", "eval_789")
     assert isinstance(result, RequestResult)
     return result.latest.state, result.latest.reason
 

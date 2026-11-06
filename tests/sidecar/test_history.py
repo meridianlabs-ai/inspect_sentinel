@@ -10,7 +10,7 @@ from inspect_ai.model import (
 )
 from inspect_ai.tool import ToolCall
 
-from inspect_sentinel.sidecar._history import EXACT_PAIRS, record_sent
+from inspect_sentinel.sidecar._history import EXACT_PAIRS, record_sent, with_sent_ids
 from inspect_sentinel.sidecar._state import Conversation
 
 
@@ -26,6 +26,46 @@ def _sent(*requests: list[ChatMessage], body: bytes = b"") -> list[str]:
     for input in requests:
         record_sent(conversation, input, body)
     return [f"{message.role[0]}:{message.text}" for message in conversation.sent]
+
+
+def _ids_kept(*requests: list[ChatMessage]) -> list[list[bool]]:
+    # for each request, whether each message has the id of the message that
+    # said the same before, every message of these saying something else
+    conversation = Conversation()
+    kept: list[list[bool]] = []
+    for input in requests:
+        given = with_sent_ids(conversation, input, b"")
+        before = {message.text: message.id for message in conversation.sent}
+        kept.append([before.get(message.text) == message.id for message in given])
+        record_sent(conversation, given, b"")
+    return kept
+
+
+def test_a_message_sent_before_keeps_its_id() -> None:
+    # as in Inspect's own process, where a message keeps its id from one model
+    # call to the next
+    assert _ids_kept(
+        _read("s:Be brief.", "u:Weather?"),
+        _read("s:Be brief.", "u:Weather?", "a:Sunny.", "u:Tomorrow?"),
+        _read("s:Be brief.", "u:Weather?", "a:Sunny.", "u:Tomorrow?", "a:Rain."),
+    ) == [[False, False], [True, True, False, False], [True] * 4 + [False]]
+
+
+def test_the_turns_a_compaction_keeps_keep_their_ids() -> None:
+    earlier = ["a:Sunny.", "u:Warm?", "a:Yes.", "u:Tomorrow?", "a:Rain."]
+    assert _ids_kept(
+        _read("s:Be brief.", "u:Weather?", *earlier),
+        _read(
+            "s:Be brief.", "u:Weather?", "u:Summary: sunny.", "u:Tomorrow?", "a:Rain."
+        ),
+    )[1] == [True, True, False, True, True]
+
+
+def test_a_long_request_matched_in_order_keeps_its_ids() -> None:
+    long = [f"u:Turn {n}." for n in range(250)]
+    assert len(long) * len(long) > EXACT_PAIRS
+    # a new first message, so nothing is matched outright
+    assert _ids_kept(_read(*long), _read("u:New.", *long))[1] == [False] + [True] * 250
 
 
 def test_each_message_counts_once_however_many_requests_send_it() -> None:

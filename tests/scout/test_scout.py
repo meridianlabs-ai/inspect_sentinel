@@ -2752,22 +2752,22 @@ async def test_the_probe_digests_a_context_a_sidecar_learns_late() -> None:
     from dataclasses import replace
 
     from inspect_sentinel.sidecar import Handler
-    from inspect_sentinel.sidecar._registration import SampleFacts, TaskFacts
+    from inspect_sentinel.sidecar._registration import SampleFacts, TaskRegistration
     from tests.sidecar._traffic import inspect_headers, request
 
     handler = Handler(observe_only([replay_check(), hands_over()]))
-    task = TaskFacts(
+    task = TaskRegistration(
         task="philadelphia",
         task_description="File the weather report.",
         metadata={},
-        samples=[
-            SampleFacts(
-                sample_id=1,
-                sample_description=None,
-                sample_input="File today's report.",
-                metadata={},
-            )
-        ],
+        sample_ids=[1],
+        epochs=1,
+    )
+    sample = SampleFacts(
+        sample_id=1,
+        sample_description=None,
+        sample_input="File today's report.",
+        metadata={},
     )
 
     async def digests(id: str) -> dict[str, Any]:
@@ -2783,6 +2783,7 @@ async def test_the_probe_digests_a_context_a_sidecar_learns_late() -> None:
     # the run's first request comes before its task is registered
     before = await digests("a")
     await handler.register_task("eval_789", task)
+    await handler.complete_registration("eval_789", "philadelphia", sample)
     after = await digests("b")
 
     assert before["replay_check"] == before["hands_over"]

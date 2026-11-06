@@ -71,6 +71,12 @@ class InspectSample:
     attempt: str
     """Inspect's id for this attempt at the sample. A retry has a new one."""
 
+    attempt_number: int
+    """The attempt's number, from 1. Each retry of the sample has a higher one."""
+
+    model: str | None = None
+    """Inspect's name for the model the call is for, such as `openai-api/together/meta-llama-3`, or None if the header doesn't say."""
+
 
 @dataclass(frozen=True, kw_only=True)
 class ProxyContext:

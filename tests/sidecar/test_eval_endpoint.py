@@ -17,6 +17,7 @@ from inspect_sentinel._step import BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol, ProtocolGroup
 from inspect_sentinel.sidecar import (
     Handler,
+    Pass,
     Refuse,
     Request,
     UnreadableError,
@@ -36,9 +37,11 @@ from inspect_sentinel.sidecar._json_rpc import (
     METHOD_NOT_FOUND,
     REGISTRATION_REFUSED,
     REGISTRATIONS_FULL,
+    UNAUTHORIZED,
     UNKNOWN_SAMPLE,
+    UNKNOWN_TASK,
 )
-from inspect_sentinel.sidecar._registration import FileTask
+from inspect_sentinel.sidecar._registration import FileTask, UnregisteredSampleError
 from inspect_sentinel.sidecar._serve import add_arguments, apps
 from inspect_sentinel.sidecar._state import MemoryState
 from tests.sidecar._traffic import (
@@ -58,14 +61,17 @@ _REGISTRATION: dict[str, Any] = {
     "task_description": None,
     "metadata": {},
     "expiry": 604800,
-    "samples": [
-        {
-            "sample_id": 1,
-            "sample_description": None,
-            "sample_input": "File today's weather report for Philadelphia.",
-            "metadata": {"desk": "weather"},
-        }
-    ],
+    "sample_ids": [1],
+    "epochs": 2,
+}
+
+_COMPLETION: dict[str, Any] = {
+    "eval_id": "eval_789",
+    "task": "philadelphia",
+    "sample_id": 1,
+    "sample_description": None,
+    "sample_input": "File today's weather report for Philadelphia.",
+    "metadata": {"desk": "weather"},
 }
 
 
@@ -107,6 +113,18 @@ def _asked(id: str, irid: str = "irid-1", **sample: Any) -> Request:
     return replace(request(id), headers=headers)
 
 
+async def _eval(handler: Handler, eval_id: str = "eval_789") -> dict[str, str]:
+    # what every call for the eval presents, as its first registration gave it
+    return {"eval_id": eval_id, "token": await handler.keep_eval_token(eval_id)}
+
+
+async def _registered(client: httpx.AsyncClient, **changes: Any) -> dict[str, str]:
+    # registers the task, and gives what later calls for the eval present
+    answered = await _call(client, "register_task", _REGISTRATION | changes)
+    result: dict[str, Any] = answered["result"]
+    return {"eval_id": result["eval_id"], "token": result["token"]}
+
+
 @pytest.mark.anyio
 async def test_the_probe_says_which_versions_are_served() -> None:
     async with _client(Handler(weather_rule())) as client:
@@ -132,6 +150,8 @@ async def test_a_task_is_registered() -> None:
     async with _client(Handler(weather_rule(), task_expiry=86400)) as client:
         answered = await _call(client, "register_task", _REGISTRATION)
 
+    token = answered["result"].pop("token")
+    assert isinstance(token, str) and len(token) >= 32
     assert answered["result"] == {
         "eval_id": "eval_789",
         "task": "philadelphia",
@@ -157,6 +177,8 @@ async def test_a_task_registered_beforehand_is_already_registered(
     async with _client(handler) as client:
         answered = await _call(client, "register_task", _REGISTRATION)
 
+    # a task registered beforehand is the eval's too, so it is given a token
+    assert answered["result"].pop("token")
     # never dropped, so no expiry
     assert answered["result"] == {
         "eval_id": "eval_789",
@@ -188,8 +210,11 @@ async def test_a_registration_past_the_limit_fails_with_its_own_error() -> None:
         refused = await _call(
             client, "register_task", _REGISTRATION | {"eval_id": "eval_3"}
         )
+        token = kept[0]["result"]["token"]
         again = await _call(
-            client, "register_task", _REGISTRATION | {"eval_id": "eval_1"}
+            client,
+            "register_task",
+            _REGISTRATION | {"eval_id": "eval_1", "token": token},
         )
 
     assert all("result" in answered for answered in kept)
@@ -202,14 +227,33 @@ async def test_a_registration_past_the_limit_fails_with_its_own_error() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_sample_past_what_a_registration_holds_fails_with_the_same_error() -> (
+    None
+):
+    handler = Handler(weather_rule(), max_registration_bytes=1_000)
+    async with _client(handler) as client:
+        eval = await _registered(client)
+        answered = await _call(
+            client,
+            "complete_registration",
+            _COMPLETION | eval | {"sample_input": "x" * 2_000},
+        )
+
+    # a failure, not a refusal: the task may run once its registration is
+    # made again
+    assert answered["error"]["code"] == REGISTRATIONS_FULL
+    assert "no more than 1000" in answered["error"]["message"]
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "params",
     [
         {k: v for k, v in _REGISTRATION.items() if k != "eval_id"},
         _REGISTRATION | {"expiry": 0},
-        _REGISTRATION | {"samples": [{"sample_id": 1}]},
+        _REGISTRATION | {"epochs": 0},
     ],
-    ids=["no eval id", "no time to keep it", "a sample without input"],
+    ids=["no eval id", "no time to keep it", "no epochs"],
 )
 async def test_a_registration_that_doesnt_fit_is_an_error(
     params: dict[str, Any],
@@ -220,9 +264,86 @@ async def test_a_registration_that_doesnt_fit_is_an_error(
     assert answered["error"]["code"] == INVALID_PARAMS
 
 
-async def _request_result(handler: Handler, irid: str = "irid-1") -> dict[str, Any]:
+@pytest.mark.anyio
+async def test_a_samples_registration_is_completed() -> None:
+    async with _client(Handler(weather_rule())) as client:
+        eval = await _registered(client)
+        answered = await _call(client, "complete_registration", _COMPLETION | eval)
+
+    assert answered["result"] == {
+        "eval_id": "eval_789",
+        "task": "philadelphia",
+        "sample_id": 1,
+        "fixed": False,
+    }
+
+
+@pytest.mark.anyio
+async def test_a_samples_registration_for_a_task_not_registered_is_its_own_error() -> (
+    None
+):
+    handler = Handler(weather_rule())
     async with _client(handler) as client:
-        answered = await _call(client, "request_result", {"id": irid})
+        answered = await _call(
+            client, "complete_registration", _COMPLETION | await _eval(handler)
+        )
+        # a sidecar that keeps no token for the eval, as after a restart,
+        # holds nothing of it either
+        lost = await _call(
+            client,
+            "complete_registration",
+            _COMPLETION | {"eval_id": "eval_lost", "token": "old"},
+        )
+
+    # so an eval whose registration expired knows to register the task again
+    assert answered["error"]["code"] == UNKNOWN_TASK
+    assert "Register the task" in answered["error"]["message"]
+    assert lost["error"]["code"] == UNKNOWN_TASK
+
+
+@pytest.mark.anyio
+async def test_a_samples_registration_for_a_task_registered_beforehand_stores_nothing() -> (
+    None
+):
+    task = FileTask.model_validate({"task": "philadelphia", "samples": []})
+    handler = Handler(weather_rule(), tasks={"philadelphia": task})
+
+    async with _client(handler) as client:
+        eval = await _registered(client)
+        answered = await _call(client, "complete_registration", _COMPLETION | eval)
+
+    assert answered["result"]["fixed"] is True
+
+
+@pytest.mark.anyio
+async def test_a_sidecar_that_takes_only_registered_samples_refuses_another() -> None:
+    async with _client(Handler(weather_rule(), strictness="registered_only")) as client:
+        eval = await _registered(client)
+        answered = await _call(
+            client, "complete_registration", _COMPLETION | eval | {"sample_id": 2}
+        )
+
+    assert answered["error"]["code"] == REGISTRATION_REFUSED
+    assert "doesn't name the sample 2" in answered["error"]["message"]
+
+
+@pytest.mark.anyio
+async def test_a_samples_registration_that_doesnt_fit_is_an_error() -> None:
+    without_input = {k: v for k, v in _COMPLETION.items() if k != "sample_input"}
+
+    async with _client(Handler(weather_rule())) as client:
+        eval = await _registered(client)
+        answered = await _call(client, "complete_registration", without_input | eval)
+
+    assert answered["error"]["code"] == INVALID_PARAMS
+
+
+async def _request_result(
+    handler: Handler, irid: str = "irid-1", **params: Any
+) -> dict[str, Any]:
+    eval = await _eval(handler)
+    async with _client(handler) as client:
+        answered = await _call(client, "request_result", {"id": irid} | eval | params)
     result: dict[str, Any] = answered["result"]
     return result
 
@@ -270,18 +391,18 @@ async def test_a_request_whose_reply_was_judged_is_decided(
 @pytest.mark.parametrize(
     ("action", "outcome"), [("reject", "reject"), ("terminate", "terminate")]
 )
-async def test_a_request_of_a_run_no_eval_names_is_decided_as_judged(
+async def test_a_request_no_eval_names_is_unknown_to_every_eval(
     action: str, outcome: str
 ) -> None:
-    # A run no eval names, ended at its first turn, is not remembered as
-    # ended, so what was decided is told from the judging itself.
+    # judged as any client's, and not an eval's to read
     handler = Handler(weather_rule(action, "Tokyo"))
     await handler.request(replace(request("x"), headers={"x-irid": "irid-1"}))
-    await handler.reply(reply(_message("Tokyo")))
+    answer = await handler.reply(reply(_message("Tokyo")))
 
     result = await _request_result(handler)
 
-    assert (result["state"], result["outcome"]) == ("decided", outcome)
+    assert isinstance(answer, Refuse)
+    assert result == {"id": "irid-1", "records": "unknown"}
 
 
 def _message(city: str) -> bytes:
@@ -297,6 +418,87 @@ async def test_a_request_the_provider_failed_was_not_judged() -> None:
     result = await _request_result(handler)
 
     assert (result["state"], result["reason"]) == ("not_judged", "provider_error")
+    assert "judgment" not in result
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("action", "city"),
+    [("reject", "Oslo"), ("reject", "Tokyo"), ("terminate", "Tokyo")],
+    ids=["proceed", "reject", "terminate"],
+)
+async def test_request_result_gives_what_was_decided_and_the_reply_carries_none(
+    action: str, city: str
+) -> None:
+    handler = Handler(weather_rule(action, city))
+    await handler.request(_asked("x"))
+
+    answer = await handler.reply(reply(_message("Tokyo")))
+
+    # the eval is handed what any client is: the reply, or the refusal
+    assert isinstance(answer, Pass | Refuse)
+    result = await _request_result(handler)
+    outcome = "proceed" if isinstance(answer, Pass) else action
+    assert result["judgment"]["outcome"] == outcome
+    assert result["judgment"]["steps"][-1]["recorded"]
+
+
+@pytest.mark.anyio
+async def test_request_result_gives_the_field_of_a_request_refused() -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"))
+    await handler.request(_asked("x"))
+    await handler.reply(reply(_message("Tokyo")))
+
+    # the run has ended, so the next request is refused before the model
+    answer = await handler.request(_asked("y", irid="irid-2"))
+
+    assert isinstance(answer, Refuse)
+    result = await _request_result(handler, "irid-2")
+    assert result["judgment"] == {"version": 1, "outcome": "terminate", "steps": []}
+
+
+@pytest.mark.anyio
+async def test_request_result_trims_the_field_where_results_are_not_sent() -> None:
+    handler = Handler(weather_rule("reject", "Tokyo"))
+    await handler.request(_asked("x"))
+    await handler.reply(reply(_message("Tokyo")))
+
+    eval = await _eval(handler)
+    async with _client(handler, results=False) as client:
+        answered = await _call(client, "request_result", {"id": "irid-1"} | eval)
+
+    field = answered["result"]["judgment"]
+    assert field["trimmed"] is True
+    assert all("recorded" not in step for step in field["steps"])
+    assert set(field["steps"][-1]["decision"]) <= {"action", "message", "modified"}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "options",
+    [
+        {
+            "tasks": {
+                "philadelphia": FileTask.model_validate(
+                    {"task": "philadelphia", "samples": []}
+                )
+            }
+        },
+        {"strictness": "known_tasks"},
+    ],
+    ids=["a sample the tasks folder doesn't hold", "a task the sidecar doesn't hold"],
+)
+async def test_a_request_the_sidecar_cant_place_was_not_judged(
+    options: dict[str, Any],
+) -> None:
+    handler = Handler(weather_rule(), **options)
+
+    with pytest.raises(UnregisteredSampleError):
+        await handler.request(_asked("x"))
+
+    # how an eval learns that the sample can't run there, and not to retry it
+    result = await _request_result(handler)
+    assert (result["state"], result["reason"]) == ("not_judged", "unregistered")
 
 
 @pytest.mark.anyio
@@ -312,7 +514,7 @@ async def test_a_request_that_cant_be_read_was_not_judged() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_request_whose_inspect_header_cant_be_read_was_not_judged() -> None:
+async def test_a_request_whose_inspect_header_cant_be_read_is_refused() -> None:
     handler = Handler(weather_rule())
     headers = {"x-inspect-context": "{not json", "x-irid": "irid-1"}
 
@@ -320,8 +522,9 @@ async def test_a_request_whose_inspect_header_cant_be_read_was_not_judged() -> N
     answer = await handler.request(replace(request("x"), headers=headers))
 
     assert isinstance(answer, Refuse)
+    # it names no eval that could read it
     result = await _request_result(handler)
-    assert (result["state"], result["reason"]) == ("not_judged", "unreadable")
+    assert result == {"id": "irid-1", "records": "unknown"}
 
 
 @pytest.mark.anyio
@@ -377,6 +580,24 @@ async def test_a_request_whose_records_were_dropped_says_so_for_a_while(
     assert forgotten == {"id": "irid-1", "records": "unknown"}
 
 
+@pytest.mark.anyio
+async def test_a_request_dropped_is_unknown_to_another_eval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_state, "time", _Clock)
+    _Clock.now = 0.0
+    handler = Handler(weather_rule(), state=MemoryState(expiry=100))
+    await handler.request(_asked("x"))
+
+    _Clock.now = 150.0
+    other = await _eval(handler, "eval_other")
+    async with _client(handler) as client:
+        answered = await _call(client, "request_result", {"id": "irid-1"} | other)
+
+    # nothing says that another eval's request ever existed
+    assert answered["result"] == {"id": "irid-1", "records": "unknown"}
+
+
 class _Tally(StoreModel):
     lookups: int = 0
 
@@ -398,9 +619,19 @@ async def test_a_run_says_what_it_came_to_and_its_store() -> None:
     await handler.request(_asked("x"))
     await handler.reply(reply(_message("Oslo")))
 
+    eval = await _eval(handler)
     async with _client(handler) as client:
-        answered = await _call(client, "sample_result", {"sample_uuid": "sample_123"})
+        answered = await _call(
+            client, "sample_result", {"sample_uuid": "sample_123"} | eval
+        )
+        other = await _call(
+            client,
+            "sample_result",
+            {"sample_uuid": "sample_123"} | await _eval(handler, "eval_other"),
+        )
 
+    # another eval can't read it
+    assert other["error"]["code"] == UNKNOWN_SAMPLE
     result = answered["result"]
     assert result["sample_uuid"] == "sample_123"
     assert result["outcome"] == "proceed"
@@ -416,8 +647,11 @@ async def test_a_sample_a_sentinel_ended_says_so() -> None:
     await handler.request(_asked("x"))
     await handler.reply(reply(_message("Tokyo")))
 
+    eval = await _eval(handler)
     async with _client(handler) as client:
-        answered = await _call(client, "sample_result", {"sample_uuid": "sample_123"})
+        answered = await _call(
+            client, "sample_result", {"sample_uuid": "sample_123"} | eval
+        )
 
     assert answered["result"]["outcome"] == "terminate"
 
@@ -434,9 +668,10 @@ async def test_a_run_no_eval_names_cant_be_reached_by_its_opening() -> None:
         await _handler.read_opening(asked.provider, asked.body, asked.format)
     )
 
+    eval = await _eval(handler)
     async with _client(handler) as client:
-        result = await _call(client, "sample_result", {"sample_uuid": opening})
-        ended = await _call(client, "end_sample", {"sample_uuid": opening})
+        result = await _call(client, "sample_result", {"sample_uuid": opening} | eval)
+        ended = await _call(client, "end_sample", {"sample_uuid": opening} | eval)
     later = await handler.request(request("y"))
 
     assert result["error"]["code"] == UNKNOWN_SAMPLE
@@ -446,8 +681,12 @@ async def test_a_run_no_eval_names_cant_be_reached_by_its_opening() -> None:
 
 @pytest.mark.anyio
 async def test_a_sample_never_seen_has_no_result() -> None:
-    async with _client(Handler(weather_rule())) as client:
-        answered = await _call(client, "sample_result", {"sample_uuid": "sample_123"})
+    handler = Handler(weather_rule())
+    eval = await _eval(handler)
+    async with _client(handler) as client:
+        answered = await _call(
+            client, "sample_result", {"sample_uuid": "sample_123"} | eval
+        )
 
     assert answered["error"]["code"] == UNKNOWN_SAMPLE
 
@@ -457,22 +696,32 @@ async def test_a_sample_its_eval_ended_is_dropped_and_refused_from_then_on() -> 
     handler = Handler(counts_lookups())
     await handler.request(_asked("x"))
 
+    eval = await _eval(handler)
+    other = await _eval(handler, "eval_other")
     async with _client(handler) as client:
-        ended = await _call(client, "end_sample", {"sample_uuid": "sample_123"})
-        again = await _call(client, "end_sample", {"sample_uuid": "sample_123"})
-        never = await _call(client, "end_sample", {"sample_uuid": "sample_999"})
-        never_again = await _call(client, "end_sample", {"sample_uuid": "sample_999"})
-        result = await _call(client, "sample_result", {"sample_uuid": "sample_123"})
+        # another eval can't end it
+        not_its = await _call(
+            client, "end_sample", {"sample_uuid": "sample_123"} | other
+        )
+        ended = await _call(client, "end_sample", {"sample_uuid": "sample_123"} | eval)
+        again = await _call(client, "end_sample", {"sample_uuid": "sample_123"} | eval)
+        never = await _call(client, "end_sample", {"sample_uuid": "sample_999"} | eval)
+        never_again = await _call(
+            client, "end_sample", {"sample_uuid": "sample_999"} | eval
+        )
+        result = await _call(
+            client, "sample_result", {"sample_uuid": "sample_123"} | eval
+        )
     later = await handler.request(_asked("y", irid="irid-2"))
     unseen = await handler.request(_asked("z", irid="irid-3", sample_uuid="sample_999"))
 
     assert [
-        answered["result"]["state"] for answered in (ended, again, never, never_again)
-    ] == ["ended", "ended", "unknown", "unknown"]
+        answered["result"]["state"]
+        for answered in (not_its, ended, again, never, never_again)
+    ] == ["unknown", "ended", "ended", "unknown", "unknown"]
     assert result["error"]["code"] == UNKNOWN_SAMPLE
     assert isinstance(later, Refuse)
-    assert later.sentinel is not None
-    assert later.sentinel["outcome"] == "terminate"
+    assert (await _request_result(handler, "irid-2"))["outcome"] == "terminate"
     # a run the sidecar never saw is left as it was, not refused from then on
     assert not isinstance(unseen, Refuse)
 
@@ -490,23 +739,25 @@ async def test_results_can_be_withheld() -> None:
 
 @pytest.mark.anyio
 async def test_a_refused_turn_is_told_without_the_results() -> None:
-    # how an eval whose proxy dropped the `sentinel` field learns of it
     handler = Handler(weather_rule("reject", "Tokyo"))
     await handler.request(_asked("x"))
     await handler.reply(reply(_message("Tokyo")))
 
+    eval = await _eval(handler)
     async with _client(handler, results=False) as client:
-        answered = await _call(client, "request_result", {"id": "irid-1"})
+        answered = await _call(client, "request_result", {"id": "irid-1"} | eval)
 
     result = answered["result"]
     assert (result["outcome"], result["message"]) == ("reject", "Tokyo is not allowed.")
-    assert result["withheld"] is not None
+    assert result["judgment"]["withheld"] is not None
     assert "recorded" not in result
 
 
 @pytest.mark.anyio
 async def test_a_port_of_its_own_needs_its_own_token() -> None:
-    async with _client(Handler(weather_rule()), token="s3cret") as client:
+    handler = Handler(weather_rule())
+    eval = await _eval(handler)
+    async with _client(handler, token="s3cret") as client:
         without = await client.post(PATH, json={})
         wrong = await client.post(
             PATH, json={}, headers={"authorization": "Bearer nope"}
@@ -514,7 +765,7 @@ async def test_a_port_of_its_own_needs_its_own_token() -> None:
         right = await _call(
             client,
             "end_sample",
-            {"sample_uuid": "sample_123"},
+            {"sample_uuid": "sample_123"} | eval,
             authorization="Bearer s3cret",
         )
         probe = await client.get(INFO_PATH)
@@ -585,23 +836,28 @@ def test_schema_file_is_what_the_models_say() -> None:
 def test_calls_in_these_tests_fit_the_schema_file() -> None:
     methods = _SCHEMA["methods"]
     assert _fits(methods["register_task"]["params"], _REGISTRATION)
-    assert _fits(methods["request_result"]["params"], {"id": "irid-1"})
-    assert not _fits(methods["request_result"]["params"], {})
+    eval = {"eval_id": "eval_789", "token": "t"}
+    assert _fits(methods["complete_registration"]["params"], _COMPLETION | eval)
+    assert _fits(methods["request_result"]["params"], {"id": "irid-1"} | eval)
+    assert _fits(
+        methods["request_result"]["params"], {"id": "irid-1", "wait": 30} | eval
+    )
+    # every call for an eval presents its token
+    assert not _fits(methods["complete_registration"]["params"], _COMPLETION)
+    assert not _fits(methods["request_result"]["params"], {"id": "irid-1"})
 
 
 @pytest.mark.anyio
 async def test_a_reply_in_flight_when_its_eval_ended_the_run_is_refused() -> None:
     handler = Handler(counts_lookups())
     await handler.request(_asked("x"))
-    await handler.end_sample("sample_123")
+    await handler.end_sample("sample_123", "eval_789")
 
     answer = await handler.reply(reply(_message("Oslo")))
 
     assert isinstance(answer, Refuse)
-    assert answer.sentinel is not None
-    assert answer.sentinel["outcome"] == "terminate"
     # the run is not made again
-    assert await handler.sample_result("sample_123") is None
+    assert await handler.sample_result("sample_123", "eval_789") is None
     result = await _request_result(handler)
     assert (result["state"], result["outcome"]) == ("decided", "terminate")
 
@@ -642,12 +898,12 @@ async def test_a_request_judged_while_its_eval_ended_the_run_is_refused() -> Non
     async with anyio.create_task_group() as group:
         group.start_soon(ask)
         await anyio.wait_all_tasks_blocked()
-        await handler.end_sample("sample_123")
+        await handler.end_sample("sample_123", "eval_789")
         _gates[0].set()
 
     (answer,) = answers
     assert isinstance(answer, Refuse)
-    assert await handler.sample_result("sample_123") is None
+    assert await handler.sample_result("sample_123", "eval_789") is None
 
 
 @pytest.mark.anyio
@@ -682,9 +938,18 @@ async def test_a_rejected_turn_is_given_back_by_request_result() -> None:
 
     result = await _request_result(handler)
 
-    withheld = result["withheld"]
+    withheld = result["judgment"]["withheld"]
     assert withheld["message"]["role"] == "assistant"
     assert withheld["results"] == {"toolu_1": "Tokyo is not allowed."}
+    # the rejected call's arguments never reach the eval
+    (call,) = withheld["message"]["tool_calls"]
+    assert (call["id"], call["function"], call["arguments"]) == (
+        "toolu_1",
+        "get_weather",
+        {},
+    )
+    assert "view" not in call
+    assert withheld["redacted"] == ["toolu_1"]
 
 
 @pytest.mark.anyio
@@ -699,10 +964,127 @@ async def test_a_turn_with_a_call_taken_out_is_given_back_by_request_result() ->
 
     # the turn went on without Tokyo
     assert result["outcome"] == "proceed"
-    assert "withheld" not in result
-    proposed = result["proposed"]
-    assert [call["id"] for call in proposed["message"]["tool_calls"]] == [
-        "toolu_1",
-        "toolu_2",
-    ]
+    assert "withheld" not in result["judgment"]
+    proposed = result["judgment"]["proposed"]
+    assert [
+        (call["id"], call["arguments"]) for call in proposed["message"]["tool_calls"]
+    ] == [("toolu_1", {}), ("toolu_2", {"location": "Paris"})]
     assert proposed["results"] == {"toolu_1": "Tokyo is not allowed."}
+    assert proposed["redacted"] == ["toolu_1"]
+
+
+@pytest.mark.anyio
+async def test_only_the_evals_own_token_reaches_its_calls() -> None:
+    handler = Handler(weather_rule("reject", "Tokyo"))
+    async with _client(handler) as client:
+        eval = await _registered(client)
+        await handler.request(_asked("x"))
+        await handler.reply(reply(_message("Tokyo")))
+        wrong = {"eval_id": "eval_789", "token": "guessed"}
+        refused = [
+            await _call(client, "complete_registration", _COMPLETION | wrong),
+            await _call(client, "request_result", {"id": "irid-1"} | wrong),
+            await _call(client, "sample_result", {"sample_uuid": "sample_123"} | wrong),
+            await _call(client, "end_sample", {"sample_uuid": "sample_123"} | wrong),
+            # nobody but the eval registers for it again
+            await _call(client, "register_task", _REGISTRATION),
+            await _call(client, "register_task", _REGISTRATION | {"token": "guessed"}),
+        ]
+        again = await _call(
+            client, "register_task", _REGISTRATION | {"token": eval["token"]}
+        )
+        read = await _call(client, "request_result", {"id": "irid-1"} | eval)
+
+    assert [answered["error"]["code"] for answered in refused] == [UNAUTHORIZED] * 6
+    assert again["result"]["token"] == eval["token"]
+    assert read["result"]["outcome"] == "reject"
+
+
+@pytest.mark.anyio
+async def test_a_request_of_another_eval_is_unknown() -> None:
+    handler = Handler(weather_rule())
+    await handler.request(_asked("x"))
+    await handler.reply(reply(_message("Oslo")))
+
+    other = await _eval(handler, "eval_other")
+    async with _client(handler) as client:
+        answered = await _call(client, "request_result", {"id": "irid-1"} | other)
+
+    # nothing says that the request exists
+    assert answered["result"] == {"id": "irid-1", "records": "unknown"}
+
+
+@pytest.mark.anyio
+async def test_a_registration_that_fails_leaves_no_token_behind() -> None:
+    # had the failed registration kept a token it never gave out, the eval
+    # could never register again, once there was room
+    handler = Handler(weather_rule(), max_task_registrations=1)
+    async with _client(handler) as client:
+        await _call(client, "register_task", _REGISTRATION | {"eval_id": "eval_a"})
+        full = await _call(
+            client, "register_task", _REGISTRATION | {"eval_id": "eval_b"}
+        )
+        again = await _call(
+            client, "register_task", _REGISTRATION | {"eval_id": "eval_b"}
+        )
+
+    assert full["error"]["code"] == REGISTRATIONS_FULL
+    assert again["error"]["code"] == REGISTRATIONS_FULL
+
+
+@pytest.mark.anyio
+async def test_a_new_token_is_made_for_an_eval_the_sidecar_has_lost() -> None:
+    # as after a restart: the eval's old token is no longer kept, so its
+    # registration again is given a new one
+    async with _client(Handler(weather_rule())) as client:
+        answered = await _call(
+            client, "register_task", _REGISTRATION | {"token": "from_before"}
+        )
+
+    assert answered["result"]["token"] != "from_before"
+
+
+@pytest.mark.anyio
+async def test_request_result_waits_for_a_reply_being_judged() -> None:
+    _gates[:] = [anyio.Event(), anyio.Event(), anyio.Event()]
+    handler = Handler(waits_to_be_told())
+    results: list[dict[str, Any]] = []
+
+    async def ask() -> None:
+        await handler.request(_asked("x"))
+        await handler.reply(reply(_message("Oslo")))
+
+    async def wait_for_it() -> None:
+        results.append(await _request_result(handler, wait=10))
+
+    _gates[0].set()
+    async with anyio.create_task_group() as group:
+        group.start_soon(ask)
+        await _gates[2].wait()
+        group.start_soon(wait_for_it)
+        await anyio.wait_all_tasks_blocked()
+        # still waiting while the reply is judged
+        assert not results
+        _gates[1].set()
+
+    (result,) = results
+    assert (result["state"], result["outcome"]) == ("decided", "proceed")
+
+
+@pytest.mark.anyio
+async def test_request_result_waits_no_longer_than_asked() -> None:
+    _gates[:] = [anyio.Event(), anyio.Event(), anyio.Event()]
+    handler = Handler(waits_to_be_told())
+    result: dict[str, Any] = {}
+
+    async def ask() -> None:
+        await handler.request(_asked("x"))
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(ask)
+        await anyio.wait_all_tasks_blocked()
+        with anyio.fail_after(5):
+            result = await _request_result(handler, wait=0.1)
+        _gates[0].set()
+
+    assert result["state"] == "judging"
