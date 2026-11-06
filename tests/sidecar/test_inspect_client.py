@@ -30,7 +30,7 @@ from inspect_sentinel.sidecar import (
 )
 from inspect_sentinel.sidecar._handler import _ENDED, SampleResult
 from inspect_sentinel.sidecar._host import ListRecorder, SidecarHost
-from inspect_sentinel.sidecar._inspect_client import judgment
+from inspect_sentinel.sidecar._inspect_client import judgment, withheld_turn
 from inspect_sentinel.sidecar._state import MemoryState
 from tests.sidecar._traffic import (
     JSON,
@@ -1276,6 +1276,128 @@ async def test_a_call_taken_out_that_the_eval_holds_redacted_goes_back_as_made()
         ("toolu_1", {"location": "Tokyo"}),
         ("toolu_2", {"location": "Paris"}),
     ]
+
+
+def _openai_from_inspect(
+    api: str, id: str, then: list[dict[str, Any]] | None = None
+) -> Request:
+    # an OpenAI request from the Inspect sample, its conversation followed by `then`
+    return replace(
+        request(id),
+        provider="openai",
+        model="gpt-test",
+        body=json.dumps(openai_request(api, then or [])).encode(),
+        headers=inspect_headers(),
+    )
+
+
+def _openai_held(
+    api: str, calls: list[dict[str, Any]], written: dict[str, tuple[Any, ...]]
+) -> list[dict[str, Any]]:
+    # the turn as the eval holds it in the request's format: each call as
+    # Inspect was handed it, then its result, the sidecar's own rejection for
+    # a call taken out
+    def result(call: dict[str, Any]) -> list[dict[str, Any]]:
+        if call["id"] in written:
+            return list(written[call["id"]])
+        if api == "chat":
+            return [{"role": "tool", "tool_call_id": call["id"], "content": "Sunny."}]
+        return [
+            {"type": "function_call_output", "call_id": call["id"], "output": "Sunny."}
+        ]
+
+    if api == "chat":
+        turn: list[dict[str, Any]] = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": call["id"],
+                        "type": "function",
+                        "function": {
+                            "name": call["function"],
+                            "arguments": json.dumps(call["arguments"]),
+                        },
+                    }
+                    for call in calls
+                ],
+            }
+        ]
+    else:
+        turn = [
+            {
+                "type": "function_call",
+                "call_id": call["id"],
+                "name": call["function"],
+                "arguments": json.dumps(call["arguments"]),
+            }
+            for call in calls
+        ]
+    return turn + [entry for call in calls for entry in result(call)]
+
+
+def _openai_calls_sent(api: str, body: bytes) -> list[tuple[str, Any]]:
+    # the calls in the request the model is sent, each with its arguments read
+    sent = json.loads(body)
+    if api == "chat":
+        return [
+            (call["id"], json.loads(call["function"]["arguments"]))
+            for entry in sent["messages"]
+            if entry.get("role") == "assistant"
+            for call in entry.get("tool_calls", [])
+        ]
+    return [
+        (item["call_id"], json.loads(item["arguments"]))
+        for item in sent["input"]
+        if item.get("type") == "function_call"
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("api", ["chat", "responses"])
+async def test_a_call_taken_out_that_the_eval_holds_redacted_goes_back_as_made_on_openai(
+    api: str,
+) -> None:
+    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    await handler.request(_openai_from_inspect(api, "a"))
+    content_type, body = openai_recorded(api)
+    await handler.reply(
+        replace(
+            reply(body, id="a", content_type=content_type),
+            provider="openai",
+            model="gpt-test",
+        )
+    )
+
+    # the turn as the eval was handed it, Tokyo's call with its id and
+    # function only, and the rejection as the sidecar wrote it
+    found = await handler.request_result("request_456", "eval_789")
+    assert not isinstance(found, str) and found.latest.judged is not None
+    proposed = found.latest.judged.proposed
+    assert proposed is not None
+    (redacted,) = proposed.redacted
+    calls = withheld_turn(proposed).message["tool_calls"]
+    run = await handler._state.existing_run("sample:sample_123")  # pyright: ignore[reportPrivateUsage]
+    assert run is not None
+    (conversation,) = run.conversations.values()
+    written = {
+        id: amendment.result
+        for id, amendment in conversation.edited[0].amendments.items()
+    }
+    held = _openai_held(api, calls, written)
+    answer = await handler.request(_openai_from_inspect(api, "b", held))
+
+    # the model is sent the call it made, and no result for Tokyo was judged
+    assert isinstance(answer, Replace)
+    assert _openai_calls_sent(api, answer.body) == [
+        (
+            call["id"],
+            {"location": "Tokyo"} if call["id"] == redacted else call["arguments"],
+        )
+        for call in calls
+    ]
+    assert redacted not in [record.call for record in await handler.records("b") or []]
 
 
 @pytest.mark.anyio
