@@ -75,6 +75,7 @@ from ._state import (
     Attempt,
     Conversation,
     Dropped,
+    EndedOn,
     Held,
     Made,
     MemoryState,
@@ -92,7 +93,9 @@ from ._wire import (
     amendments,
     call_texts,
     edit_reply,
+    grows_entry,
     held_rejections,
+    last_entry,
     offered,
     read_opening,
     read_reply_noted,
@@ -701,7 +704,7 @@ class Handler:
                 request = replace(request, body=body)
                 restored = True
         marks = request_marks(request.provider, request.body, request.format)
-        refusal = _ended(run, marks, sample_attempt)
+        refusal = _ended(run, marks, sample_attempt, request)
         if refusal is not None:
             # the run has ended, and the sentinel is not asked again
             return self._judged(refusal, proxy, Exchange(), attempt)
@@ -796,6 +799,9 @@ class Handler:
             proxy=proxy,
             store=store,
             attempt=attempt,
+            last=None
+            if named
+            else last_entry(request.provider, request.body, request.format),
         )
         said = call_texts(request.provider, request.body, request.format)
         # a changed call's result is of the call that ran, whichever the client holds
@@ -829,7 +835,7 @@ class Handler:
                     attempt,
                 )
         # another exchange of the run may have ended it while this one waited
-        refusal = _ended(run, marks, sample_attempt)
+        refusal = _ended(run, marks, sample_attempt, request)
         if refusal is not None:
             return self._judged(refusal, proxy, held.exchange, attempt)
         # the request goes on to the model, as the client sent it with what
@@ -1299,6 +1305,12 @@ class Handler:
             return refusal
         if held.answered:
             run.ended_at[held.mark] = refusal
+            if held.sent > 0:
+                run.ended_on.append(
+                    EndedOn(
+                        held.sent - 1, held.marks[held.sent - 1], held.last, refusal
+                    )
+                )
         # A run no eval names, ended before any reply in its
         # conversation was passed on, is not remembered as ended. Its
         # conversation is still only how it opens, which is all another
@@ -1360,14 +1372,35 @@ def _begin_attempt(run: Run, sample: InspectSample) -> Refuse | None:
     return None
 
 
-def _ended(run: Run, marks: Sequence[str], attempt: str) -> Refuse | None:
+def _ended(
+    run: Run, marks: Sequence[str], attempt: str, request: Request | None = None
+) -> Refuse | None:
     # what a request is refused with, if its run has ended: any request of a
     # run an eval names, or one that continues the conversation it was ended
     # in; and any request or reply of an attempt a later one replaced
     if not run.closed and attempt != run.attempt:
         return _REPLACED
-    return run.refusal or next(
+    refusal = run.refusal or next(
         (run.ended_at[mark] for mark in marks if mark in run.ended_at), None
+    )
+    if refusal is not None or request is None:
+        return refusal
+
+    # A client may add the user's next message to the entry the ended
+    # request ended with, as Claude Code adds it beside the last results,
+    # rather than send it as an entry of its own. That request continues the
+    # ended conversation too.
+    return next(
+        (
+            ended.refusal
+            for ended in run.ended_on
+            if ended.at < len(marks)
+            and marks[ended.at] == ended.before
+            and grows_entry(
+                request.provider, request.body, request.format, ended.at, ended.entry
+            )
+        ),
+        None,
     )
 
 

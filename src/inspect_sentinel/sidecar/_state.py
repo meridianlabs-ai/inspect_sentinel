@@ -212,6 +212,9 @@ class Run:
     ended_at: dict[str, Refuse] = field(default_factory=dict[str, Refuse])
     """For a run no eval names: the marks of the requests the run was ended at, each with what a request that continues from it is refused with."""
 
+    ended_on: list["EndedOn"] = field(default_factory=list["EndedOn"])
+    """For a run no eval names: the last entry of each request the run was ended at. A request that continues from it with blocks added to that entry, as a client adds the user's next message to the one that holds the last results, is refused as well."""
+
     eval: EvalContext | None = None
     """The sample the run is, as its task was registered when the run first found it. A registration made later doesn't reach it."""
 
@@ -222,6 +225,20 @@ class Run:
         default_factory=dict[str, tuple[Format, Any]]
     )
     """For a run an eval names, the model's own calls that a decision acted on, by call id, each in the format its request was written in. The eval holds each with its id and function only, and each later request has the model's own call put back."""
+
+
+@dataclass(frozen=True)
+class EndedOn:
+    """For a run no eval names, the entry that a request the run was ended at ends with."""
+
+    at: int
+    """How many entries come before it."""
+    before: str
+    """The mark of those entries."""
+    entry: object
+    """The entry, as its mark was taken of it."""
+    refusal: Refuse
+    """What a request that adds to it is refused with."""
 
 
 @dataclass(frozen=True)
@@ -255,6 +272,8 @@ class Held:
     """The attempt at the request, for an eval that names its requests."""
     exchange: Exchange = field(default_factory=Exchange)
     """What was decided so far during the exchange, for an Inspect eval's judgment of it."""
+    last: object = None
+    """For a run no eval names, the last entry the client sent, as its mark was taken of it, or None for a request with none."""
 
     @property
     def sent(self) -> int:

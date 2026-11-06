@@ -1,6 +1,6 @@
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any, cast
 
@@ -1277,6 +1277,117 @@ async def test_a_run_with_no_name_ended_on_its_first_turn_is_judged_afresh() -> 
 
     assert ended == _ENDED
     assert (asked, answered) == (Pass(), Pass())
+
+
+async def _ended_after_a_turn(handler: Handler) -> list[dict[str, Any]]:
+    # a run no eval names, ended at its second turn, once a reply of its
+    # conversation was passed on; what the ended request held after its
+    # opening
+    await handler.request(request("a"))
+    assert await handler.reply(reply(message(weather("Oslo")), id="a")) == Pass()
+    oslo = ran("Oslo", "rain")
+    await handler.request(request("b", then=oslo))
+    ended = await handler.reply(reply(message(weather("Tokyo", "toolu_2")), id="b"))
+    assert ended == _ENDED
+    return oslo
+
+
+def _beside_the_last(
+    then: list[dict[str, Any]], *blocks: dict[str, Any]
+) -> list[dict[str, Any]]:
+    # the user's next message added to the entry that holds the last
+    # results, as Claude Code adds it
+    *before, last = then
+    return [*before, {**last, "content": [*last["content"], *blocks]}]
+
+
+_AGAIN = {"type": "text", "text": "Please try again."}
+
+
+def _again_beside(then: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _beside_the_last(then, _AGAIN)
+
+
+def _again_on_its_own(then: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [*then, {"role": "user", "content": [_AGAIN]}]
+
+
+def _again_with_cache_marks_moved(
+    then: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    # cache marks moved to the latest blocks, as clients move them
+    *before, last = then
+    marked = [
+        {**block, "cache_control": {"type": "ephemeral"}} for block in last["content"]
+    ]
+    return _beside_the_last([*before, {**last, "content": marked}], _AGAIN)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "follow_up",
+    [_again_beside, _again_on_its_own, _again_with_cache_marks_moved],
+    ids=["beside the last results", "as an entry of its own", "cache marks moved"],
+)
+async def test_a_run_with_no_name_stays_ended_when_the_user_writes_again(
+    follow_up: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
+) -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"))
+    oslo = await _ended_after_a_turn(handler)
+
+    again = await handler.request(request("c", then=follow_up(oslo)))
+
+    assert again == _ENDED
+    # the sentinel was not asked again
+    assert not await handler.records("c")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "then",
+    [
+        # an earlier entry that isn't the ended conversation's: the model
+        # looked up another city
+        _beside_the_last(ran("Bergen", "rain"), _AGAIN),
+        # the entry's own blocks changed, not only added to
+        _beside_the_last(ran("Oslo", "snow"), _AGAIN),
+        # the entry's own blocks, without anything added
+        ran("Oslo", "snow"),
+    ],
+    ids=["earlier entry differs", "its blocks differ", "nothing added"],
+)
+async def test_a_conversation_that_only_opens_alike_is_judged_afresh(
+    then: list[dict[str, Any]],
+) -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"))
+    await _ended_after_a_turn(handler)
+
+    asked = await handler.request(request("c", then=then))
+    answered = await handler.reply(reply(message(weather("Oslo", "toolu_3")), id="c"))
+
+    assert (asked, answered) == (Pass(), Pass())
+
+
+@pytest.mark.anyio
+async def test_a_sample_that_ended_is_refused_whatever_its_messages() -> None:
+    # a run an eval names is ended whole: no message of its is compared
+    handler = Handler(weather_rule("terminate", "Tokyo"))
+    await handler.request(request("a", sample="sample-1"))
+    assert await handler.reply(reply(message(weather("Oslo")), id="a")) == Pass()
+    oslo = ran("Oslo", "rain")
+    await handler.request(request("b", then=oslo, sample="sample-1"))
+    ended = await handler.reply(reply(message(weather("Tokyo", "toolu_2")), id="b"))
+
+    grown = await handler.request(
+        request("c", then=_beside_the_last(oslo, _AGAIN), sample="sample-1")
+    )
+    other = await handler.request(
+        request("d", "Another opening", then=ran("Oslo", "snow"), sample="sample-1")
+    )
+
+    assert (ended, grown, other) == (_ENDED, _ENDED, _ENDED)
+    assert not await handler.records("c")
+    assert not await handler.records("d")
 
 
 @protocol

@@ -694,6 +694,44 @@ def request_marks(
     return marks
 
 
+def last_entry(provider: str, body: bytes, format: Format | None = None) -> object:
+    """The last entry of a request's conversation, as its mark is taken of it, or None for a request with none."""
+    request = json_object(body, "request")
+    api = _api(provider, request, format)
+    entries = _conversation(request, api)
+    return api.settled(entries[-1]) if entries else None
+
+
+def grows_entry(
+    provider: str, body: bytes, format: Format | None, at: int, entry: object
+) -> bool:
+    """Whether a request's entry at `at` is `entry` with content blocks added after its own.
+
+    A client may add the user's next message to the one that holds the last results, as Claude Code does, rather than send it as a message of its own. Everything else about the entry must be as it was, and its own blocks must come first, unchanged, as its mark was taken of them.
+    """
+    request = json_object(body, "request")
+    api = _api(provider, request, format)
+    entries = _conversation(request, api)
+    if at >= len(entries):
+        return False
+    grown = api.settled(entries[at])
+    if not isinstance(grown, dict) or not isinstance(entry, dict):
+        return False
+    now = cast("dict[str, Any]", grown)
+    then = cast("dict[str, Any]", entry)
+    content, before = now.get("content"), then.get("content")
+    if not isinstance(content, list) or not isinstance(before, list):
+        return False
+    blocks = cast("list[object]", content)
+    kept = cast("list[object]", before)
+    return (
+        {key: value for key, value in now.items() if key != "content"}
+        == {key: value for key, value in then.items() if key != "content"}
+        and len(blocks) > len(kept)
+        and blocks[: len(kept)] == kept
+    )
+
+
 # inspect_ai's providers write an item's `internal` into its text in this
 # tag, and its readers take every such span out of a text but read only the
 # first. See parse_content_with_internal() in inspect_ai's
