@@ -20,7 +20,6 @@ from inspect_ai.log import EvalSample, transcript
 from inspect_ai.model import ChatMessage, ChatMessageAssistant, Content, ModelUsage
 
 from inspect_sentinel import Context, ReplayStep
-from inspect_sentinel.scout import step_selector
 
 StepId = tuple[str, str]
 """A step as a transcript keys it: its stage and step id."""
@@ -90,7 +89,6 @@ class Request:
         return self.text if self.shown is None else self.shown
 
 
-@step_selector
 def every_step_marked(transcript_id: str, step: ReplayStep) -> bool:
     """Select every step, recording a mark naming it in the scan's events first."""
     transcript().info({"stage": step.stage, "step_id": step.id}, source=MARK)
