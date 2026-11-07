@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.1](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.3.0...0.3.1) (2026-11-07)
+
+
+### Features
+
+* fit the score prompt to the context window of the monitor model ([#156](https://github.com/meridianlabs-ai/inspect_sentinel/issues/156)) ([9f3cebe](https://github.com/meridianlabs-ai/inspect_sentinel/commit/9f3cebebf580d2574dface09a77b21eb41f4b6e6))
+* replay a monitor over stored transcripts, with Inspect Scout ([#135](https://github.com/meridianlabs-ai/inspect_sentinel/issues/135)) ([21a6e55](https://github.com/meridianlabs-ai/inspect_sentinel/commit/21a6e55b29a6aa640e8c3106a0c20597d4c512e9))
+* **scout:** replay older Inspect logs and imported transcripts with turns inferred from their timeline ([#151](https://github.com/meridianlabs-ai/inspect_sentinel/issues/151)) ([ec3fe40](https://github.com/meridianlabs-ai/inspect_sentinel/commit/ec3fe40abd84fc2b4057b9f29d0f0916efe77516))
+
+
+### Bug Fixes
+
+* the replay host gives the input budget and the token count of a monitor model ([#161](https://github.com/meridianlabs-ai/inspect_sentinel/issues/161)) ([ddbe966](https://github.com/meridianlabs-ai/inspect_sentinel/commit/ddbe966bf2363aef1c821a25e4a51564bffd5598))
+
 ## [0.3.0](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.2.0...0.3.0) (2026-10-27)
 
 
