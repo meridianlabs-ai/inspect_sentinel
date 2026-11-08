@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable, Iterable, Mapping
-from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from inspect_sentinel import HumanStandIn, ReplayStep
 
@@ -22,11 +23,7 @@ StepTable: TypeAlias = (
 )
 """A label table of the steps a scan runs the sentinel at: a pandas `DataFrame` with `transcript_id` and `step_id` columns, or a results dataframe from `scan_results_df()`, whose step ids are in `metadata.step_id`; or rows of `(transcript_id, step_id)` pairs, or of mappings with those keys. A `stage` column or key (`metadata.stage` in a results dataframe) limits each row to the step at that stage; without one, or where a row's stage is missing, a row selects its step at every stage, a tool call's `tool_call` and `tool_result` steps alike, since they share the call's id. A `conversation` column or key (`metadata.conversation`) likewise limits a row to the step in that conversation, since two agents' tool calls can share an id; it is matched against the replay's conversations, which with `as_scanner(timeline=)` are the stored timeline's."""
 
-F = TypeVar("F", bound=Callable[..., Any])
-
-_NAME = "__sentinel_replay_name__"
 _KINDS = {"step_selector": "a step selector", "human_stand_in": "a human stand-in"}
-_registered: dict[str, dict[str, Callable[..., Any]]] = {kind: {} for kind in _KINDS}
 
 
 class Table:
@@ -103,54 +100,18 @@ def _row(row: object) -> tuple[object, object, object, object]:
     return transcript_id, None, None, step_id
 
 
-def step_selector(selector: F) -> F:
-    """Register a step selector, so a scan that uses it can run in Scout's worker processes and be resumed in another process.
-
-    A selector is a function `(transcript_id, step) -> bool` defined at module level, in a module or in the script that runs the scan. A scan records its module, name and file, and finds it again by importing the module, or loading the file. One defined in a notebook, REPL or `python -c` has no file to load, so `as_scanner()` refuses it: put it in a `.py` file next to the notebook and import it from there.
-
-    Args:
-        selector: The selector.
-    """
-    return _register("step_selector", selector)
-
-
-def human_stand_in(stand_in: F) -> F:
-    """Register a stand-in for the person `human()` asks, so a scan that uses it can run in Scout's worker processes and be resumed in another process.
-
-    A stand-in is an `async` function `(step, escalations, choices) -> HumanAnswer`, as `HumanStandIn` describes, defined at module level, in a module or in the script that runs the scan. A scan records it as `@step_selector` records a selector.
-
-    Args:
-        stand_in: The stand-in.
-    """
-    return _register("human_stand_in", stand_in)
-
-
-def _register(kind: str, function: F) -> F:
-    qualname = getattr(function, "__qualname__", "")
-    module = getattr(function, "__module__", None)
-    if not module or not qualname or "<" in qualname:
-        raise TypeError(
-            f"{_KINDS[kind].capitalize()} must be a function defined at module level, so another process can find it; {function!r} is not."
-        )
-    setattr(function, _NAME, kind)
-    _registered[kind][f"{module}:{qualname}"] = function
-    return function
-
-
 def callback_ref(kind: str, callback: object, parameter: str) -> dict[str, str | None]:
-    # what a scan records of a registered callback: its module, name and file
+    # what a scan records of a function it is handed, or of the one a
+    # `module:name` string names: its module, name and file, so another
+    # process, such as a worker or a resumed scan, can find it again
     if isinstance(callback, str):
-        found = _registered[kind].get(callback)
-        if found is None:
-            raise ValueError(f"No {_KINDS[kind]} is registered as {callback!r}.")
-        callback = found
-    decorator = "@step_selector" if kind == "step_selector" else "@human_stand_in"
-    if getattr(callback, _NAME, None) != kind:
+        callback = _named(kind, callback)
+    qualname = getattr(callback, "__qualname__", "")
+    module = getattr(callback, "__module__", None)
+    if not callable(callback) or not module or not qualname or "<" in qualname:
         raise TypeError(
-            f"as_scanner({parameter}=...) takes {_KINDS[kind]} registered with {decorator}, so the scan can record it and find it again in another process; {callback!r} is not registered."
+            f"as_scanner({parameter}=...) takes {_KINDS[kind]} defined at module level, so the scan can record it and find it again in another process; {callback!r} is not."
         )
-    module: str = getattr(callback, "__module__", "")
-    qualname: str = getattr(callback, "__qualname__", "")
     file = source_file(module)
     if module == "__main__" and file is None:
         raise TypeError(
@@ -160,26 +121,42 @@ def callback_ref(kind: str, callback: object, parameter: str) -> dict[str, str |
 
 
 def callback_from(kind: str, ref: Mapping[str, str | None]) -> Callable[..., Any]:
-    # the registered callback a scan recorded, from this process's registry,
-    # else from its module or file, by name: a script's functions are
-    # registered under the name it ran as, here or in a worker
+    # the function a scan recorded, from its module, else its file, by name: a
+    # script is found as the process's `__main__` where it is the script that
+    # ran, and loaded from its file elsewhere
     module, qualname = ref.get("module"), ref.get("qualname")
     if module is None or qualname is None:
         raise ValueError(
             f"A recorded {_KINDS[kind]} needs a module and a name: {ref!r}."
         )
-    found = _registered[kind].get(f"{module}:{qualname}")
-    if found is not None:
-        return found
-    loaded = import_source(module, ref.get("file"))
-    callback: object = loaded
-    for part in qualname.split("."):
-        callback = getattr(callback, part, None)
-    if loaded is None or getattr(callback, _NAME, None) != kind:
+    found = _attribute(import_source(module, ref.get("file")), qualname)
+    if found is None:
         raise ValueError(
             f"Cannot find the {_KINDS[kind]} {module}:{qualname}: importing its module, or loading its file {ref.get('file')!r}, did not define it."
         )
-    return cast(Callable[..., Any], callback)
+    return found
+
+
+def _named(kind: str, name: str) -> object:
+    # the function a `module:name` string names, found by importing the module
+    module, _, qualname = name.partition(":")
+    if not module or not qualname:
+        raise ValueError(
+            f"{_KINDS[kind].capitalize()} given by name is `module:name`; got {name!r}."
+        )
+    found = _attribute(importlib.import_module(module), qualname)
+    if found is None:
+        raise ValueError(
+            f"Cannot find the {_KINDS[kind]} {name!r}: importing {module!r} did not define {qualname!r}."
+        )
+    return found
+
+
+def _attribute(loaded: object, qualname: str) -> Callable[..., Any] | None:
+    found = loaded
+    for part in qualname.split("."):
+        found = getattr(found, part, None)
+    return cast(Callable[..., Any], found) if callable(found) else None
 
 
 # the fixed answers as_scanner(human=) takes
@@ -196,7 +173,7 @@ def selector_from(steps: object) -> StepSelector | None:
             return Table((str(t), c, g, str(s)) for t, c, g, s in rows)
         return cast(StepSelector, callback_from("step_selector", recorded))
     raise TypeError(
-        f"steps must be a recorded label table or a registered selector; got {steps!r}."
+        f"steps must be a recorded label table or a recorded selector; got {steps!r}."
     )
 
 
@@ -209,5 +186,5 @@ def stand_in_from(human: object) -> HumanFallback:
             callback_from("human_stand_in", cast(Mapping[str, str | None], human)),
         )
     raise TypeError(
-        f"human must be one of {', '.join(repr(a) for a in ANSWERS)} or a registered stand-in; got {human!r}."
+        f"human must be one of {', '.join(repr(a) for a in ANSWERS)} or a recorded stand-in; got {human!r}."
     )

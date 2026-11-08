@@ -150,7 +150,7 @@ At `BeforeGenerate`, `history` does not yet include `input`. At the other stages
 Check these fields for `None`, and abstain when the list a monitor needs is missing rather than fall back to another list:
 
 - `agent_messages` is `None` when no `@agent` function is running (for example, a solver that calls `generate()` directly), for agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html), and in replay.
-- At the tool stages, `input`, `tools`, and `tool_choice` are `None` when no model call produced the tool call, as with a pre-filled assistant message, and in replay from an older log's messages.
+- At the tool stages, `input`, `tools`, and `tool_choice` are `None` when no model call produced the tool call, as with a pre-filled assistant message, and in replay from a transcript's messages (see [Transcripts From Messages](replay.qmd#transcripts-from-messages)).
 - `history` is set in an eval and in replay, but its type allows `None`.
 
 For what the sample asked the agent to do, use `context.eval.sample_input` (see [Context](monitors.qmd#context)). To keep hidden instructions away from an LLM monitor, see [Hiding Side-Task Instructions](llm-monitors.qmd#hiding-side-task-instructions).
@@ -159,13 +159,13 @@ For what the sample asked the agent to do, use `context.eval.sample_input` (see 
 
 At `AfterToolCall`, `result` is the tool message the agent's model will see, and `output` is the tool's full return value. They differ when the output was longer than Inspect's output limit, because `result` then holds the truncated text. To score what the agent's model saw, use `result`. If you use `output`, check it for `None`: replay sets it to `None`, because the log records only `result`.
 
-`truncated` is a `Truncation` when Inspect cut the output, with its size in `original_bytes` and the limit in `limit_bytes`. It is `False` when the output was not cut, and `None` when no record is available, as in replay from an older log. Use this field rather than looking for Inspect's "output was too long" notice in `result`, because a tool's output can contain that text.
+`truncated` is a `Truncation` when Inspect cut the output, with its size in `original_bytes` and the limit in `limit_bytes`. It is `False` when the output was not cut, and `None` when no record is available, as in replay from a transcript's messages. Use this field rather than looking for Inspect's "output was too long" notice in `result`, because a tool's output can contain that text.
 
 Output cut by a sandbox output limit or a timeout is not reported in `truncated`. Check `result.error` for those, with type `"limit"` or `"timeout"`.
 
 ### Human Decisions
 
-`human_decisions` lists the decisions a person made through the `human()` protocol at earlier steps of the agent's conversation, oldest first, and `human_decision_for(step, call_id)` returns the latest decision covering a tool call. The list is empty when there are no decisions, and `None` when replay builds steps from an older log's messages. See [Marking Tool Calls a Person Reviewed](llm-monitors.qmd#marking-tool-calls-a-person-reviewed) for how an LLM monitor uses it, and [Human Decisions](human-decisions.qmd) for `human()`.
+`human_decisions` lists the decisions a person made through the `human()` protocol at earlier steps of the agent's conversation, oldest first, and `human_decision_for(step, call_id)` returns the latest decision covering a tool call. The list is empty when there are no decisions, and `None` when replay builds steps from a transcript's messages. See [Marking Tool Calls a Person Reviewed](llm-monitors.qmd#marking-tool-calls-a-person-reviewed) for how an LLM monitor uses it, and [Human Decisions](human-decisions.qmd) for `human()`.
 
 ### Model Calls Without Generate Stages
 
