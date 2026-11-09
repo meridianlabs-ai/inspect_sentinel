@@ -1382,7 +1382,7 @@ Inside Inspect, monitor state is already in the sample store, where a scorer can
 
 **Inspect copies the monitor state before every scoring.** Scoring can happen during a sample. For example, `react` with more than one attempt scores each submitted answer to decide whether to stop (inspect_ai's `agent/_react.py`). After each copy, Inspect writes a marker into the sample store saying whether the copy succeeded.
 
-**A sample is scored only with its monitor state.** When the copy failed, Inspect doesn't run the scorers for that sample, and reports the reason where the scoring would have reported:
+**Inspect blocks scoring when the monitor-state copy fails.** Issue [#187](https://github.com/meridianlabs-ai/inspect_sentinel/issues/187) describes a case where state loss goes undetected. When the copy failed, Inspect doesn't run the scorers for that sample, and reports the reason where the scoring would have reported:
 
 | Where scoring happens | Copied? | When the copy failed |
 | --- | --- | --- |
