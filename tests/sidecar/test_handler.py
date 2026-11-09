@@ -1451,17 +1451,14 @@ async def test_a_reply_in_flight_when_its_conversation_ended_is_refused(
 
 
 @pytest.mark.anyio
-async def test_a_result_for_a_call_that_reuses_a_rejected_calls_id_is_judged() -> None:
+async def test_a_conversation_with_two_calls_under_one_id_is_unreadable() -> None:
     handler = Handler(rejects_tokyo_and_ends_at_any_result())
-    await handler.request(request("a"))
-    await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
-    await handler.request(request("b"))
-    # the model makes another call, under the id the rejected one had
-    await handler.reply(reply(message(weather("Oslo", "toolu_1")), id="b"))
+    # the model made its second call under the id of its first, so which of
+    # the two each result is of can't be told, and neither is judged on a guess
+    then = [*ran("Oslo", "mild", "toolu_1"), *ran("Lima", "storm", "toolu_1")]
 
-    answer = await handler.request(request("c", then=ran("Oslo", "storm", "toolu_1")))
-
-    assert answer == _ENDED_AT_RESULT
+    with pytest.raises(UnreadableError, match="two tool calls with the id 'toolu_1'"):
+        await handler.request(request("a", then=then))
 
 
 @protocol

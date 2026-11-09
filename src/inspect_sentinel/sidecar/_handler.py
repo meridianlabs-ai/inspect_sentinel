@@ -83,7 +83,6 @@ from ._state import (
     Rejected,
     Run,
     State,
-    occurrence,
 )
 from ._wire import (
     Edited,
@@ -738,6 +737,9 @@ class Handler:
         # only what the client sent holds results to judge: what the sidecar
         # adds below is its own writing
         client = messages
+        # a conversation that holds two calls with one id can't be read, as
+        # which of the two a result is of can't be told
+        _calls(client)
         # A point this request doesn't continue from is kept for the requests
         # that do: a run's key is shared by conversations that open alike. A
         # client that was handed a rejected turn, as an Inspect eval is in the
@@ -813,7 +815,6 @@ class Handler:
             format=request_format(request.provider, request.body, request.format),
             recorder=await self._state.recorder(request.id),
             input=messages,
-            calls=_calls(client),
             offered=sends,
             marks=marks,
             proxy=proxy,
@@ -870,30 +871,17 @@ class Handler:
         run: Run,
         conversation: Conversation,
         client: list[ChatMessage],
-        said: Mapping[str, Sequence[str]],
+        said: Mapping[str, str],
         restored: frozenset[str] = frozenset(),
         ran: Mapping[str, ToolCall] | None = None,
     ) -> Refuse | None:
         if AfterToolCall not in self._watched:
             return None
-        made: dict[str, tuple[ChatMessageAssistant, ToolCall, str, int]] = {}
-        held_calls = _calls(client)
-        # the calls the client holds count too, those this sidecar never
-        # handed out included
-        for call_id, count in held_calls.items():
-            issued = max(conversation.issued.get(call_id, 0), count)
-            conversation.issued[call_id] = issued
-        # how many calls with each id have come before, as a client can use
-        # one id for calls in different turns, each with words of its own
-        occurrences: dict[str, int] = {}
+        made: dict[str, tuple[ChatMessageAssistant, ToolCall, str]] = {}
         for entry in client:
             if isinstance(entry, ChatMessageAssistant):
                 for call in entry.tool_calls or []:
-                    index = occurrences.get(call.id, 0)
-                    occurrences[call.id] = index + 1
-                    written = said.get(call.id, ())
-                    words = written[index] if index < len(written) else entry.text
-                    made[call.id] = (entry, call, words, index)
+                    made[call.id] = (entry, call, said.get(call.id, entry.text))
             if not isinstance(entry, ChatMessageTool):
                 continue
             found = made.get(entry.tool_call_id or "")
@@ -901,21 +889,9 @@ class Handler:
                 raise UnreadableError(
                     f"The request holds a result for a call it doesn't hold: {entry.tool_call_id!r}."
                 )
-            assistant, call, words, index = found
+            assistant, call, words = found
             call = (ran or {}).get(call.id, call)
-            # A call's place among those with its id tells it apart from the
-            # others, as a client can use one id for calls in different
-            # turns. A conversation that lost calls with its id, to
-            # compaction, shifted that place, and a result there can't be
-            # told from one judged before, so it is refused rather than
-            # judged as a guess.
-            if held_calls.get(call.id, 0) < conversation.issued.get(call.id, 0):
-                raise UnreadableError(
-                    f"The request holds fewer calls with the id {call.id!r} than its conversation did, so its results can't be told apart from those judged before."
-                )
-            # the call's occurrence too: a client that runs two calls with one
-            # id, the same arguments and the same result ran them both
-            digest = _result_digest(words, call, entry, index)
+            digest = _result_digest(words, call, entry)
             key = (held.run, held.conversation, digest)
             if key in self._judging:
                 while (judging := self._judging.get(key)) is not None:
@@ -928,7 +904,7 @@ class Handler:
             # writing, not the result of a call that ran
             if digest in conversation.judged or entry.tool_call_id in restored:
                 continue
-            sent = conversation.made.get(occurrence(call.id, index))
+            sent = conversation.made.get(call.id)
             # a call this sidecar did not hand out has only the id its
             # reading of the request gave it
             message_id = sent.message_id if sent is not None else assistant.id
@@ -1101,23 +1077,14 @@ class Handler:
         if not held.named:
             run.answered.add(held.mark)
         if message is not None:
-            seen = dict(held.calls)
             for call in message.tool_calls or []:
-                index = seen.get(call.id, 0)
-                seen[call.id] = index + 1
                 assert message.id is not None
-                made = Made(
+                conversation.made[call.id] = Made(
                     held.input,
                     held.offered.tools,
                     held.offered.tool_choice,
                     message.id,
                 )
-                conversation.made[occurrence(call.id, index)] = made
-                # its place, not one more each time: a retry or another
-                # reply to the same request hands out a call in the same
-                # place, of which the client keeps one
-                issued = max(conversation.issued.get(call.id, 0), index + 1)
-                conversation.issued[call.id] = issued
             while len(conversation.made) > MADE_KEPT:
                 del conversation.made[next(iter(conversation.made))]
         return Pass()
@@ -1486,7 +1453,7 @@ def _edit_lost(
 ) -> bool:
     # whether the messages hold a call id of an edited turn of the run that
     # isn't among those the request continues from
-    ids = set(_calls(messages)) | {
+    ids = _calls(messages) | {
         message.tool_call_id
         for message in messages
         if isinstance(message, ChatMessageTool) and message.tool_call_id is not None
@@ -1498,19 +1465,23 @@ def _edit_lost(
     )
 
 
-def _calls(messages: Sequence[ChatMessage]) -> dict[str, int]:
-    # how many tool calls with each id the messages hold
-    calls: dict[str, int] = {}
+def _calls(messages: Sequence[ChatMessage]) -> set[str]:
+    # the ids of the tool calls the messages hold. Separate calls have
+    # separate ids, so a conversation that holds two calls with one id can't
+    # be read: which of them a result is of can't be told.
+    calls: set[str] = set()
     for message in messages:
         if isinstance(message, ChatMessageAssistant):
             for call in message.tool_calls or []:
-                calls[call.id] = calls.get(call.id, 0) + 1
+                if call.id in calls:
+                    raise UnreadableError(
+                        f"The request holds two tool calls with the id {call.id!r}."
+                    )
+                calls.add(call.id)
     return calls
 
 
-def _result_digest(
-    said: str, call: ToolCall, result: ChatMessageTool, index: int
-) -> str:
+def _result_digest(said: str, call: ToolCall, result: ChatMessageTool) -> str:
     # everything the step is given from the request, what the model said with
     # the call as well as the call and the result: the client wrote them all
     # into the request, so an id seen before doesn't vouch for what now
@@ -1520,7 +1491,6 @@ def _result_digest(
             [
                 said,
                 call.id,
-                index,
                 call.type,
                 call.function,
                 call.arguments,

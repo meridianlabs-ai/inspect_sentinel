@@ -117,11 +117,6 @@ class Rejected:
     """Whether the turns are added to the requests that continue from the point. A run no eval names that was ended at the point, but isn't remembered as ended there, may next be sent the same request as a fresh start, so they stop being added. They are kept, so that a client that put a turn back itself is still told from one that ran its calls."""
 
 
-def occurrence(call: str, index: int) -> str:
-    """A tool call told apart from others with its id: a client can use one id for calls in different turns. `index` is how many calls with the id come before it in the client's conversation, which only grows, so it stays the same on every request."""
-    return f"{call}#{index}"
-
-
 @dataclass(frozen=True)
 class Made:
     """What the model was sent for the generate that made a tool call."""
@@ -160,11 +155,8 @@ class Conversation:
     judged: set[str] = field(default_factory=set[str])
     """Digests of the tool results in the conversation the sentinel has been shown and let go on."""
 
-    issued: dict[str, int] = field(default_factory=dict[str, int])
-    """For each call id the client was handed, how many calls with the id its conversation has held, those it held before this sidecar saw it included. A request that holds fewer was compacted, so a call's place among those with its id no longer tells which of them it is. Each is a count, kept for the conversation's life, as forgetting one would hide a compaction."""
-
     made: dict[str, Made] = field(default_factory=dict[str, Made])
-    """For the latest tool calls the client was handed, by `occurrence()`, what the model was sent for the generate that made each. The oldest are dropped past `MADE_KEPT`, as each holds what the model was sent, which grows with the conversation."""
+    """For the latest tool calls the client was handed, by call id, what the model was sent for the generate that made each. The oldest are dropped past `MADE_KEPT`, as each holds what the model was sent, which grows with the conversation."""
 
     sent: list[ChatMessage] = field(default_factory=list[ChatMessage])
     """Every message the conversation's requests sent the model, in the order first sent, each once: a step's `history`. Messages a compaction dropped from later requests are kept."""
@@ -253,8 +245,6 @@ class Held:
     recorder: ListRecorder
     input: list[ChatMessage]
     """What the model was sent."""
-    calls: Mapping[str, int]
-    """How many tool calls with each id the client sent, which the reply's calls follow."""
     offered: Offered
     marks: list[str]
     """The request's marks, for each count of the entries the client sent, before anything was added."""
