@@ -401,6 +401,19 @@ class Handler:
             )
         return kept
 
+    async def eval_token_room(self) -> None:
+        """Check there is room to keep one more eval's token, before a registration for a new eval is made.
+
+        A token is kept for `--run-expiry` after the eval was last named, apart from the registration that made it, which may expire sooner or, for a task registered beforehand, take no room at all. So the tokens are bounded on their own, by the same number as the tasks registered by evals, and nothing kept is dropped to make room: a kept token guards the records of the eval's runs for as long as they are kept.
+
+        Raises:
+            RegistrationsFullError: If the handler already keeps as many tokens as it takes registrations.
+        """
+        if await self._state.eval_tokens() >= self._max_task_registrations:
+            raise RegistrationsFullError(
+                f"This sidecar already keeps the {self._max_task_registrations} tasks registered by evals that it takes, or the tokens of as many evals. One is taken again once a kept task or token expires."
+            )
+
     async def keep_eval_token(self, eval_id: str, chosen: str | None = None) -> str:
         """Keep a secret for an eval whose registration succeeded, unless one is kept already, as when two registrations made it at once.
 

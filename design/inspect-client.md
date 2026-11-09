@@ -80,7 +80,8 @@ What each probe answer means:
 | a sidecar, with a version Inspect knows | use it | use it |
 | a sidecar, with no version Inspect knows | fail the task | fail the task |
 | a 404, or an answer that isn't a sidecar | no sidecar: run as today | fail the task |
-| a 401 or 403, a 5xx, or a timeout | can't tell: run as today for this call, with a warning the first time, and probe again on the next call | fail the task |
+| another 4xx, such as 401, 403 or 405 | the endpoint answered, and no sidecar can be reached there with the model's credentials: run as today | fail the task |
+| a 5xx, a 408 or 429, a timeout, or no connection | can't tell: run as today for this call, with a warning the first time, and probe again on the next call | fail the task |
 
 **Off unless set.** An eval that doesn't set `sentinel_proxy` sends exactly the requests it sends today: no probe, no header, and no call under `/sentinel/`. A deployment with a sidecar sets `auto` or `required` for its evals, for example in its runner, or with `INSPECT_EVAL_SENTINEL_PROXY`. `auto` can't guarantee that the sidecar is used, so a deployment that relies on its sidecar sets `required`.
 
@@ -105,7 +106,7 @@ Envoy and LiteLLM both forward `/sentinel/` at the root. An OpenAI base URL usua
 - **Under `required`, the assigned model's endpoint is probed whatever its address,** so a task that relies on a sidecar fails if it is pointed at the provider directly.
 - **At task start, Inspect probes the endpoint of the task's assigned model:** the model the eval runs with, such as `--model`. So `required` fails the task before any sample runs.
 - **Any other endpoint is probed the first time an agent call goes to it,** such as a model given to a role that the agent hands work to. Inspect can't know these up front, because an agent can pick a model at any point.
-- **Each endpoint is probed once per task,** per endpoint and credentials, and the answer is kept for the rest of the task when it is definite: a sidecar, a 404, or an answer that isn't a sidecar. A probe that can't tell is tried again on the next agent call to that endpoint, so one failure at task start doesn't leave a sidecar unused for the whole task.
+- **Each endpoint is probed once per task,** per endpoint and credentials, and the answer is kept for the rest of the task when it is definite: a sidecar, a 4xx other than 408 or 429, or an answer that isn't a sidecar. A probe that can't tell is tried again on the next agent call to that endpoint, so one failure at task start doesn't leave a sidecar unused for the whole task.
 - **An endpoint only graders, approvers, compaction or monitors use is never probed,** because no agent call reaches it.
 - **An endpoint with no sidecar behind it gets plain model calls,** with none of Inspect's headers, as today.
 - Nothing is shared between tasks in this PR.

@@ -1033,6 +1033,61 @@ async def test_a_registration_that_fails_leaves_no_token_behind() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_token_past_the_registration_limit_fails_with_its_own_error() -> None:
+    # a token outlives the registration that made it, and a task registered
+    # beforehand takes no registration at all, so the tokens are bounded on
+    # their own: by the same number, and nothing kept is dropped to make room
+    task = FileTask.model_validate({"task": "philadelphia", "samples": []})
+    handler = Handler(
+        weather_rule(), tasks={"philadelphia": task}, max_task_registrations=2
+    )
+    async with _client(handler) as client:
+        kept = [
+            await _call(
+                client,
+                "register_task",
+                _REGISTRATION | {"eval_id": id, "token": f"token-{id}"},
+            )
+            for id in ["eval_1", "eval_2"]
+        ]
+        refused = await _call(
+            client, "register_task", _REGISTRATION | {"eval_id": "eval_3"}
+        )
+        again = await _call(
+            client,
+            "register_task",
+            _REGISTRATION | {"eval_id": "eval_1", "token": "token-eval_1"},
+        )
+
+    assert [k["result"]["token"] for k in kept] == ["token-eval_1", "token-eval_2"]
+    assert refused["error"]["code"] == REGISTRATIONS_FULL
+    assert "or the tokens of as many evals" in refused["error"]["message"]
+    # a kept eval registers again as before
+    assert again["result"]["token"] == "token-eval_1"
+
+
+@pytest.mark.anyio
+async def test_a_registration_whose_eval_gets_no_token_is_not_kept() -> None:
+    # the first eval's registration expires at once and frees its slot, but
+    # its token stays; the next eval is refused before anything is kept of it
+    handler = Handler(weather_rule(), max_task_registrations=1)
+    async with _client(handler) as client:
+        await _call(
+            client,
+            "register_task",
+            _REGISTRATION | {"eval_id": "eval_1", "expiry": 0.001},
+        )
+        await anyio.sleep(0.01)
+        refused = await _call(
+            client, "register_task", _REGISTRATION | {"eval_id": "eval_2"}
+        )
+
+    assert refused["error"]["code"] == REGISTRATIONS_FULL
+    assert await handler._state.registration("eval_2", "philadelphia") is None  # pyright: ignore[reportPrivateUsage]
+    assert await handler._state.eval_token("eval_2") is None  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.anyio
 async def test_a_first_registration_sent_again_with_its_token_gets_the_same_token_back() -> (
     None
 ):

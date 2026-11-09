@@ -308,6 +308,10 @@ async def _answered(handler: Handler, given: BaseModel, results: bool) -> BaseMo
             given.model_dump(include=set(TaskRegistration.model_fields))
         )
         try:
+            # before the registration, so one that can't be given a token
+            # isn't kept
+            if kept is None:
+                await handler.eval_token_room()
             granted = await handler.register_task(
                 given.eval_id, registration, given.expiry
             )

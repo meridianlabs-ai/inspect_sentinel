@@ -362,6 +362,10 @@ class State(Protocol):
         """The secret an eval presents to the endpoint for evals, or None if none is kept. Asking counts as the eval being named, so it is kept for its expiry from now."""
         ...
 
+    async def eval_tokens(self) -> int:
+        """How many evals' secrets are kept, so that what anything reaching the endpoint for evals can make the sidecar keep is bounded."""
+        ...
+
     async def keep_eval_token(self, eval_id: str, token: str) -> str:
         """Keep the secret an eval presents to the endpoint for evals, unless one is kept for it already, for as long as a run is kept once no call names the eval.
 
@@ -485,6 +489,9 @@ class MemoryState:
     async def eval_token(self, eval_id: str) -> str | None:
         return self._tokens.get(eval_id)
 
+    async def eval_tokens(self) -> int:
+        return self._tokens.count()
+
     async def keep_eval_token(self, eval_id: str, token: str) -> str:
         kept = self._tokens.get(eval_id)
         if kept is not None:
@@ -534,6 +541,10 @@ class _Expiring(Generic[V]):
         self._expire()
         kept = self._kept.pop(key, None)
         return kept[1] if kept is not None else None
+
+    def count(self) -> int:
+        self._expire()
+        return len(self._kept)
 
     def _expire(self) -> None:
         now = time.monotonic()
