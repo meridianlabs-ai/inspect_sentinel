@@ -501,8 +501,6 @@ class _Exchange:
         # a refusal is an error, as the endpoint for proxies bounds it
         status = bounded(refused.status)
         error = error_body(self._format, status, refused.message)
-        if refused.sentinel is not None:
-            error["sentinel"] = dict(refused.sentinel)
         return pb.ProcessingResponse(
             immediate_response=pb.ImmediateResponse(
                 status=http_status.HttpStatus(

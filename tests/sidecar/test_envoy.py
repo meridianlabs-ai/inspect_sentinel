@@ -253,10 +253,11 @@ def test_turn_whose_every_call_is_rejected_is_refused_with_the_providers_error(
 
 @pytest.mark.parametrize("stream", [False, True], ids=["whole", "streamed"])
 @pytest.mark.parametrize("api", _APIS)
-def test_inspect_client_is_told_what_was_decided(
+def test_inspect_client_is_handed_the_reply_and_asks_what_was_decided(
     stack: Stack, api: str, stream: bool
 ) -> None:
-    stack.use(Handler(rejects("Tokyo")))
+    handler = Handler(rejects("Tokyo"))
+    stack.use(handler)
     _answer_with(stack, api, stream)
 
     answered = httpx.post(
@@ -264,18 +265,21 @@ def test_inspect_client_is_told_what_was_decided(
     )
 
     assert answered.status_code == 200
-    assert b'"sentinel"' in answered.content
-    assert b'"reject"' in answered.content
+    assert b'"sentinel"' not in answered.content
+    result = stack.run(handler.request_result("request_456", "eval_789"))
+    assert isinstance(result, RequestResult) and result.latest.judged is not None
+    assert result.latest.judged.proposed is not None
     # Inspect's headers name the sample to the sidecar, and never reach the
     # provider
     assert not {"x-inspect-context", "x-irid"} & set(stack.provider.received[0].headers)
 
 
 @pytest.mark.parametrize("api", _APIS)
-def test_refusal_carries_the_sentinel_field_for_an_inspect_client(
+def test_refusal_of_an_inspect_client_is_the_providers_error_alone(
     stack: Stack, api: str
 ) -> None:
-    stack.use(Handler(every_call_rule()))
+    handler = Handler(every_call_rule())
+    stack.use(handler)
     _answer_with(stack, api, False)
 
     answered = httpx.post(
@@ -285,7 +289,10 @@ def test_refusal_carries_the_sentinel_field_for_an_inspect_client(
     assert answered.status_code == 400
     assert answered.headers["content-type"] == "application/json"
     refused = answered.json()
-    assert refused["sentinel"]["outcome"] == "reject"
+    assert "sentinel" not in refused
+    result = stack.run(handler.request_result("request_456", "eval_789"))
+    assert isinstance(result, RequestResult)
+    assert result.latest.outcome == "reject"
     if api == "anthropic":
         assert refused["type"] == "error"
         assert refused["error"]["type"] == "invalid_request_error"
@@ -329,15 +336,14 @@ def test_reply_in_a_success_status_other_than_200_is_judged(
     )
 
     assert answered.status_code == 201
-    # the calls the client is handed: the field beside them still names the
-    # rejected call, as it was proposed
+    # the calls the client is handed, without the rejected call
     output = asyncio.run(
         read_reply("anthropic", answered.headers["content-type"], answered.content)
     )
     calls = output.message.tool_calls or []
     assert [_city(call.arguments["location"]) for call in calls] == ["Paris", "Lima"]
-    assert b'"sentinel"' in answered.content
-    result = stack.run(handler.request_result("request_456"))
+    assert b'"sentinel"' not in answered.content
+    result = stack.run(handler.request_result("request_456", "eval_789"))
     assert isinstance(result, RequestResult)
     assert (result.latest.state, result.latest.outcome) == ("decided", "proceed")
 
@@ -804,10 +810,11 @@ def test_reply_released_early_that_passes_reaches_the_client_as_sent(
 
 
 @pytest.mark.parametrize("api", _APIS)
-def test_inspect_client_is_told_what_was_decided_on_a_reply_released_early(
+def test_inspect_client_asks_what_was_decided_of_a_reply_released_early(
     stack: Stack, api: str
 ) -> None:
-    stack.use(Handler(rejects("Tokyo"), release="early"))
+    handler = Handler(rejects("Tokyo"), release="early")
+    stack.use(handler)
     _answer_with(stack, api, True)
 
     answered = httpx.post(
@@ -818,8 +825,10 @@ def test_inspect_client_is_told_what_was_decided_on_a_reply_released_early(
     )
 
     assert answered.status_code == 200
-    assert b'"sentinel"' in answered.content
-    assert b'"reject"' in answered.content
+    assert b'"sentinel"' not in answered.content
+    result = stack.run(handler.request_result("request_456", "eval_789", wait=5))
+    assert isinstance(result, RequestResult)
+    assert (result.latest.state, result.latest.outcome) == ("decided", "proceed")
 
 
 def test_turn_of_calls_alone_all_rejected_early_is_refused_with_its_status(

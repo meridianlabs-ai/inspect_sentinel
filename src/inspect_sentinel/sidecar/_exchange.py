@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, TypeAlias
+from typing import TypeAlias
 
 from ._wire import Format
 
@@ -95,9 +95,6 @@ class Refuse:
 
     message: str
     """What the client is told. A client that carries on hands this to the model."""
-
-    sentinel: Mapping[str, Any] | None = None
-    """For an Inspect client, the `sentinel` field: what was decided during the exchange. The proxy puts it into the error it sends the client, without reading it."""
 
 
 Answer: TypeAlias = Pass | Replace | Refuse

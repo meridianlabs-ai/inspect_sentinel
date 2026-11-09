@@ -9,6 +9,7 @@ import pytest
 from inspect_ai._util.registry import registry_info
 from inspect_ai.tool import Tool, ToolCall, ToolCallContent, ToolCallView, tool
 
+from inspect_sentinel import NewSinceLastReport, StepPreprocessor, preprocess_step
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
 from inspect_sentinel._report import Decision, Escalations
@@ -215,6 +216,32 @@ async def test_a_tool_choice_that_cannot_be_read_is_unreadable() -> None:
         )
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("named", "model"),
+    [
+        (None, "anthropic/claude-test"),
+        ("anthropic/claude-test", "anthropic/claude-test"),
+        ("openai-api/together/claude-test", "openai-api/together/claude-test"),
+        ("anthropic/another-model", "anthropic/claude-test"),
+    ],
+    ids=["not named", "the same", "more parts", "another model"],
+)
+async def test_a_step_names_the_model_as_inspect_does(
+    named: str | None, model: str
+) -> None:
+    # as in Inspect's own process, where an Inspect client names it, but only
+    # a name that ends in the model the request names: the client can add
+    # what precedes it, and not name another model
+    handler = Handler(reports_generates())
+    headers = inspect_headers(**({"model": named} if named is not None else {}))
+
+    await handler.request(replace(request("a"), headers=headers))
+
+    [explanation] = _explanations(await handler.records("a"))
+    assert explanation.split("|")[0] == model
+
+
 # the text beside each call in a reply, as `ran` writes it when the client
 # sends the reply back
 _LOOKING = {"type": "text", "text": "Looking."}
@@ -293,6 +320,40 @@ async def test_a_reply_is_given_what_its_conversation_sent_while_it_waited() -> 
     assert after == str(
         ["You are helpful.", "What is the weather?", "Looking.", "rain"]
     )
+
+
+@protocol
+def reports_new_input() -> Protocol:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
+        if not isinstance(step, BeforeGenerate):
+            return Decision.proceed(type(step).__name__)
+        thinned = await preprocess_step(
+            step, StepPreprocessor(input_window=NewSinceLastReport(context))
+        )
+        new = [message.text for message in thinned.input or []]
+        return Decision.proceed(f"BeforeGenerate|{new}")
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_monitor_is_shown_only_the_input_new_since_its_last_report() -> None:
+    # as in Inspect's own process, where a message keeps its id from one model
+    # call to the next, a monitor finds the message it was last shown
+    handler = Handler(reports_new_input())
+    await handler.request(request("a"))
+    await handler.reply(reply(message(_LOOKING, weather("Oslo", "toolu_1")), id="a"))
+    await handler.request(request("b", then=ran("Oslo", "rain", "toolu_1")))
+
+    shown = [
+        explanation.split("|", 1)[1]
+        for id in ["a", "b"]
+        for explanation in _explanations(await handler.records(id))
+        if explanation.startswith("BeforeGenerate|")
+    ]
+    assert shown == [str(["What is the weather?"]), str(["Looking.", "rain"])]
 
 
 _SAID: list[dict[str, Any]] = [
@@ -393,8 +454,8 @@ async def test_a_new_attempt_at_a_sample_starts_its_history_afresh() -> None:
     # the model of a new attempt never saw the discarded attempt's turns
     handler = Handler(reports_histories())
 
-    async def turn(id: str, attempt: str, **then: Any) -> list[str]:
-        headers = inspect_headers(attempt=attempt)
+    async def turn(id: str, attempt: int, **then: Any) -> list[str]:
+        headers = inspect_headers(attempt=f"attempt_{attempt}", attempt_number=attempt)
         await handler.request(replace(request(id, **then), headers=headers))
         await handler.reply(reply(message({"type": "text", "text": "Rain."}), id=id))
         return [
@@ -402,9 +463,9 @@ async def test_a_new_attempt_at_a_sample_starts_its_history_afresh() -> None:
             for explanation in _explanations(await handler.records(id))
         ]
 
-    await turn("a", "attempt_1")
-    later = await turn("b", "attempt_1", then=ran("Oslo", "rain", "toolu_1"))
-    fresh = await turn("c", "attempt_2")
+    await turn("a", 1)
+    later = await turn("b", 1, then=ran("Oslo", "rain", "toolu_1"))
+    fresh = await turn("c", 2)
 
     opening = ["You are helpful.", "What is the weather?"]
     assert later[0] == str(opening)

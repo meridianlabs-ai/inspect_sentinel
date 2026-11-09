@@ -15,6 +15,10 @@ from ._wire import Format, StreamEvent, TooLargeError, UnreadableError
 logger = logging.getLogger(__name__)
 
 
+class UnauthorizedError(Exception):
+    """A call to the endpoint for evals that didn't present the eval's token."""
+
+
 class TimeLimitError(TimeoutError):
     """The sentinel didn't finish judging a request or a reply within the handler's time limit, and was cancelled."""
 
@@ -95,20 +99,14 @@ def error_event(
 ) -> bytes:
     """An error event that refuses a turn once some of its stream has gone out, which the provider's SDK raises an exception on.
 
-    For an Inspect client, the `sentinel` field goes where the SDK keeps it: beside the error in Anthropic's event, whose whole data is the exception's body, and inside the error, at `error.provider_specific_fields.sentinel`, for OpenAI's, whose exception keeps only the error.
-
     Args:
         format: Which API the stream is written in.
         refused: The refusal.
         events: The stream's events so far, as the provider sent them.
     """
     status, message = bounded(refused.status), refused.message
-    field = dict(refused.sentinel) if refused.sentinel is not None else None
     if format == "anthropic-messages":
-        data = error_body(format, status, message)
-        if field is not None:
-            data["sentinel"] = field
-        return _written(data, event="error")
+        return _written(error_body(format, status, message), event="error")
     code = _openai_code(status)
     error: dict[str, Any] = {
         "message": message,
@@ -116,8 +114,6 @@ def error_event(
         "param": None,
         "code": code,
     }
-    if field is not None:
-        error["provider_specific_fields"] = {"sentinel": field}
     if format == "openai-chat":
         return _written({"error": error})
     # The SDK raises on an event with an error at its top, and a client that

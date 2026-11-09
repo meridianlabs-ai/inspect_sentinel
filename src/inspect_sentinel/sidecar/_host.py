@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
@@ -24,6 +26,34 @@ logger = logging.getLogger(__name__)
 
 Stage: TypeAlias = Literal["model_input", "model_output", "tool_call", "tool_result"]
 """Where a step was judged, named as Inspect's transcript names it."""
+
+
+@dataclass(frozen=True)
+class ModelUsed:
+    """A model a monitor or protocol called while a step was judged."""
+
+    role: str | None
+    """The role it asked for, or None where it named the model without one."""
+
+    model: str
+    """The model the call went to, as Inspect names it."""
+
+
+# the models called while one step is judged, in the order first called
+_models_used: ContextVar[list[ModelUsed] | None] = ContextVar(
+    "sidecar_models_used", default=None
+)
+
+
+@contextmanager
+def noting_models() -> Generator[list[ModelUsed]]:
+    """Note each model the sidecar's host calls in the block, once each, in the order first called."""
+    used: list[ModelUsed] = []
+    token = _models_used.set(used)
+    try:
+        yield used
+    finally:
+        _models_used.reset(token)
 
 
 class SidecarHost:
@@ -67,7 +97,13 @@ class SidecarHost:
             tool_choice: Which of `tools` the model may or must call.
             config: Generation configuration.
         """
-        return await self._resolve(model, role).generate(
+        resolved = self._resolve(model, role)
+        used = _models_used.get()
+        if used is not None:
+            noted = ModelUsed(_asked(model, role), str(resolved))
+            if noted not in used:
+                used.append(noted)
+        return await resolved.generate(
             input,
             tools=tools or [],
             tool_choice=tool_choice,
@@ -99,7 +135,7 @@ class SidecarHost:
         # the model a host call names, the way `generate` resolves it: the
         # role's configured model wins, otherwise `model`; with neither it
         # raises, since a sidecar has no agent's model to fall back on
-        asked = role if role is not None else ("monitor" if model is None else None)
+        asked = _asked(model, role)
         resolved = self._roles.get(asked) if asked is not None else None
         if resolved is None and model is None:
             raise ValueError(
@@ -133,6 +169,11 @@ class SidecarHost:
         return HumanAnswer(
             decision=decision, reason="No person can be asked from the sidecar yet."
         )
+
+
+def _asked(model: str | None, role: str | None) -> str | None:
+    # the role a host call asks for: `monitor` when it names neither
+    return role if role is not None else ("monitor" if model is None else None)
 
 
 class RunHost:

@@ -4,19 +4,20 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Generic, Literal, Protocol, TypeAlias, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar
 
+import anyio
 from inspect_ai.model import ChatMessage
 from inspect_ai.tool import ToolChoice, ToolInfo
 from inspect_ai.util import Store
 from pydantic import JsonValue
 
 from .._context import EvalContext, ProxyContext
-from ._exchange import Refuse
+from ._exchange import Refuse, Request
 from ._host import ListRecorder, Record
-from ._inspect_client import Exchange, Withheld
-from ._registration import TaskFacts
-from ._wire import Amendment, Edited, Format, Offered, Turn
+from ._inspect_client import Exchange
+from ._registration import RegisteredTask
+from ._wire import Amendment, Edited, EntryDigest, Format, Offered, Turn
 
 V = TypeVar("V")
 
@@ -30,12 +31,26 @@ DROPPED_IDS = 1_000_000
 """How many ids of requests whose records were dropped are kept, so that a request can be told apart from one never seen."""
 
 NotJudged: TypeAlias = Literal[
-    "unreadable", "unregistered", "time_limit", "error", "provider_error", "cut_off"
+    "unreadable",
+    "unregistered",
+    "time_limit",
+    "error",
+    "provider_error",
+    "cut_off",
+    "replaced_attempt",
 ]
 """Why a request or its reply was not judged."""
 
 Outcome: TypeAlias = Literal["proceed", "reject", "terminate"]
 """What an exchange came to."""
+
+
+@dataclass(frozen=True)
+class Dropped:
+    """A request whose attempts were kept and no longer are."""
+
+    eval_id: str | None
+    """The eval its latest attempt's `x-inspect-context` named, the only one told it was dropped."""
 
 
 @dataclass
@@ -44,6 +59,9 @@ class Attempt:
 
     exchange: str
     """The proxy's id for the exchange, under which its records are kept."""
+
+    eval_id: str | None = None
+    """The eval the request's `x-inspect-context` named, the only one `request_result` answers for it. None if the header couldn't be read."""
 
     state: Literal["judging", "awaiting_reply", "decided", "not_judged"] = "judging"
     """Where the attempt stands."""
@@ -57,19 +75,21 @@ class Attempt:
     message: str | None = None
     """What the model is told, for a rejection."""
 
-    withheld: Withheld | None = None
-    """The model's turn, when the client was refused it because a call in it was rejected."""
+    judged: Exchange | None = None
+    """What was decided during the attempt, for an Inspect eval, from which `request_result` writes its judgment."""
 
-    proposed: Withheld | None = None
-    """The model's turn as it proposed it, when the client was handed it with calls taken out."""
+    settled: anyio.Event = field(default_factory=anyio.Event)
+    """Set once the attempt is decided or not judged, for a `request_result` that waits."""
 
     def decide(self, outcome: Outcome, message: str | None = None) -> None:
         """Mark the attempt decided."""
         self.state, self.outcome, self.message = "decided", outcome, message
+        self.settled.set()
 
     def not_judged(self, reason: NotJudged) -> None:
         """Mark the attempt as one that judging ended without a decision for."""
         self.state, self.reason = "not_judged", reason
+        self.settled.set()
 
 
 @dataclass
@@ -113,6 +133,17 @@ class Made:
     """The id the reply holding the call was given, so the call's two steps share it."""
 
 
+@dataclass(frozen=True)
+class Sent:
+    """What one request of a conversation sent the model, which a later request is matched against."""
+
+    keys: list[str]
+    """A digest of what the model was sent of each of the request's messages."""
+
+    ids: list[str | None]
+    """The id each of the request's messages was given, which a message of a later request matched to it keeps."""
+
+
 @dataclass
 class Conversation:
     """One conversation within a run."""
@@ -138,8 +169,8 @@ class Conversation:
     sent: list[ChatMessage] = field(default_factory=list[ChatMessage])
     """Every message the conversation's requests sent the model, in the order first sent, each once: a step's `history`. Messages a compaction dropped from later requests are kept."""
 
-    recent: list[list[str]] = field(default_factory=list[list[str]])
-    """For each of the conversation's latest requests, latest last, a digest of what the model was sent of each of its messages, which a later request is matched against."""
+    recent: list[Sent] = field(default_factory=list[Sent])
+    """What each of the conversation's latest requests sent the model, latest last, which a later request is matched against."""
 
 
 @dataclass
@@ -147,7 +178,16 @@ class Run:
     """What the sidecar keeps for one run."""
 
     store: Store = field(default_factory=Store)
-    """The sentinel's store."""
+    """The sentinel's store. For a run an eval names, it is the latest attempt's: a new attempt at the sample starts it afresh, as Inspect starts the sample store afresh."""
+
+    attempt: str = ""
+    """For a run an eval names, the attempt at the sample that the store and the run's end are of."""
+
+    attempt_number: int = 0
+    """That attempt's number. A request of an attempt with a lower one is refused unjudged, as nobody waits for it."""
+
+    closed: bool = False
+    """Whether the eval ended the sample, once it was scored. No later attempt starts the run again."""
 
     conversations: dict[str, Conversation] = field(
         default_factory=dict[str, Conversation]
@@ -158,7 +198,7 @@ class Run:
     """Rejected turns since a reply last passed, by the attempt an eval names, or `""`. A new attempt at a sample starts its own count, as its model never saw the earlier attempt's turns."""
 
     refusal: Refuse | None = None
-    """What every later request is refused with, once a sentinel has ended a run an eval names."""
+    """What every later request is refused with, once a sentinel has ended a run an eval names, or the eval has ended its sample. A sentinel's end is the attempt's, as the store is."""
 
     answered: set[str] = field(default_factory=set[str])
     """For a run no eval names: the marks of the requests whose replies were passed on."""
@@ -166,8 +206,33 @@ class Run:
     ended_at: dict[str, Refuse] = field(default_factory=dict[str, Refuse])
     """For a run no eval names: the marks of the requests the run was ended at, each with what a request that continues from it is refused with."""
 
+    ended_on: list["EndedOn"] = field(default_factory=list["EndedOn"])
+    """For a run no eval names: the last entry of each request the run was ended at, in digests. A request that continues from it with blocks added to that entry, as a client adds the user's next message to the one that holds the last results, is refused as well."""
+
     eval: EvalContext | None = None
     """The sample the run is, as its task was registered when the run first found it. A registration made later doesn't reach it."""
+
+    eval_id: str | None = None
+    """For a run an eval names, the eval, the only one the endpoint for evals answers for the run."""
+
+    redacted: dict[str, tuple[Format, Any]] = field(
+        default_factory=dict[str, tuple[Format, Any]]
+    )
+    """For a run an eval names, the model's own calls that a decision acted on, by call id, each in the format its request was written in. The eval holds each with its id and function only, and each later request has the model's own call put back."""
+
+
+@dataclass(frozen=True)
+class EndedOn:
+    """For a run no eval names, the entry that a request the run was ended at ends with."""
+
+    at: int
+    """How many entries come before it."""
+    before: str
+    """The mark of those entries."""
+    digest: EntryDigest
+    """The entry, as its mark was taken of it, in digests."""
+    refusal: Refuse
+    """What a request that adds to it is refused with."""
 
 
 @dataclass(frozen=True)
@@ -195,10 +260,16 @@ class Held:
     """The request's marks, for each count of the entries the client sent, before anything was added."""
     proxy: ProxyContext
     """What the proxy said about the request."""
+    store: Store
+    """The sentinel's store as the request found it, its attempt's, so that a judgment that outlives its attempt writes nowhere a later attempt reads."""
     attempt: Attempt | None = None
     """The attempt at the request, for an eval that names its requests."""
     exchange: Exchange = field(default_factory=Exchange)
-    """What was decided so far during the exchange, for an Inspect client's `sentinel` field."""
+    """What was decided so far during the exchange, for an Inspect eval's judgment of it."""
+    last: EntryDigest | None = None
+    """For a run no eval names, the last entry the client sent, as its mark was taken of it, in digests, or None for a request with none, or whose last entry nothing can be added to."""
+    request: Request | None = None
+    """For a run no eval names, the request as the client sent it, so that a run ended meanwhile by another exchange refuses its reply when it continues the ended conversation with blocks added to its last entry."""
 
     @property
     def sent(self) -> int:
@@ -238,14 +309,14 @@ class State(Protocol):
         ...
 
     async def register(
-        self, eval_id: str, task: str, facts: TaskFacts, expiry: float, limit: int
+        self, eval_id: str, task: str, facts: RegisteredTask, expiry: float, limit: int
     ) -> bool:
         """Keep a task an eval registered, in place of any it registered before.
 
         Args:
             eval_id: The eval's id.
             task: The task's name.
-            facts: The task and its samples.
+            facts: The task, the samples it runs, and those whose registration is complete.
             expiry: How long to keep it once no request has named it, in seconds.
             limit: How many registrations are kept at once.
 
@@ -254,7 +325,7 @@ class State(Protocol):
         """
         ...
 
-    async def registration(self, eval_id: str, task: str) -> TaskFacts | None:
+    async def registration(self, eval_id: str, task: str) -> RegisteredTask | None:
         """A task an eval registered, or None if none is kept. Asking counts as the task being named, so it is kept for its expiry from now."""
         ...
 
@@ -262,11 +333,15 @@ class State(Protocol):
         """The run's state, or None if none is kept."""
         ...
 
-    async def end_run(self, key: str) -> bool:
+    async def end_run(self, key: str, eval_id: str | None = None) -> bool:
         """Drop a run's state, and remember that it ended. A request or reply of the run still being judged finds it ended too.
 
+        Args:
+            key: The run's key.
+            eval_id: The eval ending it, if an eval is: a run of another eval is left as it is.
+
         Returns:
-            Whether the run was known: kept, or ended before.
+            Whether the run was known, and the eval's if one was given: kept, or ended before.
         """
         ...
 
@@ -279,8 +354,24 @@ class State(Protocol):
         """
         ...
 
-    async def attempts(self, request: str) -> list[Attempt] | Literal["dropped"] | None:
-        """The attempts at a request in order, `dropped` if they were kept and no longer are, or None if the request was never seen."""
+    async def attempts(self, request: str) -> list[Attempt] | Dropped | None:
+        """The attempts at a request in order, `Dropped` if they were kept and no longer are, or None if the request was never seen."""
+        ...
+
+    async def eval_token(self, eval_id: str) -> str | None:
+        """The secret an eval presents to the endpoint for evals, or None if none is kept. Asking counts as the eval being named, so it is kept for its expiry from now."""
+        ...
+
+    async def eval_tokens(self) -> int:
+        """How many evals' secrets are kept, so that what anything reaching the endpoint for evals can make the sidecar keep is bounded."""
+        ...
+
+    async def keep_eval_token(self, eval_id: str, token: str) -> str:
+        """Keep the secret an eval presents to the endpoint for evals, unless one is kept for it already, for as long as a run is kept once no call names the eval.
+
+        Returns:
+            The secret kept: `token`, or the one kept already.
+        """
         ...
 
 
@@ -300,13 +391,17 @@ class MemoryState:
         self._ended = _Expiring[Run](expiry)
         # a request's id outlives its attempts, so the eval can be told they
         # were dropped and not that the request was never seen
-        self._dropped = _Expiring[bool](expiry, limit=DROPPED_IDS)
+        self._dropped = _Expiring[Dropped](expiry, limit=DROPPED_IDS)
         self._attempts = _Expiring[list[Attempt]](
-            expiry, dropped=lambda key: self._dropped.put(key, True)
+            expiry,
+            dropped=lambda key, attempts: self._dropped.put(
+                key, Dropped(attempts[-1].eval_id if attempts else None)
+            ),
         )
         # each registration has an expiry of its own, and there are few, so
         # they are swept whole
-        self._tasks: dict[tuple[str, str], tuple[float, float, TaskFacts]] = {}
+        self._tasks: dict[tuple[str, str], tuple[float, float, RegisteredTask]] = {}
+        self._tokens = _Expiring[str](expiry)
 
     async def run(self, key: str) -> Run:
         run = self._runs.get(key)
@@ -337,7 +432,7 @@ class MemoryState:
         return recorder.records if recorder is not None else None
 
     async def register(
-        self, eval_id: str, task: str, facts: TaskFacts, expiry: float, limit: int
+        self, eval_id: str, task: str, facts: RegisteredTask, expiry: float, limit: int
     ) -> bool:
         self._expire_tasks()
         if (eval_id, task) not in self._tasks and len(self._tasks) >= limit:
@@ -345,7 +440,7 @@ class MemoryState:
         self._tasks[(eval_id, task)] = (time.monotonic(), expiry, facts)
         return True
 
-    async def registration(self, eval_id: str, task: str) -> TaskFacts | None:
+    async def registration(self, eval_id: str, task: str) -> RegisteredTask | None:
         self._expire_tasks()
         kept = self._tasks.get((eval_id, task))
         if kept is None:
@@ -357,16 +452,23 @@ class MemoryState:
     async def existing_run(self, key: str) -> Run | None:
         return self._runs.get(key)
 
-    async def end_run(self, key: str) -> bool:
+    async def end_run(self, key: str, eval_id: str | None = None) -> bool:
+        kept = self._runs.get(key)
+        if eval_id is not None and kept is not None and kept.eval_id != eval_id:
+            return False
         run = self._runs.pop(key)
         if run is None:
             # a run never seen is left as it is, rather than refused from then on
-            return self._ended.get(key) is not None
+            ended = self._ended.get(key)
+            return ended is not None and eval_id in (None, ended.eval_id)
+        run.closed = True
         if run.refusal is None:
             # held by any request or reply of the run still being judged
             run.refusal = Refuse(400, "This run has ended.")
         if self._ended.get(key) is None:
-            self._ended.put(key, Run(refusal=run.refusal))
+            self._ended.put(
+                key, Run(refusal=run.refusal, closed=True, eval_id=run.eval_id)
+            )
         return True
 
     async def attempt(self, request: str, exchange: str) -> Attempt:
@@ -378,11 +480,24 @@ class MemoryState:
         attempts.append(attempt)
         return attempt
 
-    async def attempts(self, request: str) -> list[Attempt] | Literal["dropped"] | None:
+    async def attempts(self, request: str) -> list[Attempt] | Dropped | None:
         attempts = self._attempts.get(request)
         if attempts is not None:
             return attempts
-        return "dropped" if self._dropped.get(request) is not None else None
+        return self._dropped.get(request)
+
+    async def eval_token(self, eval_id: str) -> str | None:
+        return self._tokens.get(eval_id)
+
+    async def eval_tokens(self) -> int:
+        return self._tokens.count()
+
+    async def keep_eval_token(self, eval_id: str, token: str) -> str:
+        kept = self._tokens.get(eval_id)
+        if kept is not None:
+            return kept
+        self._tokens.put(eval_id, token)
+        return token
 
     def _expire_tasks(self) -> None:
         now = time.monotonic()
@@ -398,7 +513,7 @@ class _Expiring(Generic[V]):
         expiry: float,
         *,
         limit: int | None = None,
-        dropped: Callable[[str], None] | None = None,
+        dropped: Callable[[str, V], None] | None = None,
     ) -> None:
         self._expiry = expiry
         self._limit = limit
@@ -427,12 +542,16 @@ class _Expiring(Generic[V]):
         kept = self._kept.pop(key, None)
         return kept[1] if kept is not None else None
 
+    def count(self) -> int:
+        self._expire()
+        return len(self._kept)
+
     def _expire(self) -> None:
         now = time.monotonic()
         while self._kept:
             key, (used, _) = next(iter(self._kept.items()))
             if now - used < self._expiry:
                 return
-            del self._kept[key]
+            _, value = self._kept.pop(key)
             if self._dropped is not None:
-                self._dropped(key)
+                self._dropped(key, value)

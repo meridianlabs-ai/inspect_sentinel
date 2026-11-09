@@ -466,6 +466,131 @@
       "title": "ChatMessageUser",
       "type": "object"
     },
+    "CompleteRegistrationParams": {
+      "description": "Parameters of `complete_registration`: one sample of a registered task, sent before the sample's first epoch.",
+      "properties": {
+        "eval_id": {
+          "description": "The eval's id, as its requests name it.",
+          "title": "Eval Id",
+          "type": "string"
+        },
+        "token": {
+          "description": "The token `register_task` gave the eval. A call without the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps none for the eval, as after a restart, holds nothing of it for anyone.",
+          "title": "Token",
+          "type": "string"
+        },
+        "sample_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "description": "The sample's id in the dataset.",
+          "title": "Sample Id"
+        },
+        "sample_description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What is distinctive about the sample.",
+          "title": "Sample Description"
+        },
+        "sample_input": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ChatMessageSystem"
+                  },
+                  {
+                    "$ref": "#/$defs/ChatMessageUser"
+                  },
+                  {
+                    "$ref": "#/$defs/ChatMessageAssistant"
+                  },
+                  {
+                    "$ref": "#/$defs/ChatMessageTool"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          ],
+          "description": "The sample's input: a string, or chat messages as inspect_ai writes them.",
+          "title": "Sample Input"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "description": "The sample's metadata.",
+          "title": "Metadata",
+          "type": "object"
+        },
+        "task": {
+          "description": "The task's name, as `register_task` gave it.",
+          "title": "Task",
+          "type": "string"
+        }
+      },
+      "required": [
+        "eval_id",
+        "token",
+        "sample_id",
+        "sample_input",
+        "task"
+      ],
+      "title": "CompleteRegistrationParams",
+      "type": "object"
+    },
+    "CompleteRegistrationResult": {
+      "description": "That the sample's facts were stored, or that the task was registered beforehand and nothing was stored.",
+      "properties": {
+        "eval_id": {
+          "title": "Eval Id",
+          "type": "string"
+        },
+        "task": {
+          "title": "Task",
+          "type": "string"
+        },
+        "sample_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Sample Id"
+        },
+        "fixed": {
+          "description": "Whether the task was registered beforehand, in the tasks folder. Its sentinel is then given the folder's facts, the sample is not compared with them, and nothing is stored.",
+          "title": "Fixed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "eval_id",
+        "task",
+        "sample_id",
+        "fixed"
+      ],
+      "title": "CompleteRegistrationResult",
+      "type": "object"
+    },
     "ContentAudio": {
       "description": "Audio content.",
       "properties": {
@@ -1058,6 +1183,16 @@
     "EndSampleParams": {
       "description": "Parameters of `end_sample`: one sample in one epoch, once it has been scored.",
       "properties": {
+        "eval_id": {
+          "description": "The eval's id, as its requests name it.",
+          "title": "Eval Id",
+          "type": "string"
+        },
+        "token": {
+          "description": "The token `register_task` gave the eval. A call without the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps none for the eval, as after a restart, holds nothing of it for anyone.",
+          "title": "Token",
+          "type": "string"
+        },
         "sample_uuid": {
           "description": "The sample's uuid, as `x-inspect-context` gives it.",
           "title": "Sample Uuid",
@@ -1065,6 +1200,8 @@
         }
       },
       "required": [
+        "eval_id",
+        "token",
         "sample_uuid"
       ],
       "title": "EndSampleParams",
@@ -1095,8 +1232,95 @@
       "type": "object"
     },
     "JsonValue": {},
+    "Judgment": {
+      "description": "What a sentinel decided during one exchange, for an Inspect eval, which asks for it with `request_result`.",
+      "properties": {
+        "version": {
+          "const": 1,
+          "default": 1,
+          "description": "The version of the judgment.",
+          "title": "Version",
+          "type": "integer"
+        },
+        "outcome": {
+          "description": "What the exchange came to: `proceed` when the reply goes on, `reject` when the model's turn was refused and the run goes on, and `terminate` when the run has ended, in this exchange or before it.",
+          "enum": [
+            "proceed",
+            "reject",
+            "terminate"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "trimmed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "True when the sidecar was told not to send results, so each step holds only what Inspect acts on: its stage, its call, and its decision's action, message and modified call.",
+          "title": "Trimmed"
+        },
+        "steps": {
+          "description": "Every step judged during the exchange, in the order they were judged. A step that ended the run is the last. Empty when the run had already ended.",
+          "items": {
+            "$ref": "#/$defs/SentinelStep"
+          },
+          "title": "Steps",
+          "type": "array"
+        },
+        "withheld": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WithheldTurn"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model's turn, when the client was refused it because a call in it was rejected, or because a sentinel ended the run at the reply or at a call in it."
+        },
+        "proposed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WithheldTurn"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model's turn, when the client was handed it with calls taken out because they were rejected, or changed. Each call taken out is redacted, each changed call is as it ran, and `results` holds what the model is told of each call taken out. The sidecar puts those calls and results back in each later request of the conversation that doesn't already hold them."
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the provider billed for the model's reply, as Inspect writes `ModelUsage`, when the client was refused a reply the model gave. A refusal carries no usage of its own, so the client counts it from here.",
+          "title": "Usage"
+        }
+      },
+      "required": [
+        "outcome",
+        "steps"
+      ],
+      "title": "Judgment",
+      "type": "object"
+    },
     "RegisterTaskParams": {
-      "description": "Parameters of `register_task`: a task an eval runs, and its samples, sent at task init.",
+      "description": "Parameters of `register_task`: a task an eval runs, and the ids of its samples, sent at task init.",
       "properties": {
         "task": {
           "description": "The task's name.",
@@ -1122,18 +1346,44 @@
           "title": "Metadata",
           "type": "object"
         },
-        "samples": {
-          "description": "Every sample of the task.",
+        "sample_ids": {
+          "description": "The ids of the samples the eval runs, after `--limit`, `--sample-id` and the like.",
           "items": {
-            "$ref": "#/$defs/SampleFacts"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
           },
-          "title": "Samples",
+          "title": "Sample Ids",
           "type": "array"
+        },
+        "epochs": {
+          "description": "How many epochs each sample runs.",
+          "minimum": 1,
+          "title": "Epochs",
+          "type": "integer"
         },
         "eval_id": {
           "description": "The eval's id, as its requests name it.",
           "title": "Eval Id",
           "type": "string"
+        },
+        "token": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The token the eval holds for this sidecar. At the eval's first registration, one the eval made, which the sidecar keeps and hands back, so the registration can be sent again if its answer was lost. A sidecar that keeps another token for the eval answers `unauthorized`.",
+          "title": "Token"
         },
         "expiry": {
           "anyOf": [
@@ -1152,17 +1402,23 @@
       },
       "required": [
         "task",
-        "samples",
+        "sample_ids",
+        "epochs",
         "eval_id"
       ],
       "title": "RegisterTaskParams",
       "type": "object"
     },
     "RegisterTaskResult": {
-      "description": "What the sidecar stored, or that the task was registered beforehand and nothing was stored.",
+      "description": "What the sidecar stored, or that the task was registered beforehand and nothing was stored, and the eval's token.",
       "properties": {
         "eval_id": {
           "title": "Eval Id",
+          "type": "string"
+        },
+        "token": {
+          "description": "The eval's token, which every later call for the eval presents. It is the one presented, kept now if the sidecar kept none for the eval, or one made here where none was presented. The eval keeps the latest, and never hands it to an agent.",
+          "title": "Token",
           "type": "string"
         },
         "task": {
@@ -1195,6 +1451,7 @@
       },
       "required": [
         "eval_id",
+        "token",
         "task",
         "samples",
         "fixed"
@@ -1205,13 +1462,32 @@
     "RequestResultParams": {
       "description": "Parameters of `request_result`: one model request, by the eval's id for it.",
       "properties": {
+        "eval_id": {
+          "description": "The eval's id, as its requests name it.",
+          "title": "Eval Id",
+          "type": "string"
+        },
+        "token": {
+          "description": "The token `register_task` gave the eval. A call without the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps none for the eval, as after a restart, holds nothing of it for anyone.",
+          "title": "Token",
+          "type": "string"
+        },
         "id": {
           "description": "The request's `x-irid`.",
           "title": "Id",
           "type": "string"
+        },
+        "wait": {
+          "default": 0,
+          "description": "How long to wait, in seconds, while the latest attempt is still being judged, at most 30. The answer comes as soon as the attempt is decided or not judged. An eval asks again while the state is still `judging`.",
+          "minimum": 0,
+          "title": "Wait",
+          "type": "number"
         }
       },
       "required": [
+        "eval_id",
+        "token",
         "id"
       ],
       "title": "RequestResultParams",
@@ -1225,7 +1501,7 @@
           "type": "string"
         },
         "records": {
-          "description": "`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never saw the request.",
+          "description": "`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never saw the request, or the request's `x-inspect-context` named another eval.",
           "enum": [
             "held",
             "dropped",
@@ -1262,7 +1538,8 @@
                 "time_limit",
                 "error",
                 "provider_error",
-                "cut_off"
+                "cut_off",
+                "replaced_attempt"
               ],
               "type": "string"
             },
@@ -1319,32 +1596,20 @@
             }
           ],
           "default": null,
-          "description": "What each monitor and protocol recorded, every attempt's in order.",
+          "description": "What each monitor and protocol recorded, every attempt's in order. Left out where the sidecar doesn't send results.",
           "title": "Recorded"
         },
-        "withheld": {
+        "judgment": {
           "anyOf": [
             {
-              "$ref": "#/$defs/WithheldTurn"
+              "$ref": "#/$defs/Judgment"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "description": "The model's turn, when the latest attempt was refused it because a call in it was rejected, as the `sentinel` field holds it. An eval puts it into its own copy of the conversation, as it would from the field."
-        },
-        "proposed": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/WithheldTurn"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The model's turn as it proposed it, when the latest attempt was handed it with calls taken out because they were rejected, as the `sentinel` field holds it."
+          "description": "What was decided during the latest attempt, once decided, which the eval acts on and logs. Trimmed where the sidecar doesn't send results."
         }
       },
       "required": [
@@ -1354,79 +1619,19 @@
       "title": "RequestResultResult",
       "type": "object"
     },
-    "SampleFacts": {
-      "description": "One sample of a registered task.",
-      "properties": {
-        "sample_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "integer"
-            }
-          ],
-          "description": "The sample's id in the dataset.",
-          "title": "Sample Id"
-        },
-        "sample_description": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "What is distinctive about the sample.",
-          "title": "Sample Description"
-        },
-        "sample_input": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/ChatMessageSystem"
-                  },
-                  {
-                    "$ref": "#/$defs/ChatMessageUser"
-                  },
-                  {
-                    "$ref": "#/$defs/ChatMessageAssistant"
-                  },
-                  {
-                    "$ref": "#/$defs/ChatMessageTool"
-                  }
-                ]
-              },
-              "type": "array"
-            }
-          ],
-          "description": "The sample's input: a string, or chat messages as inspect_ai writes them.",
-          "title": "Sample Input"
-        },
-        "metadata": {
-          "additionalProperties": true,
-          "description": "The sample's metadata.",
-          "title": "Metadata",
-          "type": "object"
-        }
-      },
-      "required": [
-        "sample_id",
-        "sample_input"
-      ],
-      "title": "SampleFacts",
-      "type": "object"
-    },
     "SampleResultParams": {
       "description": "Parameters of `sample_result`: one sample in one epoch, before it is scored.",
       "properties": {
+        "eval_id": {
+          "description": "The eval's id, as its requests name it.",
+          "title": "Eval Id",
+          "type": "string"
+        },
+        "token": {
+          "description": "The token `register_task` gave the eval. A call without the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps none for the eval, as after a restart, holds nothing of it for anyone.",
+          "title": "Token",
+          "type": "string"
+        },
         "sample_uuid": {
           "description": "The sample's uuid, as `x-inspect-context` gives it: one sample in one epoch, the same across the sample's retries.",
           "title": "Sample Uuid",
@@ -1434,6 +1639,8 @@
         }
       },
       "required": [
+        "eval_id",
+        "token",
         "sample_uuid"
       ],
       "title": "SampleResultParams",
@@ -1447,7 +1654,7 @@
           "type": "string"
         },
         "outcome": {
-          "description": "`terminate` if a sentinel ended the sample.",
+          "description": "`terminate` if a sentinel ended the sample's latest attempt.",
           "enum": [
             "proceed",
             "terminate"
@@ -1457,7 +1664,7 @@
         },
         "store": {
           "additionalProperties": true,
-          "description": "The sentinel's store, by the keys the sentinel wrote, to copy into the sample's store.",
+          "description": "The sentinel's store of the sample's latest attempt, by the keys the sentinel wrote, to copy into the sample's store. Each attempt starts with an empty store, as the sample store does.",
           "title": "Store",
           "type": "object"
         }
@@ -1468,6 +1675,108 @@
         "store"
       ],
       "title": "SampleResultResult",
+      "type": "object"
+    },
+    "SentinelModel": {
+      "description": "A model a monitor or protocol called while a step was judged.",
+      "properties": {
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model role the call asked for, as Inspect names roles. Left out where the call named its model without a role.",
+          "title": "Role"
+        },
+        "model": {
+          "description": "The model the call went to, as Inspect names it.",
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "SentinelModel",
+      "type": "object"
+    },
+    "SentinelStep": {
+      "description": "One step judged during an exchange.",
+      "properties": {
+        "stage": {
+          "description": "Where the step was judged, as Inspect's sentinel events name it.",
+          "enum": [
+            "model_input",
+            "model_output",
+            "tool_call",
+            "tool_result"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "call": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The id of the tool call, at a tool stage.",
+          "title": "Call"
+        },
+        "decision": {
+          "additionalProperties": true,
+          "description": "The step's final decision, as the core package writes a `Decision`.",
+          "title": "Decision",
+          "type": "object"
+        },
+        "recorded": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What each monitor and protocol recorded for the step. Left out of a trimmed field.",
+          "title": "Recorded"
+        },
+        "models": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/SentinelModel"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The models the step's monitors and protocols called, each once, in the order first called. The sidecar takes a role's model from its own configuration, not from the eval's. Left out where none was called, and of a trimmed field.",
+          "title": "Models"
+        }
+      },
+      "required": [
+        "stage",
+        "decision"
+      ],
+      "title": "SentinelStep",
       "type": "object"
     },
     "ToolCall": {
@@ -1661,11 +1970,11 @@
       "type": "object"
     },
     "WithheldTurn": {
-      "description": "The model's turn, which the client was refused.",
+      "description": "The model's turn, which the client was refused or handed with calls taken out or changed.",
       "properties": {
         "message": {
           "additionalProperties": true,
-          "description": "The model's message, every call in it included, as Inspect writes a `ChatMessageAssistant`.",
+          "description": "The model's message, as Inspect writes a `ChatMessageAssistant`, every call in it included, each redacted call with its id and function only, and each changed call as it ran.",
           "title": "Message",
           "type": "object"
         },
@@ -1673,9 +1982,17 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "What the model is told happened to each of its calls, by call id. The sidecar adds the turn and these results to each later request of the conversation that doesn't already hold the turn.",
+          "description": "What the model is told happened to each call taken out, by call id. The sidecar adds the turn and these results to each later request of the conversation that doesn't already hold them.",
           "title": "Results",
           "type": "object"
+        },
+        "redacted": {
+          "description": "The calls a decision acted on, by id, whose arguments an eval is never handed. Each is in `message` with no arguments and no view. An eval holds it that way, and the sidecar puts the model's own call back in each later request of the conversation.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Redacted",
+          "type": "array"
         }
       },
       "required": [
@@ -1695,6 +2012,14 @@
       },
       "result": {
         "$ref": "#/$defs/RegisterTaskResult"
+      }
+    },
+    "complete_registration": {
+      "params": {
+        "$ref": "#/$defs/CompleteRegistrationParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CompleteRegistrationResult"
       }
     },
     "request_result": {
@@ -1725,15 +2050,23 @@
   "errors": {
     "-32001": {
       "name": "registration_refused",
-      "description": "The sidecar takes no tasks registered by an eval, and this task was not registered beforehand."
+      "description": "The sidecar takes no tasks registered by an eval, and this task was not registered beforehand; or, for `complete_registration`, the sidecar takes only the samples a task's registration names, and this sample isn't one."
     },
     "-32008": {
       "name": "registrations_full",
-      "description": "The sidecar keeps as many task registrations as it takes, and takes another once a kept one expires. A failure, not a refusal: the deployment has not said that the task may not run."
+      "description": "The sidecar keeps as many task registrations as it takes, and takes another once a kept one expires; or, for `complete_registration`, the task's registration holds as much as the sidecar takes for a task. A failure, not a refusal: the deployment has not said that the task may not run."
     },
     "-32002": {
       "name": "unknown_sample",
       "description": "The sidecar holds nothing for the sample, so an eval never mistakes a forgotten sample for a clean one."
+    },
+    "-32009": {
+      "name": "unknown_task",
+      "description": "The sidecar holds no registration of the task by the eval: it was never registered, or is no longer kept. The eval registers the task again, then completes the sample's registration."
+    },
+    "-32010": {
+      "name": "unauthorized",
+      "description": "The call didn't present the token the sidecar keeps for the eval, which only the eval's own registration was given."
     }
   }
 }

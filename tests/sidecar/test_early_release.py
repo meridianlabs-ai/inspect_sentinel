@@ -250,7 +250,7 @@ async def test_a_turn_of_calls_alone_all_rejected_is_refused_with_its_status() -
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("name", ["anthropic", "responses"])
-async def test_a_turn_ended_after_content_went_out_raises_in_the_sdk_with_the_field(
+async def test_a_turn_ended_after_content_went_out_raises_in_the_sdk(
     name: str,
 ) -> None:
     # these recordings open with text or reasoning, which goes out first
@@ -262,13 +262,11 @@ async def test_a_turn_ended_after_content_went_out_raises_in_the_sdk_with_the_fi
 
     assert isinstance(outputs[0], Release) and isinstance(outputs[-1], ErrorEvent)
     raised = _read_with_sdk(name, _sent(outputs))
-    body: Any = raised.body
-    field = (
-        body["sentinel"]
-        if name == "anthropic"
-        else body["provider_specific_fields"]["sentinel"]
-    )
-    assert field["outcome"] == "terminate"
+    assert "ended this run" in str(raised)
+    # the eval asks what was decided
+    result = await handler.request_result("request_456", "eval_789")
+    assert not isinstance(result, str)
+    assert result.latest.outcome == "terminate"
 
 
 @pytest.mark.anyio
@@ -281,8 +279,10 @@ async def test_a_turn_of_calls_alone_ended_is_refused_with_its_status() -> None:
     outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
 
     [refused] = outputs
-    assert isinstance(refused, Refuse) and refused.sentinel is not None
-    assert refused.sentinel["outcome"] == "terminate"
+    assert isinstance(refused, Refuse) and refused.status == 400
+    result = await handler.request_result("request_456", "eval_789")
+    assert not isinstance(result, str)
+    assert result.latest.outcome == "terminate"
 
 
 def _read_with_sdk(name: str, body: bytes) -> Any:
@@ -392,7 +392,7 @@ async def test_a_sentinel_given_the_finished_turn_still_has_text_released_early(
 
 
 async def _result(handler: Handler) -> tuple[str, str | None]:
-    result = await handler.request_result("request_456")
+    result = await handler.request_result("request_456", "eval_789")
     assert isinstance(result, RequestResult)
     return result.latest.state, result.latest.reason
 
@@ -680,7 +680,7 @@ async def test_a_reply_released_early_has_one_time_limit_for_all_its_judging() -
 
     # the text had gone out, so the turn fails in the stream
     assert isinstance(outputs[-1], ErrorEvent)
-    result = await early.request_result("request_456")
+    result = await early.request_result("request_456", "eval_789")
     assert not isinstance(result, str)
     assert (result.latest.state, result.latest.reason) == ("not_judged", "time_limit")
 

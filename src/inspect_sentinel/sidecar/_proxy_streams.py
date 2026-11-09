@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 
 from ._exchange import Refuse
 from ._handler import Handler
-from ._inspect_client import SentinelField
 from ._json_rpc import INVALID_PARAMS, INVALID_REQUEST, UNKNOWN_STREAM, RpcError
 from ._reply_stream import (
     ErrorEvent,
@@ -107,10 +106,6 @@ class RefuseOutput(BaseModel):
     kind: Literal["refuse"] = "refuse"
     status: int = Field(ge=400, le=599, description="The HTTP status of the error.")
     message: str = Field(description="What the caller is told.")
-    sentinel: SentinelField | None = Field(
-        default=None,
-        description="For an Inspect client: what was decided, which the proxy hook puts into the error as a top-level `sentinel` field.",
-    )
 
 
 class ErrorEventOutput(BaseModel):
@@ -373,15 +368,7 @@ def _output(output: Output) -> StreamOutput:
     if isinstance(output, Finished):
         return FinishedOutput()
     assert isinstance(output, Refuse)
-    return RefuseOutput(
-        status=output.status,
-        message=output.message,
-        sentinel=(
-            SentinelField.model_validate(output.sentinel)
-            if output.sentinel is not None
-            else None
-        ),
-    )
+    return RefuseOutput(status=output.status, message=output.message)
 
 
 def _size(output: StreamOutput) -> int:

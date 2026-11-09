@@ -1,6 +1,6 @@
-"""What an eval can recover from the endpoint for evals about a reply released early, when the `sentinel` field never reached it: the stream was cut, or its proxy didn't pass the field on.
+"""What an eval learns from the endpoint for evals about a reply released early, including one whose stream was cut.
 
-A small client of the endpoint for evals stands in for the eval, and the proxy hook is driven through the endpoint for proxies. Neither reads the field.
+A small client of the endpoint for evals stands in for the eval, and the proxy hook is driven through the endpoint for proxies.
 """
 
 import base64
@@ -49,27 +49,30 @@ class Recovered:
     reason: str | None = None
     """Why a request was not judged."""
 
-    turn: list[str] | None = None
-    """The cities of the calls in the model's turn as it proposed it, where the client was refused it or handed it with calls taken out."""
+    turn: list[str | None] | None = None
+    """The cities of the calls in the model's turn, where the client was refused it or handed it with calls taken out: None for a call a decision acted on, whose arguments an eval is never handed."""
 
     decided: list[str] | None = None
     """What each call judged was decided, where the sidecar sends results."""
 
 
 class EvalClient:
-    """A client of the endpoint for evals, as an eval asks it what became of a request whose reply didn't carry the `sentinel` field."""
+    """A client of the endpoint for evals, as an eval asks it what became of a request."""
 
-    def __init__(self, http: httpx.AsyncClient) -> None:
+    def __init__(self, http: httpx.AsyncClient, handler: Handler) -> None:
         self._http = http
+        self._handler = handler
 
     async def recover(self, irid: str) -> Recovered:
+        # the token the eval's registration would have been given
+        token = await self._handler.keep_eval_token("eval_789")
         answered = await self._http.post(
             EVAL_PATH,
             json={
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "request_result",
-                "params": {"id": irid},
+                "params": {"id": irid, "eval_id": "eval_789", "token": token},
             },
         )
         result: dict[str, Any] = answered.json()["result"]
@@ -86,7 +89,10 @@ class EvalClient:
             return Recovered("pending", decided=decided)
         if state == "not_judged":
             return Recovered("not_judged", reason=result["reason"], decided=decided)
-        turn = result.get("withheld") or result.get("proposed")
+        judgment: dict[str, Any] = result.get("judgment") or {}
+        turn: dict[str, Any] | None = judgment.get("withheld") or judgment.get(
+            "proposed"
+        )
         return Recovered(
             "decided",
             outcome=result["outcome"],
@@ -95,13 +101,13 @@ class EvalClient:
         )
 
 
-def _cities(message: dict[str, Any]) -> list[str]:
+def _cities(message: dict[str, Any]) -> list[str | None]:
     calls: list[dict[str, Any]] = message.get("tool_calls") or []
-    return [call["arguments"]["location"] for call in calls]
+    return [call["arguments"].get("location") for call in calls]
 
 
 class ProxyHook:
-    """A proxy hook that hands a reply over as it arrives, and never passes on the `sentinel` field."""
+    """A proxy hook that hands a reply over as it arrives."""
 
     def __init__(self, http: httpx.AsyncClient) -> None:
         self._http = http
@@ -179,7 +185,7 @@ async def _sidecar(
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://sidecar"
         ) as http:
-            yield ProxyHook(http), EvalClient(http)
+            yield ProxyHook(http), EvalClient(http, handler)
 
 
 @pytest.mark.anyio
@@ -192,27 +198,27 @@ async def _sidecar(
             "Tokyo",
             "finished",
             "proceed",
-            _CALLS,
+            ["Paris", None, "Lima"],
             ["proceed", "reject", "proceed"],
         ),
-        ("reject", "every", "error_event", "reject", _CALLS, ["reject"] * 3),
+        ("reject", "every", "error_event", "reject", [None] * 3, ["reject"] * 3),
         (
             "terminate",
             "Tokyo",
             "error_event",
             "terminate",
-            None,
+            ["Paris", None, "Lima"],
             ["proceed", "terminate"],
         ),
     ],
     ids=["one call taken out", "every call rejected", "run ended"],
 )
-async def test_what_a_reply_released_early_came_to_is_recovered_without_the_field(
+async def test_what_a_reply_released_early_came_to_is_recovered(
     action: str,
     city: str,
     last: str,
     outcome: str,
-    turn: list[str] | None,
+    turn: list[str | None] | None,
     decided: list[str],
     results: bool,
 ) -> None:
@@ -277,7 +283,7 @@ async def test_a_turn_judged_when_the_client_went_is_pending_then_decided(
     assert recovered == Recovered(
         "decided",
         outcome="proceed",
-        turn=_CALLS,
+        turn=[None, "Tokyo", "Lima"],
         decided=["reject", "proceed", "proceed"] if results else None,
     )
 
