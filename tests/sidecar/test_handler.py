@@ -1451,8 +1451,18 @@ async def test_a_reply_in_flight_when_its_conversation_ended_is_refused(
 
 
 @pytest.mark.anyio
-async def test_a_conversation_with_two_calls_under_one_id_is_unreadable() -> None:
-    handler = Handler(rejects_tokyo_and_ends_at_any_result())
+@pytest.mark.parametrize(
+    "sentinel",
+    [
+        pytest.param(rejects_tokyo_and_ends_at_any_result, id="results watched"),
+        # the refusal doesn't depend on a sentinel that judges results
+        pytest.param(weather_rule, id="results not watched"),
+    ],
+)
+async def test_a_conversation_with_two_calls_under_one_id_is_unreadable(
+    sentinel: Callable[[], Protocol | ProtocolGroup],
+) -> None:
+    handler = Handler(sentinel())
     # the model made its second call under the id of its first, so which of
     # the two each result is of can't be told, and neither is judged on a guess
     then = [*ran("Oslo", "mild", "toolu_1"), *ran("Lima", "storm", "toolu_1")]
