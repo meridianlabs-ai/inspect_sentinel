@@ -645,15 +645,15 @@ def request_format(provider: str, body: bytes, format: Format | None = None) -> 
 
 def call_texts(
     provider: str, body: bytes, format: Format | None = None
-) -> dict[str, list[str]]:
-    """What the model said with each tool call in a request, as the client wrote it, by call id, in the order the calls come, where reading the request can change it.
+) -> dict[str, str]:
+    """What the model said with each tool call in a request, as the client wrote it, by call id, where reading the request can change it.
 
     inspect_ai's Chat Completions reader merges a turn some scaffolds split, assistant(calls) -> tool -> assistant(text), moving the later text into the turn that made the calls. What the model said with a call is then its own words as the client wrote them, so a summary that follows a result doesn't make the result new. Other formats are read as written, and have nothing here.
     """
     request = json_object(body, "request")
     if _request_format(provider, request, format) != "openai-chat":
         return {}
-    said: dict[str, list[str]] = {}
+    said: dict[str, str] = {}
     for entry in _conversation(request, _api(provider, request, format)):
         if not isinstance(entry, dict):
             continue
@@ -668,8 +668,7 @@ def call_texts(
         )
         for call in cast("list[object]", calls):
             if isinstance(call, dict):
-                call_id = str(cast("dict[str, Any]", call).get("id"))
-                said.setdefault(call_id, []).append(written)
+                said[str(cast("dict[str, Any]", call).get("id"))] = written
     return said
 
 

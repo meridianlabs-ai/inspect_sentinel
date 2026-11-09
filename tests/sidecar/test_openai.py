@@ -1045,13 +1045,13 @@ async def test_a_request_with_text_inspect_ai_would_drop_is_unreadable(
         await read_request("openai", json.dumps(body).encode())
 
 
-def _write_file(text: str) -> dict[str, Any]:
+def _write_file(text: str, call: str = "call_1") -> dict[str, Any]:
     return {
         "role": "assistant",
         "content": None,
         "tool_calls": [
             {
-                "id": "call_1",
+                "id": call,
                 "type": "function",
                 "function": {
                     "name": "write_file",
@@ -1453,6 +1453,8 @@ def ends_at_a_second_result() -> Protocol:
 
 _CALLED = _write_file("Rain.") | {"content": None}
 _RESULT = {"role": "tool", "tool_call_id": "call_1", "content": "Written."}
+_CALLED_2 = _write_file("Rain.", "call_2") | {"content": None}
+_RESULT_2 = _RESULT | {"tool_call_id": "call_2"}
 
 
 def _chat_asked(id: str, *then: dict[str, Any]) -> Request:
@@ -1522,20 +1524,16 @@ def ends_at_a_storm_the_model_mentions() -> Protocol:
 
 
 @pytest.mark.anyio
-async def test_each_call_that_reuses_an_id_keeps_its_own_words() -> None:
+async def test_a_result_beside_changed_words_is_judged_again() -> None:
     handler = Handler(ends_at_a_storm_the_model_mentions())
 
-    def turns(first: str) -> list[dict[str, Any]]:
-        return [
-            _CALLED | {"content": first},
-            _RESULT,
-            _CALLED | {"content": "Fine too."},
-            _RESULT,
-        ]
-
-    first = await handler.request(_chat_asked("a", *turns("Fine.")))
-    # the earlier of two calls with one id, beside changed words
-    second = await handler.request(_chat_asked("b", *turns("A storm.")))
+    first = await handler.request(
+        _chat_asked("a", _CALLED | {"content": "Fine."}, _RESULT)
+    )
+    # the same call and result, beside other words of the model's
+    second = await handler.request(
+        _chat_asked("b", _CALLED | {"content": "A storm."}, _RESULT)
+    )
 
     assert (first, isinstance(second, Refuse)) == (Pass(), True)
 
@@ -1809,14 +1807,25 @@ async def test_a_span_inside_reasoning_is_read_in_the_reasoning() -> None:
 
 
 @pytest.mark.anyio
-async def test_two_calls_that_share_an_id_and_a_result_are_each_judged() -> None:
-    # a client can use one id in different turns, and the same call can give
-    # the same result twice: each ran
+async def test_two_calls_alike_but_for_their_ids_are_each_judged() -> None:
+    # the same call can give the same result twice: each ran
     handler = Handler(ends_at_a_second_result())
 
-    answer = await handler.request(_chat_asked("a", _CALLED, _RESULT, _CALLED, _RESULT))
+    answer = await handler.request(
+        _chat_asked("a", _CALLED, _RESULT, _CALLED_2, _RESULT_2)
+    )
 
     assert isinstance(answer, Refuse)
+
+
+@pytest.mark.anyio
+async def test_a_conversation_with_two_calls_under_one_id_is_unreadable() -> None:
+    handler = Handler(ends_at_a_second_result())
+
+    # which call each result is of can't be told, so neither is judged on a
+    # guess
+    with pytest.raises(UnreadableError, match="two tool calls with the id 'call_1'"):
+        await handler.request(_chat_asked("a", _CALLED, _RESULT, _CALLED, _RESULT))
 
 
 @protocol
@@ -1830,9 +1839,10 @@ def notes_what_the_model_was_sent() -> Protocol:
     return decide
 
 
-def _chat_reply_calling(id: str) -> Reply:
+def _chat_reply_calling(id: str, call: str = "call_1") -> Reply:
     reply = json.loads(openai_recorded("chat")[1])
-    reply["choices"][0]["message"]["tool_calls"] = _write_file("Rain.")["tool_calls"]
+    calls = _write_file("Rain.", call)["tool_calls"]
+    reply["choices"][0]["message"]["tool_calls"] = calls
     return Reply(
         id=id,
         provider="openai",
@@ -1850,43 +1860,34 @@ async def _explained(handler: Handler, id: str) -> list[str]:
 
 
 @pytest.mark.anyio
-async def test_each_call_that_shares_an_id_is_judged_with_what_its_model_was_sent() -> (
-    None
-):
-    handler = Handler(notes_what_the_model_was_sent())
-    # the model is handed call_1 twice, in two turns
-    await handler.request(_chat_asked("a"))
-    await handler.reply(_chat_reply_calling("a"))
-    await handler.request(_chat_asked("b", _CALLED, _RESULT))
-    await handler.reply(_chat_reply_calling("b"))
-
-    # and the client changes the first call's result
-    changed = _RESULT | {"content": "Written again."}
-    await handler.request(_chat_asked("c", _CALLED, changed, _CALLED, _RESULT))
-
-    # the first was made from what the model was sent for "a", the system
-    # prompt and the user's message, not for "b"
-    assert (await _explained(handler, "c"))[0] == "2"
-
-
-@pytest.mark.anyio
-async def test_a_result_whose_call_is_no_longer_kept_is_judged_without_input(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("kept", "explained"),
+    [
+        pytest.param(64, ["2", "4"], id="both kept"),
+        pytest.param(1, ["None", "4"], id="the older dropped"),
+    ],
+)
+async def test_each_result_is_judged_with_what_its_models_was_sent_while_kept(
+    kept: int, explained: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from inspect_sentinel.sidecar import _handler
 
-    monkeypatch.setattr(_handler, "MADE_KEPT", 1)
+    monkeypatch.setattr(_handler, "MADE_KEPT", kept)
     handler = Handler(notes_what_the_model_was_sent())
+    # the model is handed a call in each of two turns
     await handler.request(_chat_asked("a"))
     await handler.reply(_chat_reply_calling("a"))
     await handler.request(_chat_asked("b", _CALLED, _RESULT))
-    # a later call takes the one place kept
-    await handler.reply(_chat_reply_calling("b"))
+    await handler.reply(_chat_reply_calling("b", "call_2"))
 
+    # and the client changes the first call's result, so it is judged again
     changed = _RESULT | {"content": "Written again."}
-    await handler.request(_chat_asked("c", _CALLED, changed, _CALLED, _RESULT))
+    await handler.request(_chat_asked("c", _CALLED, changed, _CALLED_2, _RESULT_2))
 
-    assert (await _explained(handler, "c"))[0] == "None"
+    # the first was made from what the model was sent for "a", the system
+    # prompt and the user's message, and the second from what "b" sent, unless
+    # the first was dropped to keep the second
+    assert await _explained(handler, "c") == explained
 
 
 @pytest.mark.parametrize(
@@ -1929,21 +1930,6 @@ def test_a_code_interpreter_without_files_is_read() -> None:
     assert len(offered("openai", json.dumps(body).encode()).tools) == 1
 
 
-@pytest.mark.anyio
-async def test_a_conversation_that_lost_calls_with_a_shared_id_is_unreadable() -> None:
-    handler = Handler(ends_at_a_second_result())
-    await handler.request(_chat_asked("a"))
-    await handler.reply(_chat_reply_calling("a"))
-    await handler.request(_chat_asked("b", _CALLED, _RESULT))
-    # the model is handed the same call again
-    await handler.reply(_chat_reply_calling("b"))
-
-    # and the client compacts its conversation, keeping only the later run,
-    # which can't be told from the earlier one
-    with pytest.raises(UnreadableError, match="fewer calls with the id 'call_1'"):
-        await handler.request(_chat_asked("c", _CALLED, _RESULT))
-
-
 @protocol
 def notes_each_result() -> Protocol:
     async def decide(
@@ -1955,16 +1941,16 @@ def notes_each_result() -> Protocol:
 
 
 @pytest.mark.anyio
-async def test_each_run_of_a_call_is_judged_once() -> None:
-    then = [_CALLED, _RESULT, _CALLED, _RESULT]
+async def test_each_result_is_judged_once() -> None:
+    then = [_CALLED, _RESULT, _CALLED_2, _RESULT_2]
     handler = Handler(notes_each_result())
     await handler.request(_chat_asked("a"))
     await handler.reply(_chat_reply_calling("a"))
     await handler.request(_chat_asked("b", _CALLED, _RESULT))
-    await handler.reply(_chat_reply_calling("b"))
+    await handler.reply(_chat_reply_calling("b", "call_2"))
 
     await handler.request(_chat_asked("c", *then))
-    # and the same again
+    # and the same again, as every request sends the history
     await handler.request(_chat_asked("d", *then))
 
     assert [len(await _explained(handler, id)) for id in "bcd"] == [1, 1, 0]
@@ -1982,100 +1968,8 @@ def test_a_code_interpreter_in_a_container_the_provider_keeps_is_unreadable() ->
         offered("openai", json.dumps(body).encode())
 
 
-_SNOW = {
-    "id": "call_2",
-    "type": "function",
-    "function": {"name": "write_file", "arguments": json.dumps({"text": "Snow."})},
-}
-
-
-class _Calls(StoreModel):
-    judged: dict[str, int] = {}
-
-
-@protocol
-def ends_at_a_second_result_of_call_1() -> Protocol:
-    async def decide(
-        context: Context, step: AfterToolCall, escalations: Escalations
-    ) -> Decision | None:
-        calls = context.store_as(_Calls)
-        judged = calls.judged | {step.call.id: calls.judged.get(step.call.id, 0) + 1}
-        calls.judged = judged
-        if judged.get("call_1", 0) > 1:
-            return Decision.terminate("a second result of call_1")
-        return Decision.proceed()
-
-    return decide
-
-
 @pytest.mark.anyio
-async def test_compaction_is_noticed_however_many_calls_follow(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from inspect_sentinel.sidecar import _handler
-
-    # fewer calls kept than the reply below hands out
-    monkeypatch.setattr(_handler, "MADE_KEPT", 1)
-    handler = Handler(ends_at_a_second_result_of_call_1())
-    await handler.request(_chat_asked("a"))
-    await handler.reply(_chat_reply_calling("a"))
-    await handler.request(_chat_asked("b", _CALLED, _RESULT))
-    # the model is handed call_1 again, and another call after it
-    both = json.loads(_chat_reply_calling("b").body)
-    both["choices"][0]["message"]["tool_calls"].append(_SNOW)
-    await handler.reply(
-        replace(_chat_reply_calling("b"), body=json.dumps(both).encode())
-    )
-
-    # the client compacts its conversation to the later turn alone
-    with pytest.raises(UnreadableError, match="fewer calls"):
-        await handler.request(
-            _chat_asked(
-                "c",
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [*_write_file("Rain.")["tool_calls"], _SNOW],
-                },
-                _RESULT,
-                {"role": "tool", "tool_call_id": "call_2", "content": "Written."},
-            )
-        )
-
-
-@pytest.mark.anyio
-async def test_compaction_of_calls_the_sidecar_never_handed_out_is_noticed() -> None:
-    handler = Handler(notes_what_the_model_was_sent())
-    # the conversation already holds a call to call_1 when the sidecar first
-    # sees it
-    earlier = [_CALLED, _RESULT]
-    await handler.request(_chat_asked("a", *earlier))
-    await handler.reply(_chat_reply_calling("a"))
-    first = [_CALLED, _RESULT | {"content": "Written first."}]
-    await handler.request(_chat_asked("b", *earlier, *first))
-    await handler.reply(_chat_reply_calling("b"))
-
-    # compaction drops the call the sidecar never handed out
-    second = [_CALLED, _RESULT | {"content": "Written second."}]
-    with pytest.raises(UnreadableError, match="fewer calls"):
-        await handler.request(_chat_asked("c", *first, *second))
-
-
-@pytest.mark.anyio
-async def test_compaction_of_history_the_sidecar_was_only_sent_is_noticed() -> None:
-    handler = Handler(notes_each_result())
-    # two calls with one id, already in the conversation, and no reply since
-    # has handed out a call
-    first = [_CALLED, _RESULT | {"content": "Written first."}]
-    second = [_CALLED, _RESULT | {"content": "Written second."}]
-    await handler.request(_chat_asked("a", *first, *second))
-
-    with pytest.raises(UnreadableError, match="fewer calls"):
-        await handler.request(_chat_asked("b", *second))
-
-
-@pytest.mark.anyio
-async def test_a_retried_reply_does_not_count_its_call_twice() -> None:
+async def test_a_retried_request_may_be_handed_the_same_call_again() -> None:
     handler = Handler(notes_each_result())
     await handler.request(_chat_asked("a"))
     await handler.reply(_chat_reply_calling("a"))
