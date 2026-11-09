@@ -1382,7 +1382,7 @@
             }
           ],
           "default": null,
-          "description": "The token an earlier registration gave the eval, if it was given one. A sidecar that keeps a token for the eval refuses a registration without it, with `unauthorized`.",
+          "description": "The token the eval holds for this sidecar. At the eval's first registration, one the eval made, which the sidecar keeps and hands back, so the registration can be sent again if its answer was lost. A sidecar that keeps another token for the eval answers `unauthorized`.",
           "title": "Token"
         },
         "expiry": {
@@ -1417,7 +1417,7 @@
           "type": "string"
         },
         "token": {
-          "description": "The eval's token, which every later call for the eval presents. It is the one presented, or a new one where the sidecar kept none for the eval. The eval keeps the latest, and never hands it to an agent.",
+          "description": "The eval's token, which every later call for the eval presents. It is the one presented, kept now if the sidecar kept none for the eval, or one made here where none was presented. The eval keeps the latest, and never hands it to an agent.",
           "title": "Token",
           "type": "string"
         },

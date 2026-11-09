@@ -65,7 +65,7 @@ class RegisterTaskParams(TaskRegistration):
     eval_id: str = Field(description="The eval's id, as its requests name it.")
     token: str | None = Field(
         default=None,
-        description="The token an earlier registration gave the eval, if it was given one. A sidecar that keeps a token for the eval refuses a registration without it, with `unauthorized`.",
+        description="The token the eval holds for this sidecar. At the eval's first registration, one the eval made, which the sidecar keeps and hands back, so the registration can be sent again if its answer was lost. A sidecar that keeps another token for the eval answers `unauthorized`.",
     )
     expiry: float | None = Field(
         default=None,
@@ -79,7 +79,7 @@ class RegisterTaskResult(BaseModel):
 
     eval_id: str
     token: str = Field(
-        description="The eval's token, which every later call for the eval presents. It is the one presented, or a new one where the sidecar kept none for the eval. The eval keeps the latest, and never hands it to an agent."
+        description="The eval's token, which every later call for the eval presents. It is the one presented, kept now if the sidecar kept none for the eval, or one made here where none was presented. The eval keeps the latest, and never hands it to an agent."
     )
     task: str
     samples: int = Field(description="How many samples the registration named.")
@@ -315,9 +315,13 @@ async def _answered(handler: Handler, given: BaseModel, results: bool) -> BaseMo
             raise RpcError(REGISTRATIONS_FULL, str(ex)) from None
         except RegistrationError as ex:
             raise RpcError(REGISTRATION_REFUSED, str(ex)) from None
-        # made only now, so a registration that failed leaves none behind
+        # kept only now, so a registration that failed leaves none behind; the
+        # eval's own token where it sent one, so that a first registration
+        # whose answer was lost gets the same token when it is sent again
         token = (
-            kept if kept is not None else await handler.keep_eval_token(given.eval_id)
+            kept
+            if kept is not None
+            else await handler.keep_eval_token(given.eval_id, given.token)
         )
         return RegisterTaskResult(
             eval_id=given.eval_id,

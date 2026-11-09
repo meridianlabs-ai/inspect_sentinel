@@ -80,13 +80,13 @@ What each probe answer means:
 | a sidecar, with a version Inspect knows | use it | use it |
 | a sidecar, with no version Inspect knows | fail the task | fail the task |
 | a 404, or an answer that isn't a sidecar | no sidecar: run as today | fail the task |
-| a 401 or 403, a 5xx, or a timeout | can't tell: run as today, with a debug line | fail the task |
+| a 401 or 403, a 5xx, or a timeout | can't tell: run as today for this call, with a warning the first time, and probe again on the next call | fail the task |
 
 **Off unless set.** An eval that doesn't set `sentinel_proxy` sends exactly the requests it sends today: no probe, no header, and no call under `/sentinel/`. A deployment with a sidecar sets `auto` or `required` for its evals, for example in its runner, or with `INSPECT_EVAL_SENTINEL_PROXY`. `auto` can't guarantee that the sidecar is used, so a deployment that relies on its sidecar sets `required`.
 
 **Proposed: credentials.** The probe and every call under `/sentinel/` reuse the authentication configured for the model's endpoint, in whatever form Inspect uses for that model. The proxy checks them as it checks a model call.
 
-**Decided: the eval's token.** Every call under `/sentinel/` after `register_task` also carries the eval's `eval_id` and a token the sidecar gave the eval (section 2), as parameters. The sidecar answers it only for that eval's requests and samples. Inspect keeps the token in its own process: it is never put into a model request, a sandbox or the eval log, so an agent that can reach `/sentinel/` can't read the eval's results ([sidecar.md, the eval's token](sidecar.md#the-evals-token)).
+**Decided: the eval's token.** Every call under `/sentinel/` after `register_task` also carries the eval's `eval_id` and the eval's token (section 2), as parameters. The sidecar answers it only for that eval's requests and samples. Inspect keeps the token in its own process: it is never put into a model request, a sandbox or the eval log, so an agent that can reach `/sentinel/` can't read the eval's results ([sidecar.md, the eval's token](sidecar.md#the-evals-token)).
 
 **Not in PR 11: a separate port for the endpoint.** A sidecar can serve its endpoint for evals on a port of its own, with its own token. Inspect can't find that from the model's address, so PR 11 doesn't support it.
 
@@ -105,7 +105,7 @@ Envoy and LiteLLM both forward `/sentinel/` at the root. An OpenAI base URL usua
 - **Under `required`, the assigned model's endpoint is probed whatever its address,** so a task that relies on a sidecar fails if it is pointed at the provider directly.
 - **At task start, Inspect probes the endpoint of the task's assigned model:** the model the eval runs with, such as `--model`. So `required` fails the task before any sample runs.
 - **Any other endpoint is probed the first time an agent call goes to it,** such as a model given to a role that the agent hands work to. Inspect can't know these up front, because an agent can pick a model at any point.
-- **Each endpoint is probed once per task,** per endpoint and credentials, and the answer is kept for the rest of the task.
+- **Each endpoint is probed once per task,** per endpoint and credentials, and the answer is kept for the rest of the task when it is definite: a sidecar, a 404, or an answer that isn't a sidecar. A probe that can't tell is tried again on the next agent call to that endpoint, so one failure at task start doesn't leave a sidecar unused for the whole task.
 - **An endpoint only graders, approvers, compaction or monitors use is never probed,** because no agent call reaches it.
 - **An endpoint with no sidecar behind it gets plain model calls,** with none of Inspect's headers, as today.
 - Nothing is shared between tasks in this PR.
@@ -131,7 +131,7 @@ Inspect calls `register_task` either way. A pre-registered task runs only sample
 
 Before each epoch of a sample, and before each retry, Inspect then calls `complete_registration` with the sample's input, description and metadata (F below).
 
-**Decided: the token.** `register_task` returns `token`, a random secret for the eval. Inspect keeps the latest token it was given, and presents it in every later call for the eval: `complete_registration`, `request_result`, `sample_result`, `end_sample`, and `register_task` for the eval's other tasks. When the sidecar keeps no token for the eval, as after a restart or once the token expired, `complete_registration` answers `unknown_task`, and Inspect registers the task again and is given a new token (F below).
+**Decided: the token.** Inspect makes `token`, a random secret for the eval, before its first registration, sends it in that `register_task`, and presents it in every later call for the eval: `complete_registration`, `request_result`, `sample_result`, `end_sample`, and `register_task` for the eval's other tasks. The sidecar keeps the token at the first registration and hands it back, so a first registration whose answer was lost is sent again with the same token and gets it back; a sidecar that keeps another token for the eval answers `unauthorized`. When the sidecar keeps no token for the eval, as after a restart or once the token expired, `complete_registration` answers `unknown_task`, and Inspect registers the task again with the same token, which the sidecar keeps again (F below).
 
 The sidecar gives one of five answers.
 
@@ -402,7 +402,7 @@ Each item says what this design proposes. Where something is still needed from s
 
 - Inspect's headers go only on agent calls to an endpoint where a sidecar answered. Every other endpoint gets plain model calls, as today.
 
-- Each sidecar gets its own `register_task`, `complete_registration` and `end_sample`, and gives the eval a token of its own, which Inspect presents only to that sidecar. `request_result` goes to the sidecar the call went to. A registration that fails mid-run fails that sample, not the task.
+- Each sidecar gets its own `register_task`, `complete_registration` and `end_sample`, with a token Inspect made for that sidecar alone, which it presents only there. `request_result` goes to the sidecar the call went to. A registration that fails mid-run fails that sample, not the task.
 
 - `required` covers only the assigned model's endpoint. An agent call to another endpoint with no sidecar behind it goes through unjudged. Inspect says so: a warning once per model, and a note in the sample's transcript the first time each attempt calls it.
 

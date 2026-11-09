@@ -1033,15 +1033,34 @@ async def test_a_registration_that_fails_leaves_no_token_behind() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_new_token_is_made_for_an_eval_the_sidecar_has_lost() -> None:
-    # as after a restart: the eval's old token is no longer kept, so its
-    # registration again is given a new one
+async def test_a_first_registration_sent_again_with_its_token_gets_the_same_token_back() -> (
+    None
+):
+    # the eval makes its token and sends it with its first registration, so
+    # when the answer is lost the registration can be sent again with it
     async with _client(Handler(weather_rule())) as client:
-        answered = await _call(
-            client, "register_task", _REGISTRATION | {"token": "from_before"}
+        first = await _call(
+            client, "register_task", _REGISTRATION | {"token": "made-by-the-eval"}
+        )
+        again = await _call(
+            client, "register_task", _REGISTRATION | {"token": "made-by-the-eval"}
         )
 
-    assert answered["result"]["token"] != "from_before"
+    assert first["result"]["token"] == "made-by-the-eval"
+    assert again["result"]["token"] == "made-by-the-eval"
+
+
+@pytest.mark.anyio
+async def test_a_first_registration_sent_again_without_its_token_is_refused() -> None:
+    # once the sidecar keeps the eval's token, nobody registers for the eval
+    # without it
+    async with _client(Handler(weather_rule())) as client:
+        await _call(
+            client, "register_task", _REGISTRATION | {"token": "made-by-the-eval"}
+        )
+        answered = await _call(client, "register_task", _REGISTRATION)
+
+    assert answered["error"]["code"] == UNAUTHORIZED
 
 
 @pytest.mark.anyio

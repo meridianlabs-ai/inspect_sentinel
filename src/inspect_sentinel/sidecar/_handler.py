@@ -401,15 +401,17 @@ class Handler:
             )
         return kept
 
-    async def keep_eval_token(self, eval_id: str) -> str:
-        """Make and keep a secret for an eval whose registration succeeded, unless one is kept already, as when two registrations made it at once.
+    async def keep_eval_token(self, eval_id: str, chosen: str | None = None) -> str:
+        """Keep a secret for an eval whose registration succeeded, unless one is kept already, as when two registrations made it at once.
 
-        Made only once a registration succeeds, so a registration that fails leaves no secret its caller was never given.
+        The secret is `chosen`, the one the eval made and sent with its first registration, or one made here when the eval chose none. Kept only once a registration succeeds, so a registration that fails leaves no secret behind. A repeat of a first registration that carries the same chosen secret is given it back, so a registration whose answer was lost can be sent again.
 
         Returns:
             The secret kept for the eval, which every later call for it presents.
         """
-        return await self._state.keep_eval_token(eval_id, secrets.token_urlsafe(32))
+        return await self._state.keep_eval_token(
+            eval_id, chosen if chosen is not None else secrets.token_urlsafe(32)
+        )
 
     async def holds_eval(self, eval_id: str, token: str) -> bool:
         """Whether the sidecar keeps a secret for the eval, which the caller must present.
