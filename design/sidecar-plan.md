@@ -184,15 +184,15 @@ Acceptance tests use a provider and a sentinel whose progress is controlled: pre
 
 ## PR 11: Inspect client for the sidecar
 
-Repositories: `inspect_ai`, with the sidecar's side in `inspect_sentinel`. Depends on: PRs 5, 6 and 7 (above). Design: [inspect-client.md](inspect-client.md).
+Repositories: `inspect_ai`, with the sidecar's side in `inspect_sentinel`. Depends on: PRs 5, 6 and 7 (above). Design: [sidecar.md, section 9](sidecar.md#9-a-connection-between-an-eval-and-its-sentinel).
 
 Scheduled after PR 10. The initial client uses whole-response holding; support for incremental replies follows in PR 12. While PRs 9 and 10 are built, agree the client contract with Meridian: activation and discovery failure, registration requirements, model-cache behavior, request and message identity, retries, missing results, scoring and cleanup. Review the trusted-host scope alongside #117 before implementing the client. Keep ordinary evals and in-process sentinels unchanged, and split the implementation into separately reviewable changes.
 
 Keep the integration transparent to eval authors and preserve the existing eval and task interfaces. "Inspect client for the sidecar" describes its responsibility, without prescribing a public type or a choice users must make between local and remote execution. Its internal names, structure and any necessary deployment configuration are for Meridian to agree.
 
-- The probe, `register_task` and the client's one setting, `off` (the default), `auto` or `required`, at task init (section 9 and [inspect-client.md](inspect-client.md)). An answer with `fixed` true, for a task in the tasks folder, is a success.
+- The probe, `register_task` and the client's one setting, `off` (the default), `auto` or `required`, at task init ([sidecar.md, section 9](sidecar.md#turning-the-client-on)). An answer with `fixed` true, for a task in the tasks folder, is a success.
 - `complete_registration` before each sample's first epoch, with the sample's input and metadata. The sidecar's side, with its `strictness` setting, is built ahead of the client.
-- Not in PR 11: the exemption for model calls that aren't the agent's ([inspect-client.md, K](inspect-client.md#k-model-calls-that-arent-the-agents)). It follows as its own change, after the client, once what Inspect signs and how the key reaches both sides are settled. It is off by default, so nothing in PR 11 depends on it.
+- Not in PR 11: the exemption for model calls that aren't the agent's ([sidecar.md, "Deferred"](sidecar.md#deferred)). It follows as its own change, after the client, once what Inspect signs and how the key reaches both sides are settled. It is off by default, so nothing in PR 11 depends on it.
 - Any subset of a registered task's samples is valid. An eval that runs only some of the samples in the tasks folder, chosen with `--sample-id`, `--limit` or any other selection, runs them as usual.
 - `x-inspect-context` and `x-irid` on each model request, only after the probe found a sentinel.
 - `request_result` after every agent call that went to a sidecar, a reply or an error alike, by the call's `x-irid`, with `wait`, asking again while the answer is `judging`. A request the sidecar says it couldn't judge is recorded as not judged. One whose judgment is lost, unknown or can't be looked up is recorded as unavailable, and never as allowed.
