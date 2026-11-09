@@ -872,7 +872,7 @@ Until a sample's registration is complete, its sentinel gets no `context.eval`, 
 
 - **Facts are stored under the eval id, the task and the sample id**, which every model request names in `x-inspect-context`. The run is keyed by the header's `sample_uuid` (section 7), so each epoch of a sample is its own run, with the same facts.
 - **`metadata` is the task's own.** A sentinel gets it merged with each sample's metadata, as in Inspect's process. A sample input made of chat messages is sent in inspect_ai's JSON form for messages.
-- **A registration is kept until no request has named its task for a day.** A caller may ask for another time with `expiry`, in seconds, and Inspect doesn't. Every model request naming the task, and every new registration of it, restarts that time, so a registration is never dropped while its eval is running. `--task-expiry` caps it, at 30 days by default, and the answer says when the sidecar shortened what was asked.
+- **A registration is kept until no request has named its task for a day.** A caller may ask for another time with `expiry`, in seconds, and Inspect doesn't. Every model request naming the task, and every new registration of it, restarts that time. So a registration lasts while the eval's requests keep naming the task. A running eval that makes no such request for a day loses it. `--task-expiry` caps it, at 30 days by default, and the answer says when the sidecar shortened what was asked.
 - **The number of registrations is bounded** by `--max-task-registrations`, 1000 by default, because anything that can reach the endpoint for evals can register a task. A new registration past it fails with `registrations_full`, with the code `-32008`, and no registration in use is dropped to make room. This is a failure, not a refusal: the task may run there once a registration expires.
 - **Each registration is bounded by `--max-body-bytes`**, which is what a whole registration could hold in one call. The bound covers the registration, the facts of each completed sample, and the id of each sample a sample's registration added. A sample's registration past it also fails with `registrations_full`. Facts arrive at each sample's first agent call, so an eval whose facts exceed the bound fails its later samples partway through. Facts are kept until the registration expires, and dropping them as samples end is a follow-up ([#169](https://github.com/meridianlabs-ai/inspect_sentinel/issues/169)).
 - **Registering again changes no run that has started.** A new registration replaces the one held, unless that one is fixed, and keeps each completed sample it still names. A run takes its sample's facts at its first request and keeps them to its end. So resending the same registration has no effect, and Inspect can safely retry. Completing a sample's registration again replaces its facts for runs that start afterwards.
@@ -886,8 +886,8 @@ An eval's calls to the endpoint for evals are scoped by its token. The token is 
 
 - **In Inspect, a token belongs to one task and one sidecar.** Each task has its own `eval_id`, as the eval log names it, and a retried task gets a new one. Inspect makes a token for each task and each sidecar the task's calls go through, and presents it only to that sidecar. The methods let tasks of one eval share a token, and Inspect never does.
 - **`register_task` keeps and returns the token.** The eval sends it as `token`. A sidecar holding no token for the eval keeps the one sent and returns it: at the first registration, and after a restart or the token's expiry. So a first registration whose answer was lost can be resent, and gets the same token back. A client that sends none is given one the sidecar makes. Once the sidecar holds a token, `register_task` must present it, or is refused with `unauthorized`. Inspect keeps the latest token it was given.
-- **Every other method needs the token.** `complete_registration`, `request_result`, `sample_result` and `end_sample` take `eval_id` and `token`, and a wrong token is refused with `unauthorized`, with the code `-32010`.
-- **Without the eval's token, everything looks unknown.** An eval with no kept token, never registered or lost to a restart or expiry, is answered as unknown. `complete_registration` answers `unknown_task`, and Inspect registers the task again with the same token ("When registration fails" below). `request_result` answers `records` `unknown`, `sample_result` answers `unknown_sample`, and `end_sample` answers `state` `unknown`. A request whose `x-inspect-context` named another eval, and another eval's sample, get the same answers, so nothing tells a caller that they exist.
+- **Every other method needs the token.** `complete_registration`, `request_result`, `sample_result` and `end_sample` take `eval_id` and `token`. A wrong token is refused with `unauthorized`, with the code `-32010`. A call that leaves the token out is refused with JSON-RPC's invalid params, `-32602`.
+- **When the sidecar holds no token for the eval, everything looks unknown.** That is an eval never registered, or one whose token went with a restart or expiry. `complete_registration` answers `unknown_task`, and Inspect registers the task again with the same token ("When registration fails" below). `request_result` answers `records` `unknown`, `sample_result` answers `unknown_sample`, and `end_sample` answers `state` `unknown`. A request whose `x-inspect-context` named another eval, and another eval's sample, get the same answers, so nothing tells a caller that they exist.
 - **The token never leaves Inspect's process.** It goes only to the endpoint for evals, never into a model request, a sandbox or the eval's log. So an agent, even one that can reach `/sentinel/`, can't read the eval's results.
 - **A token lasts as long as a run.** It is dropped once nothing has named the eval for `--run-expiry`, a day by default. Every call to the endpoint for evals, and every model request naming the eval, restarts that time. The token is kept apart from its registration, which may expire sooner or, for a task in the tasks folder, take no room. So the token guards the eval's run records for as long as they are kept.
 - **Tokens are bounded on their own**, at `--max-task-registrations` evals, because anything that can reach the endpoint can register. Past that, a registration for an eval with no kept token fails with `registrations_full`, before anything is kept. A kept token is never dropped to make room, so its eval registers again as before.
@@ -968,6 +968,8 @@ This doesn't recover a sample already running when the sidecar restarts, or when
 - **Under `known_tasks` and `registered_only`**, its calls are refused as `unregistered`, and the attempt fails.
 
 Registering again couldn't make the attempt whole, because a restart also loses the run's history and monitor state ([shared and durable state](sidecar-plan.md#follow-up-shared-and-durable-state)). So an attempt the sidecar lost isn't scored on what the sidecar has held since. Its copy of the monitor state before scoring is marked as lost, and the sample isn't scored ("The end of a sample" below).
+
+**Known gap ([#187](https://github.com/meridianlabs-ai/inspect_sentinel/issues/187)).** Inspect marks the attempt lost only when one of its calls comes back `unregistered`. Under `open`, if another sample of the task registers it again after the restart, the running sample's copy succeeds with monitor state that began after the restart, and the sample is scored on it.
 
 ### How strict the sidecar is
 
@@ -1161,59 +1163,15 @@ Whatever is decided, Inspect receives one response, and then the judgment:
 | some tool calls rejected or modified | the reply, with those calls taken out or changed | `outcome` `proceed`, with the turn in `proposed` |
 | `proceed` at every step | the provider's reply | `outcome` `proceed` |
 
-Step by step:
+The scenario diagrams above are the walkthrough. What they don't show:
 
-1. **Inspect sends its model request to the proxy**, with `x-inspect-context` and its own `x-irid`. The example is OpenAI Chat Completions. Other routes keep their own paths and body formats.
+- **The proxy hook passes Inspect's headers on without reading them**, among the request's headers, and never passes on a credential. The proxy removes both headers before the request reaches the provider.
+- **The proxy's exchange id ties `judge_request` to the later `judge_reply`.** It is not Inspect's `x-irid`. The exchange id brings back the request, its `x-irid` and the run.
+- **At the request, the sidecar finds the run and the facts.** The run is the header's `sample_uuid`, and the sample's registered facts are found by `eval_id`, `task` and `sample_id`, and given to the sentinel as `context.eval`. It judges `AfterToolCall` for each tool result new to its conversation, beside the model's words as the client wrote them, then `BeforeGenerate`. It answers `replace` rather than `pass` when it has put back calls it took out of an earlier reply (section 4).
+- **At the reply**, it judges `AfterGenerate`, then `BeforeToolCall` for each call, and carries out the decisions as section 4 describes.
+- **Inspect asks after every reply, before the agent is given anything.** After an error, it asks only once it has stopped retrying, so a retried error such as a 503 isn't looked up.
 
-   ```http
-   POST <proxy>/v1/chat/completions
-   Content-Type: application/json
-   x-irid: request_456
-   x-inspect-context: {"version":1,"eval_id":"eval_789","task":"philadelphia","sample_id":1,"epoch":2,"sample_uuid":"sample_123","attempt":"attempt_1","attempt_number":1,"model":"openai/gpt-4.1-mini"}
-   ```
-
-2. **The proxy hook sends the request to the sidecar.** It passes on `x-inspect-context` and `x-irid` without reading them. It never passes on a credential.
-
-   ```text
-   POST <sidecar>/proxy/v1
-
-   JSON-RPC method: judge_request
-   params:
-     id: proxy_exchange_id
-     provider: "openai"
-     format: "openai-chat"
-     model: requested_model
-     headers: {x-inspect-context, x-irid}
-     body: provider_request_body
-   ```
-
-   The proxy's exchange id ties `judge_request` to the later `judge_reply`. It is not Inspect's `x-irid`.
-
-3. **The sidecar judges the request.** It finds the run by the header's `sample_uuid`, and the sample's registered facts by `eval_id`, `task` and `sample_id`. The sentinel gets those facts as `context.eval`. The sidecar judges `AfterToolCall` for each tool result new to its conversation, beside the model's words as the client wrote them, then `BeforeGenerate`. If either ends the run, it answers `refuse`, and the provider is not called. Otherwise it answers `pass`, or `replace` when it has put back calls it took out of an earlier reply (section 4). The proxy forwards the request without Inspect's two headers.
-
-4. **The proxy hook sends the whole reply to the sidecar** once the provider has finished.
-
-   ```text
-   POST <sidecar>/proxy/v1
-
-   JSON-RPC method: judge_reply
-   params:
-     id: proxy_exchange_id
-     provider: "openai"
-     format: "openai-chat"
-     model: requested_model
-     status: provider_http_status
-     content_type: provider_content_type
-     body: base64(provider_reply_bytes)
-   ```
-
-   The exchange id brings back the request, its `x-irid` and the run.
-
-5. **The sidecar judges the reply**: `AfterGenerate`, then `BeforeToolCall` for each tool call. It carries out the decisions as section 4 describes. It answers `pass` when every step proceeded, `replace` with calls taken out or changed, or `refuse` when the reply is withheld.
-
-6. **The proxy completes Inspect's request** with the sidecar's answer.
-
-7. **Inspect asks what was decided**, before the agent is given anything ("The judgment" below). It calls `request_result` with the eval's `eval_id` and token, the call's `x-irid` and a `wait`. It asks after every reply. After an error, it asks only once it has stopped retrying, so a retried error such as a 503 isn't looked up.
+The wire form of each message is under "The methods" below.
 
 At the generate stages, only `proceed` and `terminate` are carried out. The core package doesn't define `reject` and `modify` there yet, and the sidecar will follow whatever it defines.
 
@@ -1334,6 +1292,8 @@ This is the judgment for a refusal, after a sentinel ended the run at a tool res
 ### Redacted calls
 
 A rejected or modified call's original arguments are never returned to anyone, Inspect included. A step carries no copy of the call it judged.
+
+**Known gap ([#188](https://github.com/meridianlabs-ai/inspect_sentinel/issues/188)).** When a turn has a rejected call and a changed call, and the sidecar can't write the change into the reply, it refuses the turn whole. `withheld` then redacts only the rejected call, and the changed call comes back with the model's original arguments. A change to a call that isn't a function call, such as a Responses custom tool call, is one way this happens.
 
 - **Which calls are redacted.** In `withheld` and `proposed`: a rejected call, the call a `terminate` was decided at, and every call of a turn that a `terminate` at `AfterGenerate` ended.
 - **What a redacted call holds.** Only its id and function. Its `arguments` are `{}`, it has no `view` and no `parse_error`, and the turn's `redacted` lists its id.
@@ -1487,6 +1447,46 @@ The sidecar serves two endpoints:
 
 - **The endpoint for proxies**, at `POST /proxy/v1`. A proxy hook sends each request and each reply here to be judged.
 - **The endpoint for evals**, at `POST /sentinel/v1`, with the probe at `GET /sentinel/info`.
+
+**The endpoint for proxies.** A model request reaches the proxy with Inspect's two headers. The example is OpenAI Chat Completions; other routes keep their own paths and body formats:
+
+```http
+POST <proxy>/v1/chat/completions
+Content-Type: application/json
+x-irid: request_456
+x-inspect-context: {"version":1,"eval_id":"eval_789","task":"philadelphia","sample_id":1,"epoch":2,"sample_uuid":"sample_123","attempt":"attempt_1","attempt_number":1,"model":"openai/gpt-4.1-mini"}
+```
+
+The proxy hook sends the request to the sidecar, and then the whole reply once the provider has finished:
+
+```text
+POST <sidecar>/proxy/v1
+
+JSON-RPC method: judge_request
+params:
+  id: proxy_exchange_id
+  provider: "openai"
+  format: "openai-chat"
+  model: requested_model
+  headers: {x-inspect-context, x-irid}
+  body: provider_request_body
+```
+
+```text
+POST <sidecar>/proxy/v1
+
+JSON-RPC method: judge_reply
+params:
+  id: proxy_exchange_id
+  provider: "openai"
+  format: "openai-chat"
+  model: requested_model
+  status: provider_http_status
+  content_type: provider_content_type
+  body: base64(provider_reply_bytes)
+```
+
+Each is answered with `pass`, `replace` or `refuse`. The methods and their results are in `proxy_endpoint.schema.json` (section 1), and a reply handed over as it arrives uses the reply-stream methods of section 5.
 
 **By default, both endpoints share one port, 8900, and only the proxy reaches it.** Inspect reaches the endpoint for evals through the proxy, which forwards `/sentinel` to the sidecar under the same access control as model calls ("Finding the sidecar" above).
 
@@ -1795,7 +1795,7 @@ Five rules follow.
 - **No method can loosen a decision.** Every method either sends context in or reads results out. None allows a call, clears a tally, or changes the sentinel or its configuration. Decisions are made only on the requests and replies a proxy sends. When a sentinel asks a person, the answer is never accepted on an eval's credential.
 - **What an eval registers is a claim, not a fact.** A compromised client could register a false sample input or metadata to mislead a monitor. Section 8's promise that nothing in `context.eval` came from the agent holds for Inspect's registration only if the process that sent it can be trusted. Where it cannot be, an admin registers the tasks in the tasks folder, where nothing the eval sends can replace them. The sidecar then runs with `--no-runtime-task-registration`, and with `--strictness registered_only` so that it judges no request for a task outside the folder ("Advanced: a sidecar that runs only the tasks in its folder" above). Once the sidecar keeps an eval's token, only a caller holding it can replace that eval's registrations.
 - **A token works only for its own eval** ("The eval's token" above). One eval cannot register, read or end another eval's tasks, requests or samples. The token never leaves Inspect's process, so an agent inside the eval's sandbox cannot present it.
-- **A rejected or modified call's original arguments are never returned.** No step carries the call it judged, and `withheld` and `proposed` hold each call a decision acted on redacted, with arguments `{}` ("Redacted calls" above). Only the sidecar keeps the model's original call, to put back in each later request it sends the provider.
+- **A rejected or modified call's original arguments are never returned.** No step carries the call it judged, and `withheld` and `proposed` hold each call a decision acted on redacted, with arguments `{}` ("Redacted calls" above). Only the sidecar keeps the model's original call, to put back in each later request it sends the provider. One case breaks this today ([#188](https://github.com/meridianlabs-ai/inspect_sentinel/issues/188), "Redacted calls" above).
 - **Results can be withheld while decisions are still sent.** A record holds each monitor's explanation, which tells an agent what the monitor looks for, and can quote a call's arguments that redaction doesn't reach. Where the client is not trusted, `--no-eval-results` turns off `sample_result`, leaves `recorded` out of `request_result`, and trims the judgment to what Inspect acts on: each step's stage, call, action, agent-facing message and modified call. `request_result` still gives the outcome, the message, and the withheld or proposed turn, because that is how an eval learns what was decided. The judgment says it was trimmed, so it is never read as a run where the sentinel had nothing to say.
 
 What isn't designed yet is listed under "Open questions", near the end.
@@ -1865,6 +1865,8 @@ What this design hasn't settled, checked or built yet, in one place. Each item n
 - tallies kept at the task level, shared by every sample of a task, and how a sentinel asks for them (sections 7 and 10)
 
 ### To do
+
+- **Known gaps in the code ([#187](https://github.com/meridianlabs-ai/inspect_sentinel/issues/187), [#188](https://github.com/meridianlabs-ai/inspect_sentinel/issues/188)).** A sample can be scored on monitor state that began after a sidecar restart (section 9, "A sidecar that loses the task"). A changed call's original arguments can come back in a turn refused whole (section 9, "Redacted calls").
 
 Differences from a sentinel in an eval's process that are to be fixed (section 8, "What holds something else in the sidecar"):
 
