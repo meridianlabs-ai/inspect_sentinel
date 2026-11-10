@@ -18,7 +18,7 @@ MAX_TASK_EXPIRY = 30 * 24 * 60 * 60
 """The longest a task Inspect registers is kept once no request has named it, unless the sidecar is told otherwise, in seconds."""
 
 MAX_TASK_REGISTRATIONS = 1000
-"""How many tasks registered by evals are kept at once, unless the sidecar is told otherwise. Anything that can reach the endpoint for evals can register a task, so a registration past this is refused, rather than one still in use dropped."""
+"""How many tasks registered by evals are kept at once, and how many evals' tokens, unless the sidecar is told otherwise. Anything that can reach the endpoint for evals can register a task, so a registration past this is refused, rather than one still in use dropped. It also bounds the evals whose tokens are kept, with runtime registration on or off: a token is kept until no request has named its eval for the run expiry, so an eval that has finished holds a place until then."""
 
 
 class RegistrationError(Exception):

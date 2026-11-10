@@ -137,7 +137,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=MAX_TASK_REGISTRATIONS,
         metavar="COUNT",
-        help=f"How many tasks registered by evals are kept at once. Anything that can reach the endpoint for evals can register a task, so a registration past this is refused, rather than one still in use dropped. {MAX_TASK_REGISTRATIONS} by default.",
+        help=f"How many tasks registered by evals are kept at once, and how many evals' tokens. A token is kept until no request has named its eval for --run-expiry, so an eval that has finished holds a place until then, even with runtime registration off. Anything that can reach the endpoint for evals can register, so a registration past this is refused, rather than one still in use dropped. {MAX_TASK_REGISTRATIONS} by default.",
     )
     parser.add_argument(
         "--max-body-bytes",
