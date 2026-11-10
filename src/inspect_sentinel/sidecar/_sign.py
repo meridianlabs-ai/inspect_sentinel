@@ -75,11 +75,25 @@ def unproven(
     Returns:
         The reason, which never holds the `mac` the sidecar expected.
     """
-    # how far behind the sidecar's clock, so a clock problem shows as one
-    behind = time.time() - timestamp
+    # How far behind the sidecar's clock, so a clock problem shows as one.
+    # Whole seconds, as a timestamp is, because a sender can send an integer
+    # too large to become a float, and that must be refused, not raise.
+    behind = int(time.time()) - timestamp
     if abs(behind) > window:
         way = "behind" if behind > 0 else "ahead of"
-        return f"{what} timestamp is {abs(behind):.0f} seconds {way} the sidecar's clock, more than the {window:g} seconds allowed. If the eval sent it just now, the eval's clock and the sidecar's differ."
-    if not hmac.compare_digest(sign(token, values).encode(), mac.encode()):
-        return f"{what} mac isn't one made with the eval's token from the values sent."
+        far = f"{abs(behind)} seconds" if abs(behind) < 10**12 else "far"
+        return f"{what} timestamp is {far} {way} the sidecar's clock, more than the {window:g} seconds allowed. If the eval sent it just now, the eval's clock and the sidecar's differ."
+
+    # A mac is hex, so anything else is refused before it is compared. The
+    # comparison fails closed: if the sent values can't be signed at all, the
+    # request is refused, never let through as the sentinel's failure.
+    wrong = f"{what} mac isn't one made with the eval's token from the values sent."
+    if not mac.isascii():
+        return wrong
+    try:
+        expected = sign(token, values)
+    except Exception:
+        return wrong
+    if not hmac.compare_digest(expected.encode(), mac.encode()):
+        return wrong
     return None

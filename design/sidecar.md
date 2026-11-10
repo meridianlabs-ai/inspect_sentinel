@@ -1498,7 +1498,7 @@ The sidecar serves two endpoints:
 POST <proxy>/v1/chat/completions
 Content-Type: application/json
 x-irid: request_456
-x-inspect-context: {"version":2,"eval_id":"eval_789","task":"philadelphia","sample_id":1,"epoch":2,"sample_uuid":"sample_123","attempt":"attempt_1","attempt_number":1,"model":"openai/gpt-4.1-mini","timestamp":1794182400,"mac":"74412b3a14d9b3f4e1f940f1dd53b61ca618b58b3b899d13434014be4fe3a8b0"}
+x-inspect-context: {"version":1,"eval_id":"eval_789","task":"philadelphia","sample_id":1,"epoch":2,"sample_uuid":"sample_123","attempt":"attempt_1","attempt_number":1,"model":"openai/gpt-4.1-mini","timestamp":1794182400,"mac":"74412b3a14d9b3f4e1f940f1dd53b61ca618b58b3b899d13434014be4fe3a8b0"}
 ```
 
 The proxy hook sends the request to the sidecar, and then the whole reply once the provider has finished:

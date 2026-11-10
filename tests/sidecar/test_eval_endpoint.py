@@ -1349,6 +1349,42 @@ async def test_a_call_with_a_stale_timestamp_is_unauthorized(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("method", list(_OTHER_METHODS))
+async def test_a_call_with_a_timestamp_too_large_for_a_float_is_unauthorized(
+    method: str,
+) -> None:
+    async with _client(Handler(weather_rule())) as client:
+        await _registered(client)
+        answered = await _call(
+            client,
+            method,
+            _OTHER_METHODS[method] | eval_call(method, timestamp=10**400),
+        )
+
+    assert answered["error"]["code"] == UNAUTHORIZED
+    assert "timestamp is far" in answered["error"]["message"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mac", ["", "*", "\ud800", "é" * 64])
+async def test_a_call_whose_mac_isnt_hex_is_unauthorized(mac: str) -> None:
+    params = _OTHER_METHODS["sample_result"] | eval_call("sample_result") | {"mac": mac}
+    # sent as JSON escapes, as any client may, since a lone surrogate can't be
+    # encoded as UTF-8
+    body = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": "sample_result", "params": params}
+    )
+    async with _client(Handler(weather_rule())) as client:
+        await _registered(client)
+        answered = await client.post(
+            PATH, content=body, headers={"content-type": "application/json"}
+        )
+
+    assert answered.status_code == 200
+    assert answered.json()["error"]["code"] == UNAUTHORIZED
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("method", list(_OTHER_METHODS))
 async def test_a_call_with_no_token_held_gets_the_holds_nothing_answer(
     method: str,
 ) -> None:

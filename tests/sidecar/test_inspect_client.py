@@ -1643,6 +1643,53 @@ async def test_a_header_is_accepted_only_within_the_window(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("timestamp", [10**400, -(10**400)], ids=["ahead", "behind"])
+async def test_a_timestamp_too_large_for_a_float_is_refused(timestamp: int) -> None:
+    handler = await holding(Handler(weather_rule()))
+    header = _signed_header(timestamp=timestamp)
+
+    answer = await handler.request(_sent(header, "x", "irid-x"))
+
+    assert isinstance(answer, Refuse) and answer.status == 400
+    assert "far" in answer.message
+    assert await _reason(handler, "irid-x") == "unauthenticated"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("field", "raw"),
+    [
+        ("epoch", "1" + "0" * 4400),
+        ("attempt_number", "1" + "0" * 4400),
+        ("sample_id", "1" + "0" * 4400),
+        ("timestamp", "1" + "0" * 4400),
+        ("epoch", "1" + "0" * 400),
+        ("mac", '""'),
+        ("mac", '"*"'),
+        ("mac", '"\\ud800"'),
+        ("task", '"\\ud800"'),
+    ],
+)
+async def test_a_header_with_an_odd_value_is_refused_not_failed(
+    field: str, raw: str
+) -> None:
+    # a value too large to turn into text or a float, or text that can't be
+    # encoded, is refused like any wrong header, and never raises: a proxy
+    # that lets through what the sentinel failed on would let it through
+    handler = await holding(Handler(weather_rule()))
+    header = _signed_header()
+    header[field] = 0
+    text = json.dumps(header).replace(f'"{field}": 0', f'"{field}": {raw}')
+
+    answer = await handler.request(
+        replace(request("x"), headers={"x-inspect-context": text, "x-irid": "irid-x"})
+    )
+
+    assert isinstance(answer, Refuse) and answer.status == 400
+    assert await _reason(handler, "irid-x") in ("unreadable", "unauthenticated")
+
+
+@pytest.mark.anyio
 async def test_the_window_is_the_handlers_setting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
