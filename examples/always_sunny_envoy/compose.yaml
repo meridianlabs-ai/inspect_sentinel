@@ -19,8 +19,8 @@ services:
 
   sidecar:
     build:
-      context: ../..
-      dockerfile: examples/always_sunny_envoy/Dockerfile.sidecar
+      context: .
+      dockerfile: sidecar/Dockerfile
     command:
       - --sentinel
       - /sentinel/sentinel.yaml

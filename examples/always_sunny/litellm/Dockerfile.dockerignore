@@ -1,0 +1,4 @@
+# only what the build copies; local environments stay out
+*
+!litellm/pyproject.toml
+!litellm/uv.lock

@@ -165,7 +165,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "inspect-sentinel-litellm", directory = "../../../src/proxies/litellm" },
+    { name = "inspect-sentinel-litellm", git = "https://github.com/meridianlabs-ai/inspect_sentinel?subdirectory=src%2Fproxies%2Flitellm&tag=0.3.1" },
     { name = "litellm", extras = ["proxy"], specifier = "==1.105.0" },
 ]
 
@@ -1132,20 +1132,12 @@ wheels = [
 [[package]]
 name = "inspect-sentinel-litellm"
 version = "0.1.0"
-source = { directory = "../../../src/proxies/litellm" }
+source = { git = "https://github.com/meridianlabs-ai/inspect_sentinel?subdirectory=src%2Fproxies%2Flitellm&tag=0.3.1#4a119e6a889be566f04e33c1ab2b4e1213afae35" }
 dependencies = [
     { name = "aiohttp" },
     { name = "fastapi" },
     { name = "litellm", extra = ["proxy"] },
     { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10" },
-    { name = "fastapi", specifier = ">=0.120.1" },
-    { name = "litellm", extras = ["proxy"], specifier = ">=1.83.0" },
-    { name = "pydantic", specifier = ">=2.5.0" },
 ]
 
 [[package]]
