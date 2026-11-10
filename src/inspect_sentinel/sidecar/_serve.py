@@ -123,7 +123,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--strictness",
         choices=["open", "known_tasks", "registered_only"],
         default="open",
-        help="How strict the sidecar is about a request it can't place. open, the default, judges every request, without the task's facts where it holds none. known_tasks refuses a request whose x-inspect-context names a task the sidecar doesn't hold, and judges one without the header. registered_only refuses any request that doesn't name a sample the sidecar holds, including one without the header, such as a grader's or a client's other than an eval's.",
+        help="How strict the sidecar is about a request it can't place. Under every setting, a request with an x-inspect-context header must first pass the check of that header: it is refused, and not judged, if the sidecar holds no token for the eval it names, as after a restart or for an eval that never registered, if its timestamp or mac fails the check, or if it names a run another eval started. The setting says what happens to a request that passes, and to one without the header. open, the default, judges each of those, without the task's facts where it holds none. known_tasks refuses a request whose x-inspect-context names a task the sidecar doesn't hold, and judges one without the header. registered_only refuses any request that doesn't name a sample the sidecar holds, including one without the header, such as a grader's or a client's other than an eval's.",
     )
     parser.add_argument(
         "--task-expiry",

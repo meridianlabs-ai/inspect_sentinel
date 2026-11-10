@@ -30,7 +30,7 @@ class RegistrationsFullError(RegistrationError):
 
 
 Strictness: TypeAlias = Literal["open", "known_tasks", "registered_only"]
-"""How strict a sidecar is about a request it can't place. `open` judges every request, without the task's facts where it holds none. `known_tasks` refuses a request that names a task it doesn't hold, and judges one that names no task. `registered_only` refuses any request that doesn't name a sample it holds, including one that names no task."""
+"""How strict a sidecar is about a request it can't place. Under every strictness, a request with an `x-inspect-context` header is refused, and not judged, unless it passes the check of that header, which needs the token its eval registered with. The strictness says what happens to a request that passes, and to one without the header. `open` judges each of those, without the task's facts where it holds none. `known_tasks` refuses a request that names a task it doesn't hold, and judges one that names no task. `registered_only` refuses any request that doesn't name a sample it holds, including one that names no task."""
 
 
 class UnregisteredSampleError(Exception):
