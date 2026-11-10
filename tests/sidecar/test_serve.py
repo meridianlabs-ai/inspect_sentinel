@@ -160,7 +160,7 @@ async def test_an_inspect_client_can_be_sent_only_what_it_acts_on() -> None:
         _arguments("--sentinel", "no_tokyo", "--no-eval-results")
     )
     await holding(handler)
-    headers = inspect_headers(epoch=1) | {"x-irid": "irid-1"}
+    headers = inspect_headers(irid="irid-1", epoch=1)
     await handler.request(replace(request(), headers=headers))
 
     answer = await handler.reply(reply(message(weather("Tokyo"))))

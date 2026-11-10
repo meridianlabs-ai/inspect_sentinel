@@ -101,8 +101,7 @@
                 "error",
                 "provider_error",
                 "cut_off",
-                "replaced_attempt",
-                "unauthenticated"
+                "replaced_attempt"
               ],
               "type": "string"
             },

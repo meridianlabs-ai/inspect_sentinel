@@ -118,8 +118,7 @@ def _fits(part: dict[str, Any], value: Any) -> bool:
 
 def _asked(id: str, irid: str = "irid-1", **sample: Any) -> Request:
     # a request an Inspect eval sends, with its id for the request
-    headers = inspect_headers(**sample) | {"x-irid": irid}
-    return replace(request(id), headers=headers)
+    return replace(request(id), headers=inspect_headers(irid=irid, **sample))
 
 
 def _token(eval_id: str) -> str:
@@ -656,7 +655,7 @@ async def _send(handler: Handler, client: httpx.AsyncClient, case: str) -> bool:
         "a registration with the token": ("register_task", _REGISTRATION),
     }
     if case in model_requests:
-        headers = inspect_headers(**model_requests[case]) | {"x-irid": "irid-1"}
+        headers = inspect_headers(irid="irid-1", **model_requests[case])
         answer = await handler.request(replace(request("x"), headers=headers))
         return not isinstance(answer, Refuse)
     method, params = calls[case]
@@ -1569,9 +1568,8 @@ async def test_after_a_restart_a_signed_request_is_unregistered_until_the_eval_r
 
     assert isinstance(refused, Refuse) and refused.status == 400
     assert "holds no registration of the eval" in refused.message
-    attempts = await handler._state.attempts("irid-1")  # pyright: ignore[reportPrivateUsage]
-    assert isinstance(attempts, list)
-    assert (attempts[-1].state, attempts[-1].reason) == ("not_judged", "unregistered")
+    # the request that couldn't be checked was never kept
+    assert await handler._state.attempts("irid-1", "eval_789") is None  # pyright: ignore[reportPrivateUsage]
     assert not isinstance(judged, Refuse)
     result = await _request_result(handler, "irid-2")
     assert result["state"] == "awaiting_reply"

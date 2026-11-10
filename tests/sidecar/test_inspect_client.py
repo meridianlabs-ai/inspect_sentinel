@@ -1,4 +1,5 @@
 import json
+import time
 from dataclasses import replace
 from typing import Any
 
@@ -30,7 +31,7 @@ from inspect_sentinel.sidecar import (
     _state,
     read_reply,
 )
-from inspect_sentinel.sidecar._handler import _ENDED, SampleResult
+from inspect_sentinel.sidecar._handler import _ENDED, RequestResult, SampleResult
 from inspect_sentinel.sidecar._host import ListRecorder, SidecarHost
 from inspect_sentinel.sidecar._inspect_client import judgment, withheld_turn
 from inspect_sentinel.sidecar._state import MemoryState
@@ -55,8 +56,8 @@ from tests.sidecar._traffic import (
 
 
 def _from_inspect(asked: Request, irid: str | None = None, **changes: Any) -> Request:
-    headers = inspect_headers(**changes)
-    return replace(asked, headers=headers | ({"x-irid": irid} if irid else {}))
+    headers = inspect_headers(**({"irid": irid} if irid else {}), **changes)
+    return replace(asked, headers=headers)
 
 
 async def _not_judged(handler: Handler, irid: str) -> tuple[str, str | None, bool]:
@@ -129,7 +130,7 @@ async def _judgments(
 ) -> list[dict[str, Any]]:
     # what an eval is told of each attempt at the request, as `request_result`
     # writes the latest's
-    attempts = await handler._state.attempts(irid)  # pyright: ignore[reportPrivateUsage]
+    attempts = await handler._state.attempts(irid, "eval_789")  # pyright: ignore[reportPrivateUsage]
     assert isinstance(attempts, list)
     return [
         judgment(
@@ -1440,9 +1441,11 @@ async def test_a_call_no_decision_acted_on_is_never_put_back() -> None:
     assert answer == Pass()
 
 
-def _signed_header(**changes: Any) -> dict[str, Any]:
-    # the header Inspect sends, signed, as a dict to change after signing
-    header: dict[str, Any] = json.loads(inspect_headers(**changes)["x-inspect-context"])
+def _signed_header(irid: str, **changes: Any) -> dict[str, Any]:
+    # the header Inspect sends with the request `irid`, signed, as a dict to
+    # change after signing
+    signed = inspect_headers(irid=irid, **changes)
+    header: dict[str, Any] = json.loads(signed["x-inspect-context"])
     return header
 
 
@@ -1453,9 +1456,15 @@ def _sent(header: dict[str, Any], id: str, irid: str) -> Request:
 
 
 async def _reason(handler: Handler, irid: str) -> str | None:
-    attempts = await handler._state.attempts(irid)  # pyright: ignore[reportPrivateUsage]
+    attempts = await handler._state.attempts(irid, "eval_789")  # pyright: ignore[reportPrivateUsage]
     assert isinstance(attempts, list)
     return attempts[-1].reason
+
+
+async def _kept(handler: Handler, irid: str) -> bool:
+    # whether anything was kept under the request id, for `request_result`
+    attempts = await handler._state.attempts(irid, "eval_789")  # pyright: ignore[reportPrivateUsage]
+    return attempts is not None
 
 
 async def _terminated() -> Handler:
@@ -1495,7 +1504,7 @@ async def test_a_header_changed_after_it_was_signed_is_refused(
     field: str, value: Any
 ) -> None:
     handler = await _terminated()
-    header = _signed_header()
+    header = _signed_header("irid-b")
     header[field] = header["timestamp"] + 1 if field == "timestamp" else value
 
     answer = await handler.request(_sent(header, "b", "irid-b"))
@@ -1504,10 +1513,12 @@ async def test_a_header_changed_after_it_was_signed_is_refused(
     assert "mac isn't one made with the eval's token" in answer.message
     # never told the mac that would have matched
     matching = _signed_header(
-        **{name: header[name] for name in _NAMES_THE_RUN}, timestamp=header["timestamp"]
+        "irid-b",
+        **{name: header[name] for name in _NAMES_THE_RUN},
+        timestamp=header["timestamp"],
     )
     assert matching["mac"] not in answer.message
-    assert await _reason(handler, "irid-b") == "unauthenticated"
+    assert not await _kept(handler, "irid-b")
     # the run is as it was: still ended, and no other run was begun
     assert (await handler.sample_result("sample_123", "eval_789")) == SampleResult(
         "terminate", {}
@@ -1522,14 +1533,14 @@ async def test_a_header_changed_after_it_was_signed_is_refused(
 async def test_a_raised_attempt_number_doesnt_start_a_terminated_run_afresh() -> None:
     # signed as the attempt it was, then raised, as a retry would be
     handler = await _terminated()
-    header = _signed_header()
+    header = _signed_header("irid-b")
     header |= {"attempt": "attempt_2", "attempt_number": 2}
 
     answer = await handler.request(_sent(header, "b", "irid-b"))
     retried = await handler.request(_from_inspect(request("c"), "irid-c"))
 
     assert isinstance(answer, Refuse)
-    assert await _reason(handler, "irid-b") == "unauthenticated"
+    assert not await _kept(handler, "irid-b")
     assert isinstance(retried, Refuse)
     ended = await handler.sample_result("sample_123", "eval_789")
     assert ended is not None and ended.outcome == "terminate"
@@ -1544,7 +1555,7 @@ async def test_a_mac_made_with_another_evals_token_is_refused() -> None:
     answer = await handler.request(replace(request("x"), headers=signed_by_other))
 
     assert isinstance(answer, Refuse) and answer.status == 400
-    assert await _reason(handler, "request_456") == "unauthenticated"
+    assert not await _kept(handler, "request_456")
     assert await handler.sample_result("sample_123", "eval_789") is None
 
 
@@ -1555,13 +1566,14 @@ async def test_a_request_naming_another_evals_sample_is_refused() -> None:
     handler = await holding(Handler(weather_rule("terminate", "Tokyo")))
     await handler.request(_from_inspect(request("a"), "irid-a"))
     await handler.reply(reply(message(weather("Tokyo")), id="a"))
-    header = _signed_header(eval_id="eval_other")
+    header = _signed_header("irid-b", eval_id="eval_other")
 
     answer = await handler.request(_sent(header, "b", "irid-b"))
 
     # the sidecar holds no token for that eval, so it can't check the request
     assert isinstance(answer, Refuse) and answer.status == 400
-    assert await _reason(handler, "irid-b") == "unregistered"
+    assert "holds no registration of the eval" in answer.message
+    assert not await _kept(handler, "irid-b")
     # and nothing of the other eval's run changed or became readable
     assert await handler.sample_result("sample_123", "eval_other") is None
 
@@ -1587,7 +1599,7 @@ async def test_an_eval_of_the_clients_own_cant_reach_another_evals_run() -> None
     )
 
     assert isinstance(answer, Refuse) and answer.status == 400
-    assert await _reason(handler, "irid-b") == "unauthenticated"
+    assert not await _kept(handler, "irid-b")
     ended = await handler.sample_result("sample_123", "eval_789")
     assert ended is not None and ended.outcome == "terminate"
 
@@ -1662,6 +1674,38 @@ async def test_the_eval_asking_of_its_own_run_keeps_it(
     assert await handler.sample_result("sample_123", "eval_789") is not None
 
 
+@pytest.mark.anyio
+async def test_another_evals_request_with_the_same_id_leaves_the_result_as_it_was() -> (
+    None
+):
+    # A client that registered an eval of its own signs a header that passes
+    # the check, with the id of another eval's request. A request is kept
+    # under its eval and its id together, so the other eval's is untouched.
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
+    await handler.request(replace(request("a"), headers=inspect_headers(irid="irid-a")))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+    before = await handler.request_result("irid-a", "eval_789")
+    own_token = "eval-own-token-the-client-registered-with"
+    await holding(handler, "eval_own", own_token)
+
+    await handler.request(
+        replace(
+            request("b"),
+            headers=inspect_headers(
+                irid="irid-a",
+                token=own_token,
+                eval_id="eval_own",
+                sample_uuid="sample_own",
+            ),
+        )
+    )
+    after = await handler.request_result("irid-a", "eval_789")
+
+    assert not isinstance(before, str) and not isinstance(after, str)
+    assert after.latest is before.latest
+    assert after.latest.outcome == "reject"
+
+
 class _ExpiryClock:
     # what the state's expiry reads
     now = 0.0
@@ -1675,7 +1719,7 @@ class _ExpiryClock:
 @pytest.mark.parametrize("left_out", ["mac", "timestamp", "an unknown version"])
 async def test_a_header_without_its_credentials_is_unreadable(left_out: str) -> None:
     handler = await holding(Handler(weather_rule()))
-    header = _signed_header()
+    header = _signed_header("irid-x")
     if left_out == "an unknown version":
         header["version"] = 2
     else:
@@ -1686,7 +1730,81 @@ async def test_a_header_without_its_credentials_is_unreadable(left_out: str) -> 
     assert answer == Refuse(
         400, "The request's x-inspect-context header isn't one this sidecar can read."
     )
-    assert await _reason(handler, "irid-x") == "unreadable"
+    assert not await _kept(handler, "irid-x")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("irid", [None, ""], ids=["left out", "empty"])
+async def test_a_header_without_a_request_id_is_unreadable(irid: str | None) -> None:
+    # the mac signs the request's id, so without one it can't be checked
+    handler = await holding(Handler(weather_rule()))
+    header = inspect_headers()["x-inspect-context"]
+    headers = {"x-inspect-context": header} | (
+        {"x-irid": irid} if irid is not None else {}
+    )
+
+    answer = await handler.request(replace(request("x"), headers=headers))
+
+    assert answer == Refuse(
+        400,
+        "The request has an x-inspect-context header and no x-irid header, which Inspect sends with it.",
+    )
+    assert await handler.sample_result("sample_123", "eval_789") is None
+
+
+async def _with_a_judged_request() -> tuple[Handler, RequestResult]:
+    # a handler that judged the eval's request `irid-a`, and what
+    # `request_result` answers for it
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
+    await handler.request(_from_inspect(request("a"), "irid-a"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+    before = await handler.request_result("irid-a", "eval_789")
+    assert not isinstance(before, str) and before.latest.outcome == "reject"
+    return handler, before
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("sample", ["the same sample", "another sample"])
+async def test_a_mac_made_for_one_request_id_is_refused_with_another(
+    sample: str,
+) -> None:
+    # signed for `irid-b`, and sent as `irid-a`, so that what is decided of
+    # it would be filed under `irid-a`
+    handler, before = await _with_a_judged_request()
+    other = {"sample_id": 2, "sample_uuid": "sample_999"}
+    header = _signed_header("irid-b", **(other if sample == "another sample" else {}))
+
+    answer = await handler.request(_sent(header, "b", "irid-a"))
+
+    assert isinstance(answer, Refuse) and answer.status == 400
+    assert "mac isn't one made with the eval's token" in answer.message
+    assert await handler.request_result("irid-a", "eval_789") == before
+    assert not await _kept(handler, "irid-b")
+    assert await handler.sample_result("sample_999", "eval_789") is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "junk", ["a wrong mac", "a stale timestamp", "an unreadable header", "no header"]
+)
+async def test_a_junk_request_with_another_requests_id_leaves_its_result_as_it_was(
+    junk: str,
+) -> None:
+    handler, before = await _with_a_judged_request()
+    headers = {
+        "a wrong mac": inspect_headers(
+            irid="irid-a", token="a-token-the-eval-never-made-for-these-tests"
+        ),
+        "a stale timestamp": inspect_headers(
+            irid="irid-a", timestamp=int(time.time()) - 1000
+        ),
+        "an unreadable header": {"x-inspect-context": "{not json", "x-irid": "irid-a"},
+        "no header": {"x-irid": "irid-a"},
+    }[junk]
+
+    await handler.request(replace(request("b"), headers=headers))
+
+    assert await handler.request_result("irid-a", "eval_789") == before
 
 
 class _Clock:
@@ -1709,7 +1827,7 @@ async def test_a_header_is_accepted_only_within_the_window(
     # the signature's own clock only
     monkeypatch.setattr(_sign, "time", _Clock)
     handler = await holding(Handler(weather_rule()))
-    header = _signed_header(timestamp=int(_Clock.now) + off)
+    header = _signed_header("irid-x", timestamp=int(_Clock.now) + off)
 
     answer = await handler.request(_sent(header, "x", "irid-x"))
 
@@ -1719,20 +1837,20 @@ async def test_a_header_is_accepted_only_within_the_window(
         assert isinstance(answer, Refuse) and answer.status == 400
         way = "behind" if off < 0 else "ahead of"
         assert f"301 seconds {way} the sidecar's clock" in answer.message
-        assert await _reason(handler, "irid-x") == "unauthenticated"
+        assert not await _kept(handler, "irid-x")
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("timestamp", [10**400, -(10**400)], ids=["ahead", "behind"])
 async def test_a_timestamp_too_large_for_a_float_is_refused(timestamp: int) -> None:
     handler = await holding(Handler(weather_rule()))
-    header = _signed_header(timestamp=timestamp)
+    header = _signed_header("irid-x", timestamp=timestamp)
 
     answer = await handler.request(_sent(header, "x", "irid-x"))
 
     assert isinstance(answer, Refuse) and answer.status == 400
     assert "far" in answer.message
-    assert await _reason(handler, "irid-x") == "unauthenticated"
+    assert not await _kept(handler, "irid-x")
 
 
 @pytest.mark.anyio
@@ -1757,7 +1875,7 @@ async def test_a_header_with_an_odd_value_is_refused_not_failed(
     # encoded, is refused like any wrong header, and never raises: a proxy
     # that lets through what the sentinel failed on would let it through
     handler = await holding(Handler(weather_rule()))
-    header = _signed_header()
+    header = _signed_header("irid-x")
     header[field] = 0
     text = json.dumps(header).replace(f'"{field}": 0', f'"{field}": {raw}')
 
@@ -1766,7 +1884,7 @@ async def test_a_header_with_an_odd_value_is_refused_not_failed(
     )
 
     assert isinstance(answer, Refuse) and answer.status == 400
-    assert await _reason(handler, "irid-x") in ("unreadable", "unauthenticated")
+    assert not await _kept(handler, "irid-x")
 
 
 @pytest.mark.anyio
@@ -1777,10 +1895,10 @@ async def test_the_window_is_the_handlers_setting(
     handler = await holding(Handler(weather_rule(), timestamp_window=10))
 
     inside = await handler.request(
-        _sent(_signed_header(timestamp=int(_Clock.now) - 10), "a", "irid-a")
+        _sent(_signed_header("irid-a", timestamp=int(_Clock.now) - 10), "a", "irid-a")
     )
     outside = await handler.request(
-        _sent(_signed_header(timestamp=int(_Clock.now) - 11), "b", "irid-b")
+        _sent(_signed_header("irid-b", timestamp=int(_Clock.now) - 11), "b", "irid-b")
     )
 
     assert inside == Pass()

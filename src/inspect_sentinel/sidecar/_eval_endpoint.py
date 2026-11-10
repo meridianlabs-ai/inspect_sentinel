@@ -144,7 +144,7 @@ class RequestResultResult(BaseModel):
 
     id: str
     records: Literal["held", "dropped", "unknown"] = Field(
-        description="`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never saw the request, or the request's `x-inspect-context` named another eval."
+        description="`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never kept the request: one it never saw, one without an `x-inspect-context` it could read and check, or one whose `x-inspect-context` named another eval."
     )
     state: Literal["judging", "awaiting_reply", "decided", "not_judged"] | None = Field(
         default=None, description="Where the latest attempt stands."

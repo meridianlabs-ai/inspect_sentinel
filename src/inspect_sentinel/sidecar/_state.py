@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
@@ -38,7 +39,6 @@ NotJudged: TypeAlias = Literal[
     "provider_error",
     "cut_off",
     "replaced_attempt",
-    "unauthenticated",
 ]
 """Why a request or its reply was not judged."""
 
@@ -61,8 +61,8 @@ class Attempt:
     exchange: str
     """The proxy's id for the exchange, under which its records are kept."""
 
-    eval_id: str | None = None
-    """The eval the request's `x-inspect-context` named, the only one `request_result` answers for it. None if the header couldn't be read."""
+    eval_id: str
+    """The eval the request's `x-inspect-context` named, and proved with its `mac`: the only one `request_result` answers for it."""
 
     state: Literal["judging", "awaiting_reply", "decided", "not_judged"] = "judging"
     """Where the attempt stands."""
@@ -341,17 +341,23 @@ class State(Protocol):
         """
         ...
 
-    async def attempt(self, request: str, exchange: str) -> Attempt:
-        """Begin a new attempt at a request an eval names.
+    async def attempt(self, request: str, exchange: str, eval_id: str) -> Attempt:
+        """Begin a new attempt at a request an eval names, once its header has passed the check.
 
         Args:
             request: The eval's id for the request. A client that retries the request sends it again under the same id.
             exchange: The proxy's id for this attempt's exchange.
+            eval_id: The eval the request's header named and proved.
         """
         ...
 
-    async def attempts(self, request: str) -> list[Attempt] | Dropped | None:
-        """The attempts at a request in order, `Dropped` if they were kept and no longer are, or None if the request was never seen."""
+    async def attempts(
+        self, request: str, eval_id: str
+    ) -> list[Attempt] | Dropped | None:
+        """The attempts at a request of an eval in order, `Dropped` if they were kept and no longer are, or None if the eval's request was never seen.
+
+        A request is kept under its eval and its id together. So another eval, which proves its own token and may send any id, never adds to an eval's request.
+        """
         ...
 
     async def eval_token(self, eval_id: str, *, renew: bool = True) -> str | None:
@@ -477,20 +483,24 @@ class MemoryState:
             )
         return True
 
-    async def attempt(self, request: str, exchange: str) -> Attempt:
-        attempts = self._attempts.get(request)
+    async def attempt(self, request: str, exchange: str, eval_id: str) -> Attempt:
+        key = _request_key(request, eval_id)
+        attempts = self._attempts.get(key)
         if attempts is None:
             attempts = list[Attempt]()
-            self._attempts.put(request, attempts)
-        attempt = Attempt(exchange)
+            self._attempts.put(key, attempts)
+        attempt = Attempt(exchange, eval_id)
         attempts.append(attempt)
         return attempt
 
-    async def attempts(self, request: str) -> list[Attempt] | Dropped | None:
-        attempts = self._attempts.get(request)
+    async def attempts(
+        self, request: str, eval_id: str
+    ) -> list[Attempt] | Dropped | None:
+        key = _request_key(request, eval_id)
+        attempts = self._attempts.get(key)
         if attempts is not None:
             return attempts
-        return self._dropped.get(request)
+        return self._dropped.get(key)
 
     async def eval_token(self, eval_id: str, *, renew: bool = True) -> str | None:
         return self._tokens.get(eval_id) if renew else self._tokens.peek(eval_id)
@@ -510,6 +520,11 @@ class MemoryState:
         for key, (used, expiry, _) in list(self._tasks.items()):
             if now - used >= expiry:
                 del self._tasks[key]
+
+
+def _request_key(request: str, eval_id: str) -> str:
+    # the eval and the request's id, in a form no two pairs share
+    return json.dumps([eval_id, request])
 
 
 class _Expiring(Generic[V]):

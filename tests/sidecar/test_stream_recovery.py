@@ -134,7 +134,7 @@ class ProxyHook:
             provider="anthropic",
             model="claude-test",
             user="user-1",
-            headers=inspect_headers() | {"x-irid": irid},
+            headers=inspect_headers(irid=irid),
             body=json.loads(asked.body),
         )
         assert judged["result"]["action"] == "pass"

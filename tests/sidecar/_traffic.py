@@ -134,9 +134,13 @@ def signed(token: str, values: Sequence[object]) -> str:
 
 
 def inspect_headers(
-    *, token: str = TOKEN, timestamp: int | None = None, **changes: Any
+    *,
+    irid: str = "request_456",
+    token: str = TOKEN,
+    timestamp: int | None = None,
+    **changes: Any,
 ) -> dict[str, str]:
-    """The headers an Inspect eval sends with each model request, for `SAMPLE` with `changes`, signed with `token` at `timestamp`, now if not given."""
+    """The headers an Inspect eval sends with each model request, for `SAMPLE` with `changes` and the request id `irid`, signed with `token` at `timestamp`, now if not given."""
     fields = SAMPLE | changes
     fields["timestamp"] = int(time.time()) if timestamp is None else timestamp
     fields["mac"] = signed(
@@ -152,12 +156,13 @@ def inspect_headers(
                     "sample_uuid",
                     "attempt",
                     "attempt_number",
-                    "timestamp",
                 )
             ),
+            irid,
+            fields["timestamp"],
         ],
     )
-    return {"x-inspect-context": json.dumps(fields), "x-irid": "request_456"}
+    return {"x-inspect-context": json.dumps(fields), "x-irid": irid}
 
 
 def eval_call(

@@ -126,8 +126,12 @@ async def test_request_and_reply_are_judged(
 
 
 def _from_inspect() -> dict[str, str]:
-    # signed now, and as a proxy may pass the header on: as the client wrote it
-    return {"X-Inspect-Context": inspect_headers(epoch=1)["x-inspect-context"]}
+    # signed now, and as a proxy may pass the headers on: as the client wrote them
+    signed = inspect_headers(epoch=1)
+    return {
+        "X-Inspect-Context": signed["x-inspect-context"],
+        "X-Irid": signed["x-irid"],
+    }
 
 
 @pytest.mark.anyio

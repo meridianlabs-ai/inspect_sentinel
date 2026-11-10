@@ -1540,7 +1540,7 @@
           "type": "string"
         },
         "records": {
-          "description": "`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never saw the request, or the request's `x-inspect-context` named another eval.",
+          "description": "`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never kept the request: one it never saw, one without an `x-inspect-context` it could read and check, or one whose `x-inspect-context` named another eval.",
           "enum": [
             "held",
             "dropped",
@@ -1578,8 +1578,7 @@
                 "error",
                 "provider_error",
                 "cut_off",
-                "replaced_attempt",
-                "unauthenticated"
+                "replaced_attempt"
               ],
               "type": "string"
             },

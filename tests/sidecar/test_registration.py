@@ -718,10 +718,8 @@ async def test_a_request_stripped_of_its_header_doesnt_reach_a_terminated_run() 
     with pytest.raises(UnregisteredSampleError):
         await handler.request(stripped)
 
-    attempts = await handler._state.attempts("irid-b")  # pyright: ignore[reportPrivateUsage]
-    assert isinstance(attempts, list)
-    assert attempts[-1].reason == "unregistered"
-    # nothing was judged, and the run stays ended
-    assert await handler.records("b") == []
+    # nothing was kept or judged, and the run stays ended
+    assert await handler._state.attempts("irid-b", "eval_789") is None  # pyright: ignore[reportPrivateUsage]
+    assert await handler.records("b") is None
     ended = await handler.sample_result("sample_123", "eval_789")
     assert ended is not None and ended.outcome == "terminate"

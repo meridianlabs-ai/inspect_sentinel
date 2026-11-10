@@ -38,7 +38,7 @@ An Inspect eval turns on Inspect's sidecar client, which is part of inspect_ai, 
 - **Grader.** A model that a scorer asks to grade an answer. Its calls can pass through the proxy, but they are not the agent's.
 - **The sample store.** Inspect's key-value store for one sample in one epoch, always client side. Tools, solvers and scorers use it, and the eval log saves its final contents.
 - **Monitor state.** What a monitor or protocol keeps between steps, with `context.store_as()`. Inside Inspect it is a slice of the sample store. Through a sidecar it is kept server side for each run, and Inspect copies it into the sample store before scoring (section 9).
-- **The sidecar's records.** What the sentinel reported for each model call, kept server side by the call's `x-irid`. Inspect reads them with `request_result`. Inside Inspect, the same history is the transcript's `SentinelEvent`s.
+- **The sidecar's records.** What the sentinel reported for each model call, kept server side by the call's eval and its `x-irid` together. Inspect reads them with `request_result`. Inside Inspect, the same history is the transcript's `SentinelEvent`s.
 - **Host.** Where a sentinel runs: Inspect's process, or the sidecar. The core package's narrower `Host` interface is what a sentinel calls for side effects, such as a model call. Each host implements it, and the sidecar's implementation is `SidecarHost`.
 - **Step.** One thing a sentinel judges, such as a tool call the model proposed. Each step has one of four stages: before a model call, after a model call, before a tool call and after a tool call.
 - **Decision.** What a sentinel says about a step: `proceed`, `reject`, `terminate`, `modify` or `escalate`.
@@ -639,19 +639,20 @@ In an eval, the conversation doesn't tell the sidecar the run. A fingerprint of 
   | `timestamp` | when Inspect sent this HTTP try of the request, in integer seconds since the epoch |
   | `mac` | proof that the header's values come from the holder of the eval's token, as a hex string (below) |
 
-- **The `mac` proves which sample the request belongs to.** Only a holder of the eval's token can make it ("The eval's token", section 9). Changing any of the values it covers breaks it. So a client without the token can't move a request to another run, start its run afresh, or name another sample. It is an HMAC-SHA256, keyed with the eval's token in UTF-8, over a JSON list of the values as strings:
+- **The `mac` proves which sample the request belongs to, and which request it is.** Only a holder of the eval's token can make it ("The eval's token", section 9). Changing any of the values it covers breaks it. So a client without the token can't move a request to another run, start its run afresh, name another sample, or send the request under another request's `x-irid`. It is an HMAC-SHA256, keyed with the eval's token in UTF-8, over a JSON list of the values as strings:
 
   ```text
-  mac = HMAC-SHA256(token, json.dumps([str(v) for v in ["model-request", task, sample_id, epoch, sample_uuid, attempt, attempt_number, timestamp]], separators=(",", ":"))), as a hex digest
+  mac = HMAC-SHA256(token, json.dumps([str(v) for v in ["model-request", task, sample_id, epoch, sample_uuid, attempt, attempt_number, x_irid, timestamp]], separators=(",", ":"))), as a hex digest
   ```
 
+  - **`x_irid` is the value of the request's `x-irid` header**, read by name. It is Inspect's id for the model call, by which `request_result` finds what the sidecar decided of it (section 9). Without it in the list, a `mac` made for one call could be sent with another call's `x-irid`, and what was decided of the first call's sample would be filed under the second. The `mac` still travels only in `x-inspect-context`, and the `x-irid` header carries no `mac`. The order and case of the headers don't matter.
   - **`eval_id` isn't in the list**, because the sidecar picks the token by the header's `eval_id`. Another `eval_id` picks another token, so the `mac` doesn't match.
   - **`version` and `model` aren't in the list.** `version` only says how to read the header. `model` only names the model, and changes no run.
   - **Every value is turned into a string first**, which follows Inspect's own rule that sample ids are unique by their string form.
   - **`"model-request"` keeps this `mac` apart from a call's to the endpoint for evals**, because no method has that name (section 9, "The eval's token").
-- **The sidecar checks the `mac` before the request can change any run.** It finds the eval's token by `eval_id`, makes the same `mac`, and compares the two in constant time. A request whose `mac` doesn't match is refused with 400, and is not judged, with the reason `unauthenticated`. A request naming an eval whose token the sidecar doesn't hold is refused with 400, and is not judged, with the reason `unregistered`, because the sidecar can't check its `mac` (section 9, "How strict the sidecar is").
-- **A run belongs to the eval that started it.** A client can register an eval of its own, so it can hold a token and sign a header with it. Its `mac` then checks out, whatever sample the header names. So once the `mac` checks out, the sidecar also checks that the run the header names was started by the same eval. A request that names another eval's run is refused with 400, and is not judged, with the reason `unauthenticated`.
-- **The `timestamp` makes a `mac` short-lived.** The sidecar refuses a request whose `timestamp` is more than its window away from the sidecar's clock, in either direction, with the reason `unauthenticated`. The window is 5 minutes unless the operator sets `--timestamp-window`, in seconds (`timestamp_window` in the `server` stanza). So a header copied from somewhere is useless after the window. Within it, the copy names the same run and attempt, so a request of a run that a sentinel ended is still refused.
+- **The sidecar checks the `mac` before the request can change any run.** It finds the eval's token by `eval_id`, makes the same `mac`, and compares the two in constant time. A request whose `mac` doesn't match is refused with 400, and is not judged. A request naming an eval whose token the sidecar doesn't hold is refused with 400, and is not judged, because the sidecar can't check its `mac` (section 9, "How strict the sidecar is").
+- **A run belongs to the eval that started it.** A client can register an eval of its own, so it can hold a token and sign a header with it. Its `mac` then checks out, whatever sample the header names. So once the `mac` checks out, the sidecar also checks that the run the header names was started by the same eval. A request that names another eval's run is refused with 400, and is not judged.
+- **The `timestamp` makes a `mac` short-lived.** The sidecar refuses a request whose `timestamp` is more than its window away from the sidecar's clock, in either direction, and doesn't judge it. The window is 5 minutes unless the operator sets `--timestamp-window`, in seconds (`timestamp_window` in the `server` stanza). So a header copied from somewhere is useless after the window. Within it, the copy names the same run and attempt, so a request of a run that a sentinel ended is still refused.
 - **Inspect makes a fresh `timestamp` and `mac` for each HTTP try.** Inspect builds the header once for each model call, with the values that name the sample, and those values stay fixed. Its httpx request hook, which Inspect already installs on its provider clients, then sets `timestamp` to the current time and makes the `mac`, just before each HTTP try is sent. The hook runs on the provider SDK's own retries and on Inspect's alike. Both can back off for longer than the window, so a retry still carries a `timestamp` the sidecar accepts. The eval log records the header as Inspect built it, without `timestamp` and `mac`.
 - **Inspect sends the header only on an agent's model calls**, and only to a proxy that its probe found a sidecar behind (section 9), so a provider reached directly never sees it. Inspect escapes every character outside ASCII, because a header value must be ASCII and a sample id can be any string.
 - **The run is the header's `sample_uuid`.** The proxy hook passes the header on without reading it. A run is therefore one sample in one epoch, across its retries.
@@ -661,7 +662,9 @@ In an eval, the conversation doesn't tell the sidecar the run. A fingerprint of 
 - **Once a later attempt has begun, an earlier attempt's request or reply is refused unjudged**, because nobody waits for it. A judgment of it still under way changes nothing of the later attempt.
 - **A request of another attempt with the current attempt's number is refused**, because the sidecar can't tell which is the sample's.
 - **A request the client retries within an attempt keeps the attempt's conversation.**
-- **A request whose header can't be read, names an unknown version, or lacks `timestamp` or `mac`, is refused.** The header says the request is an eval's. Treating it as merely unreadable would let a proxy set to fail open pass it on unjudged, for the price of a header anyone can write.
+- **Nothing is kept under a request's `x-irid` until its header has passed the check.** A request whose header can't be read, one refused by the check, and one without `x-inspect-context` add nothing to the history of any `x-irid`. So a request sent with another request's `x-irid` doesn't change what `request_result` answers for that request.
+- **A request's history is kept under its eval and its `x-irid` together.** A client can register an eval of its own, so it can sign a header that passes the check, with any `x-irid`. Its request is then kept under its own eval. So it never adds to the history of another eval's request with the same `x-irid`.
+- **A request whose header can't be read, names an unknown version, or lacks `timestamp` or `mac`, is refused.** So is a request with `x-inspect-context` and no `x-irid`, because Inspect always sends the two together, and the `mac` can't be checked without the `x-irid`. The header says the request is an eval's. Treating it as merely unreadable would let a proxy set to fail open pass it on unjudged, for the price of a header anyone can write.
 - **A proxy hook never needs to understand Inspect's headers, and never names the run itself.** A run that a proxy names in its own way can be added when a proxy hook needs it.
 - **Neither of Inspect's headers reaches the provider.** Every proxy hook passes `x-inspect-context` and `x-irid` to the sidecar among the request's headers in `judge_request`, and removes both before the request goes to the provider. Inspect's existing `x-irid` stays the id of a single model request.
 - **The sample's input and metadata are not in the header.** They are too long for a header, and the metadata can be private. They reach the sidecar only through registration, which is per task (section 9), and are never put into the provider request. The sidecar finds a sample's registered facts by the header's `eval_id`, `task` and `sample_id`. How strictly the header's task and sample are checked against registration is the sidecar's `strictness` setting (section 9).
@@ -976,7 +979,7 @@ An admin registers tasks beforehand in the tasks folder. For each task an eval r
 - **A refusal stops the task too, though it is not a failure.** With runtime registration off, the sidecar answers `registration_refused` for a task that isn't in the tasks folder, because the deployment runs only the tasks in its folder. "Advanced: a sidecar that runs only the tasks in its folder" below shows the flow.
 - **A registration at another model's sidecar fails only that sample.** That model is probed at an agent's first call to it, during a sample, so a registration that fails there fails the sample, not the task.
 
-**Requests from samples never registered.** A model request with `x-inspect-context` needs the eval's token at the sidecar, because the sidecar checks the header's `mac` with it (section 7). So a request naming an eval that never called `register_task`, or whose token the sidecar lost, is refused as `unregistered`, under every `strictness`. A request naming a sample whose registration was never completed is another matter. Its eval holds a token, and unless the sidecar is stricter ("How strict the sidecar is" below), it treats such requests like this:
+**Requests from samples never registered.** A model request with `x-inspect-context` needs the eval's token at the sidecar, because the sidecar checks the header's `mac` with it (section 7). So a request naming an eval that never called `register_task`, or whose token the sidecar lost, is refused and not judged, under every `strictness`. A request naming a sample whose registration was never completed is another matter. Its eval holds a token, and unless the sidecar is stricter ("How strict the sidecar is" below), it treats such requests like this:
 
 - **The run is still keyed by the sample.** The sidecar takes the header's `sample_uuid` as the run, and keeps tallies per sample. The eval reads decisions with `request_result` as usual.
 - **`context.eval` is None.** The sample's input and metadata are not in the header, and the sidecar doesn't invent them.
@@ -989,7 +992,7 @@ An admin registers tasks beforehand in the tasks folder. For each task an eval r
 - `complete_registration` answers `registration_refused`, because the sidecar takes only registered samples and the task's registration doesn't name this one.
 - A stricter `strictness` refuses the sample's model call as `unregistered`.
 
-A refused model call gets a 400, and `request_result` then says it was `not_judged`, with the reason `unregistered`. A model call naming an eval whose token the sidecar doesn't hold is refused as `unregistered` too, but its eval can't read that reason ("A sidecar that loses the task" below).
+A refused model call gets a 400, and `request_result` then says it was `not_judged`, with the reason `unregistered`. A model call naming an eval whose token the sidecar doesn't hold is refused too, but the sidecar keeps nothing of it, so its eval reads it as `unknown` ("A sidecar that loses the task" below).
 
 - **Where the refusal can't change, Inspect raises `SampleRefusedError`.** That is the first two cases. `SampleRefusedError` is a sample error meaning the sample can't run here. It is never retried, because a retry would be refused the same way. It is never scored, even with `score_on_error`, because the sample never ran. It counts toward `fail_on_error`, like any sample error.
 - **Any other `unregistered` refusal is an ordinary sample error**, which `retry_on_error` retries. A retry starts afresh: it completes the sample's registration again and, if the task is gone, registers the task again.
@@ -998,8 +1001,8 @@ A refused model call gets a 400, and `request_result` then says it was `not_judg
 
 A sample already running when the sidecar restarts completed its registration earlier, so nothing registers it again before its next call. A restart loses the eval's token with everything else:
 
-- **The sample's next model call is refused as `unregistered`, under every `strictness`.** The sidecar holds no token for the eval, so it can't check the call's `mac`.
-- **The eval reads the call as `unknown`.** The sidecar ties a request to its eval only once the request's `mac` checks out. So `request_result` answers `records` `unknown` for this call, and Inspect fails the attempt with the call's error, as for any error whose judgment is unknown ("What each answer means" below).
+- **The sample's next model call is refused, under every `strictness`.** The sidecar holds no token for the eval, so it can't check the call's `mac`.
+- **The eval reads the call as `unknown`.** The sidecar keeps a request under its `x-irid`, and ties it to its eval, only once the request's `mac` checks out. So `request_result` answers `records` `unknown` for this call, and Inspect fails the attempt with the call's error, as for any error whose judgment is unknown ("What each answer means" below).
 - **Recovery is Inspect's existing retry of a sample.** `retry_on_error` retries the failed attempt. The retry's `complete_registration` is answered `unknown_task`, so Inspect registers the task again, sending the token, and then completes the sample's registration. So recovery needs `retry_on_error` to allow another attempt. Without one, the sample fails.
 
 When only the task's registration has expired, after a day with no request from any of its samples, the sidecar still holds the eval's token. Under the default strictness, `open`, the sample's calls go on being judged without the task's facts. Under `known_tasks` and `registered_only`, they are refused as `unregistered`, and the attempt fails.
@@ -1012,8 +1015,8 @@ Registering again couldn't make the attempt whole, because a restart also loses 
 
 Two checks of `x-inspect-context` come before `strictness`, and apply at every level:
 
-- **A request naming an eval whose token the sidecar doesn't hold is refused**, and is not judged, with the reason `unregistered`. The sidecar can't check the request's `mac` without the token. That covers an eval that never registered, and one whose token the sidecar lost in a restart or expiry.
-- **A request whose `timestamp` is outside the window, or whose `mac` doesn't match, is refused**, and is not judged, with the reason `unauthenticated` (section 7).
+- **A request naming an eval whose token the sidecar doesn't hold is refused**, and is not judged. The sidecar can't check the request's `mac` without the token. That covers an eval that never registered, and one whose token the sidecar lost in a restart or expiry.
+- **A request whose `timestamp` is outside the window, or whose `mac` doesn't match, is refused**, and is not judged (section 7).
 
 A request that passes both can still name a task or a sample the sidecar doesn't hold, and a request can carry no `x-inspect-context` at all. The setting `strictness` (`--strictness`, or `strictness` in the `server` stanza) says what happens to it, at one of three levels:
 
@@ -1035,7 +1038,7 @@ A request that passes both can still name a task or a sample the sidecar doesn't
 - **The call is an agent turn**, one the sentinel would judge if it ran inside Inspect. Calls by a scorer's grader, an approver, a compaction summary, a monitor, or Inspect itself are not.
 - **The call goes to an endpoint where a probe found a sidecar**, whatever the model ("Finding the sidecar" above).
 
-Section 7 lists the fields of `x-inspect-context`, and says how Inspect makes a fresh `timestamp` and `mac` for each HTTP try. The other header, `x-irid`, is unchanged: Inspect sends it on every model call, as with no sidecar. It names one logical model call, and a provider SDK's own retries of that call send the same `x-irid`. The sidecar answers `request_result` for the latest attempt, which is the reply Inspect got. The proxy removes both headers before the request reaches the provider.
+Section 7 lists the fields of `x-inspect-context`, and says how Inspect makes a fresh `timestamp` and `mac` for each HTTP try. The other header, `x-irid`, is unchanged: Inspect sends it on every model call, as with no sidecar, and the `mac` in `x-inspect-context` covers its value. It names one logical model call, and a provider SDK's own retries of that call send the same `x-irid`. The sidecar answers `request_result` for the latest attempt, which is the reply Inspect got. The proxy removes both headers before the request reaches the provider.
 
 **Inspect's completion cache is off for these calls.** A cached reply never reaches the proxy, so none of its steps would be judged. The sidecar's decision on it in an earlier eval says nothing about this one. The provider's own prompt caching is unaffected.
 
@@ -1729,8 +1732,7 @@ For a task in the tasks folder, nothing is stored and `fixed` is true. The sampl
 | `error` | The sentinel raised an error. |
 | `provider_error` | The provider's reply was an error, so there was nothing to judge. |
 | `cut_off` | The proxy stopped handing over a streamed reply before it ended and before it was judged, as when its client disconnected. |
-| `unregistered` | The request named a task or sample the sidecar doesn't take, or an eval whose token the sidecar doesn't hold ("How strict the sidecar is" above). |
-| `unauthenticated` | The request's `x-inspect-context` had a `timestamp` outside the window, or a `mac` that doesn't match (section 7). |
+| `unregistered` | The request named a task or sample the sidecar doesn't take ("How strict the sidecar is" above). |
 | `replaced_attempt` | The request or reply belongs to an attempt at the sample that a later attempt replaced, or to another attempt with the same number (section 7). |
 
 `records` says whether the sidecar has records for the request:
@@ -1739,11 +1741,11 @@ For a task in the tasks folder, nothing is stored and `fixed` is true. The sampl
 | --- | --- |
 | `held` | The sidecar has them, in `recorded`. |
 | `dropped` | The sidecar had them and no longer keeps them. |
-| `unknown` | The sidecar never saw the request, or the request is another eval's. |
+| `unknown` | The sidecar never kept the request, or the request is another eval's. |
 
 `dropped` and `unknown` are normal results, not errors, because the eval writes them into its log. Neither comes with `outcome`, `message`, `recorded` or `judgment`. After dropping a request's records, the sidecar keeps the request's id alone, so that it can answer `dropped`. It keeps the id for as long again as it kept the records, up to a limit on how many ids it keeps, and then answers `unknown`.
 
-A request is tied to the eval it names only once its `x-inspect-context` passes the `mac` check. So `request_result` answers `unknown` for a request refused `unauthenticated`, and for one refused `unregistered` because the sidecar held no token for its eval. An eval never reads either reason. This keeps a request with a forged header out of the records of the eval it names.
+A request is kept under its eval and its `x-irid` together, only once its `x-inspect-context` passes the `mac` check. So `request_result` answers `unknown` for a request whose header couldn't be read, one whose `timestamp` or `mac` failed the check, one that named another eval's run, and one refused because the sidecar held no token for its eval. Such a request adds nothing to the history of the `x-irid` it was sent with, so a request with a forged header can't change what the eval is told of its own requests.
 
 **`sample_result`.** The eval asks before each time it scores a sample ("The end of a sample" above):
 

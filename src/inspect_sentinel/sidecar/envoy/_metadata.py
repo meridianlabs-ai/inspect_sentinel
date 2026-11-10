@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from .._handler import REQUEST_ID
-from .._inspect_client import INSPECT_CONTEXT
+from .._inspect_client import INSPECT_CONTEXT, REQUEST_ID
 
 FORMAT_METADATA = "sentinel-format"
 """The gRPC metadata in which Envoy's route tells the shim which API a request is written in, such as `anthropic-messages`."""

@@ -123,10 +123,6 @@ _NOT_RUN = "This call was not run, because another call in the same turn was rej
 _ENDED = "This call was not run, because a sentinel ended the run."
 
 
-REQUEST_ID = "x-irid"
-"""The header an Inspect eval names each of its model requests in."""
-
-
 @dataclass(frozen=True)
 class RequestResult:
     """What happened to a request an eval names."""
@@ -260,7 +256,9 @@ class Handler:
 
         A request with `x-inspect-context` belongs to the sample it names, which is its run. A request whose header can't be read is refused, rather than judged as another client's would be: it says it is an eval's, and a proxy set to let through what can't be judged would let it through unjudged.
 
-        The header's `mac` proves the values that name the run, made with the token the eval registered with. Before anything of the run is looked up or changed, a request is refused unjudged, whatever the strictness, if the handler holds no token for the eval, as after a restart, with the reason `unregistered`; or if its `timestamp` is outside the window or its `mac` doesn't match, with the reason `unauthenticated`. So a client without the eval's token that changes the sample, the attempt or its number, or names a sample of the eval, reaches no run.
+        The header's `mac` proves the values that name the run, and the request's `x-irid`, made with the token the eval registered with. A request with the header and no `x-irid` can't be checked, and is refused as one whose header can't be read. Before anything of the run or of the `x-irid` is looked up or changed, a request is refused unjudged, whatever the strictness, if the handler holds no token for the eval, as after a restart; if its `timestamp` is outside the window or its `mac` doesn't match; or if it names a run another eval started. So a client without the eval's token that changes the sample, the attempt or its number, or the `x-irid`, or names a sample of the eval, reaches no run and changes no request's history.
+
+        A request is kept under its `x-irid`, for `request_result`, only once its header has passed the check. One whose header can't be read, one refused unchecked, and one without the header add nothing to the history of any `x-irid`, so a request sent with another request's `x-irid` doesn't change what `request_result` answers for it.
 
         A conversation belongs to one attempt at the sample. A new attempt starts afresh, as Inspect starts the sample store afresh for it: its conversations, its count of rejected turns in a row, the sentinel's store, and the run's end if a sentinel ended the attempt before. A sample the eval has ended stays ended. Attempts are ordered by the number the header gives each. Once a later attempt has begun, a request of an earlier one is refused unjudged, as nobody waits for it, and so is one of another attempt with the same number: `request_result` says it was not judged, with the reason `replaced_attempt`, so an eval never takes it for a sentinel's terminate. A client that retries a request within the attempt keeps the attempt's conversation.
 
@@ -274,32 +272,28 @@ class Handler:
             UnregisteredSampleError: If the request names a sample that a task registered beforehand doesn't hold, or the handler's strictness refuses a request it can't place.
             TimeLimitError: If the handler has a time limit and the sentinel didn't finish within it.
         """
-        id = request.headers.get(REQUEST_ID)
-        attempt = None
-        if id:
-            attempt = await self._state.attempt(id, request.id)
-            # an attempt that is never judged has records too: none
-            await self._state.recorder(request.id)
         try:
             signed = signed_sample(request.headers)
         except UnreadableError as ex:
             # refused rather than raised, but never judged, so not a terminate
-            if attempt is not None:
-                attempt.not_judged("unreadable")
             return Refuse(400, str(ex))
         sample = signed.sample if signed is not None else None
+
+        # Proven before anything of its run or its x-irid is looked up or
+        # changed, and refused rather than raised, so a proxy that lets
+        # through what can't be judged doesn't let through a request that
+        # can't prove its run.
+        attempt = None
         if signed is not None:
-            # proven before anything of its run is looked up or changed, and
-            # refused rather than raised, so a proxy that lets through what
-            # can't be judged doesn't let through a request that can't prove
-            # its run
             refused = await self._unproven_request(signed)
             if refused is not None:
-                if attempt is not None:
-                    attempt.not_judged(refused[0])
-                return Refuse(400, refused[1])
-            if attempt is not None:
-                attempt.eval_id = signed.sample.eval_id
+                return Refuse(400, refused)
+            attempt = await self._state.attempt(
+                signed.request_id, request.id, signed.sample.eval_id
+            )
+            # an attempt that is never judged has records too: none
+            await self._state.recorder(request.id)
+
         try:
             answer = await self._within_limit(
                 self._request(request, sample, attempt), "request", request.id
@@ -482,27 +476,22 @@ class Handler:
         await self._state.eval_token(eval_id)
         return True
 
-    async def _unproven_request(
-        self, signed: SignedSample
-    ) -> tuple[NotJudged, str] | None:
+    async def _unproven_request(self, signed: SignedSample) -> str | None:
         # why a request's header doesn't prove its run, or None if it does
         eval_id = signed.sample.eval_id
         kept = await self._state.eval_token(eval_id, renew=False)
         if kept is None:
-            return (
-                "unregistered",
-                f"This sidecar holds no registration of the eval {eval_id!r}, as after a restart, so it can't check the request's {INSPECT_CONTEXT} header. The eval registers its task again.",
-            )
+            return f"This sidecar holds no registration of the eval {eval_id!r}, as after a restart, so it can't check the request's {INSPECT_CONTEXT} header. The eval registers its task again."
         problem = unproven(
             kept,
-            request_values(signed.sample, signed.timestamp),
+            request_values(signed.sample, signed.request_id, signed.timestamp),
             signed.timestamp,
             signed.mac,
             window=self._timestamp_window,
             what=f"The request's {INSPECT_CONTEXT}",
         )
         if problem is not None:
-            return "unauthenticated", f"{problem} The request was not judged."
+            return f"{problem} The request was not judged."
 
         # A run belongs to the eval that started it. A client can register an
         # eval of its own and sign with that eval's token, so the token alone
@@ -511,10 +500,7 @@ class Handler:
             _run_key(True, signed.sample.sample_uuid), renew=False
         )
         if held is not None and held.eval_id is not None and held.eval_id != eval_id:
-            return (
-                "unauthenticated",
-                f"The request's {INSPECT_CONTEXT} header names a sample of another eval. The request was not judged.",
-            )
+            return f"The request's {INSPECT_CONTEXT} header names a sample of another eval. The request was not judged."
 
         # a request that proves its run keeps the eval's token
         await self._state.eval_token(eval_id)
@@ -527,7 +513,7 @@ class Handler:
 
         Args:
             id: The eval's id for the request, as its `x-irid` header gave it. A client that retries a request sends it again under the same id.
-            eval_id: The eval asking. A request whose `x-inspect-context` named another eval, or none, reads as unknown.
+            eval_id: The eval asking. A request whose `x-inspect-context` named another eval reads as unknown, as does one that was never kept: one with no `x-inspect-context`, or one whose header couldn't be read or failed the check.
             wait: How long to wait, in seconds, while the latest attempt is still being judged, at most `MAX_RESULT_WAIT`.
 
         Returns:
@@ -535,7 +521,7 @@ class Handler:
         """
         deadline = time.monotonic() + min(max(wait, 0), MAX_RESULT_WAIT)
         while True:
-            attempts = await self._state.attempts(id)
+            attempts = await self._state.attempts(id, eval_id)
             if attempts is None:
                 return "unknown"
             if isinstance(attempts, Dropped):
