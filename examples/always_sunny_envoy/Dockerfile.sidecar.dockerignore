@@ -3,4 +3,5 @@
 !README.md
 !pyproject.toml
 !src
+!uv.lock
 !examples/always_sunny_envoy/rule
