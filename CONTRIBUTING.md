@@ -64,7 +64,6 @@ For this repository:
 
 - inspect_sentinel needs unreleased inspect_ai and inspect_scout changes. `[tool.uv.sources]` in `pyproject.toml` points `inspect-ai` and `inspect-scout` at their `main` branches. Tracking `main` is deliberate: sentinel and inspect_ai co-develop, and most sentinel changes need hooks that have not shipped yet. Scout is tracked the same way, so a Scout change that alters what a monitor's model is shown reaches CI at once.
 - The 6-hour packages are in `[tool.uv.exclude-newer-package]` in `pyproject.toml`.
-- The procedure for a local inspect_ai checkout is also the procedure for a local inspect_scout checkout.
 
 ## Checks and tests
 
