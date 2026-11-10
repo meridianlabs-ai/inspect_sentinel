@@ -115,8 +115,8 @@ Supports Python 3.11+ (the same floor as `inspect-ai`, which is intended to depe
 
 ### Common Pitfalls
 - Use the venv for all Python commands: either reference `.venv/bin/` directly or run `source .venv/bin/activate`
-- Set up the venv with `uv sync --extra dev`, which installs the inspect_ai and inspect_scout commits in `uv.lock`; `uv sync --upgrade-package inspect-ai --upgrade-package inspect-scout --extra dev` moves them to their latest `main`. Run commands with `.venv/bin/`, `uv run --no-sync` or an activated venv; a plain `uv run` also works, but it reinstalls the locked inspect_ai and inspect_scout over a local editable checkout
-- After changing dependencies in `pyproject.toml`, run `uv lock` and commit `uv.lock`; CI's `uv sync --locked` fails on a stale lock. Don't override the 7-day `exclude-newer` cooldown; for an emergency release, CONTRIBUTING.md describes a dated entry
+- Set up the venv with `uv sync --locked --extra dev`, which installs the inspect_ai and inspect_scout commits in `uv.lock`; `uv sync --upgrade-package inspect-ai --upgrade-package inspect-scout --extra dev` moves them to their latest `main`. Run commands with `.venv/bin/`, `uv run --no-sync` or an activated venv; a plain `uv run` also works, but it reinstalls the locked inspect_ai and inspect_scout over a local editable checkout
+- After changing dependencies in `pyproject.toml`, run `uv lock` and commit `uv.lock`; CI's `uv sync --locked` fails on a stale lock. Don't override the 7-day `exclude-newer` cooldown. Every other dependency procedure is in [DEPENDENCIES.md](https://github.com/meridianlabs-ai/actions/blob/main/DEPENDENCIES.md)
 
 ## Reviewing other people's pull requests
 
