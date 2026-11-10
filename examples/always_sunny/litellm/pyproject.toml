@@ -1,0 +1,24 @@
+# What the example's LiteLLM image installs: LiteLLM's proxy at one version,
+# and this repository's guardrail for it. It exists for the uv.lock beside it,
+# which Dockerfile.litellm installs exactly. Nothing is built or published
+# from here.
+#
+# To move to newer releases, change the LiteLLM version here if it moves, run
+# `uv lock --upgrade` in this directory, and commit uv.lock.
+[project]
+name = "always-sunny-litellm"
+version = "0"
+requires-python = ">=3.13"
+dependencies = [
+    "inspect_sentinel_litellm",
+    "litellm[proxy]==1.105.0",
+]
+
+[tool.uv]
+package = false
+required-version = ">=0.13.4"
+# only releases at least 7 days old, as in the repository's own pyproject.toml
+exclude-newer = "7 days"
+
+[tool.uv.sources]
+inspect_sentinel_litellm = { path = "../../../src/proxies/litellm" }
