@@ -44,9 +44,11 @@ jobs:
 
       # The build frontend and backend come from scripts/build-dist/requirements.txt,
       # pinned with hashes, and the build runs without isolation, so nothing
-      # else is resolved at build time. Dependabot updates the file weekly with
-      # a 7-day cooldown; it lives outside .github/ because Dependabot changes
-      # files there only for github-actions. This job holds id-token, so it
+      # else is resolved at build time. Dependabot updates the file weekly.
+      # Its cooldown is 7 days after a release, before it proposes a PR.
+      # That cooldown is not the same as `--exclude-newer` on a hand compile.
+      # The file lives outside .github/ because Dependabot changes files
+      # there only for github-actions. This job holds id-token, so it
       # restores no Actions cache. To update the file by hand, run in
       # scripts/build-dist:
       #   uv pip compile --no-config --generate-hashes --python-version 3.11 \
