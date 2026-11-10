@@ -454,14 +454,19 @@ class MemoryState:
         return self._runs.get(key) if renew else self._runs.peek(key)
 
     async def end_run(self, key: str, eval_id: str | None = None) -> bool:
-        kept = self._runs.get(key)
+        # read without renewing, so that another eval ending the run keeps
+        # nothing alive
+        kept = self._runs.peek(key)
         if eval_id is not None and kept is not None and kept.eval_id != eval_id:
             return False
         run = self._runs.pop(key)
         if run is None:
             # a run never seen is left as it is, rather than refused from then on
-            ended = self._ended.get(key)
-            return ended is not None and eval_id in (None, ended.eval_id)
+            ended = self._ended.peek(key)
+            if ended is None or eval_id not in (None, ended.eval_id):
+                return False
+            self._ended.get(key)
+            return True
         run.closed = True
         if run.refusal is None:
             # held by any request or reply of the run still being judged

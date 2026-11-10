@@ -571,9 +571,13 @@ class Handler:
         Returns:
             The sample's outcome and store, or None if nothing is kept for it, or it isn't the eval's.
         """
-        kept = await self._state.existing_run(_run_key(True, sample_uuid))
+        # renewed only once it is found to be the eval's, so that another
+        # eval asking keeps nothing alive
+        key = _run_key(True, sample_uuid)
+        kept = await self._state.existing_run(key, renew=False)
         if kept is None or kept.eval_id != eval_id:
             return None
+        await self._state.existing_run(key)
         return SampleResult(
             "terminate" if kept.refusal is not None else "proceed",
             dict(kept.store.items()),

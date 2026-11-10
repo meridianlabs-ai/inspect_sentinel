@@ -1618,6 +1618,50 @@ async def test_a_request_refused_for_naming_another_evals_run_keeps_it_no_longer
     assert await handler.sample_result("sample_123", "eval_789") is None
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "asked", ["sample_result", "end_sample", "end_sample of an ended run"]
+)
+async def test_another_eval_asking_of_a_run_keeps_it_no_longer(
+    monkeypatch: pytest.MonkeyPatch, asked: str
+) -> None:
+    # The run, or what is left of it once its eval ended it, is kept for 100
+    # seconds after its eval last named it. Another eval asking of it, or
+    # ending it, is told nothing and must not keep it past that.
+    monkeypatch.setattr(_state, "time", _ExpiryClock)
+    _ExpiryClock.now = 0.0
+    handler = await holding(Handler(weather_rule(), state=MemoryState(expiry=100)))
+    await handler.request(_from_inspect(request("a"), "irid-a"))
+    if asked == "end_sample of an ended run":
+        assert await handler.end_sample("sample_123", "eval_789") == "ended"
+
+    _ExpiryClock.now = 60.0
+    if asked == "sample_result":
+        assert await handler.sample_result("sample_123", "eval_own") is None
+    else:
+        assert await handler.end_sample("sample_123", "eval_own") == "unknown"
+    _ExpiryClock.now = 120.0
+
+    assert await handler.sample_result("sample_123", "eval_789") is None
+    assert await handler.end_sample("sample_123", "eval_789") == "unknown"
+
+
+@pytest.mark.anyio
+async def test_the_eval_asking_of_its_own_run_keeps_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_state, "time", _ExpiryClock)
+    _ExpiryClock.now = 0.0
+    handler = await holding(Handler(weather_rule(), state=MemoryState(expiry=100)))
+    await handler.request(_from_inspect(request("a"), "irid-a"))
+
+    _ExpiryClock.now = 60.0
+    assert await handler.sample_result("sample_123", "eval_789") is not None
+    _ExpiryClock.now = 120.0
+
+    assert await handler.sample_result("sample_123", "eval_789") is not None
+
+
 class _ExpiryClock:
     # what the state's expiry reads
     now = 0.0
