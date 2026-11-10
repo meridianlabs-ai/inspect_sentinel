@@ -25,6 +25,7 @@ from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
 from tests.sidecar._traffic import (
     STREAM,
     anthropic_recorded,
+    holding,
     reply,
     request,
     weather_rule,
@@ -248,7 +249,7 @@ async def test_a_wait_with_nothing_ready_is_not_the_end() -> None:
 
 @pytest.mark.anyio
 async def test_a_reply_that_cant_be_judged_is_an_error_asked_again_and_again() -> None:
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     await handler.request(request(sample="sample_123"))
 
     with anyio.fail_after(10):
@@ -264,7 +265,7 @@ async def test_a_reply_that_cant_be_judged_is_an_error_asked_again_and_again() -
 
 @pytest.mark.anyio
 async def test_an_aborted_stream_is_recorded_as_cut_off_and_let_go_of() -> None:
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     await handler.request(request(sample="sample_123"))
 
     with anyio.fail_after(10):
@@ -283,7 +284,7 @@ async def test_an_aborted_stream_is_recorded_as_cut_off_and_let_go_of() -> None:
 
 @pytest.mark.anyio
 async def test_a_stream_its_proxy_hook_forgot_expires() -> None:
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     await handler.request(request(sample="sample_123"))
 
     with anyio.fail_after(10):

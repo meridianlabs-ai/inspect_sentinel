@@ -23,6 +23,7 @@ from ._http import HEALTH_PATH, health_route
 from ._proxy_endpoint import proxy_app
 from ._registration import MAX_TASK_EXPIRY, MAX_TASK_REGISTRATIONS, read_tasks_folder
 from ._reply_stream import KEEPALIVE_SECONDS
+from ._sign import TIMESTAMP_WINDOW
 from ._state import RUN_EXPIRY, MemoryState
 
 
@@ -152,6 +153,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="SECONDS",
         help="How long a run's state is kept once no request has named it. A day by default.",
     )
+    parser.add_argument(
+        "--timestamp-window",
+        type=float,
+        default=TIMESTAMP_WINDOW,
+        metavar="SECONDS",
+        help=f"How far the timestamp of an Inspect eval's model request, or of its call to the endpoint for evals, may be from the sidecar's clock. One further is refused, so a signature copied from a log is of no use once the window has passed. {TIMESTAMP_WINDOW:g} by default.",
+    )
 
 
 class EnvoySettings(BaseModel):
@@ -188,6 +196,7 @@ class ServerSettings(BaseModel):
     max_task_registrations: int | None = None
     max_body_bytes: int | None = None
     run_expiry: float | None = None
+    timestamp_window: float | None = None
     release: Literal["whole", "early"] | None = None
     keepalive: float | None = None
 
@@ -221,6 +230,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "max_task_registrations",
             "max_body_bytes",
             "run_expiry",
+            "timestamp_window",
             "release",
             "keepalive",
         )
@@ -350,6 +360,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         max_registration_bytes=arguments.max_body_bytes,
         release=arguments.release,
         keepalive=arguments.keepalive or None,
+        timestamp_window=arguments.timestamp_window,
     )
 
 

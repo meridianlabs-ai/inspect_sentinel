@@ -35,6 +35,8 @@ from inspect_sentinel.sidecar._proxy_endpoint import (
 from inspect_sentinel.sidecar._registration import FileTask
 from tests.sidecar._traffic import (
     JSON,
+    holding,
+    inspect_headers,
     message,
     ran,
     storm_rule,
@@ -123,30 +125,18 @@ async def test_request_and_reply_are_judged(
     assert _fits(_SCHEMA["methods"]["judge_reply"]["result"], answered["result"])
 
 
-_FROM_INSPECT = {
-    # a proxy may pass the headers on as the client wrote them
-    "X-Inspect-Context": json.dumps(
-        {
-            "version": 1,
-            "eval_id": "eval_789",
-            "task": "philadelphia",
-            "sample_id": 1,
-            "epoch": 1,
-            "sample_uuid": "sample_123",
-            "attempt": "attempt_1",
-            "attempt_number": 1,
-        }
-    ),
-}
+def _from_inspect() -> dict[str, str]:
+    # signed now, and as a proxy may pass the header on: as the client wrote it
+    return {"X-Inspect-Context": inspect_headers(epoch=1)["x-inspect-context"]}
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("city", ["Oslo", "Tokyo"])
 async def test_an_inspect_client_is_answered_as_any_client(city: str) -> None:
     # it asks what was decided at the endpoint for evals
-    async with _client() as client:
+    async with _client(await holding(Handler(weather_rule()))) as client:
         asked = await _call(
-            client, "judge_request", _REQUEST | {"headers": _FROM_INSPECT}
+            client, "judge_request", _REQUEST | {"headers": _from_inspect()}
         )
         answered = await _call(client, "judge_reply", _reply(message(weather(city))))
 
@@ -209,8 +199,8 @@ def reports_the_conversation() -> Protocol:
 
 @pytest.mark.anyio
 async def test_run_is_the_sample_the_eval_names() -> None:
-    async with _client(Handler(reports_the_conversation())) as client:
-        await _call(client, "judge_request", _REQUEST | {"headers": _FROM_INSPECT})
+    async with _client(await holding(Handler(reports_the_conversation()))) as client:
+        await _call(client, "judge_request", _REQUEST | {"headers": _from_inspect()})
         answered = await _call(client, "judge_reply", _reply(message(weather("Oslo"))))
 
     assert re.search(
@@ -234,14 +224,15 @@ async def test_request_can_be_refused() -> None:
 
 @pytest.mark.anyio
 async def test_run_that_a_sentinel_ended_is_refused_from_then_on() -> None:
-    named = {"headers": _FROM_INSPECT}
+    named = {"headers": _from_inspect()}
     refused = {
         "action": "refuse",
         "status": 400,
         "message": "A sentinel ended this run at the call to get_weather.",
     }
 
-    async with _client(Handler(weather_rule("terminate", "Tokyo"))) as client:
+    handler = await holding(Handler(weather_rule("terminate", "Tokyo")))
+    async with _client(handler) as client:
         await _call(client, "judge_request", _REQUEST | named)
         ended = await _call(client, "judge_reply", _reply(message(weather("Tokyo"))))
         later = await _call(client, "judge_request", _REQUEST | named | {"id": "y"})
@@ -425,11 +416,11 @@ async def test_a_sample_not_registered_beforehand_is_not_judged() -> None:
     task = FileTask.model_validate(
         {"task": "philadelphia", "samples": [{"sample_id": 7, "sample_input": "Hi."}]}
     )
-    handler = Handler(weather_rule(), tasks={"philadelphia": task})
+    handler = await holding(Handler(weather_rule(), tasks={"philadelphia": task}))
 
     async with _client(handler) as client:
         answered = await _call(
-            client, "judge_request", _REQUEST | {"headers": _FROM_INSPECT}
+            client, "judge_request", _REQUEST | {"headers": _from_inspect()}
         )
 
     assert answered["error"]["code"] == UNREGISTERED

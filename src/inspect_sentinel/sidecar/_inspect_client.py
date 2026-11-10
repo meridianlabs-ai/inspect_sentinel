@@ -29,16 +29,30 @@ class _Header(BaseModel):
     attempt: str
     attempt_number: int
     model: str | None = None
+    timestamp: int
+    mac: str
 
 
-def inspect_sample(headers: Mapping[str, str]) -> InspectSample | None:
-    """The sample an Inspect eval says a request is from, or None if the request has no `x-inspect-context`.
+@dataclass(frozen=True)
+class SignedSample:
+    """The sample an Inspect eval says a request is from, with what proves it: an HMAC of the values that name the run, made with the eval's token."""
+
+    sample: InspectSample
+    """The sample, as the header names it."""
+    timestamp: int
+    """When Inspect signed the header, in seconds since the epoch."""
+    mac: str
+    """The HMAC of the values that name the run, and the timestamp."""
+
+
+def signed_sample(headers: Mapping[str, str]) -> SignedSample | None:
+    """The sample an Inspect eval says a request is from, and what proves it, or None if the request has no `x-inspect-context`.
 
     Args:
         headers: The request's headers, by lowercase name.
 
     Raises:
-        UnreadableError: If the header is there and isn't what Inspect writes, so the request's run can't be told.
+        UnreadableError: If the header is there and isn't what Inspect writes, with a `timestamp` and a `mac`, so the request's run can't be told.
     """
     value = headers.get(INSPECT_CONTEXT)
     if value is None:
@@ -49,7 +63,11 @@ def inspect_sample(headers: Mapping[str, str]) -> InspectSample | None:
         raise UnreadableError(
             f"The request's {INSPECT_CONTEXT} header isn't one this sidecar can read."
         ) from None
-    return InspectSample(**header.model_dump(exclude={"version"}))
+    return SignedSample(
+        InspectSample(**header.model_dump(exclude={"version", "timestamp", "mac"})),
+        header.timestamp,
+        header.mac,
+    )
 
 
 @dataclass

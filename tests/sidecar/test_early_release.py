@@ -35,6 +35,7 @@ from tests.sidecar._traffic import (
     JSON,
     STREAM,
     anthropic_recorded,
+    holding,
     inspect_headers,
     message,
     openai_recorded,
@@ -161,10 +162,10 @@ async def test_a_reply_released_early_comes_to_what_it_does_held_whole(
     name: str, action: str, city: str, size: int, inspect: bool
 ) -> None:
     asked, reply = _exchange(name, inspect=inspect)
-    whole = Handler(noting([], action, city))
+    whole = await holding(Handler(noting([], action, city)))
     await whole.request(asked)
     expected = await whole.reply(reply)
-    early = Handler(noting([], action, city), release="early")
+    early = await holding(Handler(noting([], action, city), release="early"))
     await early.request(asked)
 
     outputs = await _streamed(early.reply_stream(_start(reply)), reply.body, size)
@@ -205,7 +206,7 @@ async def test_text_goes_out_as_it_arrives_and_a_call_only_once_the_turn_is_judg
 ):
     asked, reply = _exchange("anthropic", inspect=False)
     go, judging = anyio.Event(), anyio.Event()
-    handler = Handler(waits_for(go, judging), release="early")
+    handler = await holding(Handler(waits_for(go, judging), release="early"))
     await handler.request(asked)
     stream = handler.reply_stream(_start(reply))
     events = reply.body.split(b"\n\n")
@@ -239,7 +240,9 @@ async def test_text_goes_out_as_it_arrives_and_a_call_only_once_the_turn_is_judg
 @pytest.mark.anyio
 async def test_a_turn_of_calls_alone_all_rejected_is_refused_with_its_status() -> None:
     asked, reply = _exchange("chat", inspect=False)
-    handler = Handler(noting([], "reject", "every"), release="early", reject_status=503)
+    handler = await holding(
+        Handler(noting([], "reject", "every"), release="early", reject_status=503)
+    )
     await handler.request(asked)
 
     outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
@@ -255,7 +258,7 @@ async def test_a_turn_ended_after_content_went_out_raises_in_the_sdk(
 ) -> None:
     # these recordings open with text or reasoning, which goes out first
     asked, reply = _exchange(name, inspect=True)
-    handler = Handler(noting([], "terminate", "Lima"), release="early")
+    handler = await holding(Handler(noting([], "terminate", "Lima"), release="early"))
     await handler.request(asked)
 
     outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
@@ -273,7 +276,7 @@ async def test_a_turn_ended_after_content_went_out_raises_in_the_sdk(
 async def test_a_turn_of_calls_alone_ended_is_refused_with_its_status() -> None:
     # the Chat recording holds nothing but calls, so nothing has gone out
     asked, reply = _exchange("chat", inspect=True)
-    handler = Handler(noting([], "terminate", "Lima"), release="early")
+    handler = await holding(Handler(noting([], "terminate", "Lima"), release="early"))
     await handler.request(asked)
 
     outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
@@ -381,7 +384,7 @@ async def test_a_sentinel_given_the_finished_turn_still_has_text_released_early(
     None
 ):
     asked, reply = _exchange("anthropic", inspect=False)
-    handler = Handler(finished_turns(), release="early")
+    handler = await holding(Handler(finished_turns(), release="early"))
     await handler.request(asked)
 
     outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
@@ -401,7 +404,7 @@ async def _result(handler: Handler) -> tuple[str, str | None]:
 async def test_a_turn_whose_client_goes_before_it_ends_is_cut_off_unjudged() -> None:
     asked, reply = _exchange("anthropic", inspect=True)
     seen: list[tuple[str, str]] = []
-    handler = Handler(noting(seen, "reject", "Tokyo"), release="early")
+    handler = await holding(Handler(noting(seen, "reject", "Tokyo"), release="early"))
     await handler.request(asked)
     stream = handler.reply_stream(_start(reply))
 
@@ -420,7 +423,7 @@ async def test_a_turn_whose_client_goes_while_it_is_judged_is_decided() -> None:
     # as when the reply is held whole: the judgment goes on, and is kept
     asked, reply = _exchange("anthropic", inspect=True)
     go, judging = anyio.Event(), anyio.Event()
-    handler = Handler(waits_for(go, judging), release="early")
+    handler = await holding(Handler(waits_for(go, judging), release="early"))
     await handler.request(asked)
     stream = handler.reply_stream(_start(reply))
 
@@ -441,7 +444,7 @@ async def test_a_stream_that_stops_short_after_content_went_out_fails_in_the_str
     None
 ):
     asked, reply = _exchange("anthropic", inspect=True)
-    handler = Handler(noting([], "reject", "Cairo"), release="early")
+    handler = await holding(Handler(noting([], "reject", "Cairo"), release="early"))
     await handler.request(asked)
     # without its last two events, message_delta and message_stop
     cut = reply.body[: reply.body.rindex(b"event: message_delta")]
@@ -458,7 +461,7 @@ async def test_a_turn_too_large_to_hold_before_anything_went_out_is_raised() -> 
     # as when held whole: not judged, for a proxy to refuse with a real status
     # or let through, rather than refused as if decided
     asked, reply = _exchange("chat", inspect=True)
-    handler = Handler(noting([], "reject", "Cairo"), release="early")
+    handler = await holding(Handler(noting([], "reject", "Cairo"), release="early"))
     await handler.request(asked)
     stream = handler.reply_stream(_start(reply), max_held_bytes=len(reply.body) - 1)
 
@@ -472,7 +475,7 @@ async def test_a_turn_too_large_to_hold_before_anything_went_out_is_raised() -> 
 @pytest.mark.anyio
 async def test_a_turn_too_large_to_hold_after_content_went_out_says_so() -> None:
     asked, reply = _exchange("anthropic", inspect=True)
-    handler = Handler(noting([], "reject", "Cairo"), release="early")
+    handler = await holding(Handler(noting([], "reject", "Cairo"), release="early"))
     await handler.request(asked)
     stream = handler.reply_stream(_start(reply), max_held_bytes=len(reply.body) - 1)
     # up to the end of the first text block, which goes out before the rest
@@ -519,7 +522,7 @@ async def test_a_responses_call_whose_events_disagree_is_never_released() -> Non
             data["arguments"] = '{"location":"Tokyo, Japan"}'
         lines[at] = "data: " + json.dumps(data)
     body = "\n".join(lines).encode()
-    handler = Handler(noting([], "reject", "Lima"), release="early")
+    handler = await holding(Handler(noting([], "reject", "Lima"), release="early"))
     await handler.request(asked)
 
     outputs = await _streamed(handler.reply_stream(_start(reply)), body, 61)
@@ -587,7 +590,9 @@ async def test_a_client_waiting_on_a_judgment_is_kept_alive_with_what_its_sdk_sk
     name: str,
 ) -> None:
     asked, reply = _exchange(name, inspect=False)
-    handler = Handler(slowly(0.2, "proceed"), release="early", keepalive=0.02)
+    handler = await holding(
+        Handler(slowly(0.2, "proceed"), release="early", keepalive=0.02)
+    )
     await handler.request(asked)
 
     outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
@@ -603,7 +608,9 @@ async def test_a_client_waiting_on_a_judgment_is_kept_alive_with_what_its_sdk_sk
 @pytest.mark.anyio
 async def test_a_turn_refused_after_a_keepalive_went_out_is_an_error_event() -> None:
     asked, reply = _exchange("chat", inspect=False)
-    handler = Handler(slowly(0.2, "reject"), release="early", keepalive=0.02)
+    handler = await holding(
+        Handler(slowly(0.2, "reject"), release="early", keepalive=0.02)
+    )
     await handler.request(asked)
 
     outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)
@@ -624,7 +631,9 @@ async def test_no_keepalive_goes_out_where_it_isnt_wanted(
     release: Literal["whole", "early"], keepalive: float | None, carried: bool
 ) -> None:
     asked, reply = _exchange("chat", inspect=False)
-    handler = Handler(slowly(0.2, "proceed"), release=release, keepalive=keepalive)
+    handler = await holding(
+        Handler(slowly(0.2, "proceed"), release=release, keepalive=keepalive)
+    )
     await handler.request(asked)
 
     outputs = await _streamed(
@@ -640,7 +649,9 @@ async def test_no_keepalive_goes_out_before_the_format_is_known() -> None:
     # without a format, a refusal can be written only as an HTTP error, so the
     # status has to wait for the stream to say which API it is in
     asked, reply = _exchange("chat", inspect=False)
-    handler = Handler(slowly(0, "proceed"), release="early", keepalive=0.02)
+    handler = await holding(
+        Handler(slowly(0, "proceed"), release="early", keepalive=0.02)
+    )
     await handler.request(asked)
     stream = handler.reply_stream(replace(_start(reply), format=None))
     outputs: list[Output] = []
@@ -669,11 +680,13 @@ async def test_a_reply_released_early_has_one_time_limit_for_all_its_judging() -
     # each call alone is within the limit, and the three together are not, as
     # when the reply is held whole
     asked, reply = _exchange("anthropic", inspect=True)
-    whole = Handler(slowly(0.06, "proceed"), time_limit=0.1)
+    whole = await holding(Handler(slowly(0.06, "proceed"), time_limit=0.1))
     await whole.request(asked)
     with pytest.raises(TimeLimitError):
         await whole.reply(reply)
-    early = Handler(slowly(0.06, "proceed"), release="early", time_limit=0.1)
+    early = await holding(
+        Handler(slowly(0.06, "proceed"), release="early", time_limit=0.1)
+    )
     await early.request(asked)
 
     outputs = await _streamed(early.reply_stream(_start(reply)), reply.body, 61)
@@ -819,7 +832,7 @@ async def test_a_providers_comment_holds_nothing_back(name: str) -> None:
     events.insert(1, b": ping")
     body = b"\n\n".join(events)
     text = next(i for i, event in enumerate(events) if _TEXT_EVENT[name] in event)
-    handler = Handler(slowly(0, "proceed"), release="early")
+    handler = await holding(Handler(slowly(0, "proceed"), release="early"))
     await handler.request(asked)
     stream = handler.reply_stream(_start(recorded))
     first: Output | None = None
@@ -851,7 +864,9 @@ async def test_a_turn_whose_client_goes_while_text_waits_to_go_out_is_not_judged
     # the client goes: no judgment starts after that
     asked, reply = _exchange("anthropic", inspect=True)
     seen: list[tuple[str, str]] = []
-    handler = Handler(noting(seen, "reject", "Tokyo"), release="early", keepalive=None)
+    handler = await holding(
+        Handler(noting(seen, "reject", "Tokyo"), release="early", keepalive=None)
+    )
     await handler.request(asked)
     stream = handler.reply_stream(_start(reply))
     events = reply.body.split(b"\n\n")
@@ -889,7 +904,7 @@ async def test_a_turn_not_judged_after_a_keepalive_says_so_in_its_error_event() 
     # nothing but keepalives went out, so a proxy that lets a reply it couldn't
     # have judged through may still let this one through
     asked, reply = _exchange("chat", inspect=False)
-    handler = Handler(fails_after(0.2), release="early", keepalive=0.02)
+    handler = await holding(Handler(fails_after(0.2), release="early", keepalive=0.02))
     await handler.request(asked)
 
     outputs = await _streamed(handler.reply_stream(_start(reply)), reply.body, 61)

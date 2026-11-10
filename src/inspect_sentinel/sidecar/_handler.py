@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import secrets
 import time
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -52,8 +51,9 @@ from ._inspect_client import (
     INSPECT_CONTEXT,
     Exchange,
     Judged,
+    SignedSample,
     Withheld,
-    inspect_sample,
+    signed_sample,
 )
 from ._registration import (
     MAX_TASK_EXPIRY,
@@ -70,6 +70,7 @@ from ._registration import (
     UnregisteredSampleError,
 )
 from ._reply_stream import KEEPALIVE_SECONDS, PENDING_BYTES, ReplyStart, ReplyStream
+from ._sign import TIMESTAMP_WINDOW, call_values, request_values, unproven
 from ._state import (
     MADE_KEPT,
     Attempt,
@@ -177,6 +178,7 @@ class Handler:
         max_registration_bytes: int = MAX_BODY_BYTES,
         release: Literal["whole", "early"] = "whole",
         keepalive: float | None = KEEPALIVE_SECONDS,
+        timestamp_window: float = TIMESTAMP_WINDOW,
     ) -> None:
         """Create a handler.
 
@@ -195,14 +197,20 @@ class Handler:
             max_registration_bytes: The most a task registered by an eval holds, in bytes of JSON: its registration, the facts of each sample whose registration is complete, and each sample id a sample's registration added. A sample's registration past it fails. It defaults to the largest request body, which is what a task's whole registration could hold when it came in one call.
             release: How a streamed reply is passed on. `whole`, the default, holds every reply until the sentinel has judged it. `early` passes on the text and reasoning that come before the turn's first tool call as they arrive, holds the rest of the turn, and judges it once the turn has ended, as `whole` does. The sentinel is given the whole turn either way.
             keepalive: Under early release, the longest a client is sent nothing while a streamed reply is held, in seconds, after which it is sent a keepalive, an SSE comment that every provider SDK skips. The keepalive sends the status, so a turn refused after it is refused with an error event in the stream. None sends no keepalives.
+            timestamp_window: How far, in seconds, the `timestamp` of an Inspect eval's model request or call to the endpoint for evals may be from this process's clock. One further is refused, so a `mac` copied from a log is of no use once the window has passed.
 
         Raises:
-            ValueError: If `keepalive` isn't a positive number of seconds.
+            ValueError: If `keepalive` or `timestamp_window` isn't a positive number of seconds.
         """
         if keepalive is not None and not keepalive > 0:
             raise ValueError(
                 f"A keepalive is sent after some seconds, not {keepalive}."
             )
+        if not timestamp_window > 0:
+            raise ValueError(
+                f"The timestamp window is some seconds, not {timestamp_window}."
+            )
+        self._timestamp_window = timestamp_window
         self._release: Literal["whole", "early"] = release
         self._keepalive = keepalive
         self._protocol = resolve_sentinel(sentinel)
@@ -238,6 +246,11 @@ class Handler:
         """Under early release, how many seconds a client may be sent nothing before it is sent a keepalive, or None for no keepalives."""
         return self._keepalive
 
+    @property
+    def timestamp_window(self) -> float:
+        """How far, in seconds, an Inspect eval's `timestamp` may be from this process's clock."""
+        return self._timestamp_window
+
     async def request(self, request: Request) -> Answer:
         """Judge a request before the proxy sends it.
 
@@ -246,6 +259,8 @@ class Handler:
         If turns were rejected earlier in the conversation this request continues, they are added where they happened, so the model is still told.
 
         A request with `x-inspect-context` belongs to the sample it names, which is its run. A request whose header can't be read is refused, rather than judged as another client's would be: it says it is an eval's, and a proxy set to let through what can't be judged would let it through unjudged.
+
+        The header's `mac` proves the values that name the run, made with the token the eval registered with. Before anything of the run is looked up or changed, a request is refused unjudged, whatever the strictness, if the handler holds no token for the eval, as after a restart, with the reason `unregistered`; or if its `timestamp` is outside the window or its `mac` doesn't match, with the reason `unauthenticated`. So a client without the eval's token that changes the sample, the attempt or its number, or names a sample of the eval, reaches no run.
 
         A conversation belongs to one attempt at the sample. A new attempt starts afresh, as Inspect starts the sample store afresh for it: its conversations, its count of rejected turns in a row, the sentinel's store, and the run's end if a sentinel ended the attempt before. A sample the eval has ended stays ended. Attempts are ordered by the number the header gives each. Once a later attempt has begun, a request of an earlier one is refused unjudged, as nobody waits for it, and so is one of another attempt with the same number: `request_result` says it was not judged, with the reason `replaced_attempt`, so an eval never takes it for a sentinel's terminate. A client that retries a request within the attempt keeps the attempt's conversation.
 
@@ -266,17 +281,25 @@ class Handler:
             # an attempt that is never judged has records too: none
             await self._state.recorder(request.id)
         try:
-            sample = inspect_sample(request.headers)
+            signed = signed_sample(request.headers)
         except UnreadableError as ex:
             # refused rather than raised, but never judged, so not a terminate
             if attempt is not None:
                 attempt.not_judged("unreadable")
             return Refuse(400, str(ex))
-        if sample is not None:
+        sample = signed.sample if signed is not None else None
+        if signed is not None:
+            # proven before anything of its run is looked up or changed, and
+            # refused rather than raised, so a proxy that lets through what
+            # can't be judged doesn't let through a request that can't prove
+            # its run
+            refused = await self._unproven_request(signed)
+            if refused is not None:
+                if attempt is not None:
+                    attempt.not_judged(refused[0])
+                return Refuse(400, refused[1])
             if attempt is not None:
-                attempt.eval_id = sample.eval_id
-            # a request that names the eval keeps its token
-            await self._state.eval_token(sample.eval_id)
+                attempt.eval_id = signed.sample.eval_id
         try:
             answer = await self._within_limit(
                 self._request(request, sample, attempt), "request", request.id
@@ -376,29 +399,27 @@ class Handler:
         if held is not None and held.attempt is not None:
             held.attempt.not_judged(reason)
 
-    async def eval_token(self, eval_id: str, presented: str | None) -> str | None:
-        """The secret the sidecar keeps for an eval, which a caller registering a task for the eval must present.
+    async def eval_token(self, eval_id: str, presented: str) -> str | None:
+        """The secret the sidecar keeps for an eval, which a registration that sends a secret must send.
 
         Args:
             eval_id: The eval's id.
-            presented: The secret the caller holds for the eval, if it holds one.
+            presented: The secret the caller sent for the eval.
 
         Returns:
-            The secret kept, which the caller presented; or None if none is kept, at the eval's first registration or once a restart or the expiry has lost it.
+            The secret kept, which the caller sent, as when a registration whose answer was lost is sent again; or None if none is kept, at the eval's first registration or once a restart or the expiry has lost it.
 
         Raises:
-            UnauthorizedError: If the sidecar keeps a secret for the eval, and the caller didn't present it.
+            UnauthorizedError: If the sidecar keeps another secret for the eval.
         """
-        kept = await self._state.eval_token(eval_id)
+        kept = await self._state.eval_token(eval_id, renew=False)
         if kept is None:
             return None
-        if presented is None or not hmac.compare_digest(
-            presented.encode(), kept.encode()
-        ):
+        if not hmac.compare_digest(presented.encode(), kept.encode()):
             raise UnauthorizedError(
                 f"The eval {eval_id!r} registered with another token."
             )
-        return kept
+        return await self._state.eval_token(eval_id)
 
     async def eval_token_room(self) -> None:
         """Check there is room to keep one more eval's token, before a registration for a new eval is made.
@@ -413,33 +434,89 @@ class Handler:
                 f"This sidecar already keeps the {self._max_task_registrations} tasks registered by evals that it takes, or the tokens of as many evals. One is taken again once a kept task or token expires."
             )
 
-    async def keep_eval_token(self, eval_id: str, chosen: str | None = None) -> str:
-        """Keep a secret for an eval whose registration succeeded, unless one is kept already, as when two registrations made it at once.
+    async def keep_eval_token(self, eval_id: str, token: str) -> None:
+        """Keep the secret an eval made and sent with a registration that succeeded, unless one is kept already.
 
-        The secret is `chosen`, the one the eval made and sent with its first registration, or one made here when the eval chose none. Kept only once a registration succeeds, so a registration that fails leaves no secret behind. A repeat of a first registration that carries the same chosen secret is given it back, so a registration whose answer was lost can be sent again.
-
-        Returns:
-            The secret kept for the eval, which every later call for it presents.
-        """
-        return await self._state.keep_eval_token(
-            eval_id, chosen if chosen is not None else secrets.token_urlsafe(32)
-        )
-
-    async def holds_eval(self, eval_id: str, token: str) -> bool:
-        """Whether the sidecar keeps a secret for the eval, which the caller must present.
-
-        Returns:
-            True if the caller presented the eval's secret; False if the sidecar keeps none for the eval, so it holds nothing of the eval for anyone, as after a restart.
+        Kept only once a registration succeeds, so a registration that fails leaves no secret behind. The sidecar never makes a secret, and never sends one back.
 
         Raises:
-            UnauthorizedError: If the sidecar keeps a secret for the eval, and `token` isn't it.
+            UnauthorizedError: If another registration for the eval kept another secret meanwhile.
         """
-        kept = await self._state.eval_token(eval_id)
+        kept = await self._state.keep_eval_token(eval_id, token)
+        if not hmac.compare_digest(token.encode(), kept.encode()):
+            raise UnauthorizedError(
+                f"The eval {eval_id!r} registered with another token."
+            )
+
+    async def holds_eval(
+        self, eval_id: str, method: str, timestamp: int, mac: str
+    ) -> bool:
+        """Whether the sidecar keeps a secret for the eval, and the caller proved it holds it.
+
+        Args:
+            eval_id: The eval's id.
+            method: The method called.
+            timestamp: When the caller signed, in seconds since the epoch.
+            mac: The caller's HMAC of the method, the eval's id and the timestamp, made with the eval's secret.
+
+        Returns:
+            True if the caller proved it holds the eval's secret; False if the sidecar keeps none for the eval, so it holds nothing of the eval for anyone, as after a restart.
+
+        Raises:
+            UnauthorizedError: If the sidecar keeps a secret for the eval, and the `timestamp` is outside the window or the `mac` isn't made with it.
+        """
+        kept = await self._state.eval_token(eval_id, renew=False)
         if kept is None:
             return False
-        if not hmac.compare_digest(token.encode(), kept.encode()):
-            raise UnauthorizedError(f"The token isn't the eval {eval_id!r}'s.")
+        problem = unproven(
+            kept,
+            call_values(method, eval_id, timestamp),
+            timestamp,
+            mac,
+            window=self._timestamp_window,
+            what="The call's",
+        )
+        if problem is not None:
+            raise UnauthorizedError(problem)
+        # a call that proves it holds the secret keeps it
+        await self._state.eval_token(eval_id)
         return True
+
+    async def _unproven_request(
+        self, signed: SignedSample
+    ) -> tuple[NotJudged, str] | None:
+        # why a request's header doesn't prove its run, or None if it does
+        eval_id = signed.sample.eval_id
+        kept = await self._state.eval_token(eval_id, renew=False)
+        if kept is None:
+            return (
+                "unregistered",
+                f"This sidecar holds no registration of the eval {eval_id!r}, as after a restart, so it can't check the request's {INSPECT_CONTEXT} header. The eval registers its task again.",
+            )
+        problem = unproven(
+            kept,
+            request_values(signed.sample, signed.timestamp),
+            signed.timestamp,
+            signed.mac,
+            window=self._timestamp_window,
+            what=f"The request's {INSPECT_CONTEXT}",
+        )
+        if problem is not None:
+            return "unauthenticated", f"{problem} The request was not judged."
+
+        # A run belongs to the eval that started it. A client can register an
+        # eval of its own and sign with that eval's token, so the token alone
+        # doesn't stop it naming another eval's sample.
+        held = await self._state.existing_run(_run_key(True, signed.sample.sample_uuid))
+        if held is not None and held.eval_id is not None and held.eval_id != eval_id:
+            return (
+                "unauthenticated",
+                f"The request's {INSPECT_CONTEXT} header names a sample of another eval. The request was not judged.",
+            )
+
+        # a request that proves its run keeps the eval's token
+        await self._state.eval_token(eval_id)
+        return None
 
     async def request_result(
         self, id: str, eval_id: str, wait: float = 0

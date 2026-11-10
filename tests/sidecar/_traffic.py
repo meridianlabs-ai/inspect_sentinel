@@ -1,4 +1,7 @@
+import hashlib
+import hmac
 import json
+import time
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -9,7 +12,7 @@ from inspect_sentinel._decorators import protocol
 from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall
 from inspect_sentinel._types import Protocol
-from inspect_sentinel.sidecar import Reply, Request
+from inspect_sentinel.sidecar import Handler, Reply, Request
 
 DATA = Path(__file__).parent / "data"
 
@@ -120,12 +123,65 @@ SAMPLE: dict[str, Any] = {
 }
 
 
-def inspect_headers(**changes: Any) -> dict[str, str]:
-    """The headers an Inspect eval sends with each model request, for `SAMPLE` with `changes`."""
+TOKEN = "eval-789-token-that-inspect-made-for-these-tests"
+"""The token the eval `SAMPLE` names registered with, as Inspect makes one: at least 32 characters."""
+
+
+def signed(token: str, values: Sequence[object]) -> str:
+    """An HMAC as Inspect makes one: SHA-256, in hex, over a compact JSON list of the values as strings."""
+    message = json.dumps([str(value) for value in values], separators=(",", ":"))
+    return hmac.new(token.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+
+def inspect_headers(
+    *, token: str = TOKEN, timestamp: int | None = None, **changes: Any
+) -> dict[str, str]:
+    """The headers an Inspect eval sends with each model request, for `SAMPLE` with `changes`, signed with `token` at `timestamp`, now if not given."""
+    fields = SAMPLE | changes
+    fields["timestamp"] = int(time.time()) if timestamp is None else timestamp
+    fields["mac"] = signed(
+        token,
+        [
+            "model-request",
+            *(
+                fields[name]
+                for name in (
+                    "task",
+                    "sample_id",
+                    "epoch",
+                    "sample_uuid",
+                    "attempt",
+                    "attempt_number",
+                    "timestamp",
+                )
+            ),
+        ],
+    )
+    return {"x-inspect-context": json.dumps(fields), "x-irid": "request_456"}
+
+
+def eval_call(
+    method: str,
+    eval_id: str = "eval_789",
+    *,
+    token: str = TOKEN,
+    timestamp: int | None = None,
+) -> dict[str, Any]:
+    """What a call to the endpoint for evals presents for the eval, signed with `token` at `timestamp`, now if not given."""
+    at = int(time.time()) if timestamp is None else timestamp
     return {
-        "x-inspect-context": json.dumps(SAMPLE | changes),
-        "x-irid": "request_456",
+        "eval_id": eval_id,
+        "timestamp": at,
+        "mac": signed(token, [method, eval_id, at]),
     }
+
+
+async def holding(
+    handler: Handler, eval_id: str = "eval_789", token: str = TOKEN
+) -> Handler:
+    """The handler, once it holds the eval's token, as the eval's first registration leaves it, so that it can check the eval's requests."""
+    await handler.keep_eval_token(eval_id, token)
+    return handler
 
 
 def reply(

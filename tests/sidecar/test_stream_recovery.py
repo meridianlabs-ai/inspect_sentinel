@@ -26,7 +26,14 @@ from inspect_sentinel.sidecar._eval_endpoint import eval_routes
 from inspect_sentinel.sidecar._proxy_endpoint import PATH as PROXY_PATH
 from inspect_sentinel.sidecar._proxy_endpoint import proxy_app
 from inspect_sentinel.sidecar._state import MemoryState
-from tests.sidecar._traffic import STREAM, anthropic_recorded, inspect_headers, request
+from tests.sidecar._traffic import (
+    STREAM,
+    anthropic_recorded,
+    eval_call,
+    holding,
+    inspect_headers,
+    request,
+)
 from tests.sidecar.test_early_release import noting
 from tests.sidecar.test_eval_endpoint import _Clock
 
@@ -64,15 +71,15 @@ class EvalClient:
         self._handler = handler
 
     async def recover(self, irid: str) -> Recovered:
-        # the token the eval's registration would have been given
-        token = await self._handler.keep_eval_token("eval_789")
+        # the token the eval's registration left, kept again if it expired
+        await holding(self._handler)
         answered = await self._http.post(
             EVAL_PATH,
             json={
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "request_result",
-                "params": {"id": irid, "eval_id": "eval_789", "token": token},
+                "params": {"id": irid} | eval_call("request_result"),
             },
         )
         result: dict[str, Any] = answered.json()["result"]
@@ -172,6 +179,8 @@ class ProxyHook:
 async def _sidecar(
     handler: Handler, *, results: bool = True
 ) -> AsyncGenerator[tuple[ProxyHook, EvalClient]]:
+    # the eval's registration has left the sidecar its token
+    await holding(handler)
     # both endpoints on one app, as the sidecar serves them by default
     proxy = proxy_app(handler)
     app = Starlette(

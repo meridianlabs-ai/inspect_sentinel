@@ -1,5 +1,4 @@
 import argparse
-import json
 import logging
 import os
 import signal
@@ -36,7 +35,15 @@ from inspect_sentinel.sidecar._serve import (
     handler_from_arguments,
     parse_arguments,
 )
-from tests.sidecar._traffic import message, reply, request, weather, weather_rule
+from tests.sidecar._traffic import (
+    holding,
+    inspect_headers,
+    message,
+    reply,
+    request,
+    weather,
+    weather_rule,
+)
 
 
 class _Lines(logging.Handler):
@@ -115,6 +122,7 @@ def test_defaults_are_one_port_and_no_limits() -> None:
     assert arguments.time_limit is None
     assert arguments.max_body_bytes == 64 * 1024 * 1024
     assert arguments.run_expiry == 24 * 60 * 60
+    assert arguments.timestamp_window == 300
     assert arguments.no_eval_results is False
     assert arguments.tasks_folder is None
     assert arguments.no_runtime_task_registration is False
@@ -151,17 +159,8 @@ async def test_an_inspect_client_can_be_sent_only_what_it_acts_on() -> None:
     handler = handler_from_arguments(
         _arguments("--sentinel", "no_tokyo", "--no-eval-results")
     )
-    sample = {
-        "version": 1,
-        "eval_id": "eval_789",
-        "task": "philadelphia",
-        "sample_id": 1,
-        "epoch": 1,
-        "sample_uuid": "sample_123",
-        "attempt": "attempt_1",
-        "attempt_number": 1,
-    }
-    headers = {"x-inspect-context": json.dumps(sample), "x-irid": "irid-1"}
+    await holding(handler)
+    headers = inspect_headers(epoch=1) | {"x-irid": "irid-1"}
     await handler.request(replace(request(), headers=headers))
 
     answer = await handler.reply(reply(message(weather("Tokyo"))))
@@ -252,6 +251,7 @@ server:
   strictness: known_tasks
   task_expiry: 60
   max_task_registrations: 5
+  timestamp_window: 60
   envoy:
     port: 9001
     headers: [x-team]
@@ -276,6 +276,7 @@ def test_the_server_stanza_sets_what_the_options_would(tmp_path: Path) -> None:
     assert arguments.strictness == "known_tasks"
     assert arguments.task_expiry == 60
     assert arguments.max_task_registrations == 5
+    assert arguments.timestamp_window == 60
     assert (arguments.envoy_port, arguments.envoy_header) == (9001, ["x-team"])
     # the tasks folder is found beside the configuration file
     assert arguments.tasks_folder == str(tmp_path.resolve() / "tasks")
@@ -462,3 +463,28 @@ def test_the_handler_keeps_a_client_alive_as_the_arguments_say(
     )
 
     assert handler.keepalive == keepalive
+
+
+def test_the_handler_checks_timestamps_within_the_window_the_arguments_say() -> None:
+    handler = handler_from_arguments(
+        _arguments("--sentinel", "no_tokyo", "--timestamp-window", "30")
+    )
+
+    assert handler.timestamp_window == 30
+
+
+@pytest.mark.anyio
+async def test_a_handler_is_built_with_the_stanzas_timestamp_window(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "sentinel.yaml"
+    config.write_text("sentinel:\n  name: no_tokyo\nserver:\n  timestamp_window: 45\n")
+
+    handler = handler_from_arguments(parse_arguments(["--sentinel", str(config)]))
+
+    assert handler.timestamp_window == 45
+
+
+def test_a_timestamp_window_of_no_time_is_an_error() -> None:
+    with pytest.raises(ValueError, match="timestamp window"):
+        Handler(weather_rule(), timestamp_window=0)

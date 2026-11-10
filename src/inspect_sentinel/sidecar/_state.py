@@ -38,6 +38,7 @@ NotJudged: TypeAlias = Literal[
     "provider_error",
     "cut_off",
     "replaced_attempt",
+    "unauthenticated",
 ]
 """Why a request or its reply was not judged."""
 
@@ -348,8 +349,13 @@ class State(Protocol):
         """The attempts at a request in order, `Dropped` if they were kept and no longer are, or None if the request was never seen."""
         ...
 
-    async def eval_token(self, eval_id: str) -> str | None:
-        """The secret an eval presents to the endpoint for evals, or None if none is kept. Asking counts as the eval being named, so it is kept for its expiry from now."""
+    async def eval_token(self, eval_id: str, *, renew: bool = True) -> str | None:
+        """The secret an eval proves its calls to the endpoint for evals and its model requests with, or None if none is kept.
+
+        Args:
+            eval_id: The eval's id.
+            renew: Whether asking counts as the eval being named, so the secret is kept for its expiry from now. False to check a caller's proof first, so that one who can't prove it keeps nothing alive.
+        """
         ...
 
     async def eval_tokens(self) -> int:
@@ -357,7 +363,7 @@ class State(Protocol):
         ...
 
     async def keep_eval_token(self, eval_id: str, token: str) -> str:
-        """Keep the secret an eval presents to the endpoint for evals, unless one is kept for it already, for as long as a run is kept once no call names the eval.
+        """Keep the secret an eval proves its calls and requests with, unless one is kept for it already, for as long as a run is kept once no call names the eval.
 
         Returns:
             The secret kept: `token`, or the one kept already.
@@ -476,8 +482,8 @@ class MemoryState:
             return attempts
         return self._dropped.get(request)
 
-    async def eval_token(self, eval_id: str) -> str | None:
-        return self._tokens.get(eval_id)
+    async def eval_token(self, eval_id: str, *, renew: bool = True) -> str | None:
+        return self._tokens.get(eval_id) if renew else self._tokens.peek(eval_id)
 
     async def eval_tokens(self) -> int:
         return self._tokens.count()
@@ -517,6 +523,12 @@ class _Expiring(Generic[V]):
             return None
         self.put(key, kept[1])
         return kept[1]
+
+    def peek(self, key: str) -> V | None:
+        # what `get` gives, without counting as a use
+        self._expire()
+        kept = self._kept.get(key)
+        return kept[1] if kept is not None else None
 
     def put(self, key: str, value: V) -> None:
         # swept here too: what is only ever put, such as a request whose reply
