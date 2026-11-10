@@ -493,12 +493,11 @@ class Handler:
         if problem is not None:
             return f"{problem} The request was not judged."
 
-        # A run belongs to the eval that started it. A client can register an
-        # eval of its own and sign with that eval's token, so the token alone
-        # doesn't stop it naming another eval's sample.
-        held = await self._state.existing_run(
-            _run_key(True, signed.sample.sample_uuid), renew=False
-        )
+        # A run belongs to the eval that started it, whether still kept or
+        # ended. A client can register an eval of its own and sign with that
+        # eval's token, so the token alone doesn't stop it naming another
+        # eval's sample.
+        held = await self._state.peek_run(_run_key(True, signed.sample.sample_uuid))
         if held is not None and held.eval_id is not None and held.eval_id != eval_id:
             return f"The request's {INSPECT_CONTEXT} header names a sample of another eval. The request was not judged."
 
@@ -560,8 +559,9 @@ class Handler:
         # renewed only once it is found to be the eval's, so that another
         # eval asking keeps nothing alive
         key = _run_key(True, sample_uuid)
-        kept = await self._state.existing_run(key, renew=False)
-        if kept is None or kept.eval_id != eval_id:
+        kept = await self._state.peek_run(key)
+        # an ended run keeps no store to copy
+        if kept is None or kept.eval_id != eval_id or kept.closed:
             return None
         await self._state.existing_run(key)
         return SampleResult(

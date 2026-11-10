@@ -1461,9 +1461,10 @@ async def _reason(handler: Handler, irid: str) -> str | None:
     return attempts[-1].reason
 
 
-async def _kept(handler: Handler, irid: str) -> bool:
-    # whether anything was kept under the request id, for `request_result`
-    attempts = await handler._state.attempts(irid, "eval_789")  # pyright: ignore[reportPrivateUsage]
+async def _kept(handler: Handler, irid: str, eval_id: str = "eval_789") -> bool:
+    # whether anything was kept under the eval and the request id, for
+    # `request_result`
+    attempts = await handler._state.attempts(irid, eval_id)  # pyright: ignore[reportPrivateUsage]
     return attempts is not None
 
 
@@ -1573,7 +1574,7 @@ async def test_a_request_naming_another_evals_sample_is_refused() -> None:
     # the sidecar holds no token for that eval, so it can't check the request
     assert isinstance(answer, Refuse) and answer.status == 400
     assert "holds no registration of the eval" in answer.message
-    assert not await _kept(handler, "irid-b")
+    assert not await _kept(handler, "irid-b", "eval_other")
     # and nothing of the other eval's run changed or became readable
     assert await handler.sample_result("sample_123", "eval_other") is None
 
@@ -1599,24 +1600,28 @@ async def test_an_eval_of_the_clients_own_cant_reach_another_evals_run() -> None
     )
 
     assert isinstance(answer, Refuse) and answer.status == 400
-    assert not await _kept(handler, "irid-b")
+    assert not await _kept(handler, "irid-b", "eval_own")
     ended = await handler.sample_result("sample_123", "eval_789")
     assert ended is not None and ended.outcome == "terminate"
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("ended", [False, True], ids=["kept run", "ended run"])
 async def test_a_request_refused_for_naming_another_evals_run_keeps_it_no_longer(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, ended: bool
 ) -> None:
-    # The run is kept for 100 seconds after a request of it. A request from an
-    # eval of the client's own that names the run is refused, and must not
-    # keep the run past its expiry, beyond the eval it belongs to.
+    # The run, or what is left of it once its eval ended it, is kept for 100
+    # seconds after its eval last named it. A request from an eval of the
+    # client's own that names the run is refused as another eval's, keeps
+    # nothing of its own, and must not keep the run past its expiry.
     monkeypatch.setattr(_state, "time", _ExpiryClock)
     _ExpiryClock.now = 0.0
     handler = await holding(
         Handler(weather_rule("terminate", "Tokyo"), state=MemoryState(expiry=100))
     )
     await handler.request(_from_inspect(request("a"), "irid-a"))
+    if ended:
+        assert await handler.end_sample("sample_123", "eval_789") == "ended"
     own_token = "eval-own-token-the-client-registered-with"
     await holding(handler, "eval_own", own_token)
 
@@ -1627,12 +1632,22 @@ async def test_a_request_refused_for_naming_another_evals_run_keeps_it_no_longer
     _ExpiryClock.now = 120.0
 
     assert isinstance(answer, Refuse) and answer.status == 400
+    assert "names a sample of another eval" in answer.message
+    assert not await _kept(handler, "irid-b", "eval_own")
+    # `end_sample` reads an ended run, which `sample_result` doesn't
+    assert await handler.end_sample("sample_123", "eval_789") == "unknown"
     assert await handler.sample_result("sample_123", "eval_789") is None
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    "asked", ["sample_result", "end_sample", "end_sample of an ended run"]
+    "asked",
+    [
+        "sample_result",
+        "end_sample",
+        "sample_result of an ended run",
+        "end_sample of an ended run",
+    ],
 )
 async def test_another_eval_asking_of_a_run_keeps_it_no_longer(
     monkeypatch: pytest.MonkeyPatch, asked: str
@@ -1644,11 +1659,11 @@ async def test_another_eval_asking_of_a_run_keeps_it_no_longer(
     _ExpiryClock.now = 0.0
     handler = await holding(Handler(weather_rule(), state=MemoryState(expiry=100)))
     await handler.request(_from_inspect(request("a"), "irid-a"))
-    if asked == "end_sample of an ended run":
+    if asked.endswith("of an ended run"):
         assert await handler.end_sample("sample_123", "eval_789") == "ended"
 
     _ExpiryClock.now = 60.0
-    if asked == "sample_result":
+    if asked.startswith("sample_result"):
         assert await handler.sample_result("sample_123", "eval_own") is None
     else:
         assert await handler.end_sample("sample_123", "eval_own") == "unknown"

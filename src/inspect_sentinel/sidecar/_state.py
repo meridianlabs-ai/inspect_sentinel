@@ -320,12 +320,14 @@ class State(Protocol):
         """A task an eval registered, or None if none is kept. Asking counts as the task being named, so it is kept for its expiry from now."""
         ...
 
-    async def existing_run(self, key: str, *, renew: bool = True) -> Run | None:
-        """The run's state, or None if none is kept.
+    async def existing_run(self, key: str) -> Run | None:
+        """The run's state, or None if none is kept. Asking counts as the run being named, so the run is kept for its expiry from now."""
+        ...
 
-        Args:
-            key: The run's key.
-            renew: Whether asking counts as the run being named, so the run is kept for its expiry from now. False to check which eval a request's run belongs to first, so that a request refused for naming another eval's run keeps nothing alive.
+    async def peek_run(self, key: str) -> Run | None:
+        """The run's state, kept or ended, or None if neither is kept, renewing nothing.
+
+        Every check of which eval a run belongs to reads the run this way first, and renews it only once the check passes. So a caller refused for naming another eval's run keeps nothing of it alive, whether the run is still kept or its eval ended it.
         """
         ...
 
@@ -456,21 +458,22 @@ class MemoryState:
         self._tasks[(eval_id, task)] = (time.monotonic(), expiry, facts)
         return facts
 
-    async def existing_run(self, key: str, *, renew: bool = True) -> Run | None:
-        return self._runs.get(key) if renew else self._runs.peek(key)
+    async def existing_run(self, key: str) -> Run | None:
+        return self._runs.get(key)
+
+    async def peek_run(self, key: str) -> Run | None:
+        kept = self._runs.peek(key)
+        return kept if kept is not None else self._ended.peek(key)
 
     async def end_run(self, key: str, eval_id: str | None = None) -> bool:
-        # read without renewing, so that another eval ending the run keeps
-        # nothing alive
-        kept = self._runs.peek(key)
-        if eval_id is not None and kept is not None and kept.eval_id != eval_id:
+        # a run never seen is left as it is, rather than refused from then
+        # on; and another eval ending the run keeps nothing alive
+        kept = await self.peek_run(key)
+        if kept is None or eval_id not in (None, kept.eval_id):
             return False
         run = self._runs.pop(key)
         if run is None:
-            # a run never seen is left as it is, rather than refused from then on
-            ended = self._ended.peek(key)
-            if ended is None or eval_id not in (None, ended.eval_id):
-                return False
+            # ended before: ending it again renews what is left of it
             self._ended.get(key)
             return True
         run.closed = True
