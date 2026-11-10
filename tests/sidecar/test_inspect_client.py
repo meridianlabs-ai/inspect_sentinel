@@ -27,6 +27,7 @@ from inspect_sentinel.sidecar import (
     Request,
     UnreadableError,
     _sign,
+    _state,
     read_reply,
 )
 from inspect_sentinel.sidecar._handler import _ENDED, SampleResult
@@ -1589,6 +1590,41 @@ async def test_an_eval_of_the_clients_own_cant_reach_another_evals_run() -> None
     assert await _reason(handler, "irid-b") == "unauthenticated"
     ended = await handler.sample_result("sample_123", "eval_789")
     assert ended is not None and ended.outcome == "terminate"
+
+
+@pytest.mark.anyio
+async def test_a_request_refused_for_naming_another_evals_run_keeps_it_no_longer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The run is kept for 100 seconds after a request of it. A request from an
+    # eval of the client's own that names the run is refused, and must not
+    # keep the run past its expiry, beyond the eval it belongs to.
+    monkeypatch.setattr(_state, "time", _ExpiryClock)
+    _ExpiryClock.now = 0.0
+    handler = await holding(
+        Handler(weather_rule("terminate", "Tokyo"), state=MemoryState(expiry=100))
+    )
+    await handler.request(_from_inspect(request("a"), "irid-a"))
+    own_token = "eval-own-token-the-client-registered-with"
+    await holding(handler, "eval_own", own_token)
+
+    _ExpiryClock.now = 60.0
+    answer = await handler.request(
+        _from_inspect(request("b"), "irid-b", token=own_token, eval_id="eval_own")
+    )
+    _ExpiryClock.now = 120.0
+
+    assert isinstance(answer, Refuse) and answer.status == 400
+    assert await handler.sample_result("sample_123", "eval_789") is None
+
+
+class _ExpiryClock:
+    # what the state's expiry reads
+    now = 0.0
+
+    @classmethod
+    def monotonic(cls) -> float:
+        return cls.now
 
 
 @pytest.mark.anyio

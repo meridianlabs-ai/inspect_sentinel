@@ -507,7 +507,9 @@ class Handler:
         # A run belongs to the eval that started it. A client can register an
         # eval of its own and sign with that eval's token, so the token alone
         # doesn't stop it naming another eval's sample.
-        held = await self._state.existing_run(_run_key(True, signed.sample.sample_uuid))
+        held = await self._state.existing_run(
+            _run_key(True, signed.sample.sample_uuid), renew=False
+        )
         if held is not None and held.eval_id is not None and held.eval_id != eval_id:
             return (
                 "unauthenticated",

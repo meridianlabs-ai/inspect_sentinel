@@ -320,8 +320,13 @@ class State(Protocol):
         """A task an eval registered, or None if none is kept. Asking counts as the task being named, so it is kept for its expiry from now."""
         ...
 
-    async def existing_run(self, key: str) -> Run | None:
-        """The run's state, or None if none is kept."""
+    async def existing_run(self, key: str, *, renew: bool = True) -> Run | None:
+        """The run's state, or None if none is kept.
+
+        Args:
+            key: The run's key.
+            renew: Whether asking counts as the run being named, so the run is kept for its expiry from now. False to check which eval a request's run belongs to first, so that a request refused for naming another eval's run keeps nothing alive.
+        """
         ...
 
     async def end_run(self, key: str, eval_id: str | None = None) -> bool:
@@ -445,8 +450,8 @@ class MemoryState:
         self._tasks[(eval_id, task)] = (time.monotonic(), expiry, facts)
         return facts
 
-    async def existing_run(self, key: str) -> Run | None:
-        return self._runs.get(key)
+    async def existing_run(self, key: str, *, renew: bool = True) -> Run | None:
+        return self._runs.get(key) if renew else self._runs.peek(key)
 
     async def end_run(self, key: str, eval_id: str | None = None) -> bool:
         kept = self._runs.get(key)
