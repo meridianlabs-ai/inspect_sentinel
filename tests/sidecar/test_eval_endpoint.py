@@ -609,6 +609,102 @@ async def test_a_request_whose_records_were_dropped_says_so_for_a_while(
     assert forgotten == {"id": "irid-1", "records": "unknown"}
 
 
+_WRONG_TOKEN = "a-token-the-eval-never-made-for-these-tests"
+
+_UNPROVEN = [
+    "a model request with a wrong mac",
+    "a model request with a stale timestamp",
+    "an eval call with a wrong mac",
+    "an eval call with a stale timestamp",
+    "a registration with a wrong token",
+    "a registration with a wrong mac",
+]
+
+_PROVEN = ["a model request", "an eval call", "a registration with the token"]
+
+
+async def _send(handler: Handler, client: httpx.AsyncClient, case: str) -> bool:
+    # sends one request or call that names `eval_789`, and says whether the
+    # sidecar took it; nothing here keeps the token for the eval, so only the
+    # request or call itself can renew it
+    stale = int(time.time()) - 1000
+    result = _OTHER_METHODS["sample_result"]
+    unsigned = {k: v for k, v in _REGISTRATION.items() if k != "token"}
+    model_requests: dict[str, dict[str, Any]] = {
+        "a model request with a wrong mac": {"token": _WRONG_TOKEN},
+        "a model request with a stale timestamp": {"timestamp": stale},
+        "a model request": {},
+    }
+    calls = {
+        "an eval call with a wrong mac": (
+            "sample_result",
+            result | eval_call("sample_result", token=_WRONG_TOKEN),
+        ),
+        "an eval call with a stale timestamp": (
+            "sample_result",
+            result | eval_call("sample_result", timestamp=stale),
+        ),
+        "an eval call": ("sample_result", result | eval_call("sample_result")),
+        "a registration with a wrong token": (
+            "register_task",
+            _REGISTRATION | {"token": _WRONG_TOKEN},
+        ),
+        "a registration with a wrong mac": (
+            "register_task",
+            unsigned | eval_call("register_task", token=_WRONG_TOKEN),
+        ),
+        "a registration with the token": ("register_task", _REGISTRATION),
+    }
+    if case in model_requests:
+        headers = inspect_headers(**model_requests[case]) | {"x-irid": "irid-1"}
+        answer = await handler.request(replace(request("x"), headers=headers))
+        return not isinstance(answer, Refuse)
+    method, params = calls[case]
+    answered = await _call(client, method, params)
+    return "result" in answered or answered["error"]["code"] == UNKNOWN_SAMPLE
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("case", _UNPROVEN)
+async def test_a_request_or_call_that_fails_the_check_doesnt_keep_the_token(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    # The token is kept for 100 seconds after the eval was last named. A
+    # sender that can't prove the token is refused, and must not keep it
+    # alive, or anyone could keep an eval's token forever.
+    monkeypatch.setattr(_state, "time", _Clock)
+    _Clock.now = 0.0
+    state = MemoryState(expiry=100)
+    handler = await holding(Handler(weather_rule(), state=state))
+
+    _Clock.now = 60.0
+    async with _client(handler) as client:
+        taken = await _send(handler, client, case)
+    _Clock.now = 120.0
+
+    assert not taken
+    assert await state.eval_token("eval_789", renew=False) is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("case", _PROVEN)
+async def test_a_request_or_call_that_passes_the_check_keeps_the_token(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    monkeypatch.setattr(_state, "time", _Clock)
+    _Clock.now = 0.0
+    state = MemoryState(expiry=100)
+    handler = await holding(Handler(weather_rule(), state=state))
+
+    _Clock.now = 60.0
+    async with _client(handler) as client:
+        taken = await _send(handler, client, case)
+    _Clock.now = 120.0
+
+    assert taken
+    assert await state.eval_token("eval_789", renew=False) == TOKEN
+
+
 @pytest.mark.anyio
 async def test_a_request_dropped_is_unknown_to_another_eval(
     monkeypatch: pytest.MonkeyPatch,
