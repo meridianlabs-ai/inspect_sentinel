@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import time
 from collections import OrderedDict
@@ -30,6 +31,9 @@ RUN_EXPIRY = 24 * 60 * 60
 
 DROPPED_IDS = 1_000_000
 """How many ids of requests whose records were dropped are kept, so that a request can be told apart from one never seen."""
+
+Registered: TypeAlias = Literal["kept", "full", "tokens_full", "another_token"]
+"""What became of a registration, or of an eval's secret alone. `kept`; `full` if it would be one registration more than are kept at once; `tokens_full` if it would be one eval's secret more than are kept at once; or `another_token` if the eval's secret is kept and isn't the one sent. Nothing is kept or changed unless it is `kept`."""
 
 NotJudged: TypeAlias = Literal[
     "unreadable",
@@ -300,24 +304,42 @@ class State(Protocol):
         ...
 
     async def register(
-        self, eval_id: str, task: str, facts: RegisteredTask, expiry: float, limit: int
-    ) -> bool:
-        """Keep a task an eval registered, in place of any it registered before.
+        self,
+        eval_id: str,
+        task: str,
+        facts: RegisteredTask,
+        expiry: float,
+        limit: int,
+        *,
+        token: str | None = None,
+    ) -> Registered:
+        """Keep a task an eval registered, in place of any it registered before, and with it the eval's secret if the registration sent one.
+
+        The task and the secret are kept together or not at all, in one step that nothing else comes between. Were they two steps, two first registrations of an eval that sent different secrets could each keep something: one its secret, the other its task. An implementation that several processes share must keep them together too, as in one transaction.
 
         Args:
             eval_id: The eval's id.
             task: The task's name.
             facts: The task, the samples it runs, and those whose registration is complete.
             expiry: How long to keep it once no request has named it, in seconds.
-            limit: How many registrations are kept at once.
+            limit: How many registrations are kept at once, and how many evals' secrets.
+            token: The secret the registration sent, which is kept if the eval has none. None for a registration that proved it holds the eval's secret.
 
         Returns:
-            Whether it is kept: False for a new registration when `limit` are kept already.
+            What became of it. Nothing is kept or changed unless it is `kept`.
         """
         ...
 
-    async def registration(self, eval_id: str, task: str) -> RegisteredTask | None:
-        """A task an eval registered, or None if none is kept. Asking counts as the task being named, so it is kept for its expiry from now."""
+    async def registration(
+        self, eval_id: str, task: str, *, renew: bool = True
+    ) -> RegisteredTask | None:
+        """A task an eval registered, or None if none is kept.
+
+        Args:
+            eval_id: The eval's id.
+            task: The task's name.
+            renew: Whether asking counts as the task being named, so it is kept for its expiry from now. False for a registration that reads the task it would replace before `register` has taken its secret, so that one refused there keeps nothing alive.
+        """
         ...
 
     async def existing_run(self, key: str) -> Run | None:
@@ -377,15 +399,18 @@ class State(Protocol):
         """
         ...
 
-    async def eval_tokens(self) -> int:
-        """How many evals' secrets are kept, so that what anything reaching the endpoint for evals can make the sidecar keep is bounded."""
-        ...
+    async def keep_eval_token(self, eval_id: str, token: str, limit: int) -> Registered:
+        """Keep the secret an eval proves its calls and requests with, for as long as a run is kept once no call names the eval, for a registration that stores no task.
 
-    async def keep_eval_token(self, eval_id: str, token: str) -> str:
-        """Keep the secret an eval proves its calls and requests with, unless one is kept for it already, for as long as a run is kept once no call names the eval.
+        One step, as `register` is: the check that the eval has no other secret, the check that there is room, and the keeping.
+
+        Args:
+            eval_id: The eval's id.
+            token: The secret the registration sent.
+            limit: How many evals' secrets are kept at once.
 
         Returns:
-            The secret kept: `token`, or the one kept already.
+            `kept` if it is kept now or was already, which keeps it for its expiry from now; `tokens_full`; or `another_token`, which renews nothing.
         """
         ...
 
@@ -447,21 +472,38 @@ class MemoryState:
         return recorder.records if recorder is not None else None
 
     async def register(
-        self, eval_id: str, task: str, facts: RegisteredTask, expiry: float, limit: int
-    ) -> bool:
+        self,
+        eval_id: str,
+        task: str,
+        facts: RegisteredTask,
+        expiry: float,
+        limit: int,
+        *,
+        token: str | None = None,
+    ) -> Registered:
+        # Nothing is awaited from the first check to the last write, so
+        # nothing comes between them.
         self._expire_tasks()
+        refused = self._token_refused(eval_id, token, limit)
+        if refused is not None:
+            return refused
         if (eval_id, task) not in self._tasks and len(self._tasks) >= limit:
-            return False
+            return "full"
         self._tasks[(eval_id, task)] = (time.monotonic(), expiry, facts)
-        return True
+        if token is not None:
+            self._tokens.put(eval_id, token)
+        return "kept"
 
-    async def registration(self, eval_id: str, task: str) -> RegisteredTask | None:
+    async def registration(
+        self, eval_id: str, task: str, *, renew: bool = True
+    ) -> RegisteredTask | None:
         self._expire_tasks()
         kept = self._tasks.get((eval_id, task))
         if kept is None:
             return None
         _, expiry, facts = kept
-        self._tasks[(eval_id, task)] = (time.monotonic(), expiry, facts)
+        if renew:
+            self._tasks[(eval_id, task)] = (time.monotonic(), expiry, facts)
         return facts
 
     async def existing_run(self, key: str) -> Run | None:
@@ -528,15 +570,27 @@ class MemoryState:
     async def eval_token(self, eval_id: str, *, renew: bool = True) -> str | None:
         return self._tokens.get(eval_id) if renew else self._tokens.peek(eval_id)
 
-    async def eval_tokens(self) -> int:
-        return self._tokens.count()
-
-    async def keep_eval_token(self, eval_id: str, token: str) -> str:
-        kept = self._tokens.get(eval_id)
-        if kept is not None:
-            return kept
+    async def keep_eval_token(self, eval_id: str, token: str, limit: int) -> Registered:
+        refused = self._token_refused(eval_id, token, limit)
+        if refused is not None:
+            return refused
         self._tokens.put(eval_id, token)
-        return token
+        return "kept"
+
+    def _token_refused(
+        self, eval_id: str, token: str | None, limit: int
+    ) -> Registered | None:
+        # why a registration's secret can't be kept, or None if it can, or
+        # the registration sent none; read without renewing, so a caller
+        # with another secret keeps nothing alive
+        if token is None:
+            return None
+        kept = self._tokens.peek(eval_id)
+        if kept is None:
+            return "tokens_full" if self._tokens.count() >= limit else None
+        if not hmac.compare_digest(token.encode(), kept.encode()):
+            return "another_token"
+        return None
 
     def _expire_tasks(self) -> None:
         now = time.monotonic()

@@ -324,15 +324,14 @@ async def _answered(
 ) -> BaseModel:
     if isinstance(given, RegisterTaskParams):
         # the token or the proof first: a caller that has neither registers
-        # nothing
+        # nothing, and reads nothing of what the eval registered before
         if given.token is not None:
-            held = await handler.eval_token(given.eval_id, given.token) is not None
+            await handler.eval_token(given.eval_id, given.token)
         else:
             assert given.timestamp is not None and given.mac is not None
-            held = await handler.holds_eval(
+            if not await handler.holds_eval(
                 given.eval_id, method, given.timestamp, given.mac
-            )
-            if not held:
+            ):
                 raise RpcError(
                     UNKNOWN_TASK,
                     f"The sidecar holds no token for the eval {given.eval_id!r}, as after a restart or once it expired, so the eval registers the task again with its token.",
@@ -341,21 +340,16 @@ async def _answered(
             given.model_dump(include=set(TaskRegistration.model_fields))
         )
         try:
-            # before the registration, so one whose token can't be kept
-            # isn't kept either
-            if not held:
-                await handler.eval_token_room()
+            # The token is kept with the registration, in one step. So a
+            # registration that fails leaves no token behind, and one that
+            # finds another token kept meanwhile leaves no task.
             granted = await handler.register_task(
-                given.eval_id, registration, given.expiry
+                given.eval_id, registration, given.expiry, given.token
             )
         except RegistrationsFullError as ex:
             raise RpcError(REGISTRATIONS_FULL, str(ex)) from None
         except RegistrationError as ex:
             raise RpcError(REGISTRATION_REFUSED, str(ex)) from None
-        # kept only now, so a registration that failed leaves none behind
-        if not held:
-            assert given.token is not None
-            await handler.keep_eval_token(given.eval_id, given.token)
         return RegisterTaskResult(
             eval_id=given.eval_id,
             task=given.task,

@@ -81,6 +81,7 @@ from ._state import (
     Made,
     MemoryState,
     NotJudged,
+    Registered,
     Rejected,
     Run,
     State,
@@ -426,32 +427,43 @@ class Handler:
             )
         return await self._state.eval_token(eval_id)
 
-    async def eval_token_room(self) -> None:
-        """Check there is room to keep one more eval's token, before a registration for a new eval is made.
+    def _kept(self, eval_id: str, outcome: Registered) -> None:
+        """Raise for a registration, or an eval's secret, that the state didn't keep.
 
         A token is kept for `--run-expiry` after the eval was last named, apart from the registration that made it, which may expire sooner or, for a task registered beforehand, take no room at all. So the tokens are bounded on their own, by the same number as the tasks registered by evals, and nothing kept is dropped to make room: a kept token guards the records of the eval's runs for as long as they are kept.
 
         Raises:
-            RegistrationsFullError: If the handler already keeps as many tokens as it takes registrations.
+            UnauthorizedError: If the handler keeps another secret for the eval.
+            RegistrationsFullError: If the handler already keeps as many registrations as it takes, or as many tokens.
         """
-        if await self._state.eval_tokens() >= self._max_task_registrations:
-            raise RegistrationsFullError(
-                f"This sidecar already keeps the {self._max_task_registrations} tasks registered by evals that it takes, or the tokens of as many evals. One is taken again once a kept task or token expires."
-            )
-
-    async def keep_eval_token(self, eval_id: str, token: str) -> None:
-        """Keep the secret an eval made and sent with a registration that succeeded, unless one is kept already.
-
-        Kept only once a registration succeeds, so a registration that fails leaves no secret behind. The sidecar never makes a secret, and never sends one back.
-
-        Raises:
-            UnauthorizedError: If another registration for the eval kept another secret meanwhile.
-        """
-        kept = await self._state.keep_eval_token(eval_id, token)
-        if not hmac.compare_digest(token.encode(), kept.encode()):
+        if outcome == "another_token":
             raise UnauthorizedError(
                 f"The eval {eval_id!r} registered with another token."
             )
+        if outcome == "tokens_full":
+            raise RegistrationsFullError(
+                f"This sidecar already keeps the {self._max_task_registrations} tasks registered by evals that it takes, or the tokens of as many evals. One is taken again once a kept task or token expires."
+            )
+        if outcome == "full":
+            raise RegistrationsFullError(
+                f"This sidecar already keeps the {self._max_task_registrations} tasks registered by evals that it takes. One is taken again once a kept task expires."
+            )
+
+    async def keep_eval_token(self, eval_id: str, token: str) -> None:
+        """Keep the secret an eval made and sent with a registration that stores no task, unless it is kept already.
+
+        The sidecar never makes a secret, and never sends one back.
+
+        Raises:
+            UnauthorizedError: If the handler keeps another secret for the eval.
+            RegistrationsFullError: If the handler already keeps as many tokens as it takes registrations.
+        """
+        self._kept(
+            eval_id,
+            await self._state.keep_eval_token(
+                eval_id, token, self._max_task_registrations
+            ),
+        )
 
     async def holds_eval(
         self, eval_id: str, method: str, timestamp: int, mac: str
@@ -614,7 +626,11 @@ class Handler:
         return await self._state.records(id)
 
     async def register_task(
-        self, eval_id: str, registration: TaskRegistration, expiry: float | None = None
+        self,
+        eval_id: str,
+        registration: TaskRegistration,
+        expiry: float | None = None,
+        token: str | None = None,
     ) -> float | None:
         """Keep a task an eval registered, so that its runs' sentinels are told which sample each is, once each sample's registration is complete.
 
@@ -624,17 +640,23 @@ class Handler:
             eval_id: The eval's id, as its requests name it.
             registration: The task, and the samples it runs.
             expiry: How long to keep it once no request has named the task, in seconds. A day if not given.
+            token: The secret the registration sent, which is kept if the eval has none. None for a registration that proved it holds the eval's secret.
 
         A task registered beforehand is already registered, so its registration stores nothing and is not compared with the file, since the answer would tell a caller whether its guess at the file is right. This holds whether or not the handler takes registrations from evals.
+
+        The secret a registration sent is kept with its task in one step, or alone for a task registered beforehand. So a registration that fails leaves no secret behind, and of two first registrations of an eval that send different secrets, only one keeps anything.
 
         Returns:
             How long it is kept once no request has named the task: `expiry`, or less if that is longer than the handler keeps any. None for a task registered beforehand, which is never dropped.
 
         Raises:
             RegistrationError: If the handler takes no registrations from evals and the task was not registered beforehand.
-            RegistrationsFullError: If the handler already keeps as many registrations as it takes.
+            RegistrationsFullError: If the handler already keeps as many registrations as it takes, or as many tokens.
+            UnauthorizedError: If the registration sent a secret and the handler keeps another for the eval.
         """
         if registration.task in self._tasks:
+            if token is not None:
+                await self.keep_eval_token(eval_id, token)
             return None
         if not self._runtime_task_registration:
             raise RegistrationError(
@@ -642,7 +664,10 @@ class Handler:
             )
         granted = min(expiry if expiry is not None else TASK_EXPIRY, self._task_expiry)
         kept = RegisteredTask(registration)
-        before = await self._state.registration(eval_id, registration.task)
+        # Read without renewing: the registration's secret is only taken in
+        # the step that keeps the task, so one refused there must not have
+        # kept the task it would have replaced alive.
+        before = await self._state.registration(eval_id, registration.task, renew=False)
         if before is not None:
             kept.keep_samples(
                 {
@@ -653,12 +678,17 @@ class Handler:
             )
         if kept.held > self._max_registration_bytes:
             raise self._full(registration.task, kept.held)
-        if not await self._state.register(
-            eval_id, registration.task, kept, granted, self._max_task_registrations
-        ):
-            raise RegistrationsFullError(
-                f"This sidecar already keeps the {self._max_task_registrations} tasks registered by evals that it takes. One is taken again once a kept task expires."
-            )
+        self._kept(
+            eval_id,
+            await self._state.register(
+                eval_id,
+                registration.task,
+                kept,
+                granted,
+                self._max_task_registrations,
+                token=token,
+            ),
+        )
         return granted
 
     async def complete_registration(

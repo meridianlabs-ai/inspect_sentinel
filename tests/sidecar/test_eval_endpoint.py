@@ -1,6 +1,7 @@
 import argparse
 import json
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -25,6 +26,7 @@ from inspect_sentinel.sidecar import (
     _handler,
     _state,
 )
+from inspect_sentinel.sidecar._errors import UnauthorizedError
 from inspect_sentinel.sidecar._eval_endpoint import (
     INFO_PATH,
     PATH,
@@ -44,7 +46,10 @@ from inspect_sentinel.sidecar._json_rpc import (
 )
 from inspect_sentinel.sidecar._registration import (
     FileTask,
+    RegisteredTask,
+    RegistrationsFullError,
     Strictness,
+    TaskRegistration,
     UnregisteredSampleError,
 )
 from inspect_sentinel.sidecar._serve import add_arguments, apps
@@ -1258,6 +1263,166 @@ async def test_a_registration_whose_eval_gets_no_token_is_not_kept() -> None:
     assert refused["error"]["code"] == REGISTRATIONS_FULL
     assert await handler._state.registration("eval_2", "philadelphia") is None  # pyright: ignore[reportPrivateUsage]
     assert await handler._state.eval_token("eval_2") is None  # pyright: ignore[reportPrivateUsage]
+
+
+class _GatedState(MemoryState):
+    """State whose lookups of a task's last registration wait in turn, as a shared backend's may. A registration held there has passed the check of its token, and has kept nothing yet."""
+
+    def __init__(self, gates: list[anyio.Event]) -> None:
+        super().__init__()
+        self.gates = gates
+        self._arriving = iter(gates)
+
+    async def registration(
+        self, eval_id: str, task: str, *, renew: bool = True
+    ) -> RegisteredTask | None:
+        gate = next(self._arriving, None)
+        if gate is not None:
+            await gate.wait()
+        return await super().registration(eval_id, task, renew=renew)
+
+
+async def _registered_in_turn(
+    handler: Handler,
+    state: _GatedState,
+    first: dict[str, Any],
+    second: dict[str, Any],
+    between: Callable[[], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    # Two registrations that both pass the check of the eval's token before
+    # either keeps anything, then keep, or fail to, in the order they came,
+    # with `between` called once the first has.
+    answers: dict[str, dict[str, Any]] = {}
+    async with _client(handler) as client:
+
+        async def register(name: str, changes: dict[str, Any]) -> None:
+            answers[name] = await _call(
+                client, "register_task", _REGISTRATION | changes
+            )
+
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(register, "first", first)
+            await anyio.wait_all_tasks_blocked()
+            tasks.start_soon(register, "second", second)
+            await anyio.wait_all_tasks_blocked()
+            state.gates[0].set()
+            await anyio.wait_all_tasks_blocked()
+            if between is not None:
+                between()
+            state.gates[1].set()
+    return answers["first"], answers["second"]
+
+
+@pytest.mark.anyio
+async def test_of_two_first_registrations_with_other_tokens_only_one_keeps_anything(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The eval's token and its task are kept in one step. So the registration
+    # that comes second finds the first's token kept, and keeps neither its
+    # own token nor its task in place of the first's. Nor does it keep the
+    # first's task alive: that is kept for 100 seconds from when the first
+    # registered it, at 0, though the second is refused at 60.
+    monkeypatch.setattr(_state, "time", _Clock)
+    _Clock.now = 0.0
+    state = _GatedState([anyio.Event(), anyio.Event()])
+    handler = Handler(weather_rule(), state=state)
+
+    def a_minute_on() -> None:
+        _Clock.now = 60.0
+
+    first, second = await _registered_in_turn(
+        handler,
+        state,
+        {"sample_ids": [1], "expiry": 100},
+        {"token": _token("another"), "sample_ids": [2], "expiry": 100},
+        between=a_minute_on,
+    )
+
+    assert "result" in first
+    assert second["error"]["code"] == UNAUTHORIZED
+    kept = await state.registration("eval_789", "philadelphia", renew=False)
+    assert kept is not None and kept.sample_ids == {1}
+    assert await state.eval_token("eval_789", renew=False) == TOKEN
+    _Clock.now = 120.0
+    assert await state.registration("eval_789", "philadelphia", renew=False) is None
+
+
+@pytest.mark.anyio
+async def test_a_first_registration_sent_twice_at_once_is_kept_both_times() -> None:
+    # the same token, as when a registration whose answer was slow is sent
+    # again: each is kept, and the eval has the one token
+    state = _GatedState([anyio.Event(), anyio.Event()])
+    handler = Handler(weather_rule(), state=state)
+
+    first, second = await _registered_in_turn(
+        handler, state, {"sample_ids": [1]}, {"sample_ids": [1, 2]}
+    )
+
+    assert "result" in first and "result" in second
+    kept = await state.registration("eval_789", "philadelphia")
+    assert kept is not None and kept.sample_ids == {1, 2}
+    assert await state.eval_token("eval_789", renew=False) == TOKEN
+
+
+@pytest.mark.anyio
+async def test_a_registration_cancelled_before_it_is_kept_keeps_nothing() -> None:
+    # Cancelled at the last point it waits before the one step that keeps
+    # its token and its task: neither is kept, and the eval registers
+    # afterwards as for the first time.
+    state = _GatedState([anyio.Event()])
+    handler = Handler(weather_rule(), state=state)
+    async with _client(handler) as client:
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(_call, client, "register_task", _REGISTRATION)
+            await anyio.wait_all_tasks_blocked()
+            tasks.cancel_scope.cancel()
+
+        assert await state.eval_token("eval_789", renew=False) is None
+        assert await state.registration("eval_789", "philadelphia") is None
+        await _registered(client, token=_token("another"))
+
+    assert await state.eval_token("eval_789", renew=False) == _token("another")
+
+
+@pytest.mark.anyio
+async def test_a_registration_refused_for_its_token_changes_no_task() -> None:
+    # refused in the state's one step too, not only by the check before it:
+    # the task the eval registered is as it was, and its token isn't renewed
+    handler = Handler(weather_rule())
+    registration = TaskRegistration.model_validate(
+        {k: v for k, v in _REGISTRATION.items() if k not in ("eval_id", "token")}
+    )
+    await handler.register_task("eval_789", registration, token=TOKEN)
+    changed = registration.model_copy(update={"sample_ids": [2]})
+
+    with pytest.raises(UnauthorizedError):
+        await handler.register_task("eval_789", changed, token=_token("another"))
+
+    kept = await handler._state.registration("eval_789", "philadelphia")  # pyright: ignore[reportPrivateUsage]
+    assert kept is not None and kept.sample_ids == {1}
+    assert await handler._state.eval_token("eval_789", renew=False) == TOKEN  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.anyio
+async def test_a_folder_tasks_registration_keeps_the_token_or_nothing() -> None:
+    # a task registered beforehand stores no task, so its registration keeps
+    # the eval's token alone, in one step with the checks of it
+    task = FileTask.model_validate({"task": "philadelphia", "samples": []})
+    handler = Handler(
+        weather_rule(), tasks={"philadelphia": task}, max_task_registrations=1
+    )
+    registration = TaskRegistration.model_validate(
+        {k: v for k, v in _REGISTRATION.items() if k not in ("eval_id", "token")}
+    )
+
+    assert await handler.register_task("eval_1", registration, token=TOKEN) is None
+    with pytest.raises(UnauthorizedError):
+        await handler.register_task("eval_1", registration, token=_token("another"))
+    with pytest.raises(RegistrationsFullError):
+        await handler.register_task("eval_2", registration, token=_token("eval_2"))
+
+    assert await handler._state.eval_token("eval_1", renew=False) == TOKEN  # pyright: ignore[reportPrivateUsage]
+    assert await handler._state.eval_token("eval_2", renew=False) is None  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.anyio
