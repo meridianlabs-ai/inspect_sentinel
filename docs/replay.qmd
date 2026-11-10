@@ -394,7 +394,7 @@ df = df[df["metadata.matched"] == "ids"]
 
 Agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html) (such as Claude Code or Codex in a sandbox) run their own tools, so the log records less about their tool calls:
 
--   A tool the bridge runs on the host for the agent (a `bridged_tools` tool) replays where the log ties the call to the model call that proposed it and to the run that answered it. Its `tool_call` step is the call as the bridge checked it, under the host tool's name. Its `tool_result` step holds the result the host tool returned to the agent; an error holds the tool's error message rather than the text the bridge sent the agent.
+-   A tool the bridge runs on the host for the agent (a `bridged_tools` tool) replays where the log ties the call to the model call that proposed it and to the run that answered it. Its `tool_call` step is the call as the bridge checked it, under the host tool's name. Its `tool_result` step holds the result as the bridge sent it to the agent, with two differences: an error holds the tool's error message rather than the text the bridge sent, and a single content item other than an image (rather than a list) is held as a list of one.
 
 -   A tool the agent runs itself leaves no tool event in the log, so its steps aren't replayed. Neither are those of a host call the log can't tie to its proposal, for example one run more than once. A warning names the skipped calls.
 
