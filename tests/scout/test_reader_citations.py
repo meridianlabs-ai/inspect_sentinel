@@ -18,7 +18,13 @@ from inspect_sentinel.scout import Stage, as_reader
 SAMPLE = "sample"
 
 
-def checked(span: str, stage: Stage, step_id: str, parent: str | None) -> list[Event]:
+def checked(
+    span: str,
+    stage: Stage,
+    step_id: str,
+    parent: str | None,
+    execution_id: str | None = None,
+) -> list[Event]:
     # a step's sentinel span with the decision recorded in it
     return [
         SpanBeginEvent(id=span, parent_id=parent, type="sentinel", name="sentinel"),
@@ -28,6 +34,7 @@ def checked(span: str, stage: Stage, step_id: str, parent: str | None) -> list[E
             path="",
             function="check",
             step_id=step_id,
+            execution_id=execution_id,
             conversation=parent or SAMPLE,
             stage=stage,
             kind="decision",
@@ -136,12 +143,12 @@ async def test_a_generate_in_another_conversation_does_not_overlap() -> None:
     assert cited(await read("model_input", events)) == {"u1": ["ea"], "u2": ["eb"]}
 
 
-def tool(uuid: str, parent: str) -> ToolEvent:
+def tool(uuid: str, parent: str, id: str = "shared") -> ToolEvent:
     # a call with the id "shared", whose tool message is r<uuid>
     return ToolEvent(
         uuid=uuid,
         span_id=parent,
-        id="shared",
+        id=id,
         function="addition",
         arguments={},
         message_id=f"r{uuid}",
@@ -168,6 +175,27 @@ async def test_two_agents_calls_sharing_an_id_cite_their_own_tool_events(
     results = await read(stage, events)
 
     assert [[ref.id for ref in r.references] for r in results] == [["ea"], ["eb"]]
+
+
+@pytest.mark.anyio
+async def test_each_run_of_a_bridged_call_is_its_own_step() -> None:
+    # a bridge hands the model's call "shared" to its scaffold twice, the
+    # second time under a new id (#6370): each run's result check records the
+    # id it ran under, which its host tool event has, and its row is keyed by
+    # it, as replay keys the step, and cites its own run
+    events = [
+        agent("a"),
+        tool("e1", "a"),
+        *checked("s1", "tool_result", "shared", "a"),
+        tool("e2", "a", id="handed"),
+        *checked("s2", "tool_result", "shared", "a", execution_id="handed"),
+    ]
+
+    # the transcript holds neither tool message, so each cites its tool event
+    assert cited(await read("tool_result", events)) == {
+        "shared": ["e1"],
+        "handed": ["e2"],
+    }
 
 
 @pytest.mark.anyio

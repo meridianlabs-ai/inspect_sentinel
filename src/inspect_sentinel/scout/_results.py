@@ -394,6 +394,7 @@ def _reduced(setting: list[Result], steps: int) -> dict[str, Any]:
                 "step_id": r.metadata["step_id"],
                 "stage": r.metadata["stage"],
                 "conversation": r.metadata["conversation"],
+                "matched": r.metadata["matched"],
             }
             for r in setting
             if r.metadata is not None

@@ -11,7 +11,7 @@ from inspect_scout import Result, Scanner, Transcript, scanner
 
 from inspect_sentinel import Decision, Failed, MonitorFailedError, Observation, Report
 
-from ._positions import Positions
+from ._positions import Positions, step_id
 from ._results import Cites, step_result
 from ._scanner import EVENTS, Stage, within
 
@@ -36,7 +36,7 @@ def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcri
         children: dict[tuple[str, str, str], list[SentinelEvent]] = {}
         for event in transcript.events:
             if isinstance(event, SentinelEvent) and _below(event.path, path):
-                key = (event.conversation, event.stage, event.step_id)
+                key = (event.conversation, event.stage, step_id(event))
                 children.setdefault(key, []).append(event)
         # a failure at or below the instance, at any stage, fails the read, as
         # in replay, including one a protocol went on without
@@ -68,7 +68,7 @@ def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcri
                 [
                     _child(c)
                     for c in children.get(
-                        (event.conversation, event.stage, event.step_id), []
+                        (event.conversation, event.stage, step_id(event)), []
                     )
                     if c.status == "reported"
                 ]
@@ -77,7 +77,7 @@ def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcri
             )
             results.append(
                 step_result(
-                    step_id=event.step_id,
+                    step_id=step_id(event),
                     stage=event.stage,
                     conversation=event.conversation,
                     label=path or _name(event),

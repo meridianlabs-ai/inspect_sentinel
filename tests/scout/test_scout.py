@@ -1233,37 +1233,175 @@ def test_only_an_eval_log_transcript_has_a_log_header(tmp_path: Path) -> None:
         anyio.run(Contexts().eval_info, transcript("eval_log", None))
 
 
-def test_a_transcript_imported_from_another_source_replays_from_its_messages(
+def test_an_imported_transcript_replays_from_its_events_where_it_records_messages_from(
     tmp_path: Path,
 ) -> None:
-    # until replay joins on stable message ids, a transcript with no log
-    # header replays from its messages though it has model events, as one
-    # without them does (decided by Charles 2026-10-27)
+    # an import keeps one id per message and records which model calls its
+    # messages are from (Scout #753): it replays from its events, its tool
+    # steps joined by id to the turns that made them; one imported before
+    # that replays from its messages, as before
     log = run(tmp_path / "logs", [[call(9, "a"), call(9, "b")]], None)
     assert log.samples is not None
     sample = log.samples[0]
+    models = [e for e in sample.events if isinstance(e, ModelEvent)]
 
-    def steps(source_type: str, events: Sequence[Event]) -> list[tuple[str, str, str]]:
+    def replay(source_type: str, messages_from: list[str] | None) -> list[ReplayStep]:
         transcript = Transcript(
             transcript_id=sample.uuid or "",
             source_type=source_type,
             source_uri=log.location if source_type == "eval_log" else None,
             messages=sample.messages,
-            events=list(events),
+            # importers record no origins, and no tool events with the model's
+            # call ids
+            events=[
+                e.model_copy(update={"origin": None})
+                if isinstance(e, ModelEvent)
+                else e
+                for e in sample.events
+                if not isinstance(e, ToolEvent)
+            ],
+            messages_from=messages_from,
         )
-        results = anyio.run(as_scanner(replay_check()), transcript)
-        assert isinstance(results, list)
-        return [
-            (r.metadata["step_id"], r.metadata["stage"], r.metadata["turns"])
-            for r in results
-            if r.metadata
-        ]
+        info = None if source_type != "eval_log" else EvalInfo.from_eval(log.eval)
+        steps, turns = transcript_steps(transcript, info, None)
+        assert turns == "inferred"
+        return steps
 
-    without = [e for e in sample.events if not isinstance(e, ModelEvent)]
-    imported = steps("claude_code", sample.events)
-    assert imported == steps("claude_code", without)
-    assert {turns for _, _, turns in imported} == {"inferred"}
-    assert {turns for _, _, turns in steps("eval_log", sample.events)} == {"recorded"}
+    imported = replay("claude_code", [models[-1].uuid or ""])
+    assert [(s.stage, s.matched) for s in imported] == [
+        ("model_input", "ids"),
+        ("model_output", "ids"),
+        ("tool_call", "ids"),
+        ("tool_result", "ids"),
+        ("model_input", "ids"),
+        ("model_output", "ids"),
+        ("tool_call", "ids"),
+        ("tool_result", "ids"),
+        ("model_input", "ids"),
+        ("model_output", "ids"),
+    ]
+    # each tool step has the input of the turn that made its call, which the
+    # messages alone don't give
+    tool_steps = [s.step for s in imported if isinstance(s.step, BeforeToolCall)]
+    assert [len(step.input or []) for step in tool_steps] == [
+        len(models[0].input),
+        len(models[1].input),
+    ]
+    assert [s.step.conversation for s in imported] == [sample.uuid] * len(imported)
+    # the same transcript imported before Scout recorded `messages_from`
+    older = replay("claude_code", None)
+    assert [s.stage for s in older] == [s.stage for s in imported]
+    assert {s.matched for s in older} == {"heuristic"}
+    assert all(
+        s.step.input is None
+        for s in older
+        if isinstance(s.step, BeforeToolCall | AfterToolCall)
+    )
+
+
+def test_a_claude_code_session_replays_from_its_events(tmp_path: Path) -> None:
+    # a session Scout's Claude Code importer reads: two tool calls in two turns
+    # and an answer
+    lines = [
+        _claude_code_line("u1", None, "user", {"role": "user", "content": "Read both"}),
+        _claude_code_line(
+            "a1",
+            "u1",
+            "assistant",
+            _claude_code_reply(
+                "msg_1", [_tool_use("toolu_1", "Read", {"file_path": "/a.md"})]
+            ),
+        ),
+        _claude_code_line("u2", "a1", "user", _tool_answer("toolu_1", "A")),
+        _claude_code_line(
+            "a2",
+            "u2",
+            "assistant",
+            _claude_code_reply(
+                "msg_2", [_tool_use("toolu_2", "Read", {"file_path": "/b.md"})]
+            ),
+        ),
+        _claude_code_line("u3", "a2", "user", _tool_answer("toolu_2", "B")),
+        _claude_code_line(
+            "a3",
+            "u3",
+            "assistant",
+            _claude_code_reply("msg_3", [{"type": "text", "text": "A and B."}]),
+        ),
+    ]
+    for second, line in enumerate(lines):
+        line["timestamp"] = f"2026-01-31T11:00:{second:02d}.000Z"
+    session = tmp_path / "session.jsonl"
+    session.write_text("\n".join(json.dumps(line) for line in lines))
+
+    async def imported() -> list[Transcript]:
+        from inspect_scout.sources import claude_code
+
+        return [t async for t in claude_code(path=session)]
+
+    [transcript] = anyio.run(imported)
+    assert transcript.messages_from
+    steps, turns = transcript_steps(transcript, None, None)
+    assert turns == "inferred"
+    tools = [s for s in steps if s.stage in ("tool_call", "tool_result")]
+    assert [(s.stage, s.id, s.matched) for s in tools] == [
+        ("tool_call", "toolu_1", "ids"),
+        ("tool_result", "toolu_1", "ids"),
+        ("tool_call", "toolu_2", "ids"),
+        ("tool_result", "toolu_2", "ids"),
+    ]
+    # each call's result, and the model call that made it
+    results = [s.step for s in tools if isinstance(s.step, AfterToolCall)]
+    assert [r.result.text for r in results] == ["A", "B"]
+    models = [e for e in transcript.events if isinstance(e, ModelEvent)]
+    made = {e.output.message.id: e for e in models if e.output.choices}
+    for s in tools:
+        assert isinstance(s.step, BeforeToolCall | AfterToolCall)
+        producer = made[s.step.message_id]
+        assert [m.id for m in s.step.input or []] == [m.id for m in producer.input]
+    # and it scans
+    rows = anyio.run(as_scanner(replay_check()), transcript)
+    assert isinstance(rows, list)
+    assert {r.metadata["matched"] for r in rows if r.metadata} == {"ids"}
+
+
+def _claude_code_line(
+    uuid: str, parent: str | None, kind: str, message: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "uuid": uuid,
+        "parentUuid": parent,
+        "isSidechain": False,
+        "userType": "external",
+        "cwd": "/project",
+        "sessionId": "session-1",
+        "version": "2.0.76",
+        "type": kind,
+        "message": message,
+    }
+
+
+def _claude_code_reply(id: str, content: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "id": id,
+        "model": "claude-opus-4-5-20251101",
+        "type": "message",
+        "role": "assistant",
+        "content": content,
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+
+def _tool_use(id: str, name: str, input: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "tool_use", "id": id, "name": name, "input": input}
+
+
+def _tool_answer(id: str, content: str) -> dict[str, Any]:
+    return {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": id, "content": content}],
+    }
 
 
 @scanner(messages="all")

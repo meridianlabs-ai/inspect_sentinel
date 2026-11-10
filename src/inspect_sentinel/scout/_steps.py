@@ -42,23 +42,24 @@ def transcript_steps(
     # A transcript from an Inspect log with model events replays from them,
     # through the driver inspect_ai shares with live: by the origins its log
     # records, else with turns inferred from its timeline (older Inspect
-    # logs). One imported from another source, which has no log header, one
-    # with no model events, and one the driver refuses as written before
-    # inspect_ai 0.3.100 replays from its messages, each assistant message
-    # taken for an agent turn (imports: decided by Charles 2026-10-27, until
-    # replay joins on stable message ids). Each step gets its conversation's
-    # depth in the chosen timeline.
+    # logs). One imported from another source, which has no log header,
+    # replays from its events too where Scout recorded which model calls its
+    # messages are from (`messages_from`, written since Scout's importers keep
+    # one id per message), with its turns inferred and its tool steps joined
+    # to their model calls by message id. One with no model events, an import
+    # without `messages_from`, and one the driver refuses as written before
+    # inspect_ai 0.3.100 replay from their messages, each assistant message
+    # taken for an agent turn. Each step gets its conversation's depth in the
+    # chosen timeline.
     stored = _timeline(transcript, timeline) if timeline is not None else None
     turns: Turns
-    header = (
-        eval_info
-        if eval_info is not None
-        and _model_events(transcript)
-        and not _before_phase_spans(eval_info.inspect_ai_version)
+    from_events = _model_events(transcript) and (
+        transcript.messages_from is not None
+        if eval_info is None
+        else not _before_phase_spans(eval_info.inspect_ai_version)
         and not _has_earlier_layout(transcript.events)
-        else None
     )
-    if header is None:
+    if not from_events:
         steps = list(
             steps_from_messages(
                 transcript.messages, conversation=transcript.transcript_id
@@ -79,8 +80,9 @@ def transcript_steps(
             events,
             data["messages"],
             sample_uuid=transcript.transcript_id,
-            eval_info=header,
+            eval_info=eval_info,
             timeline=stored,
+            messages_from=transcript.messages_from,
             # in a log from an eval that ran no sentinel, the decisions of
             # inspect_ai's built-in human approver, and no other, are a
             # person's
@@ -92,7 +94,7 @@ def transcript_steps(
             turns = "recorded"
         else:
             turns = "inferred"
-    depths = _depths(transcript, stored, header is None)
+    depths = _depths(transcript, stored, not from_events)
     return [replace(s, depth=depths.get(s.step.conversation)) for s in steps], turns
 
 

@@ -121,7 +121,7 @@ class Positions:
             retrying[event.span_id] = (first, event)
 
     def _tool(self, event: SentinelEvent, at: int, *, after: bool) -> ToolEvent | None:
-        found = self._tools.get((event.conversation, event.step_id))
+        found = self._tools.get((event.conversation, step_id(event)))
         if found is None:
             return None
         positions, tools = found
@@ -130,6 +130,13 @@ class Positions:
             return tools[index] if index < len(tools) else None
         index = bisect_left(positions, at) - 1
         return tools[index] if index >= 0 else None
+
+
+def step_id(event: SentinelEvent) -> str:
+    # the step a check was of, as replay keys it: a bridged call the scaffold
+    # was handed under an id other than the model's records that id
+    # (`execution_id`), which its host tool event has too
+    return event.execution_id or event.step_id
 
 
 def _preceded(

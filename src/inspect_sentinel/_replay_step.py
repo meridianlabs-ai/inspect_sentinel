@@ -39,6 +39,9 @@ class ReplayStep:
     depth: int | None = None
     """How deep the step's conversation is in the transcript's timeline, counted as Inspect Scout's `llm_scanner(depth=)` counts: only spans that make model calls of their own and are not utility spans count a level, so 1 is the outermost such span on each branch. It is the shallowest level of any span holding one of the conversation's model calls. `None` where none of them is in such a span, such as a lone call Scout's timeline leaves out of every span, or where the step's builder had no timeline."""
 
+    matched: Literal["ids", "heuristic"] = "heuristic"
+    """How the step was tied to what it was built from. `"ids"` when every part came from the record itself or was found by an id the transcript records: a generate's own model call, a tool call's proposing model call and assistant message by the message id its tool event records, its result by its tool message's id, and a bridged call's recorded checks by the id of the run they checked. `"heuristic"` when any part was found another way, as in a log written before those ids were recorded: by call id and position, by content, or from the transcript's messages alone. A heuristic match is usually right, but can pair a step with the wrong model call or result where call ids repeat. It is the replay's own record and never part of `step`, so monitors and protocols do not see it."""
+
     def __post_init__(self) -> None:
         expected = _STAGES[type(self.step)]
         if self.stage != expected:
