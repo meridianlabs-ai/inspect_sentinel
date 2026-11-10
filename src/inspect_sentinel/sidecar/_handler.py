@@ -117,6 +117,11 @@ _MAX_CONSECUTIVE_REJECTIONS = 3
 
 _REPLACED = Refuse(400, "A later attempt at this sample replaced this one.")
 
+_ANOTHER_EVALS = Refuse(
+    400,
+    f"The request's {INSPECT_CONTEXT} header names a sample of another eval. The request was not judged.",
+)
+
 # what inspect_ai tells the model of a rejected call that has no message
 _REJECTED = "Tool call not approved."
 _NOT_RUN = "This call was not run, because another call in the same turn was rejected."
@@ -302,8 +307,14 @@ class Handler:
             if attempt is not None:
                 attempt.not_judged(_not_judged(ex))
             raise
-        if attempt is not None:
-            if not isinstance(answer, Refuse):
+        if attempt is not None and signed is not None:
+            if answer is _ANOTHER_EVALS:
+                # as when the check above refuses it: nothing of the request
+                # is kept, so `request_result` reads it as unknown
+                await self._state.forget_attempt(
+                    signed.request_id, signed.sample.eval_id, attempt
+                )
+            elif not isinstance(answer, Refuse):
                 attempt.state = "awaiting_reply"
             elif attempt.judged is not None and attempt.judged.replaced:
                 attempt.not_judged("replaced_attempt")
@@ -498,8 +509,8 @@ class Handler:
         # eval's token, so the token alone doesn't stop it naming another
         # eval's sample.
         held = await self._state.peek_run(_run_key(True, signed.sample.sample_uuid))
-        if held is not None and held.eval_id is not None and held.eval_id != eval_id:
-            return f"The request's {INSPECT_CONTEXT} header names a sample of another eval. The request was not judged."
+        if held is not None and held.eval_id not in (None, eval_id):
+            return _ANOTHER_EVALS.message
 
         # a request that proves its run keeps the eval's token
         await self._state.eval_token(eval_id)
@@ -759,14 +770,23 @@ class Handler:
         # then by how it opens
         conversation_key = f"{key}/{sample_attempt}/{opening}" if named else key
         run_key = _run_key(named, key)
+        if sample is not None:
+            # Whose run it is was checked before the request was read, and
+            # another eval may have begun the run while it was. So it is
+            # checked again here, where nothing is awaited between the check
+            # and the run becoming this eval's, and before anything below
+            # can reset the run.
+            held = await self._state.peek_run(run_key)
+            if held is not None and held.eval_id not in (None, sample.eval_id):
+                return _ANOTHER_EVALS
         run = await self._state.run(run_key)
         restored = False
         if sample is not None:
+            if run.eval_id is None:
+                run.eval_id = sample.eval_id
             clash = _begin_attempt(run, sample)
             if clash is not None:
                 return self._judged(clash, proxy, Exchange(replaced=True), attempt)
-            if run.eval_id is None:
-                run.eval_id = sample.eval_id
             # the eval holds the calls a decision acted on without their
             # arguments: the model's own go back before anything reads them
             written = request_format(request.provider, request.body, request.format)

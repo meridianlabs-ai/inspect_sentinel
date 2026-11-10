@@ -353,6 +353,12 @@ class State(Protocol):
         """
         ...
 
+    async def forget_attempt(
+        self, request: str, eval_id: str, attempt: Attempt
+    ) -> None:
+        """Keep an attempt at a request no longer, as if it had never begun, for a request refused before it was judged for naming another eval's run."""
+        ...
+
     async def attempts(
         self, request: str, eval_id: str
     ) -> list[Attempt] | Dropped | None:
@@ -495,6 +501,20 @@ class MemoryState:
         attempt = Attempt(exchange, eval_id)
         attempts.append(attempt)
         return attempt
+
+    async def forget_attempt(
+        self, request: str, eval_id: str, attempt: Attempt
+    ) -> None:
+        key = _request_key(request, eval_id)
+        attempts = self._attempts.peek(key)
+        if attempts is None:
+            return
+        # by identity, as two attempts may hold the same values
+        attempts[:] = [kept for kept in attempts if kept is not attempt]
+        if not attempts:
+            self._attempts.pop(key)
+        # an eval waiting on the attempt looks again, and finds it gone
+        attempt.settled.set()
 
     async def attempts(
         self, request: str, eval_id: str

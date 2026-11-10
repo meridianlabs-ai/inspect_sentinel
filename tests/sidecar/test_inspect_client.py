@@ -27,6 +27,7 @@ from inspect_sentinel.sidecar import (
     Reply,
     Request,
     UnreadableError,
+    _handler,
     _sign,
     _state,
     read_reply,
@@ -1637,6 +1638,76 @@ async def test_a_request_refused_for_naming_another_evals_run_keeps_it_no_longer
     # `end_sample` reads an ended run, which `sample_result` doesn't
     assert await handler.end_sample("sample_123", "eval_789") == "unknown"
     assert await handler.sample_result("sample_123", "eval_789") is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "attempt",
+    [("attempt_1", 1), ("attempt_2", 2)],
+    ids=["same attempt", "later attempt"],
+)
+async def test_another_eval_naming_a_run_as_it_begins_is_refused(
+    monkeypatch: pytest.MonkeyPatch, attempt: tuple[str, int]
+) -> None:
+    # Two evals name the same new sample at once. Each passes the check that
+    # the run isn't another eval's before either request is read, as the run
+    # hasn't begun. The request read second finds the run begun by the other
+    # eval: it is refused and kept nowhere, and a later attempt number
+    # doesn't start the other eval's run afresh.
+    handler = await holding(Handler(weather_rule()))
+    own_token = "eval-own-token-the-client-registered-with"
+    await holding(handler, "eval_own", own_token)
+
+    # each request waits to be read until it is let through, in order
+    gates = [anyio.Event(), anyio.Event()]
+    waiting = iter(gates)
+    read_opening = _handler.read_opening
+
+    async def held_up(*args: Any, **kwargs: Any) -> Any:
+        await next(waiting).wait()
+        return await read_opening(*args, **kwargs)
+
+    monkeypatch.setattr(_handler, "read_opening", held_up)
+    answers: dict[str, Any] = {}
+
+    async def send(name: str, sent: Request) -> None:
+        answers[name] = await handler.request(sent)
+
+    name, number = attempt
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(send, "first", _from_inspect(request("a"), "irid-a"))
+        await anyio.wait_all_tasks_blocked()
+        tasks.start_soon(
+            send,
+            "second",
+            _from_inspect(
+                request("b"),
+                "irid-b",
+                token=own_token,
+                eval_id="eval_own",
+                attempt=name,
+                attempt_number=number,
+            ),
+        )
+        await anyio.wait_all_tasks_blocked()
+        gates[0].set()
+        await anyio.wait_all_tasks_blocked()
+        gates[1].set()
+
+    assert isinstance(answers["first"], Pass)
+    second = answers["second"]
+    assert isinstance(second, Refuse) and second.status == 400
+    assert "names a sample of another eval" in second.message
+    assert not await _kept(handler, "irid-b", "eval_own")
+    assert await handler.request_result("irid-b", "eval_own") == "unknown"
+    # the run is the first eval's, at the attempt it began
+    run = await handler._state.peek_run("sample:sample_123")  # pyright: ignore[reportPrivateUsage]
+    assert run is not None
+    assert (run.eval_id, run.attempt, run.attempt_number) == (
+        "eval_789",
+        "attempt_1",
+        1,
+    )
 
 
 @pytest.mark.anyio
