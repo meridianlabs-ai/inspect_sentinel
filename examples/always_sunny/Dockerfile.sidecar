@@ -24,7 +24,10 @@ RUN uv venv /src/.venv \
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN uv pip install --python /src/.venv/bin/python ".[anthropic,openai,sidecar]"
+# --no-sources: pyproject.toml's [tool.uv.sources] would have uv build
+# inspect-ai and inspect-scout from git again, under the version above, and
+# nothing that depends on them takes 0.0.0. They are installed already.
+RUN uv pip install --no-sources --python /src/.venv/bin/python ".[anthropic,openai,sidecar]"
 ENV PATH=/src/.venv/bin:$PATH
 # the example's rule, which the sentinel names as weather_rules/always_sunny
 COPY examples/always_sunny/rule /rule
