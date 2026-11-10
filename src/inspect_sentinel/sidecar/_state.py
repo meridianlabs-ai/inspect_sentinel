@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hmac
+import json
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
@@ -29,6 +31,9 @@ RUN_EXPIRY = 24 * 60 * 60
 
 DROPPED_IDS = 1_000_000
 """How many ids of requests whose records were dropped are kept, so that a request can be told apart from one never seen."""
+
+Registered: TypeAlias = Literal["kept", "full", "tokens_full", "another_token"]
+"""What became of a registration, or of an eval's secret alone. `kept`; `full` if it would be one registration more than are kept at once; `tokens_full` if it would be one eval's secret more than are kept at once; or `another_token` if the eval's secret is kept and isn't the one sent. Nothing is kept or changed unless it is `kept`."""
 
 NotJudged: TypeAlias = Literal[
     "unreadable",
@@ -60,8 +65,8 @@ class Attempt:
     exchange: str
     """The proxy's id for the exchange, under which its records are kept."""
 
-    eval_id: str | None = None
-    """The eval the request's `x-inspect-context` named, the only one `request_result` answers for it. None if the header couldn't be read."""
+    eval_id: str
+    """The eval the request's `x-inspect-context` named, and proved with its `mac`: the only one `request_result` answers for it."""
 
     state: Literal["judging", "awaiting_reply", "decided", "not_judged"] = "judging"
     """Where the attempt stands."""
@@ -299,28 +304,53 @@ class State(Protocol):
         ...
 
     async def register(
-        self, eval_id: str, task: str, facts: RegisteredTask, expiry: float, limit: int
-    ) -> bool:
-        """Keep a task an eval registered, in place of any it registered before.
+        self,
+        eval_id: str,
+        task: str,
+        facts: RegisteredTask,
+        expiry: float,
+        limit: int,
+        *,
+        token: str | None = None,
+    ) -> Registered:
+        """Keep a task an eval registered, in place of any it registered before, and with it the eval's secret if the registration sent one.
+
+        The task and the secret are kept together or not at all, in one step that nothing else comes between. Were they two steps, two first registrations of an eval that sent different secrets could each keep something: one its secret, the other its task. An implementation that several processes share must keep them together too, as in one transaction.
 
         Args:
             eval_id: The eval's id.
             task: The task's name.
             facts: The task, the samples it runs, and those whose registration is complete.
             expiry: How long to keep it once no request has named it, in seconds.
-            limit: How many registrations are kept at once.
+            limit: How many registrations are kept at once, and how many evals' secrets.
+            token: The secret the registration sent, which is kept if the eval has none. None for a registration that proved it holds the eval's secret.
 
         Returns:
-            Whether it is kept: False for a new registration when `limit` are kept already.
+            What became of it. Nothing is kept or changed unless it is `kept`.
         """
         ...
 
-    async def registration(self, eval_id: str, task: str) -> RegisteredTask | None:
-        """A task an eval registered, or None if none is kept. Asking counts as the task being named, so it is kept for its expiry from now."""
+    async def registration(
+        self, eval_id: str, task: str, *, renew: bool = True
+    ) -> RegisteredTask | None:
+        """A task an eval registered, or None if none is kept.
+
+        Args:
+            eval_id: The eval's id.
+            task: The task's name.
+            renew: Whether asking counts as the task being named, so it is kept for its expiry from now. False for a registration that reads the task it would replace before `register` has taken its secret, so that one refused there keeps nothing alive.
+        """
         ...
 
     async def existing_run(self, key: str) -> Run | None:
-        """The run's state, or None if none is kept."""
+        """The run's state, or None if none is kept. Asking counts as the run being named, so the run is kept for its expiry from now."""
+        ...
+
+    async def peek_run(self, key: str) -> Run | None:
+        """The run's state, kept or ended, or None if neither is kept, renewing nothing.
+
+        Every check of which eval a run belongs to reads the run this way first, and renews it only once the check passes. So a caller refused for naming another eval's run keeps nothing of it alive, whether the run is still kept or its eval ended it.
+        """
         ...
 
     async def end_run(self, key: str, eval_id: str | None = None) -> bool:
@@ -335,32 +365,52 @@ class State(Protocol):
         """
         ...
 
-    async def attempt(self, request: str, exchange: str) -> Attempt:
-        """Begin a new attempt at a request an eval names.
+    async def attempt(self, request: str, exchange: str, eval_id: str) -> Attempt:
+        """Begin a new attempt at a request an eval names, once its header has passed the check.
 
         Args:
             request: The eval's id for the request. A client that retries the request sends it again under the same id.
             exchange: The proxy's id for this attempt's exchange.
+            eval_id: The eval the request's header named and proved.
         """
         ...
 
-    async def attempts(self, request: str) -> list[Attempt] | Dropped | None:
-        """The attempts at a request in order, `Dropped` if they were kept and no longer are, or None if the request was never seen."""
+    async def forget_attempt(
+        self, request: str, eval_id: str, attempt: Attempt
+    ) -> None:
+        """Keep an attempt at a request no longer, as if it had never begun, for a request refused before it was judged for naming another eval's run."""
         ...
 
-    async def eval_token(self, eval_id: str) -> str | None:
-        """The secret an eval presents to the endpoint for evals, or None if none is kept. Asking counts as the eval being named, so it is kept for its expiry from now."""
+    async def attempts(
+        self, request: str, eval_id: str
+    ) -> list[Attempt] | Dropped | None:
+        """The attempts at a request of an eval in order, `Dropped` if they were kept and no longer are, or None if the eval's request was never seen.
+
+        A request is kept under its eval and its id together. So another eval, which proves its own token and may send any id, never adds to an eval's request.
+        """
         ...
 
-    async def eval_tokens(self) -> int:
-        """How many evals' secrets are kept, so that what anything reaching the endpoint for evals can make the sidecar keep is bounded."""
+    async def eval_token(self, eval_id: str, *, renew: bool = True) -> str | None:
+        """The secret an eval proves its calls to the endpoint for evals and its model requests with, or None if none is kept.
+
+        Args:
+            eval_id: The eval's id.
+            renew: Whether asking counts as the eval being named, so the secret is kept for its expiry from now. False to check a caller's proof first, so that one who can't prove it keeps nothing alive.
+        """
         ...
 
-    async def keep_eval_token(self, eval_id: str, token: str) -> str:
-        """Keep the secret an eval presents to the endpoint for evals, unless one is kept for it already, for as long as a run is kept once no call names the eval.
+    async def keep_eval_token(self, eval_id: str, token: str, limit: int) -> Registered:
+        """Keep the secret an eval proves its calls and requests with, for as long as a run is kept once no call names the eval, for a registration that stores no task.
+
+        One step, as `register` is: the check that the eval has no other secret, the check that there is room, and the keeping.
+
+        Args:
+            eval_id: The eval's id.
+            token: The secret the registration sent.
+            limit: How many evals' secrets are kept at once.
 
         Returns:
-            The secret kept: `token`, or the one kept already.
+            `kept` if it is kept now or was already, which keeps it for its expiry from now; `tokens_full`; or `another_token`, which renews nothing.
         """
         ...
 
@@ -422,35 +472,58 @@ class MemoryState:
         return recorder.records if recorder is not None else None
 
     async def register(
-        self, eval_id: str, task: str, facts: RegisteredTask, expiry: float, limit: int
-    ) -> bool:
+        self,
+        eval_id: str,
+        task: str,
+        facts: RegisteredTask,
+        expiry: float,
+        limit: int,
+        *,
+        token: str | None = None,
+    ) -> Registered:
+        # Nothing is awaited from the first check to the last write, so
+        # nothing comes between them.
         self._expire_tasks()
+        refused = self._token_refused(eval_id, token, limit)
+        if refused is not None:
+            return refused
         if (eval_id, task) not in self._tasks and len(self._tasks) >= limit:
-            return False
+            return "full"
         self._tasks[(eval_id, task)] = (time.monotonic(), expiry, facts)
-        return True
+        if token is not None:
+            self._tokens.put(eval_id, token)
+        return "kept"
 
-    async def registration(self, eval_id: str, task: str) -> RegisteredTask | None:
+    async def registration(
+        self, eval_id: str, task: str, *, renew: bool = True
+    ) -> RegisteredTask | None:
         self._expire_tasks()
         kept = self._tasks.get((eval_id, task))
         if kept is None:
             return None
         _, expiry, facts = kept
-        self._tasks[(eval_id, task)] = (time.monotonic(), expiry, facts)
+        if renew:
+            self._tasks[(eval_id, task)] = (time.monotonic(), expiry, facts)
         return facts
 
     async def existing_run(self, key: str) -> Run | None:
         return self._runs.get(key)
 
+    async def peek_run(self, key: str) -> Run | None:
+        kept = self._runs.peek(key)
+        return kept if kept is not None else self._ended.peek(key)
+
     async def end_run(self, key: str, eval_id: str | None = None) -> bool:
-        kept = self._runs.get(key)
-        if eval_id is not None and kept is not None and kept.eval_id != eval_id:
+        # a run never seen is left as it is, rather than refused from then
+        # on; and another eval ending the run keeps nothing alive
+        kept = await self.peek_run(key)
+        if kept is None or eval_id not in (None, kept.eval_id):
             return False
         run = self._runs.pop(key)
         if run is None:
-            # a run never seen is left as it is, rather than refused from then on
-            ended = self._ended.get(key)
-            return ended is not None and eval_id in (None, ended.eval_id)
+            # ended before: ending it again renews what is left of it
+            self._ended.get(key)
+            return True
         run.closed = True
         if run.refusal is None:
             # held by any request or reply of the run still being judged
@@ -461,39 +534,74 @@ class MemoryState:
             )
         return True
 
-    async def attempt(self, request: str, exchange: str) -> Attempt:
-        attempts = self._attempts.get(request)
+    async def attempt(self, request: str, exchange: str, eval_id: str) -> Attempt:
+        key = _request_key(request, eval_id)
+        attempts = self._attempts.get(key)
         if attempts is None:
             attempts = list[Attempt]()
-            self._attempts.put(request, attempts)
-        attempt = Attempt(exchange)
+            self._attempts.put(key, attempts)
+        attempt = Attempt(exchange, eval_id)
         attempts.append(attempt)
         return attempt
 
-    async def attempts(self, request: str) -> list[Attempt] | Dropped | None:
-        attempts = self._attempts.get(request)
+    async def forget_attempt(
+        self, request: str, eval_id: str, attempt: Attempt
+    ) -> None:
+        key = _request_key(request, eval_id)
+        attempts = self._attempts.peek(key)
+        if attempts is None:
+            return
+        # by identity, as two attempts may hold the same values
+        attempts[:] = [kept for kept in attempts if kept is not attempt]
+        if not attempts:
+            self._attempts.pop(key)
+        # an eval waiting on the attempt looks again, and finds it gone
+        attempt.settled.set()
+
+    async def attempts(
+        self, request: str, eval_id: str
+    ) -> list[Attempt] | Dropped | None:
+        key = _request_key(request, eval_id)
+        attempts = self._attempts.get(key)
         if attempts is not None:
             return attempts
-        return self._dropped.get(request)
+        return self._dropped.get(key)
 
-    async def eval_token(self, eval_id: str) -> str | None:
-        return self._tokens.get(eval_id)
+    async def eval_token(self, eval_id: str, *, renew: bool = True) -> str | None:
+        return self._tokens.get(eval_id) if renew else self._tokens.peek(eval_id)
 
-    async def eval_tokens(self) -> int:
-        return self._tokens.count()
-
-    async def keep_eval_token(self, eval_id: str, token: str) -> str:
-        kept = self._tokens.get(eval_id)
-        if kept is not None:
-            return kept
+    async def keep_eval_token(self, eval_id: str, token: str, limit: int) -> Registered:
+        refused = self._token_refused(eval_id, token, limit)
+        if refused is not None:
+            return refused
         self._tokens.put(eval_id, token)
-        return token
+        return "kept"
+
+    def _token_refused(
+        self, eval_id: str, token: str | None, limit: int
+    ) -> Registered | None:
+        # why a registration's secret can't be kept, or None if it can, or
+        # the registration sent none; read without renewing, so a caller
+        # with another secret keeps nothing alive
+        if token is None:
+            return None
+        kept = self._tokens.peek(eval_id)
+        if kept is None:
+            return "tokens_full" if self._tokens.count() >= limit else None
+        if not hmac.compare_digest(token.encode(), kept.encode()):
+            return "another_token"
+        return None
 
     def _expire_tasks(self) -> None:
         now = time.monotonic()
         for key, (used, expiry, _) in list(self._tasks.items()):
             if now - used >= expiry:
                 del self._tasks[key]
+
+
+def _request_key(request: str, eval_id: str) -> str:
+    # the eval and the request's id, in a form no two pairs share
+    return json.dumps([eval_id, request])
 
 
 class _Expiring(Generic[V]):
@@ -517,6 +625,12 @@ class _Expiring(Generic[V]):
             return None
         self.put(key, kept[1])
         return kept[1]
+
+    def peek(self, key: str) -> V | None:
+        # what `get` gives, without counting as a use
+        self._expire()
+        kept = self._kept.get(key)
+        return kept[1] if kept is not None else None
 
     def put(self, key: str, value: V) -> None:
         # swept here too: what is only ever put, such as a request whose reply

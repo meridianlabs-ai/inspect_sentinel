@@ -2866,9 +2866,9 @@ async def test_the_probe_digests_a_context_a_sidecar_learns_late() -> None:
 
     from inspect_sentinel.sidecar import Handler
     from inspect_sentinel.sidecar._registration import SampleFacts, TaskRegistration
-    from tests.sidecar._traffic import inspect_headers, request
+    from tests.sidecar._traffic import holding, inspect_headers, request
 
-    handler = Handler(observe_only([replay_check(), hands_over()]))
+    handler = await holding(Handler(observe_only([replay_check(), hands_over()])))
     task = TaskRegistration(
         task="philadelphia",
         task_description="File the weather report.",

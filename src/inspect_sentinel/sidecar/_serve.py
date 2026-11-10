@@ -23,6 +23,7 @@ from ._http import HEALTH_PATH, health_route
 from ._proxy_endpoint import proxy_app
 from ._registration import MAX_TASK_EXPIRY, MAX_TASK_REGISTRATIONS, read_tasks_folder
 from ._reply_stream import KEEPALIVE_SECONDS
+from ._sign import TIMESTAMP_WINDOW
 from ._state import RUN_EXPIRY, MemoryState
 
 
@@ -122,7 +123,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--strictness",
         choices=["open", "known_tasks", "registered_only"],
         default="open",
-        help="How strict the sidecar is about a request it can't place. open, the default, judges every request, without the task's facts where it holds none. known_tasks refuses a request whose x-inspect-context names a task the sidecar doesn't hold, and judges one without the header. registered_only refuses any request that doesn't name a sample the sidecar holds, including one without the header, such as a grader's or a client's other than an eval's.",
+        help="How strict the sidecar is about a request it can't place. Under every setting, a request with an x-inspect-context header must first pass the check of that header: it is refused, and not judged, if the sidecar holds no token for the eval it names, as after a restart or for an eval that never registered, if its timestamp or mac fails the check, or if it names a run another eval started. The setting says what happens to a request that passes, and to one without the header. open, the default, judges each of those, without the task's facts where it holds none. known_tasks refuses a request whose x-inspect-context names a task the sidecar doesn't hold, and judges one without the header. registered_only refuses any request that doesn't name a sample the sidecar holds, including one without the header, such as a grader's or a client's other than an eval's.",
     )
     parser.add_argument(
         "--task-expiry",
@@ -136,7 +137,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=MAX_TASK_REGISTRATIONS,
         metavar="COUNT",
-        help=f"How many tasks registered by evals are kept at once. Anything that can reach the endpoint for evals can register a task, so a registration past this is refused, rather than one still in use dropped. {MAX_TASK_REGISTRATIONS} by default.",
+        help=f"How many tasks registered by evals are kept at once, and how many evals' tokens. A token is kept until no request has named its eval for --run-expiry, so an eval that has finished holds a place until then, even with runtime registration off. Anything that can reach the endpoint for evals can register, so a registration past this is refused, rather than one still in use dropped. {MAX_TASK_REGISTRATIONS} by default.",
     )
     parser.add_argument(
         "--max-body-bytes",
@@ -151,6 +152,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default=RUN_EXPIRY,
         metavar="SECONDS",
         help="How long a run's state is kept once no request has named it. A day by default.",
+    )
+    parser.add_argument(
+        "--timestamp-window",
+        type=float,
+        default=TIMESTAMP_WINDOW,
+        metavar="SECONDS",
+        help=f"How far the timestamp of an Inspect eval's model request, or of its call to the endpoint for evals, may be from the sidecar's clock. One further is refused, so a signature copied from a log is of no use once the window has passed. {TIMESTAMP_WINDOW:g} by default.",
     )
 
 
@@ -188,6 +196,7 @@ class ServerSettings(BaseModel):
     max_task_registrations: int | None = None
     max_body_bytes: int | None = None
     run_expiry: float | None = None
+    timestamp_window: float | None = None
     release: Literal["whole", "early"] | None = None
     keepalive: float | None = None
 
@@ -221,6 +230,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "max_task_registrations",
             "max_body_bytes",
             "run_expiry",
+            "timestamp_window",
             "release",
             "keepalive",
         )
@@ -350,6 +360,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         max_registration_bytes=arguments.max_body_bytes,
         release=arguments.release,
         keepalive=arguments.keepalive or None,
+        timestamp_window=arguments.timestamp_window,
     )
 
 

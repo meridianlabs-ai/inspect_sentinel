@@ -32,6 +32,7 @@ from tests.sidecar._traffic import (
     STREAM,
     anthropic_recorded,
     every_call_rule,
+    holding,
     message,
     ran,
     reply,
@@ -183,7 +184,7 @@ async def test_a_changed_call_goes_back_as_the_model_proposed_it() -> None:
 async def test_a_changed_call_held_after_earlier_entries_changed_is_unreadable(
     rewritten: str,
 ) -> None:
-    handler = Handler(weather_rule("modify", "Tokyo"))
+    handler = await holding(Handler(weather_rule("modify", "Tokyo")))
     # a run an eval names, so that a rewritten opening stays in it; a run no
     # eval names is told by its opening, and one that opens anew is another
     sample = "sample-uuid"
@@ -1171,7 +1172,7 @@ async def test_a_result_is_judged_against_what_the_model_was_sent() -> None:
 @pytest.mark.anyio
 async def test_samples_share_nothing() -> None:
     # two epochs of one sample: the same conversation, and nothing in common
-    handler = Handler(weather_rule("reject", "Tokyo"))
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
     await handler.request(request("a", sample="epoch-1"))
     await handler.reply(reply(message(weather("Tokyo")), id="a"))
 
@@ -1184,7 +1185,7 @@ async def test_samples_share_nothing() -> None:
 
 @pytest.mark.anyio
 async def test_a_sample_is_one_run_however_its_conversations_open() -> None:
-    handler = Handler(third_lookup_ends_the_run())
+    handler = await holding(Handler(third_lookup_ends_the_run()))
 
     async def lookup(id: str, opening: str) -> Answer:
         await handler.request(request(id, opening, sample="sample-1"))
@@ -1201,7 +1202,7 @@ async def test_a_sample_is_one_run_however_its_conversations_open() -> None:
 
 @pytest.mark.anyio
 async def test_every_later_request_of_a_sample_that_ended_is_refused() -> None:
-    handler = Handler(weather_rule("terminate", "Tokyo"))
+    handler = await holding(Handler(weather_rule("terminate", "Tokyo")))
     await handler.request(request("a", sample="sample-1"))
     ended = await handler.reply(reply(message(weather("Tokyo")), id="a"))
 
@@ -1219,7 +1220,7 @@ async def test_every_later_request_of_a_sample_that_ended_is_refused() -> None:
 
 @pytest.mark.anyio
 async def test_a_sample_ended_at_a_result_is_refused_without_that_result() -> None:
-    handler = Handler(storm_rule())
+    handler = await holding(Handler(storm_rule()))
     ended = await handler.request(
         request("a", then=ran("Oslo", "storm"), sample="sample-1")
     )
@@ -1233,7 +1234,7 @@ async def test_a_sample_ended_at_a_result_is_refused_without_that_result() -> No
 @pytest.mark.anyio
 async def test_a_sample_ended_while_the_model_answered_is_refused() -> None:
     # two conversations of one run, the second ended while the first waited
-    handler = Handler(weather_rule("terminate", "Tokyo"))
+    handler = await holding(Handler(weather_rule("terminate", "Tokyo")))
     await handler.request(request("a", sample="sample-1"))
     await handler.request(request("b", "A subagent's conversation", sample="sample-1"))
     ended = await handler.reply(reply(message(weather("Tokyo")), id="b"))
@@ -1371,7 +1372,7 @@ async def test_a_conversation_that_only_opens_alike_is_judged_afresh(
 @pytest.mark.anyio
 async def test_a_sample_that_ended_is_refused_whatever_its_messages() -> None:
     # a run an eval names is ended whole: no message of its is compared
-    handler = Handler(weather_rule("terminate", "Tokyo"))
+    handler = await holding(Handler(weather_rule("terminate", "Tokyo")))
     await handler.request(request("a", sample="sample-1"))
     assert await handler.reply(reply(message(weather("Oslo")), id="a")) == Pass()
     oslo = ran("Oslo", "rain")
@@ -1414,7 +1415,7 @@ def reports_the_conversation() -> Protocol:
 async def test_sentinel_is_given_the_run_the_eval_names(
     sample: str | None, expected: str
 ) -> None:
-    handler = Handler(reports_the_conversation())
+    handler = await holding(Handler(reports_the_conversation()))
     await handler.request(request(sample=sample))
 
     answer = await handler.reply(reply(message(weather("Oslo"))))
@@ -1554,7 +1555,7 @@ def ends_at_tokyo_after_oslo_waits() -> Protocol:
 async def test_a_reply_judged_while_its_run_ended_is_refused() -> None:
     global _seen_tokyo
     _seen_tokyo = anyio.Event()
-    handler = Handler(ends_at_tokyo_after_oslo_waits())
+    handler = await holding(Handler(ends_at_tokyo_after_oslo_waits()))
     await handler.request(request("a", sample="sample-1"))
     await handler.request(request("b", "Another conversation", sample="sample-1"))
     answers: dict[str, Answer] = {}
@@ -1576,7 +1577,7 @@ async def test_a_reply_judged_while_its_run_ended_is_refused() -> None:
 async def test_a_request_judged_while_its_run_ended_is_refused() -> None:
     global _seen_tokyo
     _seen_tokyo = anyio.Event()
-    handler = Handler(ends_at_tokyo_after_oslo_waits())
+    handler = await holding(Handler(ends_at_tokyo_after_oslo_waits()))
     await handler.request(request("a", sample="sample-1"))
     answers: dict[str, Answer] = {}
 
@@ -1693,7 +1694,7 @@ def notes_results() -> Protocol:
 
 @pytest.mark.anyio
 async def test_a_result_is_judged_in_each_conversation_it_reaches() -> None:
-    handler = Handler(notes_results())
+    handler = await holding(Handler(notes_results()))
     # two conversations of one run, each holding the same call and result
     then = ran("Oslo", "Rain.")
 
@@ -1792,7 +1793,7 @@ async def test_a_request_that_waited_for_a_judgment_that_ended_the_run_is_refuse
     None
 ):
     _Gate.judged, _Gate.open, _Gate.reached = 0, anyio.Event(), anyio.Event()
-    handler = Handler(holds_then_ends_the_run())
+    handler = await holding(Handler(holds_then_ends_the_run()))
     then = ran("Oslo", "Rain.")
     answers: dict[str, Answer] = {}
 
