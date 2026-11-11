@@ -816,11 +816,13 @@ The probe, and every later call under `/sentinel/`, carries the credentials Insp
 {
   "service": "inspect_sentinel",
   "versions": [1],
-  "release": "whole"
+  "release": "whole",
+  "review": true
 }
 ```
 
 - **`versions` lists the versions of the endpoint's methods.** The probe's path has no version, because the probe is how Inspect learns them. Inspect works only with a version it knows. There is one, version 1, and Inspect calls its methods at `/sentinel/v1`.
+- **`review` says whether the sidecar puts a sentinel's questions for a person to the eval** ("Questions for a person" below). Inspect looks for questions only at a sidecar that says `true`. A sidecar started with `--no-eval-results` says `false`, and one from before the methods existed says nothing, so Inspect asks neither.
 - **`release` says how the sidecar passes on a streamed reply.** `whole` holds every reply until it is judged. `early` lets the text and reasoning before the turn's first call go out as they arrive, and holds the rest until the turn is judged ([section 5](#what-a-sentinel-sees-under-early-release)). Inspect works only with `whole` ("Streams" below).
 
 **Which models Inspect probes.**

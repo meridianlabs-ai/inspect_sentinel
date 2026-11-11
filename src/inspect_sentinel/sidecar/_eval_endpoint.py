@@ -435,6 +435,9 @@ def eval_routes(
                 "service": "inspect_sentinel",
                 "versions": VERSIONS,
                 "release": handler.release,
+                # whether an eval is to ask for its questions for a person:
+                # an eval asks a sidecar that doesn't say so nothing
+                "review": handler.eval_review and results,
             }
         )
 

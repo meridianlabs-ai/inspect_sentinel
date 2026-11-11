@@ -292,6 +292,11 @@ class Handler:
         return self._timestamp_window
 
     @property
+    def eval_review(self) -> bool:
+        """Whether a sentinel's question to a person is put to the Inspect eval whose run it is, for its approval UI. Not where evals aren't sent results, nor where the host asks a person its own way."""
+        return self._eval_review
+
+    @property
     def reviews(self) -> Reviews:
         """The questions a sentinel asked a person, held for Inspect evals to answer."""
         return self._reviews

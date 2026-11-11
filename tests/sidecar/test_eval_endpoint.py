@@ -155,7 +155,25 @@ async def test_the_probe_says_which_versions_are_served() -> None:
         "service": "inspect_sentinel",
         "versions": [1],
         "release": "whole",
+        "review": True,
     }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("handler_options", "route_options"),
+    [({"eval_results": False}, {}), ({}, {"results": False})],
+)
+async def test_the_probe_says_when_an_eval_isnt_asked_for_a_person(
+    handler_options: dict[str, Any], route_options: dict[str, Any]
+) -> None:
+    # an eval that isn't sent results isn't asked to answer for a person, so
+    # it needn't look for questions
+    handler = Handler(weather_rule(), **handler_options)
+    async with _client(handler, **route_options) as client:
+        answered = await client.get(INFO_PATH)
+
+    assert answered.json()["review"] is False
 
 
 @pytest.mark.anyio
