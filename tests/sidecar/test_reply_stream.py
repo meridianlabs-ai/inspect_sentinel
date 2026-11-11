@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 import anyio
 import pytest
@@ -25,6 +26,7 @@ from inspect_sentinel.sidecar._handler import RequestResult
 from inspect_sentinel.sidecar._wire import UnreadableError
 from tests.sidecar._traffic import (
     STREAM,
+    NotingHandler,
     anthropic_recorded,
     holding,
     inspect_headers,
@@ -377,3 +379,36 @@ async def _not_judged(handler: Handler) -> tuple[str, str | None]:
     result = await handler.request_result("request_456", "eval_789")
     assert isinstance(result, RequestResult)
     return result.latest.state, result.latest.reason
+
+
+@pytest.mark.anyio
+async def test_a_provider_errors_headers_and_body_are_handed_over() -> None:
+    asked, answered = _exchange("anthropic stream", inspect=True)
+    handler = NotingHandler(weather_rule())
+    await holding(handler)
+    await handler.request(asked)
+    start = replace(_start(answered, status=529), headers={"retry-after": "7"})
+    error = b'{"type":"error","error":{"type":"overloaded_error"}}'
+
+    outputs = await _streamed(handler.reply_stream(start), error, 10)
+
+    # the client is sent the error as it comes, and the handler is shown it
+    # at the start, with its headers, and handed its body once it has passed
+    assert b"".join(o.data for o in outputs if isinstance(o, Release)) == error
+    (shown,) = handler.replies
+    assert (shown.status, shown.headers, shown.body) == (529, {"retry-after": "7"}, b"")
+    assert handler.error_bodies == [("x", error)]
+
+
+@pytest.mark.anyio
+async def test_a_streamed_replys_headers_reach_the_handler_with_it() -> None:
+    asked, answered = _exchange("anthropic stream")
+    handler = NotingHandler(weather_rule())
+    await handler.request(asked)
+    start = replace(_start(answered), headers={"request-id": "req_011"})
+
+    await _streamed(handler.reply_stream(start), answered.body, 500)
+
+    (shown,) = handler.replies
+    assert shown.headers == {"request-id": "req_011"}
+    assert shown.body == answered.body

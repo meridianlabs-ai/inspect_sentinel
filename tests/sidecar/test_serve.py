@@ -123,7 +123,7 @@ def test_defaults_are_one_port_and_no_limits() -> None:
     assert arguments.max_body_bytes == 64 * 1024 * 1024
     assert arguments.run_expiry == 24 * 60 * 60
     assert arguments.timestamp_window == 300
-    assert arguments.review_timeout == 600
+    assert arguments.review_timeout is None
     assert arguments.no_eval_results is False
     assert arguments.tasks_folder is None
     assert arguments.no_runtime_task_registration is False
@@ -442,6 +442,11 @@ def test_ctrl_c_stops_the_sidecar_cleanly(second: str | None, tmp_path: Path) ->
             except httpx.HTTPError:
                 assert serving.poll() is None and time.monotonic() < deadline
                 time.sleep(0.1)
+        if second is None:
+            # a served sidecar runs the judging that waits for a person, so
+            # its probe says an eval is asked
+            probed = httpx.get(f"http://127.0.0.1:{free[0]}/sentinel/info", timeout=5)
+            assert probed.json()["review"] is True
         if second == "--envoy-port":
             # the shim listens before the endpoints do
             socket.create_connection(("127.0.0.1", free[1]), timeout=5).close()

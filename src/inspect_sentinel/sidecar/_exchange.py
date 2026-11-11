@@ -64,6 +64,9 @@ class Reply:
     format: Format | None = None
     """Which API the body is written in, if the proxy said. Without it, the API is worked out from `provider` and the body."""
 
+    headers: Mapping[str, str] = field(default_factory=dict[str, str])
+    """The reply's headers as the provider sent them, by lowercase name, where the proxy hands them over. They are kept with the reply of a model call that waited for a person, which the eval reads as the provider's own."""
+
 
 def succeeded(status: int) -> bool:
     """Whether a provider's reply in this status is the model's, to judge, rather than an error, which goes on unjudged.

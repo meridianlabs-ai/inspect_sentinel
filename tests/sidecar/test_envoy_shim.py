@@ -40,6 +40,7 @@ from inspect_sentinel.sidecar.envoy._proto.envoy.service.ext_proc.v3 import (
     external_processor_pb2 as pb,
 )
 from tests.sidecar._traffic import (
+    NotingHandler,
     every_call_rule,
     holding,
     inspect_headers,
@@ -398,6 +399,68 @@ async def test_providers_error_passes_through_unjudged_whatever_its_size_or_enco
     assert b"".join(each.body for each in passed) == error
     assert [each.end_of_stream for each in passed] == [False, True]
     assert await _not_judged(handler) == ("not_judged", "provider_error")
+
+
+@pytest.mark.anyio
+async def test_providers_error_is_handed_over_with_its_headers_and_body() -> None:
+    handler = NotingHandler(weather_rule())
+    await holding(handler)
+    error = b'{"type": "error", "error": {"type": "overloaded_error"}}'
+    replied = _reply(error[:20], error[20:])
+    replied[0] = pb.ProcessingRequest(
+        response_headers=_headers(
+            {":status": "529", "content-type": "application/json", "retry-after": "7"}
+        )
+    )
+
+    await _process(
+        [
+            _from_inspect(),
+            pb.ProcessingRequest(
+                request_body=pb.HttpBody(body=_BODY, end_of_stream=True)
+            ),
+            *replied,
+        ],
+        handler,
+    )
+
+    # shown at its headers, without HTTP/2's own, and handed its body once
+    # the body has all passed on to the client
+    (shown,) = handler.replies
+    assert (shown.status, shown.body) == (529, b"")
+    assert shown.headers == {"content-type": "application/json", "retry-after": "7"}
+    ((_, body),) = handler.error_bodies
+    assert body == error
+
+
+@pytest.mark.anyio
+async def test_a_compressed_error_is_passed_on_and_not_copied() -> None:
+    handler = NotingHandler(weather_rule())
+    await holding(handler)
+    replied = _reply(b"\x1f\x8b compressed", b" error")
+    replied[0] = pb.ProcessingRequest(
+        response_headers=_headers(
+            {
+                ":status": "500",
+                "content-type": "application/json",
+                "content-encoding": "gzip",
+            }
+        )
+    )
+
+    await _process(
+        [
+            _from_inspect(),
+            pb.ProcessingRequest(
+                request_body=pb.HttpBody(body=_BODY, end_of_stream=True)
+            ),
+            *replied,
+        ],
+        handler,
+    )
+
+    # a copy is kept as plain bytes, so one that isn't plain is left out
+    assert handler.error_bodies == []
 
 
 class _ReplacesEveryReply:

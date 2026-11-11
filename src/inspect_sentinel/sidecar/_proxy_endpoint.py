@@ -36,6 +36,7 @@ from ._json_rpc import (
 from ._proxy_streams import (
     PENDING_BYTES,
     POLL_SECONDS,
+    REPLY_HEADERS,
     STREAM_EXPIRY,
     BeginReplyParams,
     NextReleaseParams,
@@ -90,7 +91,13 @@ class JudgeReplyParams(BaseModel):
     content_type: str = Field(
         description="The reply's content type, which says whether it is one JSON object or a stream of events."
     )
-    body: str = Field(description="The reply's body, as base64.")
+    headers: dict[str, str] = Field(
+        default_factory=dict[str, str],
+        description=REPLY_HEADERS,
+    )
+    body: str = Field(
+        description="The reply's body, as base64. A provider's error is handed over with its body too."
+    )
 
 
 class PassResult(BaseModel):
@@ -312,6 +319,7 @@ def _reply(given: JudgeReplyParams) -> Reply:
         status=given.status,
         content_type=given.content_type,
         body=body,
+        headers={name.lower(): value for name, value in given.headers.items()},
     )
 
 

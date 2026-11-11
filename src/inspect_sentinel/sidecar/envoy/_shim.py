@@ -12,7 +12,13 @@ import grpc
 from .._errors import bounded, error_body, refusal_for
 from .._exchange import Answer, Pass, Refuse, Replace, Reply, Request, succeeded
 from .._handler import Handler
-from .._reply_stream import ErrorEvent, Release, ReplyStart, ReplyStream
+from .._reply_stream import (
+    ERROR_BODY_BYTES,
+    ErrorEvent,
+    Release,
+    ReplyStart,
+    ReplyStream,
+)
 from .._wire import Format
 from ._metadata import FORMAT_METADATA, INSPECT_HEADERS, PROVIDER_METADATA
 from ._proto.envoy.config.core.v3 import base_pb2 as core
@@ -162,6 +168,11 @@ class _Exchange:
         self._model = ""
         self._status = 0
         self._content_type = ""
+        # the reply's headers as the provider sent them, without HTTP/2's own
+        self._reply_headers: dict[str, str] = {}
+        # a copy of a provider's error as it passes, or None once it is too
+        # large to keep
+        self._error_body: bytearray | None = None
         self._declared_length = False
         self._request_encoding = "identity"
         self._replied = False
@@ -349,6 +360,9 @@ class _Exchange:
         received = _read(headers.headers)
         self._status = int(received.get(":status", "0") or 0)
         self._content_type = received.get("content-type", "")
+        self._reply_headers = {
+            name: value for name, value in received.items() if not name.startswith(":")
+        }
         if not succeeded(self._status):
             return await self._provider_error(headers.end_of_stream)
         encoding = received.get("content-encoding", "identity").lower()
@@ -374,6 +388,7 @@ class _Exchange:
                     user=None,
                     status=self._status,
                     content_type=self._content_type,
+                    headers=self._reply_headers,
                 ),
                 max_held_bytes=self._max_body_bytes,
             )
@@ -409,9 +424,11 @@ class _Exchange:
         ]
 
     async def _provider_error(self, end_of_stream: bool) -> list[pb.ProcessingResponse]:
-        # A provider's error goes on unjudged, and the handler reads nothing
-        # of it: it is told at the headers, and the body passes through as it
-        # comes, whatever its size or encoding.
+        # A provider's error goes on unjudged: the handler is told at the
+        # headers, and the body passes through as it comes, whatever its size
+        # or encoding. A copy of a body no larger than `ERROR_BODY_BYTES` is
+        # handed over once it has all passed, for an eval whose model call
+        # waited for a person and reads the error from the sidecar.
         self._replied = self._passing = True
         answer = await self._judge(
             self._handler.reply(self._reply_of(b"")), "reply", reply=True
@@ -419,6 +436,10 @@ class _Exchange:
         if isinstance(answer, Refuse):
             return [self._refusal(answer)]
         self.finished = end_of_stream
+        # a compressed error isn't copied: the copy is kept as plain bytes
+        encoding = self._reply_headers.get("content-encoding", "identity").lower()
+        if not end_of_stream and encoding == "identity":
+            self._error_body = bytearray()
         return [
             pb.ProcessingResponse(
                 response_headers=pb.HeadersResponse(response=pb.CommonResponse())
@@ -428,6 +449,14 @@ class _Exchange:
     async def _response_body(self, body: pb.HttpBody) -> list[pb.ProcessingResponse]:
         if self._passing:
             self.finished = body.end_of_stream
+            copy = self._error_body
+            if copy is not None:
+                copy.extend(body.body)
+                if len(copy) > ERROR_BODY_BYTES:
+                    self._error_body = None
+                elif body.end_of_stream and copy:
+                    self._error_body = None
+                    await self._handler.error_body(self._id, bytes(copy))
             return [_streamed(body.body, end_of_stream=body.end_of_stream)]
         if self._stream is None:
             return []
@@ -477,6 +506,7 @@ class _Exchange:
             status=self._status,
             content_type=self._content_type,
             body=body,
+            headers=self._reply_headers,
         )
 
     async def _judge(

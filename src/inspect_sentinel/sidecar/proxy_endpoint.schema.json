@@ -60,6 +60,14 @@
           "title": "Content Type",
           "type": "string"
         },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The reply's headers as the provider sent them, without credentials. A proxy hook that has them hands them over, for a provider's error too. The sidecar keeps them with the reply of a model call that waited for a person, which the eval then reads as the provider's own, and with a provider's error, where they say whether the call may be tried again.",
+          "title": "Headers",
+          "type": "object"
+        },
         "keepalive": {
           "default": true,
           "description": "Whether the proxy hook can send the caller a keepalive, an SSE comment, as a `release` while the reply is held. Where it can't, none is given, so that a refusal keeps its status for as long as nothing else has gone out.",
@@ -102,7 +110,7 @@
                 "provider_error",
                 "cut_off",
                 "replaced_attempt",
-                "superseded"
+                "cancelled"
               ],
               "type": "string"
             },
@@ -193,8 +201,16 @@
           "title": "Content Type",
           "type": "string"
         },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The reply's headers as the provider sent them, without credentials. A proxy hook that has them hands them over, for a provider's error too. The sidecar keeps them with the reply of a model call that waited for a person, which the eval then reads as the provider's own, and with a provider's error, where they say whether the call may be tried again.",
+          "title": "Headers",
+          "type": "object"
+        },
         "body": {
-          "description": "The reply's body, as base64.",
+          "description": "The reply's body, as base64. A provider's error is handed over with its body too.",
           "title": "Body",
           "type": "string"
         }

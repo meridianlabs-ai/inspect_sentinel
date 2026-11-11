@@ -24,6 +24,7 @@ from inspect_sentinel.sidecar._proxy_endpoint import PATH, proxy_app
 from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
 from tests.sidecar._traffic import (
     STREAM,
+    NotingHandler,
     anthropic_recorded,
     holding,
     reply,
@@ -470,3 +471,26 @@ async def test_an_error_event_for_a_turn_not_judged_says_why() -> None:
 
     assert outputs[-1]["kind"] == "error_event"
     assert outputs[-1]["not_judged"] == "error"
+
+
+@pytest.mark.anyio
+async def test_a_replys_headers_are_handed_over_as_it_begins() -> None:
+    handler = NotingHandler(weather_rule())
+    await handler.request(request())
+
+    with anyio.fail_after(10):
+        async with _serving(handler) as client:
+            begun = await _call(
+                client,
+                "begin_reply",
+                **_begun(),
+                headers={"Request-Id": "req_011", "Retry-After": "7"},
+            )
+            assert begun["result"] == {"taken": True}
+            await _feed(client, _BODY)
+            await _call(client, "end_reply", id="x")
+            await _collect(client)
+
+    # by lowercase name, with the reply once it is judged
+    (shown,) = handler.replies
+    assert shown.headers == {"request-id": "req_011", "retry-after": "7"}

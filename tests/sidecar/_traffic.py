@@ -12,7 +12,7 @@ from inspect_sentinel._decorators import protocol
 from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import AfterToolCall, BeforeToolCall
 from inspect_sentinel._types import Protocol
-from inspect_sentinel.sidecar import Handler, Reply, Request
+from inspect_sentinel.sidecar import Answer, Handler, Reply, Request
 
 DATA = Path(__file__).parent / "data"
 
@@ -304,3 +304,20 @@ def openai_ran(api: str, result: str) -> list[dict[str, Any]]:
         },
         {"type": "function_call_output", "call_id": "call_1", "output": result},
     ]
+
+
+class NotingHandler(Handler):
+    """A handler that notes each reply it is shown, and each error's body it is handed afterwards."""
+
+    def __init__(self, *args: Any, **options: Any) -> None:
+        super().__init__(*args, **options)
+        self.replies: list[Reply] = []
+        self.error_bodies: list[tuple[str, bytes]] = []
+
+    async def reply(self, reply: Reply, *, released: bytes = b"") -> Answer:
+        self.replies.append(reply)
+        return await super().reply(reply, released=released)
+
+    async def error_body(self, id: str, body: bytes) -> None:
+        self.error_bodies.append((id, body))
+        await super().error_body(id, body)

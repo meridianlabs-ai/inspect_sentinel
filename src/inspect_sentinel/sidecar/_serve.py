@@ -23,7 +23,6 @@ from ._http import HEALTH_PATH, health_route
 from ._proxy_endpoint import proxy_app
 from ._registration import MAX_TASK_EXPIRY, MAX_TASK_REGISTRATIONS, read_tasks_folder
 from ._reply_stream import KEEPALIVE_SECONDS
-from ._review import REVIEW_TIMEOUT
 from ._sign import TIMESTAMP_WINDOW
 from ._state import RUN_EXPIRY, MemoryState
 
@@ -164,9 +163,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--review-timeout",
         type=float,
-        default=REVIEW_TIMEOUT,
+        default=None,
         metavar="SECONDS",
-        help=f"How long a step waits for a person's answer when the sentinel asks one during an Inspect eval, which shows the question in its approval UI. With no answer in time, the step is answered with caution: rejected if that was offered, otherwise the run is ended. A --time-limit shorter than this cuts the wait short. {REVIEW_TIMEOUT:g} by default.",
+        help="How long a question waits for a person's answer before it expires, when the sentinel asks one during an Inspect eval, which shows the question in its approval UI. A question that expires is answered with caution: rejected if that was offered, otherwise the run is ended. By default a question has no expiry, as a person may take days. No connection waits meanwhile, and the wait is not counted against --time-limit.",
     )
 
 
@@ -437,7 +436,7 @@ def serve(handler: Handler, arguments: argparse.Namespace) -> None:
     ]
     shim = _envoy_shim(handler, arguments)
     try:
-        anyio.run(_serve_all, servers, shim)
+        anyio.run(_serve_all, servers, shim, handler)
     except KeyboardInterrupt:
         # a server that stops for Ctrl-C raises it again once it has stopped,
         # and stopping is what was asked, as `uvicorn.run` takes it
@@ -476,8 +475,17 @@ _SHIM_GRACE = 5.0
 
 
 async def _serve_all(
-    servers: list[uvicorn.Server], shim: Callable[[], _GrpcServer] | None = None
+    servers: list[uvicorn.Server],
+    shim: Callable[[], _GrpcServer] | None = None,
+    handler: Handler | None = None,
 ) -> None:
+    if handler is not None:
+        # the judging of a model call that waits for a person runs here,
+        # whichever server its exchange came through
+        async with handler.serving():
+            await _serve_all(servers, shim)
+        return
+
     async def until_one_stops(server: uvicorn.Server) -> None:
         await server.serve()
         # one signal stops only the server that caught it

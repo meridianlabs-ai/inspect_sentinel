@@ -2,12 +2,14 @@
 
 A sentinel asks a person with `human()`, through `Host.ask_human`. For a run an Inspect eval names, the sidecar keeps the question here while the step waits, the eval finds it with `pending_questions`, shows it in Inspect's approval UI, and sends the person's answer with `answer_question`.
 
+A person may take days. So no connection waits on a question: the handler answers the model call "pending review" and keeps the judging that asked, which goes on when the answer comes (`design/sidecar.md`, "A review pauses the model call, not a connection"). A question has no expiry unless the operator sets one.
+
 This first way of asking has two temporary exceptions to the sidecar's rules, both in `design/sidecar-plan.md`, step 13:
 
 - The answer comes on the eval's key, the token it signs its calls with, and is taken only for a question from one of that eval's own runs. Reviewers are to answer on credentials of their own, which the sidecar checks.
 - The question hands the eval's process the call's arguments, even where the person then rejects the call. A reviewer surface outside the eval's process is to show them instead.
 
-A question belongs to one HTTP try of one model request. What became of it is kept in a `Review`, with that try, whether or not the step went on to a decision.
+A question belongs to one model call. What became of it is kept in a `Review`, with the try of the call that asked, whether or not the step went on to a decision.
 """
 
 from __future__ import annotations
@@ -30,9 +32,6 @@ from ._host import Stage
 
 logger = logging.getLogger(__name__)
 
-REVIEW_TIMEOUT = 600.0
-"""How long a step waits for a person's answer, in seconds, by default, before it is answered with caution."""
-
 MAX_QUESTIONS_WAIT = 30.0
 """The longest `pending_questions` waits for a question, in seconds."""
 
@@ -43,14 +42,13 @@ _KEPT_RECEIPTS = 10_000
 """How many answers' receipts are kept, so that an answer sent again is told it was taken."""
 
 Cause: TypeAlias = Literal[
-    "superseded",
     "replaced_attempt",
     "sample_ended",
     "run_ended",
-    "time_limit",
+    "cancelled",
     "stopped",
 ]
-"""Why a question's wait was cancelled: a later try of its request began, a later attempt at its sample began, the eval ended its sample, a sentinel ended its run, judging ran out of time, or the sidecar stopped judging for another reason."""
+"""Why a question's wait was cancelled: a later attempt at its sample began, the eval ended its sample, a sentinel ended its run, the eval cancelled the model call, or the sidecar stopped judging for another reason, as when it shuts down."""
 
 
 class UnknownQuestionError(Exception):
@@ -157,8 +155,8 @@ class Question:
     choices: tuple[str, ...]
     """What the person may pick."""
 
-    closes: float
-    """When the step stops waiting, in seconds since the epoch: when the review timeout passes, or sooner if judging runs out of time first."""
+    closes: float | None
+    """When the question expires, in seconds since the epoch, and the step is answered with caution. None where the operator set no review timeout, so the question waits for as long as its model call does."""
 
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     """The question's id, which an answer names."""
@@ -207,16 +205,16 @@ def cautious(choices: Sequence[str], reason: str) -> HumanAnswer:
 class Reviews:
     """The questions the sidecar holds for Inspect evals to answer. Kept in this process, as a step waits on its question here."""
 
-    def __init__(self, timeout: float = REVIEW_TIMEOUT) -> None:
+    def __init__(self, timeout: float | None = None) -> None:
         """Hold no questions yet.
 
         Args:
-            timeout: How long a step waits for an answer, in seconds, before it is answered with caution.
+            timeout: How long a question waits for an answer, in seconds, before it expires and its step is answered with caution. None, the default, is no expiry.
 
         Raises:
             ValueError: If `timeout` isn't a positive number of seconds.
         """
-        if not timeout > 0:
+        if timeout is not None and not timeout > 0:
             raise ValueError(f"The review timeout is some seconds, not {timeout}.")
         self._timeout = timeout
         self._open: dict[str, Question] = {}
@@ -226,17 +224,17 @@ class Reviews:
         self._asked = anyio.Event()
 
     @property
-    def timeout(self) -> float:
-        """How long a step waits for an answer, in seconds."""
+    def timeout(self) -> float | None:
+        """How long a question waits for an answer before it expires, in seconds, or None for no expiry."""
         return self._timeout
 
     async def ask(self, question: Question) -> HumanAnswer:
-        """Hold the question until an eval answers it, or the timeout passes.
+        """Hold the question until an eval answers it, or it expires.
 
         The wait is cancelled from outside, by cancelling the judging it is part of, when the question no longer has anyone to answer to: `close` takes the question away at once, and the step then comes to no decision.
 
         Returns:
-            The eval's answer, or, if nobody answered in time, the cautious one: `reject` if offered, otherwise `terminate`.
+            The eval's answer, or, if the question expired, the cautious one: `reject` if offered, otherwise `terminate`.
         """
         review = question.review
         self._open[question.id] = question
@@ -266,15 +264,14 @@ class Reviews:
             return question.answer
         review.resolve("timed_out")
         logger.warning(
-            "Nobody answered question %s within %g seconds, so the %s stage of the call to %s was answered with caution.",
+            "Question %s expired unanswered, so the %s stage of the call to %s was answered with caution.",
             question.id,
-            self._timeout,
             question.stage,
             question.call.function,
         )
         return cautious(
             question.choices,
-            f"Nobody answered within {self._timeout:g} seconds, so the sidecar answered with caution.",
+            "Nobody answered before the question expired, so the sidecar answered with caution.",
         )
 
     async def pending(

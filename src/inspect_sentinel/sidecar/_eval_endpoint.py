@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hmac
 import json
 from pathlib import Path
@@ -13,7 +14,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from ._errors import UnauthorizedError
-from ._handler import MAX_RESULT_WAIT, Handler, RequestResult
+from ._handler import MAX_RESULT_WAIT, Handler, KeptReply, RequestResult
 from ._http import read_within
 from ._inspect_client import Judgment, judgment, record_json
 from ._json_rpc import (
@@ -147,7 +148,7 @@ class RequestResultParams(EvalCall):
     wait: float = Field(
         default=0,
         ge=0,
-        description=f"How long to wait, in seconds, while the latest attempt is still being judged, at most {MAX_RESULT_WAIT:g}. The answer comes as soon as the attempt is decided or not judged. An eval asks again while the state is still `judging`.",
+        description=f"How long to wait, in seconds, while the request is still being judged, at most {MAX_RESULT_WAIT:g}. The answer comes as soon as the state is no longer `judging`. An eval asks again while it still is.",
     )
 
 
@@ -156,7 +157,7 @@ class ReviewRecord(BaseModel):
 
     id: str = Field(description="The question's id, as `pending_questions` gave it.")
     try_number: int = Field(
-        description="Which try of the request asked, from 1, in the order the sidecar was sent them. A client that tries a request again sends it under the same `x-irid`."
+        description="Which try of the request the question was asked at, from 1, in the order the sidecar was sent them: the try whose request or reply was being judged. A client that tries a request again sends it under the same `x-irid`."
     )
     stage: Literal["tool_call", "tool_result"] = Field(
         description="Where the step was judged."
@@ -175,23 +176,50 @@ class ReviewRecord(BaseModel):
     )
     resolution: Literal["answered", "timed_out", "cancelled"] | None = Field(
         default=None,
-        description="How the wait ended. `answered`: on the eval's answer, which the sentinel was given. `timed_out`: nobody answered in time, and the sentinel was given the cautious answer. `cancelled`: the wait was stopped and the step came to no decision, so an answer taken just before took no effect. Left out while the step still waits.",
+        description="How the wait ended. `answered`: on the eval's answer, which the sentinel was given. `timed_out`: the question expired, where the operator set a review timeout, and the sentinel was given the cautious answer. `cancelled`: the wait was stopped and the step came to no decision, so an answer taken just before took no effect. Left out while the step still waits.",
     )
     cause: (
         Literal[
-            "superseded",
             "replaced_attempt",
             "sample_ended",
             "run_ended",
-            "time_limit",
+            "cancelled",
             "stopped",
         ]
         | None
     ) = Field(
         default=None,
-        description="Why the wait was cancelled: `superseded` when a later try of the request began, `replaced_attempt` when a later attempt at the sample began, `sample_ended` when the eval ended the sample, `run_ended` when a sentinel ended the run at another request, `time_limit` when judging ran out of time, and `stopped` otherwise.",
+        description="Why the wait was cancelled: `replaced_attempt` when a later attempt at the sample began, `sample_ended` when the eval ended the sample, `run_ended` when a sentinel ended the run at another request, `cancelled` when the eval cancelled the request with `cancel_request`, and `stopped` otherwise, as when the sidecar shuts down.",
     )
     resolved: float | None = Field(default=None, description="When the wait ended.")
+
+
+class ReplyRecord(BaseModel):
+    """A provider's reply, as the proxy passes it on, for the eval to read with the code that reads that provider's replies from the network."""
+
+    status: int = Field(description="The provider's HTTP status.")
+    headers: dict[str, str] = Field(
+        description="The provider's headers, by lowercase name, without the headers of one hop, such as `content-length`. Empty but for `content-type` where the proxy hands the sidecar no reply headers."
+    )
+    body: str = Field(
+        description="The body, as base64: a JSON reply whole, or a streamed reply's events from first to last. A sentinel's edits are in it. Empty for a provider's error too large to keep."
+    )
+    format: Literal["anthropic-messages", "openai-chat", "openai-responses"] = Field(
+        description="The API the request was written in, and so the reply."
+    )
+    stream: bool = Field(description="Whether the body is a stream of events.")
+
+
+class FailureRecord(BaseModel):
+    """The provider's last failed exchange, for a request a person was asked about. The eval acts on this, and not on the error its own try got, which may be the sidecar's `pending review`."""
+
+    try_number: int = Field(
+        description="Which try of the request was sent on to the provider and failed, from 1. It tells a failure the eval has already acted on from a new one."
+    )
+    reply: ReplyRecord | None = Field(
+        default=None,
+        description="The provider's error. Left out for a reply that was cut off, which the eval handles as a connection that failed.",
+    )
 
 
 class RequestResultResult(BaseModel):
@@ -201,14 +229,26 @@ class RequestResultResult(BaseModel):
     records: Literal["held", "dropped", "unknown"] = Field(
         description="`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never kept the request: one it never saw, one without an `x-inspect-context` it could read and check, or one whose `x-inspect-context` named another eval."
     )
-    state: Literal["judging", "awaiting_reply", "decided", "not_judged"] | None = Field(
-        default=None, description="Where the latest attempt stands."
+    state: (
+        Literal[
+            "judging",
+            "awaiting_review",
+            "awaiting_request",
+            "awaiting_reply",
+            "decided",
+            "not_judged",
+        ]
+        | None
+    ) = Field(
+        default=None,
+        description="Where the request stands. For a request no person was asked about, that is where its latest try stands. For one a person was asked about, it is where that one model call stands, whatever tries of it were sent since. `awaiting_review`: a question is open, and the eval answers it. `awaiting_request`: the request may be sent on to the provider, so the eval sends the same request again under the same `x-irid`.",
     )
     reason: NotJudged | None = Field(
-        default=None, description="Why the latest attempt was not judged."
+        default=None,
+        description="With `not_judged`, why the request was not judged. With `awaiting_request`, `provider_error` or `cut_off` where the request is there because the provider's last exchange failed, which `failure` describes. Left out where the request only waits to be sent.",
     )
     outcome: Outcome | None = Field(
-        default=None, description="What the latest attempt came to, once decided."
+        default=None, description="What the request came to, once decided."
     )
     message: str | None = Field(
         default=None, description="What the model is told, for a rejection."
@@ -219,11 +259,19 @@ class RequestResultResult(BaseModel):
     )
     judgment: Judgment | None = Field(
         default=None,
-        description="What was decided during the latest attempt, once decided, which the eval acts on and logs. Trimmed where the sidecar doesn't send results.",
+        description="What was decided of the request, once decided, which the eval acts on and logs. Trimmed where the sidecar doesn't send results.",
     )
     reviews: list[ReviewRecord] | None = Field(
         default=None,
-        description="What became of each question a sentinel asked a person, every try's in order, including a try that was stopped before it came to a decision. A judged step names its questions in its `reviews`. Left out where nobody was asked.",
+        description="What became of each question a sentinel asked a person, in order, including one whose step was stopped before it came to a decision. A judged step names its questions in its `reviews`. Left out where nobody was asked.",
+    )
+    reply: ReplyRecord | None = Field(
+        default=None,
+        description="The provider's reply, for a request a person was asked about that was decided with the turn going on, whichever stage it waited at. The eval reads it where its own exchange didn't bring it the reply: always for a request that waited at its reply, and for one that waited at its request when the response to the try sent on was lost. Left out of every other answer.",
+    )
+    failure: FailureRecord | None = Field(
+        default=None,
+        description="The provider's last failed exchange, with `awaiting_request` and a `reason`.",
     )
 
 
@@ -319,8 +367,9 @@ class QuestionAsked(BaseModel):
     asked: float = Field(
         description="When the question was asked, in seconds since the epoch, for showing how long it has waited."
     )
-    closes: float = Field(
-        description="When the step stops waiting, in seconds since the epoch, and the question is gone: when the sidecar's review timeout passes, after which the step is answered with caution, `reject` if offered and otherwise `terminate`; or sooner, if the sidecar's time limit for judging runs out first, after which the request is not judged."
+    closes: float | None = Field(
+        default=None,
+        description="When the question expires, in seconds since the epoch, where the operator set a review timeout. The step is then answered with caution, `reject` if offered and otherwise `terminate`, and the judging goes on. Left out where the question has no expiry.",
     )
 
 
@@ -356,6 +405,24 @@ class AnswerQuestionResult(BaseModel):
     decision: Literal["approve", "reject", "terminate"]
 
 
+class CancelRequestParams(EvalCall):
+    """Parameters of `cancel_request`: a model request a sentinel asked a person about, which the eval no longer waits for.
+
+    The request is closed wherever it stands before its end, with nothing decided: its judging is stopped and its questions close, no try of it is sent on to the provider, and the reply to a try already with the provider is not judged, kept or passed on. It then reads as `not_judged`, with the reason `cancelled`, and nothing opens it again.
+    """
+
+    id: str = Field(description="The request's `x-irid`.")
+
+
+class CancelRequestResult(BaseModel):
+    """Whether this call closed the request."""
+
+    id: str
+    cancelled: bool = Field(
+        description="Whether this call was what closed the request. False for a request that had already ended, one no person was asked about, and one the sidecar doesn't know. A second `cancel_request` for a request is answered false too, so false doesn't say the request is still open: `request_result` says where it stands."
+    )
+
+
 _METHODS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "register_task": (RegisterTaskParams, RegisterTaskResult),
     "complete_registration": (
@@ -367,13 +434,14 @@ _METHODS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "end_sample": (EndSampleParams, EndSampleResult),
     "pending_questions": (PendingQuestionsParams, PendingQuestionsResult),
     "answer_question": (AnswerQuestionParams, AnswerQuestionResult),
+    "cancel_request": (CancelRequestParams, CancelRequestResult),
 }
 
 _RESULTS = frozenset({"sample_result"})
 
 # asking a person through an eval, which a sidecar that sends an eval no
 # results doesn't do: it doesn't trust that eval to decide for itself
-_REVIEW = frozenset({"pending_questions", "answer_question"})
+_REVIEW = frozenset({"pending_questions", "answer_question", "cancel_request"})
 
 _ERRORS: dict[int, tuple[str, str]] = {
     REGISTRATION_REFUSED: (
@@ -613,6 +681,28 @@ async def _answered(
                 for number, review in found.reviews
             ]
             or None,
+            reply=_reply_record(found.reply) if found.reply is not None else None,
+            failure=(
+                FailureRecord(
+                    try_number=found.failure.try_number,
+                    reply=(
+                        _reply_record(found.failure.reply)
+                        if found.failure.reply is not None
+                        else None
+                    ),
+                )
+                if found.failure is not None
+                else None
+            ),
+        )
+    if isinstance(given, CancelRequestParams):
+        return CancelRequestResult(
+            id=given.id,
+            cancelled=(
+                await handler.cancel_request(given.id, given.eval_id)
+                if holds
+                else False
+            ),
         )
     if isinstance(given, SampleResultParams):
         run = (
@@ -664,7 +754,7 @@ async def _answer_question(
             f"The sidecar holds nothing of the eval {given.eval_id!r}, so no question of it.",
         )
     try:
-        handler.reviews.answer(given.eval_id, given.id, given.decision, given.reason)
+        handler.answer_question(given.eval_id, given.id, given.decision, given.reason)
     except UnknownQuestionError as ex:
         raise RpcError(UNKNOWN_QUESTION, str(ex)) from None
     except AnsweredError as ex:
@@ -672,6 +762,16 @@ async def _answer_question(
     except ChoiceError as ex:
         raise RpcError(ANSWER_REFUSED, str(ex)) from None
     return AnswerQuestionResult(id=given.id, decision=given.decision)
+
+
+def _reply_record(reply: KeptReply) -> ReplyRecord:
+    return ReplyRecord(
+        status=reply.status,
+        headers=dict(reply.headers),
+        body=base64.b64encode(reply.body).decode(),
+        format=reply.format,
+        stream=reply.stream,
+    )
 
 
 def _question(question: Question) -> QuestionAsked:

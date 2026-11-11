@@ -35,6 +35,7 @@ from inspect_sentinel.sidecar._proxy_endpoint import (
 from inspect_sentinel.sidecar._registration import FileTask
 from tests.sidecar._traffic import (
     JSON,
+    NotingHandler,
     holding,
     inspect_headers,
     message,
@@ -449,3 +450,41 @@ def test_calls_in_these_tests_fit_the_schema_file() -> None:
     assert _fits(methods["judge_request"]["params"], _REQUEST)
     assert _fits(methods["judge_reply"]["params"], _reply(b"{}"))
     assert not _fits(methods["judge_request"]["params"], _reply(b"{}"))
+
+
+@pytest.mark.anyio
+async def test_a_replys_headers_are_handed_over_with_it() -> None:
+    handler = NotingHandler(weather_rule())
+    async with _client(handler) as client:
+        await _call(client, "judge_request", _REQUEST)
+        answered = await _call(
+            client,
+            "judge_reply",
+            _reply(message(weather("Oslo")), headers={"Request-Id": "req_011"}),
+        )
+
+    assert answered["result"] == {"action": "pass"}
+    (shown,) = handler.replies
+    assert shown.headers == {"request-id": "req_011"}
+
+
+@pytest.mark.anyio
+async def test_a_providers_error_is_handed_over_whole() -> None:
+    handler = NotingHandler(weather_rule())
+    error = b'{"type":"error","error":{"type":"overloaded_error"}}'
+    async with _client(handler) as client:
+        await _call(client, "judge_request", _REQUEST)
+        answered = await _call(
+            client,
+            "judge_reply",
+            _reply(error, status=529, headers={"retry-after": "7"}),
+        )
+
+    # passed on unjudged, and shown with what says whether to try again
+    assert answered["result"] == {"action": "pass"}
+    (shown,) = handler.replies
+    assert (shown.status, shown.headers, shown.body) == (
+        529,
+        {"retry-after": "7"},
+        error,
+    )
