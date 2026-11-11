@@ -101,7 +101,8 @@
                 "error",
                 "provider_error",
                 "cut_off",
-                "replaced_attempt"
+                "replaced_attempt",
+                "superseded"
               ],
               "type": "string"
             },

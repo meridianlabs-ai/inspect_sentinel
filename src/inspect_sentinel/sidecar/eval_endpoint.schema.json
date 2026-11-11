@@ -1342,7 +1342,7 @@
             }
           ],
           "default": null,
-          "description": "Why it escalated. Left out where the sidecar doesn't send results, as a monitor's explanation tells an agent what it looks for.",
+          "description": "Why it escalated, if it said.",
           "title": "Explanation"
         }
       },
@@ -1584,7 +1584,7 @@
           "type": "number"
         },
         "closes": {
-          "description": "When the step stops waiting, in seconds since the epoch, after which it is answered with caution, `reject` if offered and otherwise `terminate`, and the question is gone.",
+          "description": "When the step stops waiting, in seconds since the epoch, and the question is gone: when the sidecar's review timeout passes, after which the step is answered with caution, `reject` if offered and otherwise `terminate`; or sooner, if the sidecar's time limit for judging runs out first, after which the request is not judged.",
           "title": "Closes",
           "type": "number"
         }
@@ -1852,7 +1852,8 @@
                 "error",
                 "provider_error",
                 "cut_off",
-                "replaced_attempt"
+                "replaced_attempt",
+                "superseded"
               ],
               "type": "string"
             },
@@ -1923,6 +1924,22 @@
           ],
           "default": null,
           "description": "What was decided during the latest attempt, once decided, which the eval acts on and logs. Trimmed where the sidecar doesn't send results."
+        },
+        "reviews": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ReviewRecord"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What became of each question a sentinel asked a person, every try's in order, including a try that was stopped before it came to a decision. A judged step names its questions in its `reviews`. Left out where nobody was asked.",
+          "title": "Reviews"
         }
       },
       "required": [
@@ -1930,6 +1947,145 @@
         "records"
       ],
       "title": "RequestResultResult",
+      "type": "object"
+    },
+    "ReviewRecord": {
+      "description": "What became of one question a sentinel asked a person while the request or its reply was judged.",
+      "properties": {
+        "id": {
+          "description": "The question's id, as `pending_questions` gave it.",
+          "title": "Id",
+          "type": "string"
+        },
+        "try_number": {
+          "description": "Which try of the request asked, from 1, in the order the sidecar was sent them. A client that tries a request again sends it under the same `x-irid`.",
+          "title": "Try Number",
+          "type": "integer"
+        },
+        "stage": {
+          "description": "Where the step was judged.",
+          "enum": [
+            "tool_call",
+            "tool_result"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "call": {
+          "description": "The id of the call the question was about.",
+          "title": "Call",
+          "type": "string"
+        },
+        "asked": {
+          "description": "When it was asked, in seconds since the epoch.",
+          "title": "Asked",
+          "type": "number"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "enum": [
+                "approve",
+                "reject",
+                "terminate"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the eval's answer picked, when the sidecar took one. The answer's `mac` shows that the eval sent it, not that a person chose it.",
+          "title": "Decision"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The reason the eval's answer gave, if any.",
+          "title": "Reason"
+        },
+        "answered": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the answer was taken.",
+          "title": "Answered"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "enum": [
+                "answered",
+                "timed_out",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How the wait ended. `answered`: on the eval's answer, which the sentinel was given. `timed_out`: nobody answered in time, and the sentinel was given the cautious answer. `cancelled`: the wait was stopped and the step came to no decision, so an answer taken just before took no effect. Left out while the step still waits.",
+          "title": "Resolution"
+        },
+        "cause": {
+          "anyOf": [
+            {
+              "enum": [
+                "superseded",
+                "replaced_attempt",
+                "sample_ended",
+                "run_ended",
+                "time_limit",
+                "stopped"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why the wait was cancelled: `superseded` when a later try of the request began, `replaced_attempt` when a later attempt at the sample began, `sample_ended` when the eval ended the sample, `run_ended` when a sentinel ended the run at another request, `time_limit` when judging ran out of time, and `stopped` otherwise.",
+          "title": "Cause"
+        },
+        "resolved": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the wait ended.",
+          "title": "Resolved"
+        }
+      },
+      "required": [
+        "id",
+        "try_number",
+        "stage",
+        "call",
+        "asked"
+      ],
+      "title": "ReviewRecord",
       "type": "object"
     },
     "SampleResultParams": {
@@ -2089,6 +2245,22 @@
           "default": null,
           "description": "The models the step's monitors and protocols called, each once, in the order first called. The sidecar takes a role's model from its own configuration, not from the eval's. Left out where none was called, and of a trimmed field.",
           "title": "Models"
+        },
+        "reviews": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The ids of the questions a person was asked while the step was judged, each of which `request_result`'s `reviews` says more about. Left out where nobody was asked.",
+          "title": "Reviews"
         }
       },
       "required": [

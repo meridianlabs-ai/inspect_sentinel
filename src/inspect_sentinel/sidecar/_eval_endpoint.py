@@ -151,6 +151,49 @@ class RequestResultParams(EvalCall):
     )
 
 
+class ReviewRecord(BaseModel):
+    """What became of one question a sentinel asked a person while the request or its reply was judged."""
+
+    id: str = Field(description="The question's id, as `pending_questions` gave it.")
+    try_number: int = Field(
+        description="Which try of the request asked, from 1, in the order the sidecar was sent them. A client that tries a request again sends it under the same `x-irid`."
+    )
+    stage: Literal["tool_call", "tool_result"] = Field(
+        description="Where the step was judged."
+    )
+    call: str = Field(description="The id of the call the question was about.")
+    asked: float = Field(description="When it was asked, in seconds since the epoch.")
+    decision: Literal["approve", "reject", "terminate"] | None = Field(
+        default=None,
+        description="What the eval's answer picked, when the sidecar took one. The answer's `mac` shows that the eval sent it, not that a person chose it.",
+    )
+    reason: str | None = Field(
+        default=None, description="The reason the eval's answer gave, if any."
+    )
+    answered: float | None = Field(
+        default=None, description="When the answer was taken."
+    )
+    resolution: Literal["answered", "timed_out", "cancelled"] | None = Field(
+        default=None,
+        description="How the wait ended. `answered`: on the eval's answer, which the sentinel was given. `timed_out`: nobody answered in time, and the sentinel was given the cautious answer. `cancelled`: the wait was stopped and the step came to no decision, so an answer taken just before took no effect. Left out while the step still waits.",
+    )
+    cause: (
+        Literal[
+            "superseded",
+            "replaced_attempt",
+            "sample_ended",
+            "run_ended",
+            "time_limit",
+            "stopped",
+        ]
+        | None
+    ) = Field(
+        default=None,
+        description="Why the wait was cancelled: `superseded` when a later try of the request began, `replaced_attempt` when a later attempt at the sample began, `sample_ended` when the eval ended the sample, `run_ended` when a sentinel ended the run at another request, `time_limit` when judging ran out of time, and `stopped` otherwise.",
+    )
+    resolved: float | None = Field(default=None, description="When the wait ended.")
+
+
 class RequestResultResult(BaseModel):
     """What happened to the request. With `dropped` or `unknown` records, nothing else is said."""
 
@@ -177,6 +220,10 @@ class RequestResultResult(BaseModel):
     judgment: Judgment | None = Field(
         default=None,
         description="What was decided during the latest attempt, once decided, which the eval acts on and logs. Trimmed where the sidecar doesn't send results.",
+    )
+    reviews: list[ReviewRecord] | None = Field(
+        default=None,
+        description="What became of each question a sentinel asked a person, every try's in order, including a try that was stopped before it came to a decision. A judged step names its questions in its `reviews`. Left out where nobody was asked.",
     )
 
 
@@ -237,7 +284,7 @@ class Escalation(BaseModel):
     name: str = Field(description="The escalating monitor's or protocol's name.")
     explanation: str | None = Field(
         default=None,
-        description="Why it escalated. Left out where the sidecar doesn't send results, as a monitor's explanation tells an agent what it looks for.",
+        description="Why it escalated, if it said.",
     )
 
 
@@ -273,7 +320,7 @@ class QuestionAsked(BaseModel):
         description="When the question was asked, in seconds since the epoch, for showing how long it has waited."
     )
     closes: float = Field(
-        description="When the step stops waiting, in seconds since the epoch, after which it is answered with caution, `reject` if offered and otherwise `terminate`, and the question is gone."
+        description="When the step stops waiting, in seconds since the epoch, and the question is gone: when the sidecar's review timeout passes, after which the step is answered with caution, `reject` if offered and otherwise `terminate`; or sooner, if the sidecar's time limit for judging runs out first, after which the request is not judged."
     )
 
 
@@ -324,6 +371,10 @@ _METHODS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
 
 _RESULTS = frozenset({"sample_result"})
 
+# asking a person through an eval, which a sidecar that sends an eval no
+# results doesn't do: it doesn't trust that eval to decide for itself
+_REVIEW = frozenset({"pending_questions", "answer_question"})
+
 _ERRORS: dict[int, tuple[str, str]] = {
     REGISTRATION_REFUSED: (
         "registration_refused",
@@ -369,13 +420,13 @@ def eval_routes(
 ) -> list[Route]:
     """The routes of the endpoint for evals: the probe at `/sentinel/info`, and the methods at `/sentinel/v1`.
 
-    An eval registers its tasks and completes each sample's registration before the sample runs, asks what became of each request and of a sample, and ends a sample once it is scored. The eval makes a token and sends it in a registration to a sidecar that holds none for the eval. Every other call proves the caller holds that token with a `timestamp` and a `mac`, so only the eval reads what was decided of its requests and samples. Every call is a JSON-RPC 2.0 request. No method allows a call, clears a tally or changes the sentinel. A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
+    An eval registers its tasks and completes each sample's registration before the sample runs, asks what became of each request and of a sample, and ends a sample once it is scored. The eval makes a token and sends it in a registration to a sidecar that holds none for the eval. Every other call proves the caller holds that token with a `timestamp` and a `mac`, so only the eval reads what was decided of its requests and samples. Every call is a JSON-RPC 2.0 request. No method clears a tally or changes the sentinel, and one allows a call: `answer_question`, which answers a question the sentinel itself asked a person, for now on the eval's token, and only for the eval's own runs (`design/sidecar-plan.md`, step 13). A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
 
     Args:
         handler: The handler the proxy's requests and replies are put to.
         max_body_bytes: The largest call that is read.
         token: A credential every call to the methods must present as a bearer token, when the endpoint has a port of its own. None where it shares the proxy's port and access control.
-        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited.
+        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited. Without results, `pending_questions` and `answer_question` aren't served either: an eval that isn't trusted with a monitor's explanation isn't trusted to answer for a person. Build the handler with `eval_results` off as well, so that it asks no question nobody can answer.
     """
 
     async def info(http: HttpRequest) -> Response:
@@ -410,6 +461,11 @@ def eval_routes(
                 raise RpcError(
                     METHOD_NOT_FOUND,
                     f"This sidecar doesn't send results, so there is no method {asked.method!r}.",
+                )
+            if not results and asked.method in _REVIEW:
+                raise RpcError(
+                    METHOD_NOT_FOUND,
+                    f"This sidecar doesn't send results, so it asks no person through an eval, and there is no method {asked.method!r}.",
                 )
             result = await _answer(handler, asked.method, asked.params, results)
         except RpcError as ex:
@@ -535,6 +591,25 @@ async def _answered(
                 and latest.outcome is not None
                 else None
             ),
+            reviews=[
+                ReviewRecord(
+                    id=review.id,
+                    try_number=number,
+                    stage="tool_result"
+                    if review.stage == "tool_result"
+                    else "tool_call",
+                    call=review.call,
+                    asked=review.asked,
+                    decision=_DECISION.validate_python(review.decision),
+                    reason=review.reason,
+                    answered=review.answered,
+                    resolution=review.resolution,
+                    cause=review.cause,
+                    resolved=review.resolved,
+                )
+                for number, review in found.reviews
+            ]
+            or None,
         )
     if isinstance(given, SampleResultParams):
         run = (
@@ -567,10 +642,7 @@ async def _answered(
             else []
         )
         return PendingQuestionsResult(
-            questions=[
-                _question(question, handler.reviews.timeout, results)
-                for question in found
-            ]
+            questions=[_question(question) for question in found]
         )
     raise TypeError(f"No method takes {type(given).__name__}.")
 
@@ -589,20 +661,17 @@ async def _answer_question(
             f"The sidecar holds nothing of the eval {given.eval_id!r}, so no question of it.",
         )
     try:
-        question = handler.reviews.answer(
-            given.eval_id, given.id, given.decision, given.reason
-        )
+        handler.reviews.answer(given.eval_id, given.id, given.decision, given.reason)
     except UnknownQuestionError as ex:
         raise RpcError(UNKNOWN_QUESTION, str(ex)) from None
     except AnsweredError as ex:
         raise RpcError(QUESTION_ANSWERED, str(ex)) from None
     except ChoiceError as ex:
         raise RpcError(ANSWER_REFUSED, str(ex)) from None
-    assert question.answer is not None
-    return AnswerQuestionResult(id=question.id, decision=given.decision)
+    return AnswerQuestionResult(id=given.id, decision=given.decision)
 
 
-def _question(question: Question, timeout: float, results: bool) -> QuestionAsked:
+def _question(question: Question) -> QuestionAsked:
     return QuestionAsked(
         id=question.id,
         sample_uuid=question.sample_uuid,
@@ -617,19 +686,17 @@ def _question(question: Question, timeout: float, results: bool) -> QuestionAske
             else None
         ),
         escalations=[
-            Escalation(
-                name=escalation.name,
-                explanation=escalation.explanation if results else None,
-            )
+            Escalation(name=escalation.name, explanation=escalation.explanation)
             for escalation in question.escalations
         ],
         choices=list(question.choices),
         asked=question.asked,
-        closes=question.asked + timeout,
+        closes=question.closes,
     )
 
 
 _CALL = TypeAdapter(ToolCall)
+_DECISION = TypeAdapter(Literal["approve", "reject", "terminate"] | None)
 
 
 def schema() -> dict[str, Any]:

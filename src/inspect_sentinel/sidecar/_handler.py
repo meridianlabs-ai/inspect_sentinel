@@ -4,7 +4,8 @@ import hashlib
 import hmac
 import json
 import time
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -71,7 +72,7 @@ from ._registration import (
     UnregisteredSampleError,
 )
 from ._reply_stream import KEEPALIVE_SECONDS, PENDING_BYTES, ReplyStart, ReplyStream
-from ._review import REVIEW_TIMEOUT, Question, Reviews, escalated
+from ._review import REVIEW_TIMEOUT, Question, Review, Reviews, escalated
 from ._sign import TIMESTAMP_WINDOW, call_values, request_values, unproven
 from ._state import (
     MADE_KEPT,
@@ -87,6 +88,7 @@ from ._state import (
     Rejected,
     Run,
     State,
+    Stopped,
 )
 from ._wire import (
     Edited,
@@ -120,6 +122,17 @@ _MAX_CONSECUTIVE_REJECTIONS = 3
 
 _REPLACED = Refuse(400, "A later attempt at this sample replaced this one.")
 
+# what a request or reply that waited on a person is refused with when the
+# wait is stopped, with nothing decided
+_SUPERSEDED = Refuse(400, "A later try of this request replaced this one.")
+_RUN_OVER = Refuse(400, "This run ended while the request waited for a person.")
+
+# when judging the request or reply in hand runs out of time, in seconds
+# since the epoch, or None with no time limit
+_DEADLINE: ContextVar[float | None] = ContextVar(
+    "sidecar_judging_deadline", default=None
+)
+
 _ANOTHER_EVALS = Refuse(
     400,
     f"The request's {INSPECT_CONTEXT} header names a sample of another eval. The request was not judged.",
@@ -139,6 +152,18 @@ class RequestResult:
     """The latest attempt at it."""
     records: list[Record]
     """What was recorded, every attempt's in order."""
+    reviews: list[tuple[int, Review]]
+    """What became of each question a sentinel asked a person, every attempt's in order, each with the number of the attempt that asked, from 1."""
+
+
+@dataclass(eq=False)
+class _Try:
+    """An attempt at an eval's request whose request or reply is being judged now."""
+
+    attempt: Attempt
+    sample: InspectSample
+    scope: anyio.CancelScope
+    """Cancelled to stop the judging with nothing decided."""
 
 
 @dataclass(frozen=True)
@@ -189,11 +214,11 @@ class Handler:
 
         Args:
             sentinel: One protocol, or a sequence or mapping of monitors and protocols, as a task's `sentinel=` takes.
-            host: What the sentinel may do to the outside world. Defaults to a `SidecarHost` with no model roles.
+            host: What the sentinel may do to the outside world. Defaults to a `SidecarHost` with no model roles. A host with an `ask_human` of its own is asked every time; only `SidecarHost`'s, which asks nobody, gives way to asking through an eval.
             state: Where runs are kept. Defaults to this process's memory.
             reject_status: The HTTP status a rejected turn is refused with. The default, 400, is one a client takes as final. A status a client retries by itself, such as 503, brings the client back with the same request, which then goes on with the rejection added.
             time_limit: The longest the sentinel may take to judge one request or one reply, in seconds, after which it is cancelled. None, the default, is no limit.
-            eval_results: Whether the judgment `request_result` gives an Inspect eval holds the results: the explanations, references and metadata of the decisions, and what each monitor and protocol recorded. Without them, it holds only what Inspect acts on. A monitor's explanation tells an agent what the monitor looks for, so an eval that can't be trusted is not sent them.
+            eval_results: Whether the judgment `request_result` gives an Inspect eval holds the results: the explanations, references and metadata of the decisions, and what each monitor and protocol recorded. Without them, it holds only what Inspect acts on. A monitor's explanation tells an agent what the monitor looks for, so an eval that can't be trusted is not sent them. Such an eval is not asked to answer for a person either: without results, a sentinel's question to a person is answered with caution, as for a run no eval names.
             tasks: Tasks registered beforehand, by name, as the tasks folder's files hold them. Nothing an eval registers replaces one, and a request for a sample one doesn't hold is refused.
             runtime_task_registration: Whether an eval may register its tasks itself, at task init.
             strictness: How strict the handler is about a request it can't place. Under every strictness, a request with an `x-inspect-context` header must first pass the check of that header: it is refused, and not judged, if the handler holds no token for the eval it names, if its `timestamp` or `mac` fails the check, or if it names a run another eval started (see `request`). The strictness says what happens to a request that passes, and to one without the header. `open`, the default, judges each of those, without the task's facts where it holds none. `known_tasks` refuses a request whose `x-inspect-context` names a task the handler doesn't hold, and judges one without the header. `registered_only` refuses any request that doesn't name a sample the handler holds, in an epoch the task's registration runs, including one without the header, and refuses a sample's registration that the task's registration doesn't name.
@@ -218,6 +243,7 @@ class Handler:
             )
         self._timestamp_window = timestamp_window
         self._reviews = Reviews(review_timeout)
+        self._trying: set[_Try] = set()
         self._release: Literal["whole", "early"] = release
         self._keepalive = keepalive
         self._protocol = resolve_sentinel(sentinel)
@@ -228,6 +254,13 @@ class Handler:
         self._reject_status = reject_status
         self._time_limit = time_limit
         self._eval_results = eval_results
+        # A person is asked through an eval only where the eval is sent
+        # results, as an eval that isn't is one the deployment doesn't trust
+        # to decide for itself. A host given with a way of its own to ask a
+        # person keeps it.
+        self._eval_review = (
+            eval_results and type(self._host).ask_human is SidecarHost.ask_human
+        )
         self._tasks = dict(tasks or {})
         self._runtime_task_registration = runtime_task_registration
         self._strictness: Strictness = strictness
@@ -309,17 +342,24 @@ class Handler:
             )
             # an attempt that is never judged has records too: none
             await self._state.recorder(request.id)
+            await self._supersede(signed, attempt)
 
         try:
             answer = await self._within_limit(
-                self._request(request, sample, attempt), "request", request.id
+                self._request(request, sample, attempt),
+                "request",
+                request.id,
+                attempt,
+                sample,
             )
         except Exception as ex:
             if attempt is not None:
                 attempt.not_judged(_not_judged(ex))
             raise
         if attempt is not None and signed is not None:
-            if answer is _ANOTHER_EVALS:
+            if _settle_stopped(attempt, answer):
+                pass
+            elif answer is _ANOTHER_EVALS:
                 # as when the check above refuses it: nothing of the request
                 # is kept, so `request_result` reads it as unknown
                 await self._state.forget_attempt(
@@ -356,13 +396,19 @@ class Handler:
             attempt.state = "judging"
         try:
             answer = await self._within_limit(
-                self._reply(reply, held, released), "reply", reply.id
+                self._reply(reply, held, released),
+                "reply",
+                reply.id,
+                attempt,
+                held.proxy.inspect if held is not None else None,
             )
         except Exception as ex:
             if attempt is not None:
                 attempt.not_judged(_not_judged(ex))
             raise
         if attempt is None or held is None:
+            return answer
+        if _settle_stopped(attempt, answer):
             return answer
         if not succeeded(reply.status):
             attempt.not_judged("provider_error")
@@ -581,7 +627,12 @@ class Handler:
             if kept is None:
                 return "dropped"
             records.extend(kept)
-        return RequestResult(attempts[-1], records)
+        reviews = [
+            (number, review)
+            for number, attempt in enumerate(attempts, 1)
+            for review in attempt.reviews
+        ]
+        return RequestResult(attempts[-1], records, reviews)
 
     async def sample_result(
         self, sample_uuid: str, eval_id: str
@@ -621,14 +672,93 @@ class Handler:
             `ended`, or `unknown` for a sample the handler never saw or that isn't the eval's. Ending a sample again has no effect.
         """
         ended = await self._state.end_run(_run_key(True, sample_uuid), eval_id)
+        if ended:
+            # nobody is left to answer the sample's questions, or to send an
+            # answer to one of them again
+            self._stop(
+                "sample_ended",
+                lambda trying: (
+                    (trying.sample.eval_id, trying.sample.sample_uuid)
+                    == (eval_id, sample_uuid)
+                ),
+            )
+            self._reviews.forget_sample(eval_id, sample_uuid)
         return "ended" if ended else "unknown"
 
     async def _within_limit(
-        self, judging: Awaitable[Answer], what: str, id: str
+        self,
+        judging: Awaitable[Answer],
+        what: str,
+        id: str,
+        attempt: Attempt | None = None,
+        sample: InspectSample | None = None,
     ) -> Answer:
-        with anyio.move_on_after(self._time_limit):
-            return await judging
+        # Judging an eval's request or reply can be stopped while it waits on
+        # a person, with nothing decided: `_stop` cancels its scope, and the
+        # exchange alone is refused.
+        limit = self._time_limit
+        deadline = _DEADLINE.set(time.time() + limit if limit is not None else None)
+        try:
+            with anyio.move_on_after(limit):
+                if attempt is None or sample is None:
+                    return await judging
+                with anyio.CancelScope() as scope:
+                    trying = _Try(attempt, sample, scope)
+                    self._trying.add(trying)
+                    try:
+                        return await judging
+                    finally:
+                        self._trying.discard(trying)
+                return _stopped_answer(attempt)
+        finally:
+            _DEADLINE.reset(deadline)
+        if attempt is not None:
+            for review in attempt.reviews:
+                # a wait the time limit cut short says so
+                if review.resolution == "cancelled" and review.cause == "stopped":
+                    review.cause = "time_limit"
         raise self._out_of_time(what, id)
+
+    async def _supersede(self, signed: SignedSample, attempt: Attempt) -> None:
+        # A client that tries a request again waits only for the later try.
+        # Each earlier try is marked, and kept so, since its reply may arrive
+        # after this: it then asks no person. One that is waiting on a person
+        # now is stopped, with nothing decided, as its answer would be to a
+        # reply nobody receives. The later try is judged afresh, on the reply
+        # it gets, which may not be the one the earlier try was asked about.
+        earlier = await self._state.attempts(signed.request_id, signed.sample.eval_id)
+        if not isinstance(earlier, list):
+            return
+        replaced = [old for old in earlier if old is not attempt]
+        for old in replaced:
+            if old.stopped is None and old.state in ("judging", "awaiting_reply"):
+                old.stopped = "superseded"
+        self._stop(
+            "superseded",
+            lambda trying: any(trying.attempt is old for old in replaced),
+        )
+
+    def _stop(self, cause: Stopped, stops: Callable[[_Try], bool]) -> None:
+        # Nobody waits any more for the tries that match. Each is marked,
+        # whether or not it has asked a person yet, so that judging which
+        # reaches `human()` later asks nobody. One that is waiting on a person
+        # now has its questions closed here, before anything else runs, so
+        # that none is listed or answered from this moment, and its judging is
+        # stopped, with nothing decided. Judging that asks no one is left to
+        # finish, as before: what it decides is kept or dropped by the checks
+        # that follow it.
+        for trying in list(self._trying):
+            if not stops(trying):
+                continue
+            attempt = trying.attempt
+            if attempt.stopped is None:
+                attempt.stopped = cause
+            waiting = [
+                review for review in attempt.reviews if review.resolution is None
+            ]
+            if waiting:
+                self._reviews.close(waiting, attempt.stopped)
+                trying.scope.cancel()
 
     async def records(self, id: str) -> list[Record] | None:
         """What was recorded while a request and its reply were judged.
@@ -830,7 +960,22 @@ class Handler:
         if sample is not None:
             if run.eval_id is None:
                 run.eval_id = sample.eval_id
+            was = run.attempt
             clash = _begin_attempt(run, sample)
+            if run.attempt != was:
+                eval_id, sample_uuid, now = (
+                    sample.eval_id,
+                    sample.sample_uuid,
+                    run.attempt,
+                )
+                self._stop(
+                    "replaced_attempt",
+                    lambda trying: (
+                        (trying.sample.eval_id, trying.sample.sample_uuid)
+                        == (eval_id, sample_uuid)
+                        and trying.sample.attempt != now
+                    ),
+                )
             if clash is not None:
                 return self._judged(clash, proxy, Exchange(replaced=True), attempt)
             # the eval holds the calls a decision acted on without their
@@ -1357,6 +1502,7 @@ class Handler:
 
     async def _judge(self, held: Held, run: Run, step: Step) -> Decision | None:
         recorded = len(held.recorder.records)
+        reviewed = len(held.attempt.reviews) if held.attempt is not None else 0
         # which models judged the step, for the eval: its roles don't reach here
         with noting_models() as models:
             decision = await run_sentinel(
@@ -1379,6 +1525,14 @@ class Handler:
                 decision,
                 held.recorder.records[recorded:],
                 tuple(models),
+                tuple(
+                    review.id
+                    for review in (
+                        held.attempt.reviews[reviewed:]
+                        if held.attempt is not None
+                        else []
+                    )
+                ),
             )
         )
         return decision
@@ -1386,32 +1540,56 @@ class Handler:
     def _asker(self, held: Held) -> AskHuman | None:
         # A run an Inspect eval names, whose request passed the check of its
         # header, has someone to ask: the eval shows the question in Inspect's
-        # approval UI. Any other run has nobody, and is answered with caution.
+        # approval UI. Any other run has nobody, and is answered with caution,
+        # as is every run where evals aren't sent results or the host asks a
+        # person its own way.
         sample = held.proxy.inspect
         request_id = held.proxy.headers.get(REQUEST_ID)
-        if not held.named or sample is None or request_id is None:
+        attempt = held.attempt
+        if (
+            not self._eval_review
+            or not held.named
+            or sample is None
+            or request_id is None
+            or attempt is None
+        ):
             return None
-        explanations = self._eval_results
 
         async def ask(
             step: BeforeToolCall | AfterToolCall,
             escalations: Escalations,
             choices: Sequence[str],
         ) -> HumanAnswer:
-            return await self._reviews.ask(
-                Question(
-                    eval_id=sample.eval_id,
-                    sample_uuid=sample.sample_uuid,
-                    request_id=request_id,
-                    stage=stage(step),
-                    call=step.call,
-                    message=step.message,
-                    view=step.view,
-                    result=step.result if isinstance(step, AfterToolCall) else None,
-                    escalations=escalated(escalations, explanations),
-                    choices=tuple(choices),
-                )
+            # what the try has judged so far, for the eval, should its judging
+            # be stopped here: the steps before this one stand
+            attempt.judged = held.exchange
+            if attempt.stopped is not None:
+                # a try nobody waits for asks nobody: its judging stops
+                # here, with nothing decided
+                for trying in self._trying:
+                    if trying.attempt is attempt:
+                        trying.scope.cancel()
+                await anyio.lowlevel.checkpoint()
+            asked = time.time()
+            closes = asked + self._reviews.timeout
+            deadline = _DEADLINE.get()
+            question = Question(
+                eval_id=sample.eval_id,
+                sample_uuid=sample.sample_uuid,
+                request_id=request_id,
+                stage=stage(step),
+                call=step.call,
+                message=step.message,
+                view=step.view,
+                result=step.result if isinstance(step, AfterToolCall) else None,
+                escalations=escalated(escalations),
+                choices=tuple(choices),
+                closes=min(closes, deadline) if deadline is not None else closes,
+                asked=asked,
             )
+            # kept with the try whether or not the step comes to a decision
+            attempt.reviews.append(question.review)
+            return await self._reviews.ask(question)
 
         return ask
 
@@ -1447,6 +1625,16 @@ class Handler:
             if held.sample_attempt != run.attempt:
                 return refusal
             run.refusal = refusal
+            ended = held.proxy.inspect
+            if ended is not None:
+                self._stop(
+                    "run_ended",
+                    lambda trying: (
+                        trying.attempt is not held.attempt
+                        and (trying.sample.eval_id, trying.sample.sample_uuid)
+                        == (ended.eval_id, ended.sample_uuid)
+                    ),
+                )
             # nothing of the run goes on, so nothing is put back again
             for conversation in run.conversations.values():
                 conversation.rejected.clear()
@@ -1510,6 +1698,35 @@ def _run_key(named: bool, key: str) -> str:
     # opening can work out, so the eval endpoint, which takes a sample's uuid,
     # must never reach one.
     return f"{'sample' if named else 'opening'}:{key}"
+
+
+def _stopped_answer(attempt: Attempt) -> Refuse:
+    # what a try stopped while it waited on a person is refused with
+    if attempt.stopped == "superseded":
+        return _SUPERSEDED
+    if attempt.stopped == "replaced_attempt":
+        return _REPLACED
+    return _RUN_OVER
+
+
+def _settle_stopped(attempt: Attempt, answer: Answer) -> bool:
+    # Whether judging was stopped while it waited on a person, in which case
+    # the attempt is settled here: nothing was decided for it. Its run ending
+    # reads as a request of an ended run does.
+    if attempt.stopped is None or answer is not _stopped_answer(attempt):
+        return False
+    if attempt.stopped in ("superseded", "replaced_attempt"):
+        attempt.not_judged(attempt.stopped)
+    else:
+        # As a request of an ended run reads: the run was ended, by the eval
+        # or by a sentinel at another request, and the judgment says so, with
+        # the steps this try had judged before it was stopped. No decision is
+        # made up for the step that was waiting.
+        if attempt.judged is None:
+            attempt.judged = Exchange()
+        attempt.judged.ended = True
+        attempt.decide("terminate")
+    return True
 
 
 def _begin_attempt(run: Run, sample: InspectSample) -> Refuse | None:

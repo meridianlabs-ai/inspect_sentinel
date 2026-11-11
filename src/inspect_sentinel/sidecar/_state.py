@@ -19,6 +19,7 @@ from ._exchange import Refuse, Request
 from ._host import ListRecorder, Record
 from ._inspect_client import Exchange
 from ._registration import RegisteredTask
+from ._review import Review
 from ._wire import Amendment, Edited, EntryDigest, Format, Offered, Turn
 
 V = TypeVar("V")
@@ -43,8 +44,14 @@ NotJudged: TypeAlias = Literal[
     "provider_error",
     "cut_off",
     "replaced_attempt",
+    "superseded",
 ]
 """Why a request or its reply was not judged."""
+
+Stopped: TypeAlias = Literal[
+    "superseded", "replaced_attempt", "sample_ended", "run_ended"
+]
+"""Why an attempt at a request has nobody waiting for a person's answer to it: a later try of the request began, a later attempt at its sample began, the eval ended its sample, or a sentinel ended its run."""
 
 Outcome: TypeAlias = Literal["proceed", "reject", "terminate"]
 """What an exchange came to."""
@@ -85,6 +92,12 @@ class Attempt:
 
     settled: anyio.Event = field(default_factory=anyio.Event)
     """Set once the attempt is decided or not judged, for a `request_result` that waits."""
+
+    stopped: Stopped | None = None
+    """Why the attempt asks no person, once that is so. A later try of the request marks every earlier one `superseded`, whether or not it is being judged, so that a reply which arrives late asks nobody. An attempt that is waiting on a person when this is set is stopped, with no decision."""
+
+    reviews: list[Review] = field(default_factory=list[Review])
+    """What became of each question a sentinel asked a person during the attempt, in order."""
 
     def decide(self, outcome: Outcome, message: str | None = None) -> None:
         """Mark the attempt decided."""
