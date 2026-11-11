@@ -100,5 +100,22 @@ class Refuse:
     """What the client is told. A client that carries on hands this to the model."""
 
 
-Answer: TypeAlias = Pass | Replace | Refuse
-"""What a proxy does with a request or a reply: what was decided, never how to do it."""
+@dataclass(frozen=True)
+class Respond:
+    """Don't send the request on. Answer the client with this reply in its place.
+
+    It is the reply the sidecar held for a model call while a person decided, given to the eval when it sends the call's request again. The provider is not called a second time.
+    """
+
+    status: int
+    """The provider's HTTP status."""
+
+    headers: Mapping[str, str]
+    """The provider's headers, by lowercase name, `content-type` among them."""
+
+    body: bytes
+    """The reply's body: a JSON reply whole, or a streamed reply's events from first to last."""
+
+
+Answer: TypeAlias = Pass | Replace | Refuse | Respond
+"""What a proxy does with a request or a reply: what was decided, never how to do it. `Respond` comes only for a request."""

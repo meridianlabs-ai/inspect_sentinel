@@ -32,12 +32,16 @@ def sign(token: str, values: Sequence[object]) -> str:
 
 
 def request_values(
-    sample: InspectSample, request_id: str, timestamp: int
+    sample: InspectSample,
+    request_id: str,
+    timestamp: int,
+    held_reply_for: str | None = None,
 ) -> list[object]:
-    """What a model request's `mac` signs: the values of its `x-inspect-context` that name its run, its `x-irid`, and its `timestamp`.
+    """What a model request's `mac` signs: the values of its `x-inspect-context` that name its run, its `x-irid`, and its `timestamp`, then `held_reply_for` where the header has it.
 
-    The `x-irid` is the eval's id for the request, under which the sidecar keeps what it decided of the request for the eval. Signing it means a `mac` made for one request can't put what was decided of its sample under another request's id. The eval's id isn't among the values, since it picks the token, and neither is the model, which names no run.
+    The `x-irid` is the eval's id for the request, under which the sidecar keeps what it decided of the request for the eval. Signing it means a `mac` made for one request can't put what was decided of its sample under another request's id. The eval's id isn't among the values, since it picks the token, and neither is the model, which names no run. `held_reply_for` is signed for the same reason: it names the model call whose held reply the request is for.
     """
+    held = [held_reply_for] if held_reply_for is not None else []
     return [
         "model-request",
         sample.task,
@@ -48,6 +52,7 @@ def request_values(
         sample.attempt_number,
         request_id,
         timestamp,
+        *held,
     ]
 
 

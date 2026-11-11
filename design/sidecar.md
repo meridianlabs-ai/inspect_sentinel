@@ -1024,8 +1024,13 @@ sequenceDiagram
     S-->>I: Taken
     Note over S: The judging goes on: the turn's other calls,<br/>and any other question
     I->>S: request_result: x-irid, wait
-    S-->>I: decided, proceed, with the judgment and the reply
-    Note over I: Read the reply as the provider's,<br/>record the steps, and the agent runs the calls
+    S-->>I: decided, proceed, with the judgment
+    I->>P: The same model request, naming the call in held_reply_for
+    P->>S: judge_request
+    Note over S: The operation's request: its binding matches,<br/>and nothing is judged again
+    S-->>P: respond, with the held reply
+    P-->>I: The held reply, in the provider's place
+    Note over I: Read the reply as any reply from the network,<br/>record the steps, and the agent runs the calls
 ```
 
 The provider is not called again for the operation, whatever is sent.
@@ -1067,7 +1072,7 @@ sequenceDiagram
 - **While the operation is paused or being judged**, a try is answered "pending review", and changes nothing.
 - **At `awaiting_request`, one try is sent on.** The sidecar moves the operation to `awaiting_reply` as it lets that try through, in one step, so two tries sent at once can't both reach the provider. The other is answered "pending review".
 - **At `awaiting_reply`**, a try is answered "pending review": a request is already with the provider.
-- **Once the operation has ended**, decided or not judged, a try is refused, and told the result is read with `request_result`. The provider is not called again.
+- **Once the operation has ended**, a try decided with the turn going on is answered `respond`, with the held reply ("How Inspect gets the held reply" below). Any other try is refused, and told the result is read with `request_result`. The provider is not called again.
 
 **When the provider is called again.** Only after an exchange with it that the sidecar knows to have failed.
 
@@ -1087,12 +1092,16 @@ sequenceDiagram
 - **`body`**, the bytes, as base64: a JSON reply whole, or a streamed reply's events from first to last.
 - **`format`**, the API the request was written in, and **`stream`**, whether the body is a stream of events, so that the eval's own reader of that provider's replies is the one that reads it.
 
-Inspect reads `reply` wherever the call's own exchange didn't bring it the reply:
+**How Inspect gets the held reply.** Inspect gets it through the proxy, as it gets every reply, so its provider code is unchanged. Once the call is decided with the turn going on, Inspect sends the call's request again. The proxy asks the sidecar with `judge_request`, as for any request, and the sidecar answers `respond`, with the held reply's status, headers and body. The proxy sends that to Inspect in the provider's place, and doesn't call the provider. Inspect needs this:
 
-- **A call paused at its reply**, always. Its exchange was answered "pending review".
-- **A call paused at its request, when the response to the try sent on is lost** between the proxy and Inspect. The operation is decided by then, so a request sent again is refused and the provider isn't called a second time. Without the kept reply, nothing could give Inspect the turn.
+- **For a call paused at its reply**, always. Its exchange was answered "pending review".
+- **For a call paused at its request, when the response to the try sent on is lost** between the proxy and Inspect. The operation is decided by then, so the provider isn't called a second time.
 
-Inspect reads it with the code that reads a reply from the network, so the stop reason, the usage and what the provider needs sent back in the next request are what the provider sent, whatever version of inspect_ai the sidecar runs. Inspect takes the reply from its own exchange or from `reply`, never from both, so its usage is counted once. A "pending review" counts no usage, isn't an attempt against the call's retries, and isn't logged as a failed call. The `reply` is separate from the judgment, which redacts as before, and only the eval whose call it is can read it. The sidecar keeps it until the sample ends, so it can be read again if an answer is lost.
+**A request sent for the held reply names the call.** Inspect gives each request it sends a new `x-irid`. So the request sent for a held reply carries `held_reply_for` in `x-inspect-context`, the `x-irid` of the call it is for, and the `mac` covers it: `held_reply_for` is added to the values a model request's `mac` signs, after the `timestamp`, only where the header has it. The sidecar finds the operation by `held_reply_for`, and else by `x-irid`. A request naming a call the sidecar holds nothing for is refused, and not judged. The binding leaves out `x-irid`, as it does the `timestamp` and `mac`. A call that was decided without the turn going on, rejected or ended, has no held reply: a request for it is refused, and Inspect acts on the judgment from `request_result`.
+
+**Which proxies can hand back a held reply.** The Envoy shim sends it as an immediate response. LiteLLM's guardrail is not checked yet: whether a pre-call hook can answer with a whole reply. Middleman's passthrough hook can't: it can pass a request, change its body or refuse it, and never answer it with a reply of its own. Behind Middleman, a question at `tool_call` can't be asked through an eval, a to do.
+
+Inspect reads the held reply with the code that reads any reply from the network, so the stop reason, the usage and what the provider needs sent back in the next request are what the provider sent. The reply reaches Inspect once, so its usage is counted once. A "pending review" counts no usage, isn't an attempt against the call's retries, and isn't logged as a failed call. The `reply` is separate from the judgment, which redacts as before, and only the eval whose call it is can read it. The sidecar keeps it until the sample ends, so it can be read again if an answer is lost.
 
 **A question's expiry is not the operation's end.**
 
@@ -1122,7 +1131,7 @@ Inspect reads it with the code that reads a reply from the network, so the stop 
 
 **What a restart loses.** Paused operations are kept in the sidecar's memory. After a restart, `request_result` reads such a call as `unknown`, and Inspect treats it as it does any call whose records are lost. Keeping a review across a restart belongs with [shared and durable state](sidecar-plan.md#follow-up-shared-and-durable-state).
 
-**An agent without an eval** is not asked this way yet. It has no `request_result` to read, so it needs the request it sends again to be answered from the reply the sidecar kept, which each proxy would have to do. That comes with the external review tool.
+**An agent without an eval** is not asked this way yet. It has no `request_result` to read, so it would need its request sent again to be answered with the held reply, as an eval's is, and a way to learn when to send it. That comes with the external review tool.
 
 ### The tasks folder
 
@@ -2136,6 +2145,7 @@ What this design hasn't settled, checked or built yet, in one place. Each item n
 
 ### To do
 
+- **A held reply behind Middleman and LiteLLM.** Middleman's passthrough hook can't answer a request with a reply of its own, so a question at `tool_call` can't be asked through an eval behind it. Whether LiteLLM's guardrail can answer with the held reply is not checked yet (section 9, "How Inspect gets the held reply").
 - **Reviewer credentials for human review.** [Step 13](sidecar-plan.md#step-13-human-review) first accepts a person's answer on the eval's key, for that eval's own questions, so the feature can be built and tried. A reviewer's own credential, checked by the sidecar, is to replace it, after [step 16](sidecar-plan.md#step-16-tls-on-the-sidecars-listeners) and [#189](https://github.com/meridianlabs-ai/inspect_sentinel/issues/189). Reading results and answering reviews then become separate permissions, where `--no-eval-results` now turns off both.
 - **A reviewer surface outside the eval's process.** A question now hands Inspect a call's arguments before anything is decided, an exception to "Redacted calls" (section 9). Showing questions to a reviewer somewhere the eval's process isn't ends it. Reviewer credentials alone don't.
 - **A turn's calls shown together.** A turn's calls are asked about one at a time ([step 13](sidecar-plan.md#step-13-human-review)).

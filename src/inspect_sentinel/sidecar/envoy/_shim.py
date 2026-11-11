@@ -10,7 +10,16 @@ from typing import Any, TypeVar, cast, get_args
 import grpc
 
 from .._errors import bounded, error_body, refusal_for
-from .._exchange import Answer, Pass, Refuse, Replace, Reply, Request, succeeded
+from .._exchange import (
+    Answer,
+    Pass,
+    Refuse,
+    Replace,
+    Reply,
+    Request,
+    Respond,
+    succeeded,
+)
 from .._handler import Handler
 from .._reply_stream import (
     ERROR_BODY_BYTES,
@@ -331,6 +340,8 @@ class _Exchange:
         )
         if isinstance(answer, Refuse):
             return self._refusal(answer)
+        if isinstance(answer, Respond):
+            return self._held_reply(answer)
         self._forwarded = True
         if isinstance(answer, Pass):
             return pb.ProcessingResponse(
@@ -522,6 +533,25 @@ class _Exchange:
 
     def _not_judged(self, ex: Exception, what: str, *, reply: bool) -> Refuse:
         return refusal_for(ex, what, self._id, reply=reply)
+
+    def _held_reply(self, held: Respond) -> pb.ProcessingResponse:
+        # the reply the sidecar held for the call, sent to the client in the
+        # provider's place: the request goes no further
+        self.finished = True
+        return pb.ProcessingResponse(
+            immediate_response=pb.ImmediateResponse(
+                status=http_status.HttpStatus(
+                    code=cast("http_status.StatusCode.ValueType", held.status)
+                ),
+                headers=pb.HeaderMutation(
+                    set_headers=[
+                        _header(name, value) for name, value in held.headers.items()
+                    ]
+                ),
+                body=held.body,
+                details="sentinel_held_reply",
+            )
+        )
 
     def _refuse(self, status: int, message: str) -> pb.ProcessingResponse:
         return self._refusal(Refuse(status, message))

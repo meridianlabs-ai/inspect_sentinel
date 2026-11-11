@@ -47,6 +47,7 @@ from ._exchange import (
     Replace,
     Reply,
     Request,
+    Respond,
     succeeded,
 )
 from ._history import record_sent, with_sent_ids
@@ -154,6 +155,10 @@ _OTHER_REQUEST = Refuse(
 _OVER = Refuse(
     400,
     "This model call has ended. The eval reads what it came to with request_result.",
+)
+_NO_HELD_CALL = Refuse(
+    400,
+    "The request is for the held reply of a model call this sidecar holds nothing for. It was not judged.",
 )
 
 # how long what is left of a model call that waited for a person is kept once
@@ -495,11 +500,18 @@ class Handler:
             if refused is not None:
                 return Refuse(400, refused)
             binding = _binding(request, signed.sample)
-            operation = self._operations.get((signed.sample.eval_id, signed.request_id))
+            # Inspect gives each request it sends a new `x-irid`, so a request
+            # sent again for a held reply names the call it is for apart
+            held_for = signed.held_reply_for
+            operation = self._operations.get(
+                (signed.sample.eval_id, held_for or signed.request_id)
+            )
             if operation is not None:
                 # a try of a model call a person was asked about: it is not
                 # judged again, whatever becomes of it
                 return await self._reattach(operation, request, binding)
+            if held_for is not None:
+                return _NO_HELD_CALL
             attempt = await self._state.attempt(
                 signed.request_id, request.id, signed.sample.eval_id
             )
@@ -534,6 +546,8 @@ class Handler:
                     # request went nowhere. It is kept until the eval sends
                     # it again, and that try is sent on in its place.
                     waited.held = await self._state.release(request.id)
+                    # judging a request never answers with a held reply
+                    assert not isinstance(answer, Respond)
                     waited.go = answer
                     attempt.state = "awaiting_request"
             elif attempt.judged is not None and attempt.judged.replaced:
@@ -737,6 +751,11 @@ class Handler:
         operation.tries += 1
         attempt = operation.attempt
         if attempt.settled.is_set():
+            reply = operation.reply
+            if attempt.outcome == "proceed" and reply is not None:
+                # the reply the sidecar held, as the proxy passed it on or
+                # would have: the provider is not called again
+                return Respond(reply.status, reply.headers, reply.body)
             return _OVER
         held, go = operation.held, operation.go
         if attempt.state != "awaiting_request" or held is None or go is None:
@@ -985,7 +1004,12 @@ class Handler:
             return f"This sidecar holds no registration of the eval {eval_id!r}, as after a restart, so it can't check the request's {INSPECT_CONTEXT} header. The eval registers its task again."
         problem = unproven(
             kept,
-            request_values(signed.sample, signed.request_id, signed.timestamp),
+            request_values(
+                signed.sample,
+                signed.request_id,
+                signed.timestamp,
+                signed.held_reply_for,
+            ),
             signed.timestamp,
             signed.mac,
             window=self._timestamp_window,
@@ -2228,10 +2252,12 @@ def _binding(request: Request, sample: InspectSample) -> str:
     except UnreadableError:
         # such a request is never judged, so it begins no operation
         format = None
+    # `x-irid` is left out too: a request sent for a held reply has an id of
+    # its own, and names the call in `held_reply_for`
     headers = sorted(
         (name, value)
         for name, value in request.headers.items()
-        if name != INSPECT_CONTEXT
+        if name not in (INSPECT_CONTEXT, REQUEST_ID)
     )
     return hashlib.sha256(
         json.dumps(

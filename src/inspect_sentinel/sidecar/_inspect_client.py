@@ -32,6 +32,7 @@ class _Header(BaseModel):
     attempt: str
     attempt_number: int
     model: str | None = None
+    held_reply_for: str | None = None
     timestamp: int
     mac: str
 
@@ -48,6 +49,8 @@ class SignedSample:
     """When Inspect signed the header, in seconds since the epoch."""
     mac: str
     """The HMAC of the values that name the run, the request's id, and the timestamp."""
+    held_reply_for: str | None = None
+    """The `x-irid` of the model call whose held reply the request is for, where Inspect sends it again to get the reply a sidecar held while a person decided."""
 
 
 def signed_sample(headers: Mapping[str, str]) -> SignedSample | None:
@@ -76,10 +79,15 @@ def signed_sample(headers: Mapping[str, str]) -> SignedSample | None:
             f"The request has an {INSPECT_CONTEXT} header and no {REQUEST_ID} header, which Inspect sends with it."
         )
     return SignedSample(
-        InspectSample(**header.model_dump(exclude={"version", "timestamp", "mac"})),
+        InspectSample(
+            **header.model_dump(
+                exclude={"version", "timestamp", "mac", "held_reply_for"}
+            )
+        ),
         request_id,
         header.timestamp,
         header.mac,
+        header.held_reply_for,
     )
 
 
