@@ -107,7 +107,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--no-eval-results",
         action="store_true",
-        help="Send an Inspect eval only what it acts on: each step's stage, call and decision, and what the turn came to, without the explanations, references, metadata, records or the sentinel's store. A monitor's explanation tells an agent what the monitor looks for, so use this where the eval can't be trusted.",
+        help="Send an Inspect eval only what it acts on: each step's stage, call and decision, and what the turn came to, without the explanations, references, metadata, records or the sentinel's store. A monitor's explanation tells an agent what the monitor looks for, so use this where the eval can't be trusted. The eval is still told how long the judging took and what the judge models' calls cost, by model and role, so it learns which models judge it.",
     )
     parser.add_argument(
         "--tasks-folder",
