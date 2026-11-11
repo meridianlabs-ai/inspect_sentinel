@@ -2809,3 +2809,436 @@ def test_a_reply_kept_alive_then_not_judged_goes_as_unjudged_replies_do(
     # only keepalives went out, so the setting for a reply not judged holds
     expected = b"".join(_MESSAGES.stream()) if let_through else _SIDECAR_ERROR
     assert b"".join(reply) == _KEEPALIVE + expected
+
+
+# what a provider sent with a reply, a cookie and an echoed credential among it
+_PROVIDER_SENT = {
+    "Request-Id": "req_011",
+    "retry-after": "7",
+    "anthropic-ratelimit-requests-remaining": "49",
+    "content-type": "application/json",
+    "Set-Cookie": "session=a",
+    "x-api-key": "a provider's key, echoed",
+}
+_SHOWN_OF_IT = {
+    "request-id": "req_011",
+    "retry-after": "7",
+    "anthropic-ratelimit-requests-remaining": "49",
+}
+
+
+def _kept_with_a_reply(sent: dict[str, str]) -> dict[str, Any]:
+    """LiteLLM's notes on a call whose provider sent these headers, as LiteLLM writes them, beside a header of its own."""
+    helpers: Any = importlib.import_module("litellm.litellm_core_utils.core_helpers")
+    kept: dict[str, Any] = helpers.process_response_headers(httpx.Headers(sent))
+    return {"additional_headers": kept | {"x-litellm-model-group": "a-model"}}
+
+
+class _Stream:
+    """A stream as LiteLLM hands one to a guardrail: its chunks, and LiteLLM's notes on the call."""
+
+    def __init__(self, held: list[Any], notes: dict[str, Any]) -> None:
+        self._held = held
+        self._hidden_params = notes
+
+    def __aiter__(self) -> AsyncIterator[Any]:
+        return _chunks(self._held)
+
+
+@pytest.mark.parametrize(("on", "streamed"), _ROUTES)
+def test_a_reply_is_handed_over_with_the_headers_its_provider_sent(
+    monkeypatch: pytest.MonkeyPatch, on: _On, streamed: bool
+) -> None:
+    calls: list[Any] = []
+    stream_calls: list[Any] = []
+    passed = _result({"action": "pass"})
+    notes = _kept_with_a_reply(_PROVIDER_SENT)
+    data = _data(on)
+
+    async def run(url: str) -> None:
+        guardrail = _make(monkeypatch, url)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, on.call_type)
+            if not streamed:
+                whole = on.whole()
+                if isinstance(whole, dict):
+                    whole["_hidden_params"] = notes
+                else:
+                    whole._hidden_params = notes
+                await guardrail.async_post_call_success_hook(data, _USER, whole)
+                return
+            async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                _USER, _Stream(on.stream(), notes), data
+            ):
+                pass
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_scripted(calls, passed, passed, streamed=stream_calls)) as url:
+        asyncio.run(run(url))
+
+    reply = calls[1]["params"]
+    _fits(_METHODS["judge_reply"]["params"], reply)
+    # by lowercase name, without the cookie, the credential and LiteLLM's own
+    # header, and without the content type, which is said of the reply as
+    # LiteLLM writes it
+    assert reply["headers"] == _SHOWN_OF_IT
+    if streamed:
+        begun = stream_calls[0]
+        assert begun["method"] == "begin_reply"
+        _fits(_METHODS["begin_reply"]["params"], begun["params"])
+        assert begun["params"]["headers"] == _SHOWN_OF_IT
+
+
+@pytest.mark.parametrize(("on", "streamed"), _ROUTES)
+def test_a_reply_litellm_kept_no_headers_with_is_handed_over_with_none(
+    monkeypatch: pytest.MonkeyPatch, on: _On, streamed: bool
+) -> None:
+    # a stream another callback has wrapped carries no notes, and neither
+    # does every route of every LiteLLM version
+    calls: list[Any] = []
+    passed = _result({"action": "pass"})
+
+    with _serving(_scripted(calls, passed, passed)) as url:
+        _exchange(_make(monkeypatch, url), on, _data(on), streamed)
+
+    assert calls[1]["params"]["headers"] == {}
+
+
+class _Logged:
+    """LiteLLM's log of a call on the Messages route, which keeps the provider's response."""
+
+    def __init__(self, answered: httpx.Response) -> None:
+        self.model_call_details = {"httpx_response": answered}
+
+
+@pytest.mark.parametrize("streamed", [False, True], ids=["whole", "streamed"])
+def test_a_messages_reply_is_handed_over_with_the_headers_litellm_logged(
+    monkeypatch: pytest.MonkeyPatch, streamed: bool
+) -> None:
+    # LiteLLM keeps no headers with a reply on this route, in the versions
+    # that keep none with its stream either
+    calls: list[Any] = []
+    passed = _result({"action": "pass"})
+    data = _data(_MESSAGES) | {
+        "litellm_logging_obj": _Logged(httpx.Response(200, headers=_PROVIDER_SENT))
+    }
+
+    with _serving(_scripted(calls, passed, passed)) as url:
+        _exchange(_make(monkeypatch, url), _MESSAGES, data, streamed)
+
+    assert calls[1]["params"]["headers"] == _SHOWN_OF_IT
+
+
+def _rate_limited() -> Exception:
+    """A provider's 429 on an OpenAI route, as LiteLLM raises it once it has made the error its own."""
+    sent = httpx.Response(
+        429,
+        headers={"retry-after": "7", "x-request-id": "req_1", "set-cookie": "a=b"},
+        json={"error": {"message": "Slow down.", "type": "rate_limit_error"}},
+        request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+    )
+    mapping: Any = importlib.import_module(
+        "litellm.litellm_core_utils.exception_mapping_utils"
+    )
+    # the SDK's error as it raises one for the response; which `httpx` its
+    # types name differs between the SDK versions the two LiteLLMs bring
+    raised: Any = openai.RateLimitError
+    try:
+        mapping.exception_type(
+            model="a-model",
+            original_exception=raised("Slow down.", response=sent, body=sent.json()),
+            custom_llm_provider="openai",
+        )
+    except Exception as ex:
+        return ex
+    raise AssertionError("LiteLLM raised nothing for a provider's error.")
+
+
+_OVERLOADED = (
+    '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+)
+
+
+def _overloaded() -> Exception:
+    """A provider's 529 on the Messages route, which LiteLLM raises as the provider's own."""
+    errors: Any = importlib.import_module("litellm.llms.anthropic.common_utils")
+    error: Exception = errors.AnthropicError(
+        status_code=529,
+        message=_OVERLOADED,
+        headers=httpx.Headers({"retry-after": "3", "request-id": "req_2"}),
+    )
+    return error
+
+
+def _timed_out() -> Exception:
+    """A provider that didn't answer in time, which gave LiteLLM no reply at all."""
+    litellm: Any = importlib.import_module("litellm")
+    error: Exception = litellm.Timeout(
+        message="The provider took too long.", model="a-model", llm_provider="openai"
+    )
+    return error
+
+
+def _failed_after(
+    monkeypatch: pytest.MonkeyPatch,
+    on: _On,
+    failure: Exception,
+    *answers: Any,
+    before: str = "nothing",
+    again: bool = False,
+    **settings: Any,
+) -> tuple[list[Any], Any]:
+    """Put a request through the guardrail, then tell it the call failed, as LiteLLM does: the calls the sidecar got, and what the failure hook returned.
+
+    `before` is what LiteLLM had done by then: `nothing` beyond sending the request on, shown the guardrail a `reply`, or begun a `stream`. With `again`, the failure is told twice.
+    """
+    calls: list[Any] = []
+    data = _data(on)
+
+    async def run(url: str) -> Any:
+        guardrail = _make(monkeypatch, url, **settings)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, on.call_type)
+            if before == "reply":
+                with pytest.raises(HTTPException):
+                    await guardrail.async_post_call_success_hook(
+                        data, _USER, on.whole()
+                    )
+            if before == "stream":
+                async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                    _USER, _chunks(on.stream()), data
+                ):
+                    pass
+            returned = await guardrail.async_post_call_failure_hook(
+                data, failure, _USER
+            )
+            if again:
+                await guardrail.async_post_call_failure_hook(data, failure, _USER)
+            return returned
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_scripted(calls, *answers)) as url:
+        return calls, asyncio.run(run(url))
+
+
+@pytest.mark.parametrize(
+    ("on", "failure", "status", "headers", "says"),
+    [
+        pytest.param(
+            _CHAT,
+            _rate_limited,
+            429,
+            {"retry-after": "7", "x-request-id": "req_1"},
+            b"Slow down.",
+            id="a provider's error LiteLLM made its own",
+        ),
+        pytest.param(
+            _MESSAGES,
+            _overloaded,
+            529,
+            {"retry-after": "3", "request-id": "req_2"},
+            _OVERLOADED.encode(),
+            id="a provider's error as the provider wrote it",
+        ),
+        pytest.param(
+            _CHAT,
+            _timed_out,
+            408,
+            {},
+            b"The provider took too long.",
+            id="a provider that gave no reply",
+        ),
+        pytest.param(
+            _RESPONSES,
+            lambda: RuntimeError("Something broke."),
+            500,
+            {},
+            b"Something broke.",
+            id="an error with no status",
+        ),
+    ],
+)
+def test_a_request_that_came_to_an_error_is_told_to_the_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+    on: _On,
+    failure: Callable[[], Exception],
+    status: int,
+    headers: dict[str, str],
+    says: bytes,
+) -> None:
+    passed = _result({"action": "pass"})
+
+    calls, returned = _failed_after(monkeypatch, on, failure(), passed, passed)
+
+    # LiteLLM's own error goes to the caller, unchanged
+    assert returned is None
+    asked, told = calls
+    assert (asked["method"], told["method"]) == ("judge_request", "judge_reply")
+    reply = told["params"]
+    _fits(_METHODS["judge_reply"]["params"], reply)
+    # the reply to the request the sidecar let through
+    assert reply["id"] == asked["params"]["id"]
+    assert (reply["provider"], reply["format"]) == (on.provider, on.format)
+    # the status LiteLLM answers its caller with
+    assert reply["status"] == status
+    # the provider's headers, where it replied, without its cookie, its
+    # content type or the length of a body LiteLLM may not have kept
+    shown = {
+        name: value
+        for name, value in reply["headers"].items()
+        if name != "content-length"
+    }
+    assert shown == headers
+    body = base64.b64decode(reply["body"])
+    assert says in body
+    # what LiteLLM kept of the body is JSON only where it kept the provider's own
+    is_json = body.startswith(b"{")
+    assert reply["content_type"] == ("application/json" if is_json else "text/plain")
+
+
+def test_a_providers_error_is_told_as_the_provider_wrote_it_on_the_messages_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    passed = _result({"action": "pass"})
+
+    calls, _ = _failed_after(monkeypatch, _MESSAGES, _overloaded(), passed, passed)
+
+    reply = calls[1]["params"]
+    assert base64.b64decode(reply["body"]) == _OVERLOADED.encode()
+    assert reply["content_type"] == "application/json"
+
+
+@pytest.mark.parametrize(
+    ("before", "answers", "methods"),
+    [
+        pytest.param(
+            "reply",
+            [_result({"action": "pass"}), _result(_REFUSAL)],
+            ["judge_request", "judge_reply"],
+            id="a reply the sentinel refused",
+        ),
+        pytest.param(
+            "stream",
+            [_result({"action": "pass"}), _result({"action": "pass"})],
+            ["judge_request", "judge_reply"],
+            id="a stream that had begun",
+        ),
+    ],
+)
+def test_a_failure_after_the_sidecar_was_shown_a_reply_is_not_told_to_it(
+    monkeypatch: pytest.MonkeyPatch, before: str, answers: list[Any], methods: list[str]
+) -> None:
+    # LiteLLM calls the failure hook for a refusal of the reply too, and for
+    # a stream that fails once it has begun, which the stream's own end tells
+    refusal = HTTPException(403, "Not allowed.")
+
+    calls, returned = _failed_after(
+        monkeypatch, _MESSAGES, refusal, *answers, before=before
+    )
+
+    assert returned is None
+    assert [call["method"] for call in calls] == methods
+
+
+def test_a_failure_is_told_to_the_sidecar_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    passed = _result({"action": "pass"})
+
+    calls, _ = _failed_after(
+        monkeypatch, _CHAT, _rate_limited(), passed, passed, passed, again=True
+    )
+
+    assert [call["method"] for call in calls] == ["judge_request", "judge_reply"]
+
+
+def test_a_failure_of_a_request_the_sidecar_never_let_through_is_not_told_to_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Any] = []
+    refused, unread = _data(_CHAT), _data(_CHAT)
+
+    async def run(url: str) -> None:
+        guardrail = _make(monkeypatch, url)
+        try:
+            # a request the sidecar refused
+            with pytest.raises(HTTPException) as raised:
+                await guardrail.async_pre_call_hook(
+                    _USER, None, refused, _CHAT.call_type
+                )
+            await guardrail.async_post_call_failure_hook(refused, raised.value, _USER)
+            # and one on a route the guardrail doesn't read
+            await guardrail.async_pre_call_hook(_USER, None, unread, "aembedding")
+            await guardrail.async_post_call_failure_hook(unread, _rate_limited(), _USER)
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_scripted(calls, _result(_REFUSAL))) as url:
+        asyncio.run(run(url))
+
+    assert [call["method"] for call in calls] == ["judge_request"]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(_result(_REFUSAL), id="a refusal, as for a call closed meanwhile"),
+        pytest.param(
+            {"jsonrpc": "2.0", "id": 1, "error": {"code": -32004, "message": "No."}},
+            id="no usable answer",
+        ),
+    ],
+)
+@pytest.mark.parametrize("fallback", ["fail_closed", "fail_open"])
+def test_what_the_sidecar_says_of_a_failure_doesnt_change_litellms_error(
+    monkeypatch: pytest.MonkeyPatch, answer: Any, fallback: str
+) -> None:
+    passed = _result({"action": "pass"})
+
+    calls, returned = _failed_after(
+        monkeypatch,
+        _CHAT,
+        _rate_limited(),
+        passed,
+        answer,
+        unreachable_fallback=fallback,
+    )
+
+    # nothing is returned or raised, either of which LiteLLM would answer
+    # its caller with in place of the provider's error
+    assert returned is None
+    assert [call["method"] for call in calls] == ["judge_request", "judge_reply"]
+
+
+def test_a_real_sidecar_takes_a_providers_error_and_lets_it_go_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    data = _data(_MESSAGES)
+    answers: list[tuple[str, Any]] = []
+
+    async def run(url: str) -> None:
+        guardrail = _make(monkeypatch, url)
+        ask = guardrail._call
+
+        async def kept(method: str, params: dict[str, Any], *more: Any) -> Any:
+            answer = await ask(method, params, *more)
+            answers.append((method, answer))
+            return answer
+
+        monkeypatch.setattr(guardrail, "_call", kept)
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, _MESSAGES.call_type)
+            await guardrail.async_post_call_failure_hook(data, _overloaded(), _USER)
+        finally:
+            await guardrail.aclose()
+
+    with _sidecar("Oslo", tmp_path) as url:
+        asyncio.run(run(url))
+
+    # a provider's error goes on unjudged
+    assert answers == [
+        ("judge_request", {"action": "pass"}),
+        ("judge_reply", {"action": "pass"}),
+    ]
