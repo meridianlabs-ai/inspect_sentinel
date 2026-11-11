@@ -23,6 +23,7 @@ from ._http import HEALTH_PATH, health_route
 from ._proxy_endpoint import proxy_app
 from ._registration import MAX_TASK_EXPIRY, MAX_TASK_REGISTRATIONS, read_tasks_folder
 from ._reply_stream import KEEPALIVE_SECONDS
+from ._review import REVIEW_TIMEOUT
 from ._sign import TIMESTAMP_WINDOW
 from ._state import RUN_EXPIRY, MemoryState
 
@@ -160,6 +161,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="SECONDS",
         help=f"How far the timestamp of an Inspect eval's model request, or of its call to the endpoint for evals, may be from the sidecar's clock. One further is refused, so a signature copied from a log is of no use once the window has passed. {TIMESTAMP_WINDOW:g} by default.",
     )
+    parser.add_argument(
+        "--review-timeout",
+        type=float,
+        default=REVIEW_TIMEOUT,
+        metavar="SECONDS",
+        help=f"How long a step waits for a person's answer when the sentinel asks one during an Inspect eval, which shows the question in its approval UI. With no answer in time, the step is answered with caution: rejected if that was offered, otherwise the run is ended. A --time-limit shorter than this cuts the wait short. {REVIEW_TIMEOUT:g} by default.",
+    )
 
 
 class EnvoySettings(BaseModel):
@@ -197,6 +205,7 @@ class ServerSettings(BaseModel):
     max_body_bytes: int | None = None
     run_expiry: float | None = None
     timestamp_window: float | None = None
+    review_timeout: float | None = None
     release: Literal["whole", "early"] | None = None
     keepalive: float | None = None
 
@@ -231,6 +240,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "max_body_bytes",
             "run_expiry",
             "timestamp_window",
+            "review_timeout",
             "release",
             "keepalive",
         )
@@ -361,6 +371,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         release=arguments.release,
         keepalive=arguments.keepalive or None,
         timestamp_window=arguments.timestamp_window,
+        review_timeout=arguments.review_timeout,
     )
 
 

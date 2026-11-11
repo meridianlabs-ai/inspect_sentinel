@@ -20,9 +20,9 @@ from inspect_ai.util import Store
 from pydantic import JsonValue
 
 from .._context import EvalContext, InspectSample, ProxyContext
-from .._host import HostNative
+from .._host import HostNative, HumanAnswer
 from .._integration import HostContext, resolve_sentinel, run_sentinel
-from .._report import Decision
+from .._report import Decision, Escalations
 from .._step import (
     AfterGenerate,
     AfterToolCall,
@@ -45,10 +45,11 @@ from ._exchange import (
     succeeded,
 )
 from ._history import record_sent, with_sent_ids
-from ._host import Record, RunHost, SidecarHost, noting_models, stage
+from ._host import AskHuman, Record, RunHost, SidecarHost, noting_models, stage
 from ._inspect_ai import VIEWED_TOOLS, tool_call_view
 from ._inspect_client import (
     INSPECT_CONTEXT,
+    REQUEST_ID,
     Exchange,
     Judged,
     SignedSample,
@@ -70,6 +71,7 @@ from ._registration import (
     UnregisteredSampleError,
 )
 from ._reply_stream import KEEPALIVE_SECONDS, PENDING_BYTES, ReplyStart, ReplyStream
+from ._review import REVIEW_TIMEOUT, Question, Reviews, escalated
 from ._sign import TIMESTAMP_WINDOW, call_values, request_values, unproven
 from ._state import (
     MADE_KEPT,
@@ -181,6 +183,7 @@ class Handler:
         release: Literal["whole", "early"] = "whole",
         keepalive: float | None = KEEPALIVE_SECONDS,
         timestamp_window: float = TIMESTAMP_WINDOW,
+        review_timeout: float = REVIEW_TIMEOUT,
     ) -> None:
         """Create a handler.
 
@@ -200,9 +203,10 @@ class Handler:
             release: How a streamed reply is passed on. `whole`, the default, holds every reply until the sentinel has judged it. `early` passes on the text and reasoning that come before the turn's first tool call as they arrive, holds the rest of the turn, and judges it once the turn has ended, as `whole` does. The sentinel is given the whole turn either way.
             keepalive: Under early release, the longest a client is sent nothing while a streamed reply is held, in seconds, after which it is sent a keepalive, an SSE comment that every provider SDK skips. The keepalive sends the status, so a turn refused after it is refused with an error event in the stream. None sends no keepalives.
             timestamp_window: How far, in seconds, the `timestamp` of an Inspect eval's model request or call to the endpoint for evals may be from this process's clock. One further is refused, so a `mac` copied from a log is of no use once the window has passed.
+            review_timeout: How long a step waits for a person's answer, in seconds, when a sentinel asks one during a run an Inspect eval names. The eval finds the question with `pending_questions` and answers it with `answer_question`. With no answer in time, the step is answered with caution: `reject` if offered, otherwise `terminate`. A `time_limit` shorter than this cuts the wait short, as it covers all of judging.
 
         Raises:
-            ValueError: If `keepalive` or `timestamp_window` isn't a positive number of seconds.
+            ValueError: If `keepalive`, `timestamp_window` or `review_timeout` isn't a positive number of seconds.
         """
         if keepalive is not None and not keepalive > 0:
             raise ValueError(
@@ -213,6 +217,7 @@ class Handler:
                 f"The timestamp window is some seconds, not {timestamp_window}."
             )
         self._timestamp_window = timestamp_window
+        self._reviews = Reviews(review_timeout)
         self._release: Literal["whole", "early"] = release
         self._keepalive = keepalive
         self._protocol = resolve_sentinel(sentinel)
@@ -252,6 +257,11 @@ class Handler:
     def timestamp_window(self) -> float:
         """How far, in seconds, an Inspect eval's `timestamp` may be from this process's clock."""
         return self._timestamp_window
+
+    @property
+    def reviews(self) -> Reviews:
+        """The questions a sentinel asked a person, held for Inspect evals to answer."""
+        return self._reviews
 
     async def request(self, request: Request) -> Answer:
         """Judge a request before the proxy sends it.
@@ -466,7 +476,12 @@ class Handler:
         )
 
     async def holds_eval(
-        self, eval_id: str, method: str, timestamp: int, mac: str
+        self,
+        eval_id: str,
+        method: str,
+        timestamp: int,
+        mac: str,
+        signed: Sequence[object] | None = None,
     ) -> bool:
         """Whether the sidecar keeps a secret for the eval, and the caller proved it holds it.
 
@@ -475,6 +490,7 @@ class Handler:
             method: The method called.
             timestamp: When the caller signed, in seconds since the epoch.
             mac: The caller's HMAC of the method, the eval's id and the timestamp, made with the eval's secret.
+            signed: What the `mac` signs, where the method signs more than those three, as `answer_question` does.
 
         Returns:
             True if the caller proved it holds the eval's secret; False if the sidecar keeps none for the eval, so it holds nothing of the eval for anyone, as after a restart.
@@ -487,7 +503,7 @@ class Handler:
             return False
         problem = unproven(
             kept,
-            call_values(method, eval_id, timestamp),
+            call_values(method, eval_id, timestamp) if signed is None else signed,
             timestamp,
             mac,
             window=self._timestamp_window,
@@ -1346,7 +1362,7 @@ class Handler:
             decision = await run_sentinel(
                 self._protocol,
                 HostContext(
-                    host=RunHost(self._host, run.eval),
+                    host=RunHost(self._host, run.eval, self._asker(held)),
                     recorder=held.recorder,
                     store=held.store,
                     proxy=held.proxy,
@@ -1366,6 +1382,38 @@ class Handler:
             )
         )
         return decision
+
+    def _asker(self, held: Held) -> AskHuman | None:
+        # A run an Inspect eval names, whose request passed the check of its
+        # header, has someone to ask: the eval shows the question in Inspect's
+        # approval UI. Any other run has nobody, and is answered with caution.
+        sample = held.proxy.inspect
+        request_id = held.proxy.headers.get(REQUEST_ID)
+        if not held.named or sample is None or request_id is None:
+            return None
+        explanations = self._eval_results
+
+        async def ask(
+            step: BeforeToolCall | AfterToolCall,
+            escalations: Escalations,
+            choices: Sequence[str],
+        ) -> HumanAnswer:
+            return await self._reviews.ask(
+                Question(
+                    eval_id=sample.eval_id,
+                    sample_uuid=sample.sample_uuid,
+                    request_id=request_id,
+                    stage=stage(step),
+                    call=step.call,
+                    message=step.message,
+                    view=step.view,
+                    result=step.result if isinstance(step, AfterToolCall) else None,
+                    escalations=escalated(escalations, explanations),
+                    choices=tuple(choices),
+                )
+            )
+
+        return ask
 
     def _judged(
         self,

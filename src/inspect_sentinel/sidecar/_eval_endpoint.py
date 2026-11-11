@@ -5,7 +5,8 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from inspect_ai.tool import ToolCall
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_validator
 from pydantic.json_schema import GenerateJsonSchema, models_json_schema
 from starlette.requests import Request as HttpRequest
 from starlette.responses import JSONResponse, Response
@@ -16,10 +17,13 @@ from ._handler import MAX_RESULT_WAIT, Handler, RequestResult
 from ._http import read_within
 from ._inspect_client import Judgment, judgment, record_json
 from ._json_rpc import (
+    ANSWER_REFUSED,
     METHOD_NOT_FOUND,
+    QUESTION_ANSWERED,
     REGISTRATION_REFUSED,
     REGISTRATIONS_FULL,
     UNAUTHORIZED,
+    UNKNOWN_QUESTION,
     UNKNOWN_SAMPLE,
     UNKNOWN_TASK,
     RpcError,
@@ -35,7 +39,15 @@ from ._registration import (
     TaskRegistration,
     UnknownTaskError,
 )
-from ._sign import MIN_TOKEN_LENGTH
+from ._review import (
+    ANSWERABLE,
+    MAX_QUESTIONS_WAIT,
+    AnsweredError,
+    ChoiceError,
+    Question,
+    UnknownQuestionError,
+)
+from ._sign import MIN_TOKEN_LENGTH, answer_values
 from ._state import NotJudged, Outcome
 
 PATH = "/sentinel/v1"
@@ -205,6 +217,98 @@ class EndSampleResult(BaseModel):
     )
 
 
+class PendingQuestionsParams(EvalCall):
+    """Parameters of `pending_questions`: the eval's questions for a person that nobody has answered yet."""
+
+    sample_uuid: str | None = Field(
+        default=None,
+        description="Only this sample's questions, if given, by its uuid as `x-inspect-context` gives it. Inspect asks for the sample whose model call is waiting.",
+    )
+    wait: float = Field(
+        default=0,
+        ge=0,
+        description=f"How long to wait, in seconds, while there are none, at most {MAX_QUESTIONS_WAIT:g}. The answer comes as soon as there is one.",
+    )
+
+
+class Escalation(BaseModel):
+    """An escalation the asking protocol was handed."""
+
+    name: str = Field(description="The escalating monitor's or protocol's name.")
+    explanation: str | None = Field(
+        default=None,
+        description="Why it escalated. Left out where the sidecar doesn't send results, as a monitor's explanation tells an agent what it looks for.",
+    )
+
+
+class QuestionAsked(BaseModel):
+    """A question a sentinel asked a person, about a tool call in one of the eval's model requests, which the step waits on."""
+
+    id: str = Field(description="The question's id, which `answer_question` names.")
+    sample_uuid: str = Field(description="The sample whose run asked.")
+    request_id: str = Field(
+        description="The eval's id for the model request the call was found in, its `x-irid`. That request waits on the answer."
+    )
+    stage: Literal["tool_call", "tool_result"] = Field(
+        description="`tool_call` before the call runs, `tool_result` once it has run and its result is about to reach the model."
+    )
+    call: dict[str, Any] = Field(
+        description="The call, as Inspect writes a `ToolCall`, with its arguments. Show it to the person; it is not to be put into the agent's conversation."
+    )
+    message: str = Field(description="The assistant's text alongside the call.")
+    view: dict[str, Any] = Field(
+        description="How the call is shown, as Inspect writes a `ToolCallView`."
+    )
+    result: dict[str, Any] | None = Field(
+        default=None,
+        description="The call's result, as Inspect writes a `ChatMessageTool`, at `tool_result`.",
+    )
+    escalations: list[Escalation] = Field(
+        description="The escalations the asking protocol was handed, in order: who escalated, and why."
+    )
+    choices: list[str] = Field(
+        description=f"What the person may pick. An answer is one of these, and one of {', '.join(ANSWERABLE)}."
+    )
+    asked: float = Field(
+        description="When the question was asked, in seconds since the epoch, for showing how long it has waited."
+    )
+    closes: float = Field(
+        description="When the step stops waiting, in seconds since the epoch, after which it is answered with caution, `reject` if offered and otherwise `terminate`, and the question is gone."
+    )
+
+
+class PendingQuestionsResult(BaseModel):
+    """The eval's unanswered questions, oldest first."""
+
+    questions: list[QuestionAsked]
+
+
+class AnswerQuestionParams(EvalCall):
+    """Parameters of `answer_question`: what the person picked.
+
+    For now the answer comes on the eval's token, and the sidecar takes it only for a question from one of the eval's own runs. Reviewers are to answer on credentials of their own, which the sidecar checks: until then, a client that holds the eval's token can answer that eval's questions.
+    """
+
+    id: str = Field(description="The question's id.")
+    decision: Literal["approve", "reject", "terminate"] = Field(
+        description="What the person picked, one of the question's `choices`."
+    )
+    reason: str | None = Field(
+        default=None,
+        description="The person's reason, if they gave one. At `reject` it is what the model is told.",
+    )
+    mac: str = Field(
+        description='An HMAC-SHA256, in hex, made with the eval\'s token over `json.dumps([str(v) for v in [method, eval_id, timestamp, id, decision, reason or ""]], separators=(",", ":"))`. Unlike other calls\' `mac`, it covers the answer, so one copied from an answer can\'t send another.'
+    )
+
+
+class AnswerQuestionResult(BaseModel):
+    """The answer the step was given. Sending the same answer again gives the same result."""
+
+    id: str
+    decision: Literal["approve", "reject", "terminate"]
+
+
 _METHODS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "register_task": (RegisterTaskParams, RegisterTaskResult),
     "complete_registration": (
@@ -214,6 +318,8 @@ _METHODS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "request_result": (RequestResultParams, RequestResultResult),
     "sample_result": (SampleResultParams, SampleResultResult),
     "end_sample": (EndSampleParams, EndSampleResult),
+    "pending_questions": (PendingQuestionsParams, PendingQuestionsResult),
+    "answer_question": (AnswerQuestionParams, AnswerQuestionResult),
 }
 
 _RESULTS = frozenset({"sample_result"})
@@ -234,6 +340,18 @@ _ERRORS: dict[int, tuple[str, str]] = {
     UNKNOWN_TASK: (
         "unknown_task",
         "The sidecar holds no registration of the task by the eval: it was never registered, or is no longer kept. The eval registers the task again, then completes the sample's registration. Answered to a `register_task` with a `mac` when the sidecar holds no token for the eval, as after a restart or once the token expired: the eval registers again with its token.",
+    ),
+    UNKNOWN_QUESTION: (
+        "unknown_question",
+        "The sidecar holds no such question for the eval: it was another eval's, or it closed when nobody answered in time, and the step was answered with caution.",
+    ),
+    QUESTION_ANSWERED: (
+        "question_answered",
+        "The question was already answered, with another choice or reason. The first answer stands.",
+    ),
+    ANSWER_REFUSED: (
+        "answer_refused",
+        "The answer picks a choice the question doesn't offer.",
     ),
     UNAUTHORIZED: (
         "unauthorized",
@@ -357,6 +475,8 @@ async def _answered(
             fixed=granted is None,
             expiry=granted,
         )
+    if isinstance(given, AnswerQuestionParams):
+        return await _answer_question(handler, given)
     assert isinstance(given, EvalCall)
     # a sidecar that keeps no token for the eval holds nothing of it
     holds = await handler.holds_eval(given.eval_id, method, given.timestamp, given.mac)
@@ -439,7 +559,77 @@ async def _answered(
                 else "unknown"
             ),
         )
+    if isinstance(given, PendingQuestionsParams):
+        # a sidecar that holds nothing of the eval holds no question of it
+        found = (
+            await handler.reviews.pending(given.eval_id, given.sample_uuid, given.wait)
+            if holds
+            else []
+        )
+        return PendingQuestionsResult(
+            questions=[
+                _question(question, handler.reviews.timeout, results)
+                for question in found
+            ]
+        )
     raise TypeError(f"No method takes {type(given).__name__}.")
+
+
+async def _answer_question(
+    handler: Handler, given: AnswerQuestionParams
+) -> AnswerQuestionResult:
+    signed = answer_values(
+        given.eval_id, given.timestamp, given.id, given.decision, given.reason
+    )
+    if not await handler.holds_eval(
+        given.eval_id, "answer_question", given.timestamp, given.mac, signed
+    ):
+        raise RpcError(
+            UNKNOWN_QUESTION,
+            f"The sidecar holds nothing of the eval {given.eval_id!r}, so no question of it.",
+        )
+    try:
+        question = handler.reviews.answer(
+            given.eval_id, given.id, given.decision, given.reason
+        )
+    except UnknownQuestionError as ex:
+        raise RpcError(UNKNOWN_QUESTION, str(ex)) from None
+    except AnsweredError as ex:
+        raise RpcError(QUESTION_ANSWERED, str(ex)) from None
+    except ChoiceError as ex:
+        raise RpcError(ANSWER_REFUSED, str(ex)) from None
+    assert question.answer is not None
+    return AnswerQuestionResult(id=question.id, decision=given.decision)
+
+
+def _question(question: Question, timeout: float, results: bool) -> QuestionAsked:
+    return QuestionAsked(
+        id=question.id,
+        sample_uuid=question.sample_uuid,
+        request_id=question.request_id,
+        stage="tool_result" if question.stage == "tool_result" else "tool_call",
+        call=_CALL.dump_python(question.call, mode="json", exclude_none=True),
+        message=question.message,
+        view=question.view.model_dump(mode="json", exclude_none=True),
+        result=(
+            question.result.model_dump(mode="json", exclude_none=True)
+            if question.result is not None
+            else None
+        ),
+        escalations=[
+            Escalation(
+                name=escalation.name,
+                explanation=escalation.explanation if results else None,
+            )
+            for escalation in question.escalations
+        ],
+        choices=list(question.choices),
+        asked=question.asked,
+        closes=question.asked + timeout,
+    )
+
+
+_CALL = TypeAdapter(ToolCall)
 
 
 def schema() -> dict[str, Any]:

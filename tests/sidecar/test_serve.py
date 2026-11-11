@@ -123,6 +123,7 @@ def test_defaults_are_one_port_and_no_limits() -> None:
     assert arguments.max_body_bytes == 64 * 1024 * 1024
     assert arguments.run_expiry == 24 * 60 * 60
     assert arguments.timestamp_window == 300
+    assert arguments.review_timeout == 600
     assert arguments.no_eval_results is False
     assert arguments.tasks_folder is None
     assert arguments.no_runtime_task_registration is False
@@ -252,6 +253,7 @@ server:
   task_expiry: 60
   max_task_registrations: 5
   timestamp_window: 60
+  review_timeout: 120
   envoy:
     port: 9001
     headers: [x-team]
@@ -277,6 +279,7 @@ def test_the_server_stanza_sets_what_the_options_would(tmp_path: Path) -> None:
     assert arguments.task_expiry == 60
     assert arguments.max_task_registrations == 5
     assert arguments.timestamp_window == 60
+    assert arguments.review_timeout == 120
     assert (arguments.envoy_port, arguments.envoy_header) == (9001, ["x-team"])
     # the tasks folder is found beside the configuration file
     assert arguments.tasks_folder == str(tmp_path.resolve() / "tasks")
@@ -483,6 +486,19 @@ async def test_a_handler_is_built_with_the_stanzas_timestamp_window(
     handler = handler_from_arguments(parse_arguments(["--sentinel", str(config)]))
 
     assert handler.timestamp_window == 45
+
+
+def test_the_handler_waits_for_a_person_as_long_as_the_arguments_say() -> None:
+    handler = handler_from_arguments(
+        _arguments("--sentinel", "no_tokyo", "--review-timeout", "90")
+    )
+
+    assert handler.reviews.timeout == 90
+
+
+def test_a_review_timeout_of_no_time_is_an_error() -> None:
+    with pytest.raises(ValueError, match="review timeout"):
+        Handler(weather_rule(), review_timeout=0)
 
 
 def test_a_timestamp_window_of_no_time_is_an_error() -> None:

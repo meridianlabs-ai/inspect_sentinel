@@ -1,6 +1,87 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
+    "AnswerQuestionParams": {
+      "description": "Parameters of `answer_question`: what the person picked.\n\nFor now the answer comes on the eval's token, and the sidecar takes it only for a question from one of the eval's own runs. Reviewers are to answer on credentials of their own, which the sidecar checks: until then, a client that holds the eval's token can answer that eval's questions.",
+      "properties": {
+        "eval_id": {
+          "description": "The eval's id, as its requests name it.",
+          "title": "Eval Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "When the caller signed, in whole seconds since the epoch. A call whose timestamp is further from the sidecar's clock than its window, five minutes by default, is refused with `unauthorized`.",
+          "title": "Timestamp",
+          "type": "integer"
+        },
+        "mac": {
+          "description": "An HMAC-SHA256, in hex, made with the eval's token over `json.dumps([str(v) for v in [method, eval_id, timestamp, id, decision, reason or \"\"]], separators=(\",\", \":\"))`. Unlike other calls' `mac`, it covers the answer, so one copied from an answer can't send another.",
+          "title": "Mac",
+          "type": "string"
+        },
+        "id": {
+          "description": "The question's id.",
+          "title": "Id",
+          "type": "string"
+        },
+        "decision": {
+          "description": "What the person picked, one of the question's `choices`.",
+          "enum": [
+            "approve",
+            "reject",
+            "terminate"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The person's reason, if they gave one. At `reject` it is what the model is told.",
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "eval_id",
+        "timestamp",
+        "mac",
+        "id",
+        "decision"
+      ],
+      "title": "AnswerQuestionParams",
+      "type": "object"
+    },
+    "AnswerQuestionResult": {
+      "description": "The answer the step was given. Sending the same answer again gives the same result.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "approve",
+            "reject",
+            "terminate"
+          ],
+          "title": "Decision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "decision"
+      ],
+      "title": "AnswerQuestionResult",
+      "type": "object"
+    },
     "ChatMessageAssistant": {
       "description": "Assistant chat message.",
       "properties": {
@@ -1243,6 +1324,34 @@
       "title": "EndSampleResult",
       "type": "object"
     },
+    "Escalation": {
+      "description": "An escalation the asking protocol was handed.",
+      "properties": {
+        "name": {
+          "description": "The escalating monitor's or protocol's name.",
+          "title": "Name",
+          "type": "string"
+        },
+        "explanation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why it escalated. Left out where the sidecar doesn't send results, as a monitor's explanation tells an agent what it looks for.",
+          "title": "Explanation"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Escalation",
+      "type": "object"
+    },
     "JsonValue": {},
     "Judgment": {
       "description": "What a sentinel decided during one exchange, for an Inspect eval, which asks for it with `request_result`.",
@@ -1329,6 +1438,171 @@
         "steps"
       ],
       "title": "Judgment",
+      "type": "object"
+    },
+    "PendingQuestionsParams": {
+      "description": "Parameters of `pending_questions`: the eval's questions for a person that nobody has answered yet.",
+      "properties": {
+        "eval_id": {
+          "description": "The eval's id, as its requests name it.",
+          "title": "Eval Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "When the caller signed, in whole seconds since the epoch. A call whose timestamp is further from the sidecar's clock than its window, five minutes by default, is refused with `unauthorized`.",
+          "title": "Timestamp",
+          "type": "integer"
+        },
+        "mac": {
+          "description": "An HMAC-SHA256, in hex, made with the eval's token over `json.dumps([str(v) for v in [method, eval_id, timestamp]], separators=(\",\", \":\"))`, such as `[\"sample_result\",\"eval_789\",\"1794182400\"]`. It proves only that the caller holds the token, not the call's other parameters. A call whose `mac` isn't made with the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps no token for the eval, as after a restart, holds nothing of it for anyone.",
+          "title": "Mac",
+          "type": "string"
+        },
+        "sample_uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Only this sample's questions, if given, by its uuid as `x-inspect-context` gives it. Inspect asks for the sample whose model call is waiting.",
+          "title": "Sample Uuid"
+        },
+        "wait": {
+          "default": 0,
+          "description": "How long to wait, in seconds, while there are none, at most 30. The answer comes as soon as there is one.",
+          "minimum": 0,
+          "title": "Wait",
+          "type": "number"
+        }
+      },
+      "required": [
+        "eval_id",
+        "timestamp",
+        "mac"
+      ],
+      "title": "PendingQuestionsParams",
+      "type": "object"
+    },
+    "PendingQuestionsResult": {
+      "description": "The eval's unanswered questions, oldest first.",
+      "properties": {
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/QuestionAsked"
+          },
+          "title": "Questions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "questions"
+      ],
+      "title": "PendingQuestionsResult",
+      "type": "object"
+    },
+    "QuestionAsked": {
+      "description": "A question a sentinel asked a person, about a tool call in one of the eval's model requests, which the step waits on.",
+      "properties": {
+        "id": {
+          "description": "The question's id, which `answer_question` names.",
+          "title": "Id",
+          "type": "string"
+        },
+        "sample_uuid": {
+          "description": "The sample whose run asked.",
+          "title": "Sample Uuid",
+          "type": "string"
+        },
+        "request_id": {
+          "description": "The eval's id for the model request the call was found in, its `x-irid`. That request waits on the answer.",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "stage": {
+          "description": "`tool_call` before the call runs, `tool_result` once it has run and its result is about to reach the model.",
+          "enum": [
+            "tool_call",
+            "tool_result"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "call": {
+          "additionalProperties": true,
+          "description": "The call, as Inspect writes a `ToolCall`, with its arguments. Show it to the person; it is not to be put into the agent's conversation.",
+          "title": "Call",
+          "type": "object"
+        },
+        "message": {
+          "description": "The assistant's text alongside the call.",
+          "title": "Message",
+          "type": "string"
+        },
+        "view": {
+          "additionalProperties": true,
+          "description": "How the call is shown, as Inspect writes a `ToolCallView`.",
+          "title": "View",
+          "type": "object"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The call's result, as Inspect writes a `ChatMessageTool`, at `tool_result`.",
+          "title": "Result"
+        },
+        "escalations": {
+          "description": "The escalations the asking protocol was handed, in order: who escalated, and why.",
+          "items": {
+            "$ref": "#/$defs/Escalation"
+          },
+          "title": "Escalations",
+          "type": "array"
+        },
+        "choices": {
+          "description": "What the person may pick. An answer is one of these, and one of approve, reject, terminate.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "asked": {
+          "description": "When the question was asked, in seconds since the epoch, for showing how long it has waited.",
+          "title": "Asked",
+          "type": "number"
+        },
+        "closes": {
+          "description": "When the step stops waiting, in seconds since the epoch, after which it is answered with caution, `reject` if offered and otherwise `terminate`, and the question is gone.",
+          "title": "Closes",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "sample_uuid",
+        "request_id",
+        "stage",
+        "call",
+        "message",
+        "view",
+        "escalations",
+        "choices",
+        "asked",
+        "closes"
+      ],
+      "title": "QuestionAsked",
       "type": "object"
     },
     "RegisterTaskParams": {
@@ -2090,6 +2364,22 @@
       "result": {
         "$ref": "#/$defs/EndSampleResult"
       }
+    },
+    "pending_questions": {
+      "params": {
+        "$ref": "#/$defs/PendingQuestionsParams"
+      },
+      "result": {
+        "$ref": "#/$defs/PendingQuestionsResult"
+      }
+    },
+    "answer_question": {
+      "params": {
+        "$ref": "#/$defs/AnswerQuestionParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AnswerQuestionResult"
+      }
     }
   },
   "errors": {
@@ -2108,6 +2398,18 @@
     "-32009": {
       "name": "unknown_task",
       "description": "The sidecar holds no registration of the task by the eval: it was never registered, or is no longer kept. The eval registers the task again, then completes the sample's registration. Answered to a `register_task` with a `mac` when the sidecar holds no token for the eval, as after a restart or once the token expired: the eval registers again with its token."
+    },
+    "-32011": {
+      "name": "unknown_question",
+      "description": "The sidecar holds no such question for the eval: it was another eval's, or it closed when nobody answered in time, and the step was answered with caution."
+    },
+    "-32012": {
+      "name": "question_answered",
+      "description": "The question was already answered, with another choice or reason. The first answer stands."
+    },
+    "-32013": {
+      "name": "answer_refused",
+      "description": "The answer picks a choice the question doesn't offer."
     },
     "-32010": {
       "name": "unauthorized",
