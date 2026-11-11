@@ -202,11 +202,7 @@ Keep the integration transparent to eval authors and preserve the existing eval 
 
 ## Step 12: dropped
 
-Inspect incremental streaming was planned here, and was dropped on 2026-11-10. It would have had Inspect read replies released early: a refusal arriving as an error event after some text, cut-off streams, cancellation, partial output shown while streaming, and recovering a sample's outcome when a stream ends unfinished.
-
-An eval's agent acts only on a whole turn, in Inspect's own process and through a sidecar alike. So early release would only show an eval's text sooner, to someone watching. Inspect instead goes on refusing a sidecar whose probe says `release: early`, at the task's start ([sidecar.md, "Streams"](sidecar.md#streams)). An operator who runs evals through a sidecar leaves it at `release: whole`, the default.
-
-Early release stays for clients other than Inspect, such as Claude Code run on its own through the proxy, which is what step 10 built it for. Holding an eval's replies whole in a sidecar set to `early`, so that one sidecar serves both, was considered and is not planned: nothing needs it yet.
+Inspect incremental streaming is not being done. An eval's agent acts only on a whole turn, so Inspect goes on refusing a sidecar set to `release: early` ([sidecar.md, "Streams"](sidecar.md#streams)).
 
 ## Step 13: human review
 
