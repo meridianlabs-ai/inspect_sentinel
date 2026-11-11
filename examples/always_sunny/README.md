@@ -18,6 +18,8 @@ That is the point of the example. The other examples here put the sentinel in th
 | `sentinel.yaml` | the sentinel, which names that rule |
 | `task.py` | the Inspect task, `philadelphia` |
 | `litellm.yaml` | LiteLLM's configuration: the models it serves, and the guardrail that calls the sidecar |
+| `sidecar/` | the sidecar's image: its `Dockerfile`, and the `pyproject.toml` and `uv.lock` that pin what it installs, the released `inspect-sentinel` among them |
+| `litellm/` | LiteLLM's image: its `Dockerfile`, and the `pyproject.toml` and `uv.lock` that pin what it installs |
 | `compose.yaml` | a stack to run it all: LiteLLM and the sidecar |
 
 ## Running the whole stack
@@ -26,7 +28,7 @@ That is the point of the example. The other examples here put the sentinel in th
 
 You need Docker and a provider API key.
 
-LiteLLM runs a guardrail on each model request and each reply. This repository has one for it, `LiteLLMGuardrail`, in a small package of its own at [`src/proxies/litellm`](../../src/proxies/litellm). It sends each request and reply to the sidecar and carries out the answer. The stack's LiteLLM image has it from that directory, and a LiteLLM image of your own gets it with `pip install inspect_sentinel_litellm`. `litellm.yaml` names the class and tells it where the sidecar is. No sentinel runs inside LiteLLM.
+LiteLLM runs a guardrail on each model request and each reply. This repository has one for it, `LiteLLMGuardrail`, in a small package of its own at [`src/proxies/litellm`](../../src/proxies/litellm). It sends each request and reply to the sidecar and carries out the answer. The stack's LiteLLM image installs it from this repository's release, as `litellm/pyproject.toml` says, and a LiteLLM image of your own can do the same. `litellm.yaml` names the class and tells it where the sidecar is. No sentinel runs inside LiteLLM.
 
 ```bash
 export ANTHROPIC_API_KEY=<your provider key>

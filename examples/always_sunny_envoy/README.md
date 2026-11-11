@@ -14,6 +14,7 @@ The task itself knows nothing about the sentinel. There is no `sentinel=` in `ta
 | `sentinel.yaml` | the sidecar's file: the sentinel, which names that rule, and how the sidecar serves |
 | `envoy.yaml` | Envoy's configuration, written by `python -m inspect_sentinel.sidecar.envoy` |
 | `task.py` | the Inspect task, `philadelphia` |
+| `sidecar/` | the sidecar's image: its `Dockerfile`, and the `pyproject.toml` and `uv.lock` that pin what it installs, the released `inspect-sentinel` among them |
 | `compose.yaml` | a stack to run it all: Envoy and the sidecar |
 
 ## Running the stack

@@ -8,7 +8,7 @@ import yaml
 from .._exchange import MAX_BODY_BYTES
 from ._metadata import FORMAT_METADATA, INSPECT_HEADERS, PROVIDER_METADATA
 
-ENVOY_VERSION = "1.39.4"
+ENVOY_VERSION = "1.39.6"
 """The Envoy release the configuration is written for and tested with. 1.39.1 is the earliest that works: it has the `ext_proc` fixes that keep a body whole when it is held."""
 
 MESSAGE_TIMEOUT = 3600.0
