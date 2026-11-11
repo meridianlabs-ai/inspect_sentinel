@@ -34,7 +34,7 @@ runs:
     # meridianlabs-ai/actions holds the uv pin. Both actions use the same commit.
     # setup-uv runs once per job, so skip it after an earlier
     # install-python-dependencies call, which checks that the two match.
-    - uses: meridianlabs-ai/actions/setup-uv@3bc608093ab8b8dd7f82764a863d9d5f9dce61a5 # main
+    - uses: meridianlabs-ai/actions/setup-uv@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
       if: env.MERIDIAN_SETUP_UV == ''
       with:
         python-version: ${{ inputs.python-version }}
@@ -52,7 +52,7 @@ runs:
         fi
         uv lock --upgrade-package inspect-ai --upgrade-package inspect-scout
 
-    - uses: meridianlabs-ai/actions/install-python-dependencies@3bc608093ab8b8dd7f82764a863d9d5f9dce61a5 # main
+    - uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
       with:
         versions: locked
         python-version: ${{ inputs.python-version }}
