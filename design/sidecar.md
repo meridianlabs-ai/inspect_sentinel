@@ -738,14 +738,14 @@ The table lists what a sentinel is given inside an eval's process, and what the 
 **A person who answers.** In an eval, `human()` asks a person through Inspect's approval UI and waits. [Step 13](sidecar-plan.md#step-13-human-review) adds the matching sidecar host:
 
 - **The sidecar holds the step and keeps a question for the eval.** This is built for the tool stages of a run an Inspect eval names, whose model request passed the check of its `x-inspect-context`. The question names the sample, the model request by its `x-irid`, the stage, the call, its view, its result at `tool_result`, the escalations and the choices. Inspect's sidecar client finds it with `pending_questions` while its model call waits, shows it in the same approval UI, and sends the person's answer with `answer_question` (section 9, "Questions for a person"). For an agent without an eval, an external review tool is to consume the same questions, once reviewers have credentials.
-- **The step waits for the review timeout**, 10 minutes unless set with `--review-timeout` (`review_timeout` in the `server` stanza). With no answer by then, the step is answered with caution, as below, and the question is gone. A `--time-limit` shorter than the review timeout ends the wait sooner, as it covers all of judging: the request is then not judged, and the question says so in when it `closes`.
-- **A question belongs to one try of one model request.** When that try has nobody waiting for it any more, its question closes and the try is stopped with nothing decided: no rejection and no termination is recorded for it, and only its own exchange is refused. That happens when the client sends the request again, when a later attempt at the sample begins, when the eval ends the sample, and when a sentinel ends the run at another request. A request sent again is judged afresh, on the reply it gets, which may hold other calls: an approval is never carried over to a reply the person wasn't shown. Keeping the first reply and its answer for the retry is not built ([step 13](sidecar-plan.md#step-13-human-review), on long waits).
+- **No connection waits for the person.** The sidecar answers the model call at once with "pending review", keeps the judging that asked, and goes on when the answer comes (section 9, "A review pauses the model call, not a connection"). A question has no expiry unless the operator sets one with `--review-timeout`, and a `--time-limit` doesn't count the time a question is open.
+- **A question belongs to the model call, not to a connection.** A client that sends the request again reattaches to the same question. The question closes, with nothing decided, when a later attempt at the sample begins, when the eval ends the sample or cancels the call, and when a sentinel ends the run at another call.
 - **A turn's calls are asked about one at a time**, in order, as the sentinel judges them. A person doesn't see a turn's calls together yet. Judging them at once to show them together would change the order protocols run in, so it is left until grouping is designed.
 - **The answer is to come on the person's own credential**, never the agent's or the eval's (section 9, "A client that can't be trusted"). That needs reviewer credentials, which are a TODO. Until then, [step 13](sidecar-plan.md#step-13-human-review) accepts an answer on the eval's key, its token (section 9, "The eval's token"), for that eval's own questions only, so the feature and its experience in Inspect can be developed first. The answer reaches the sentinel runner as a `HumanAnswer`.
 - **An eval the deployment doesn't trust is not asked.** With `--no-eval-results`, the sidecar keeps no question and serves neither method, and the step fails closed, as below. That flag is how an operator says an eval isn't to be told what the monitors look for, and for now it also says the eval isn't to answer for a person. Reading results and answering reviews are to become separate permissions.
 - **A host with its own way of asking a person keeps it.** A `Handler` given a host whose `ask_human` isn't the sidecar's own asks that host every time, and keeps no question.
 - **Step 13 covers** queue discovery, answers, expiry, cancellation and records. It starts with the tool stages. Asking at a generate stage fails the step until Inspect can show a person a whole request or reply.
-- **Where no person can be asked, the step fails closed.** That is a run no eval names, an eval that isn't sent results, and a question nobody answers in time. The answer is `reject` where offered and `terminate` otherwise, as Inspect's own host answers when nobody can. An escalation never lets a call through without someone deciding. A deployment that wants unattended escalations to proceed puts `handle_escalation("proceed")` after `human()` in its sentinel.
+- **Where no person can be asked, the step fails closed.** That is a run no eval names, an eval that isn't sent results, and a question that reaches an expiry the operator set. The answer is `reject` where offered and `terminate` otherwise, as Inspect's own host answers when nobody can. An escalation never lets a call through without someone deciding. A deployment that wants unattended escalations to proceed puts `handle_escalation("proceed")` after `human()` in its sentinel.
 - **A long hold can still lose its connection** (section 5).
 
 **A monitor's model calls in a gated deployment.** Some proxies, such as Middleman, are gateways: they sign callers in and decide which models each may use. Behind a gateway, a monitor's own model calls belong behind it too. This matters most for an unreleased model under evaluation. Its output is in every step, so a monitor asking another lab's model would send that output to the other lab. Such a deployment already has most of what is needed:
@@ -945,16 +945,146 @@ A deployment's own port and bearer token for the endpoint for evals ("Finding th
 When the sidecar's sentinel asks a person about a tool step of an eval's run, the sidecar keeps a question for the eval and the step waits (section 8, "A person who answers"). Two methods let Inspect find and answer it.
 
 - **`pending_questions` lists the eval's unanswered questions**, oldest first, or only one sample's with `sample_uuid`. With `wait`, at most 30 seconds, it answers as soon as there is one. Each question has an `id`, the `sample_uuid`, the `request_id` of the model request that waits on it, the `stage`, the `call` with its arguments, the assistant's `message`, the call's `view`, its `result` at `tool_result`, the `escalations` with each escalating instance's name and explanation, the `choices`, and when it was `asked` and `closes`.
-- **`closes` is when the step really stops waiting**: when the review timeout passes, or sooner if the sidecar's time limit for judging runs out first.
+- **`closes` is when the question expires**, if the operator set a review timeout, and is left out otherwise. The sentinel is then given the cautious answer ("A review pauses the model call, not a connection" below).
 - **`answer_question` sends what the person picked**: the question's `id`, a `decision` of `approve`, `reject` or `terminate` among its `choices`, and an optional `reason`. At `reject`, the reason is what the model is told. `modify` can't be answered yet, as Inspect's approval UI can't change a call.
 - **The answer's `mac` covers the answer.** It is made over `[method, eval_id, timestamp, id, decision, reason or ""]`, so a `mac` copied from one answer can't send another.
 - **Each question is answered once.** The same answer sent again gets the same result. Another answer is refused with `question_answered`, code `-32012`, and the first stands. A choice the question doesn't offer is refused with `answer_refused`, code `-32013`. Another eval's question, one never asked, and one that closed unanswered are all `unknown_question`, code `-32011`.
 - **Only a receipt is kept of an answered question**: its id, the eval, the sample, the choice and the reason. The question itself, with the call's arguments, view and result, is dropped as soon as its step stops waiting. The receipt is what lets the same answer be sent again. It is dropped when the eval ends the sample, and the sidecar keeps at most 10,000. An answer sent again after that is for an `unknown_question`.
-- **A question closes when nobody waits for its try** (section 8, "A person who answers"). An answer to it is then for an `unknown_question`.
+- **A question closes with its operation** ("A review pauses the model call, not a connection" below). An answer to it is then for an `unknown_question`.
 - **`request_result` says what became of each question**, in `reviews` ("The methods" below): whether the eval answered and what, or nobody did in time, or the wait was cancelled and why.
 - **Neither method is served with `--no-eval-results`.** Each answers method not found, `-32601`, and the sidecar keeps no question.
 - **For now, the answer comes on the eval's token.** The sidecar takes it only for a question from one of that eval's own runs. That is a temporary exception to the rule that an eval's credential never answers ("A client that can't be trusted" below), so that the feature and its experience in Inspect can be built first. Reviewers are to answer on credentials of their own, which the sidecar checks: that is a TODO, after [step 16](sidecar-plan.md#step-16-tls-on-the-sidecars-listeners) and [#189](https://github.com/meridianlabs-ai/inspect_sentinel/issues/189). The eval's `mac` shows that the eval sent the answer, not that a person chose it.
 - **For now, a question hands Inspect the call's arguments.** That is a second temporary exception, to the rule that a rejected or changed call's original arguments are never returned to anyone ("Redacted calls" below): a question holds them before anything is decided, so Inspect has them even where the person then rejects the call. Inspect shows them in its approval UI, and keeps the agent's conversation as `request_result` says, with a rejected call redacted. The exception ends when a reviewer is shown the question somewhere outside the eval's process. A reviewer's own credential doesn't do that by itself.
+
+### A review pauses the model call, not a connection
+
+A person may take minutes or days to answer a question: they are sent to a portal, or they are away. So no connection waits for a person. When a sentinel asks one, the sidecar answers the open model call at once, keeps what it needs to go on, and goes on when the answer comes. No timeout of a provider SDK, of Inspect or of a proxy bounds a review, and none needs changing.
+
+**The operation.**
+
+- **An operation is one model call of an eval.** It is named by the eval and the call's `x-irid`.
+- **It is bound to the request that began it**: the sample, the attempt at the sample, the provider, the model, and a digest of the request's body as the client sent it.
+- **Every request with that `x-irid` and the same binding is a try of the same operation.** A client that sends the request again reattaches to the operation. It is never judged a second time, it never raises a second question, and it never reaches the provider unless the operation is waiting for exactly that.
+- **A request with that `x-irid` and another binding is refused.** It is not judged, and it takes nothing from the operation: an approval is for the request the person was asked about, and no other.
+- **Only a call a sentinel asked a person about is kept this way.** Every other call is judged try by try, as before.
+
+**Pending review.** When the sentinel asks a person, the sidecar:
+
+- **Keeps the question, the judging that asked it, and, at `tool_call`, the provider's reply.** They are held by a task of the sidecar's own, which doesn't end with the HTTP exchange that began it.
+- **Answers the exchange at once with "pending review"**: a 400, in the provider's error format, which says the call is waiting for a person. Neither the Anthropic SDK, the OpenAI SDK nor Inspect sends a request again by itself after a 400.
+- **Answers every later try of the operation the same way**, for as long as it is paused. So a "pending review" that never arrived is no loss: the request sent again gets it again, and the question is still the same one.
+
+Inspect asks `request_result` after any call that comes back as an error, so it needs to read nothing from the 400 itself.
+
+**What `request_result` says of an operation.** Two states are added to those in "The methods" below:
+
+| `state` | Meaning | What Inspect does |
+| --- | --- | --- |
+| `awaiting_review` | A question is open for the call. | Shows it, sends the answer, and asks again. |
+| `judging` | The sentinel is at work, as after an answer, when the next protocol or the turn's next call is judged. | Asks again. |
+| `awaiting_request` | The request stage is finished and nothing was refused. The provider has not been called. | Sends the same request again, once. |
+| `awaiting_reply` | A try was sent on to the provider, and its reply has not reached the sidecar. | Waits for that try's own response. |
+| `decided` | The call came to an end: `outcome`, the judgment, and, for a turn that goes on, `reply`. | Acts on it. |
+| `not_judged` | The call ended with nothing decided. `reason` says why. | Fails the attempt, as for any call not judged. |
+
+**An accepted answer is not the end.** After an answer the sentinel goes on judging: another protocol may refuse the call, or the turn's next call may raise another question. Inspect waits until it has something to act on: a request to send again, a final result, or a failure. It never takes the end of `awaiting_review` for a decision.
+
+The two diagrams below draw Inspect's calls to the endpoint for evals straight to the sidecar. They go through the proxy, as every such call does.
+
+**At `tool_call`: the provider has already replied.**
+
+```mermaid
+sequenceDiagram
+    participant I as Inspect
+    participant P as Proxy
+    participant S as Sidecar
+    participant M as Provider
+    I->>P: Model request, with x-inspect-context and x-irid
+    P->>S: judge_request
+    S-->>P: pass
+    P->>M: Request
+    M-->>P: Reply
+    P->>S: judge_reply
+    Note over S: BeforeToolCall: the sentinel asks a person.<br/>Keep the reply, the question and the judging
+    S-->>P: refuse, 400: pending review
+    P-->>I: 400: pending review
+    I->>S: request_result: x-irid, wait
+    S-->>I: awaiting_review
+    I->>S: pending_questions
+    S-->>I: The question
+    Note over I: Show the question in the approval UI.<br/>No connection is open while the person decides
+    I->>S: answer_question: approve
+    S-->>I: Taken
+    Note over S: The judging goes on: the turn's other calls,<br/>and any other question
+    I->>S: request_result: x-irid, wait
+    S-->>I: decided, proceed, with the judgment and the reply
+    Note over I: Read the reply as the provider's,<br/>record the steps, and the agent runs the calls
+```
+
+The provider is not called again for the operation, whatever is sent.
+
+**At `tool_result`: the provider has not been called yet.**
+
+```mermaid
+sequenceDiagram
+    participant I as Inspect
+    participant P as Proxy
+    participant S as Sidecar
+    participant M as Provider
+    I->>P: Model request, holding a tool's result
+    P->>S: judge_request
+    Note over S: AfterToolCall: the sentinel asks a person.<br/>Keep the question and the judging
+    S-->>P: refuse, 400: pending review
+    P-->>I: 400: pending review
+    I->>S: request_result: x-irid, wait
+    S-->>I: awaiting_review
+    Note over I: Show the question, and send the answer
+    I->>S: answer_question: approve
+    Note over S: The judging goes on: the request's other results,<br/>then BeforeGenerate
+    I->>S: request_result: x-irid, wait
+    S-->>I: awaiting_request
+    I->>P: The same model request, under the same x-irid
+    P->>S: judge_request
+    Note over S: The operation's request: its binding matches,<br/>and nothing is judged again
+    S-->>P: pass
+    P->>M: Request
+    M-->>P: Reply
+    P->>S: judge_reply
+    Note over S: Judged as any reply is, and it may pause too
+    S-->>P: pass
+    P-->>I: The provider's reply
+```
+
+**A request sent again.**
+
+- **While the operation is paused or being judged**, it is answered "pending review", and changes nothing.
+- **At `awaiting_request`, one try is sent on.** The sidecar moves the operation to `awaiting_reply` as it lets that try through, in one step, so two tries sent at once can't both reach the provider. The other is answered "pending review".
+- **At `awaiting_reply`**, a try is answered "pending review": a request is already with the provider.
+- **Once the operation is decided**, a try is refused, and told the result is read with `request_result`. The provider is not called again.
+- **If the proxy says the provider's exchange failed**, by handing over an error reply or saying the reply was cut off, the operation goes back to `awaiting_request`, and Inspect or its SDK may send the request again, as after any failed call.
+- **If the sidecar never hears of the reply**, as when the proxy stops, the operation stays at `awaiting_reply`. The sidecar can't tell whether the provider answered, so it lets no other try through. Inspect's own request has failed, and it reads the call's judgment as unavailable, as it does today for a reply the sidecar never saw. Nothing recovers such a call by itself.
+
+**The completed reply.** `request_result` gives a decided call's `reply` when the turn goes on and the call's own exchange was answered "pending review" at the reply. It is the provider's reply as the proxy would have passed it on, with the sentinel's edits in it:
+
+- **`status` and `headers`**, as the provider sent them, without the headers of one hop.
+- **`body`**, the bytes, as base64: a JSON reply whole, or a streamed reply's events from first to last.
+- **`format`**, the API the request was written in, and whether the reply is a stream, so that the eval's own reader of that provider's replies is the one that reads it.
+
+Inspect reads it with the code that reads a reply from the network, so the stop reason, the usage and what the provider needs sent back in the next request are what the provider sent, whatever version of inspect_ai the sidecar runs. Its usage is counted once, when it is read: a "pending review" counts no usage, isn't an attempt against the call's retries, and isn't logged as a failed call. The `reply` is separate from the judgment, which redacts as before, and only the eval whose call it is can read it. The sidecar keeps it until the sample ends, so it can be read again if an answer is lost.
+
+**A question's expiry is not the operation's end.**
+
+- **A question has no expiry unless the operator sets one**, with `--review-timeout` (`review_timeout` in the `server` stanza).
+- **A question that expires gives the sentinel the cautious answer**, `reject` if offered and `terminate` otherwise, and the judging goes on from there: the turn's other calls are still judged.
+- **A paused operation keeps what it needs.** While it is paused, its run, its eval's token and its task's registration don't expire.
+
+**`cancel_request` closes an operation the eval no longer waits for.** It takes the call's `x-irid`, signed as other calls are. It decides nothing: the paused judging is stopped, the question closes, and the call reads as not judged, with the reason `cancelled`. A call that isn't paused is left as it is.
+
+**What ends an operation.** It ends when it is decided or not judged. Before that, it is closed, with nothing decided for it, when a later attempt at its sample begins, when the eval ends the sample, when a sentinel ends the run at another call, and when the eval cancels it with `cancel_request`, as Inspect does for a sample that is cancelled or fails while a call of it is paused. Its questions close with it.
+
+**What a restart loses.** Paused operations are kept in the sidecar's memory. After a restart, `request_result` reads such a call as `unknown`, and Inspect treats it as it does any call whose records are lost. Keeping a review across a restart belongs with [shared and durable state](sidecar-plan.md#follow-up-shared-and-durable-state).
+
+**An agent without an eval** is not asked this way yet. It has no `request_result` to read, so it needs the request it sends again to be answered from the reply the sidecar kept, which each proxy would have to do. That comes with the external review tool.
 
 ### The tasks folder
 
@@ -1745,7 +1875,8 @@ For a task in the tasks folder, nothing is stored and `fixed` is true. The sampl
 - **`outcome`** is `proceed`, `reject` or `terminate`, and **`message`** is the text the model is told. Both are present only when `state` is `decided`. An `explanation` is written to the log only, never shown to the model.
 - **Each record carries `function`**, the monitor or protocol function that made it, and a record at a tool stage carries `call`, the id of the tool call it is about.
 - **A retried call keeps its `x-irid`** ("Each agent model call" above). `outcome`, `message` and `judgment` are for the latest attempt, which is the reply the client got, and `recorded` holds every attempt's records in order.
-- **`reviews` says what became of each question a person was asked**, every try's in order. Each has the question's `id`, the `try_number` of the try that asked, from 1, the `stage`, the `call` by id only, and when it was `asked`. If the sidecar took an answer, it has the `decision`, the `reason` and when it was `answered`: the eval sent that answer, which doesn't show that a person chose it. `resolution` says how the wait ended: `answered`, when the sentinel was given the eval's answer; `timed_out`, when it was given the cautious one; or `cancelled`, when the step came to no decision, with the `cause`: `superseded`, `replaced_attempt`, `sample_ended`, `run_ended`, `time_limit` or `stopped`. A try cancelled just after its answer was taken keeps the answer, which took no effect. A cancelled try's reviews are here although the judgment is only of the latest try. `reviews` is left out when nobody was asked.
+- **`reviews` says what became of each question a person was asked**, every try's in order. Each has the question's `id`, the `try_number` of the try that asked, from 1, the `stage`, the `call` by id only, and when it was `asked`. If the sidecar took an answer, it has the `decision`, the `reason` and when it was `answered`: the eval sent that answer, which doesn't show that a person chose it. `resolution` says how the wait ended: `answered`, when the sentinel was given the eval's answer; `timed_out`, when it was given the cautious one; or `cancelled`, when the step came to no decision, with the `cause`: `replaced_attempt`, `sample_ended`, `run_ended`, `cancelled` by the eval, or `stopped`. A call closed just after its answer was taken keeps the answer, which took no effect. `reviews` is left out when nobody was asked.
+- **`reply` is the provider's reply for a call that was paused at its reply and then went on**: its `status`, `headers`, `body` as base64, and `format` ("A review pauses the model call, not a connection" above). It is left out of every other answer.
 - **`wait` makes the call a long poll.** While the latest attempt is `judging`, the sidecar answers when the state changes or after `wait` seconds, and never later than 30 seconds. Without `wait`, it answers at once ("Waiting while the sidecar judges" above).
 - **`judgment` is what was decided**, once the latest attempt is decided: every step judged in the exchange with its decision and records, what the exchange came to, and the turn withheld from the client or proposed by the model, with each call a decision acted on redacted. "The judgment" and "Redacted calls" above describe its members. Where the sidecar doesn't send results, the judgment is trimmed and says so, and `recorded` is left out ("A client that can't be trusted" below).
 
@@ -1755,6 +1886,8 @@ For a task in the tasks folder, nothing is stored and `fixed` is true. The sampl
 | --- | --- |
 | `judging` | The sentinel is at work on the request or its reply. Asking later will give a different answer. |
 | `awaiting_reply` | The request was sent on, and the proxy has not handed over a reply. A proxy that hands over only successful replies, as Middleman's passthrough hook is designed to, leaves a call that failed at the provider in this state. |
+| `awaiting_review` | A sentinel asked a person about the call, and the question is open ("A review pauses the model call, not a connection" above). |
+| `awaiting_request` | A call that was paused at its request is ready to be sent again, once. |
 | `decided` | `outcome` says what was decided. |
 | `not_judged` | Judging ended without a decision. `reason` says why. |
 
@@ -1767,7 +1900,7 @@ For a task in the tasks folder, nothing is stored and `fixed` is true. The sampl
 | `cut_off` | The proxy stopped handing over a streamed reply before it ended and before it was judged, as when its client disconnected. |
 | `unregistered` | The request named a task or sample the sidecar doesn't take ("How strict the sidecar is" above). |
 | `replaced_attempt` | The request or reply belongs to an attempt at the sample that a later attempt replaced, or to another attempt with the same number (section 7). |
-| `superseded` | The try was waiting on a person when the client sent the request again, or its reply arrived after that and would have asked one. It was stopped with nothing decided, and the later try is judged afresh. |
+| `cancelled` | The eval cancelled the call with `cancel_request` while it was paused for a person. |
 
 `records` says whether the sidecar has records for the request:
 
@@ -1964,7 +2097,8 @@ What this design hasn't settled, checked or built yet, in one place. Each item n
 
 - **Reviewer credentials for human review.** [Step 13](sidecar-plan.md#step-13-human-review) first accepts a person's answer on the eval's key, for that eval's own questions, so the feature can be built and tried. A reviewer's own credential, checked by the sidecar, is to replace it, after [step 16](sidecar-plan.md#step-16-tls-on-the-sidecars-listeners) and [#189](https://github.com/meridianlabs-ai/inspect_sentinel/issues/189). Reading results and answering reviews then become separate permissions, where `--no-eval-results` now turns off both.
 - **A reviewer surface outside the eval's process.** A question now hands Inspect a call's arguments before anything is decided, an exception to "Redacted calls" (section 9). Showing questions to a reviewer somewhere the eval's process isn't ends it. Reviewer credentials alone don't.
-- **Review that outlasts a connection, and a turn's calls shown together.** A request sent again is reviewed afresh, and a turn's calls are asked about one at a time ([step 13](sidecar-plan.md#step-13-human-review)).
+- **A turn's calls shown together.** A turn's calls are asked about one at a time ([step 13](sidecar-plan.md#step-13-human-review)).
+- **Review for an agent without an eval, and across a restart.** Both are left out of the first part (section 9, "A review pauses the model call, not a connection").
 - **Known gaps in the code ([#187](https://github.com/meridianlabs-ai/inspect_sentinel/issues/187), [#188](https://github.com/meridianlabs-ai/inspect_sentinel/issues/188)).** A sample can be scored on monitor state that began after a sidecar restart (section 9, "A sidecar that loses the task"). A changed call's original arguments can come back in a turn refused whole (section 9, "Redacted calls").
 
 Differences from a sentinel in an eval's process that are to be fixed (section 8, "What holds something else in the sidecar"):
