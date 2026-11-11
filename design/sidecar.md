@@ -969,7 +969,8 @@ A person may take minutes or days to answer a question: they are sent to a porta
   - the API format the request is written in. One provider and model can take a request under two APIs, as OpenAI does with Chat Completions and Responses, and the same body means something different under each;
   - the headers the proxy passed on, with `x-inspect-context` taken as its fields;
   - a digest of the request's body as the client sent it.
-- **What changes from one try to the next is left out of the binding.** That is the `timestamp` and `mac` of `x-inspect-context`, which Inspect makes afresh for each try (section 7), and the proxy's own `id` for the exchange. Each try's `mac` is still checked, as on any request. Every other header the proxy passes on is bound, so an operator doesn't list one that changes with each try, such as an SDK's count of its retries: each try would then be another request.
+- **What changes from one try to the next is left out of the binding.** That is the `timestamp` and `mac` of `x-inspect-context`, which Inspect makes afresh for each try (section 7), and the proxy's own `id` for the exchange. Each try's `mac` is still checked, as on any request.
+- **Every other header the proxy passes on is bound.** A request sent again isn't judged, so what a sentinel could read of it must be what was approved. The headers an operator selects must therefore be the same for every try of a call. One that changes with each try, such as an SDK's count of its retries, makes each try another request, which is refused. Passing on something that differs by try, for diagnosis, would need a facility of its own, which is not designed.
 - **Every request with that `x-irid` and the same binding is a try of the same operation.** A client that sends the request again reattaches to the operation. It is never judged a second time, and it never raises a second question. Reattaching never causes a call to the provider by itself: a try is sent on only where the operation is waiting for a request ("A request sent again" below).
 - **A request with that `x-irid` and another binding is refused.** It is not judged, and it takes nothing from the operation: an approval is for the request the person was asked about, and no other.
 - **Only a call a sentinel asked a person about is kept this way.** Every other call is judged try by try, as before.
@@ -988,7 +989,7 @@ Inspect asks `request_result` after any call that comes back as an error, so it 
 | --- | --- | --- |
 | `awaiting_review` | A question is open for the call. | Shows it, sends the answer, and asks again. |
 | `judging` | The sentinel is at work, as after an answer, when the next protocol or the turn's next call is judged. | Asks again. |
-| `awaiting_request` | The request may be sent on to the provider. Without a `reason`, the request stage is finished, nothing was refused, and the provider has not been called. With one, the provider's last exchange failed. | Without a `reason`, sends the same request again, once. With one, treats the error it got as the provider's, as for any failed call. |
+| `awaiting_request` | The request may be sent on to the provider. Without a `reason`, the request stage is finished, nothing was refused, and the provider has not been called. With one, the provider's last exchange failed. | Without a `reason`, sends the same request again, once. With one, acts on `failure`, whatever error its own try got. |
 | `awaiting_reply` | A try was sent on to the provider, and its reply has not reached the sidecar. | Waits for that try's own response. |
 | `decided` | The call came to an end: `outcome`, the judgment, and, for a turn that goes on, `reply`. | Acts on it. |
 | `not_judged` | The call ended with nothing decided. `reason` says why. | Fails the attempt, as for any call not judged. |
@@ -1070,14 +1071,17 @@ sequenceDiagram
 
 **When the provider is called again.** Only after an exchange with it that the sidecar knows to have failed.
 
-- **If the proxy says the provider's exchange failed**, by handing over an error reply or saying the reply was cut off, the operation goes back to `awaiting_request`, with the `reason` `provider_error` or `cut_off`. The try's client gets the provider's error, as from any call.
-- **One more try may then be sent on**, as Inspect or its SDK retries any failed call. That try is one of the call's retries and is counted as one. Nobody is asked again: the answers already taken stand.
-- **The `reason` tells Inspect which error it holds.** A "pending review" and a provider's own refusal can both be a 400. With a `reason`, the error is the provider's, and Inspect handles it as it does for any call. Without one, the request is only waiting to be sent.
+- **If the proxy says the provider's exchange failed**, by handing over an error reply or saying the reply was cut off, the operation goes back to `awaiting_request`, with the `reason` `provider_error` or `cut_off`, and `request_result` gives the `failure`. The client of the try that was sent on gets the provider's error, as from any call.
+- **`failure` says what failed, apart from any error Inspect holds.** It has the `try_number` of the try that was sent on. For a `provider_error`, it has the provider's error as a `reply`: its `status`, `headers`, `body` and `format`, as for a completed reply below. So what says whether the call may be tried again, such as the status and a `retry-after` header, is what the provider sent. A reply that was cut off has no `reply`, and is handled as a connection that failed.
+- **Inspect acts on `failure`, never on the error its own try got.** A "pending review" and a provider's own refusal can both be a 400, and the error Inspect holds may be either. A try can be answered "pending review" while another is with the provider, and by the time Inspect asks, that exchange has failed and the operation is back at `awaiting_request`. So Inspect reads the provider's error from `failure`, with the code that reads one from the network, and retries or fails the call by its own rules for that error. The `try_number` tells a failure Inspect has already acted on from a new one. Without a `reason`, nothing failed, and the request is only waiting to be sent.
+- **One more try may then be sent on**, as Inspect or its SDK retries any failed call. That try is one of the call's retries and is counted as one.
+- **Only the request stage is kept across such a retry.** Its judging is not done again: what was decided at the request, and the answers taken for it, stand. The new reply is judged as any reply is, and a person is asked about whatever its calls require.
+- **A proxy that hands over only successful replies reports no failure.** Middleman's passthrough hook is designed that way. A call that fails at the provider behind it stays at `awaiting_reply`, as below.
 - **If the sidecar never hears of the reply**, as when the proxy stops, the operation stays at `awaiting_reply`. The sidecar can't tell whether the provider answered, so it lets no other try through. Inspect's own request has failed, and it reads the call's judgment as unavailable, as it does today for a reply the sidecar never saw. Nothing recovers such a call by itself.
 
 **The completed reply.** The sidecar keeps the reply of every operation that is decided with the turn going on, whichever stage it was paused at, and `request_result` gives it as `reply`. It is the provider's reply as the proxy passes it on, with the sentinel's edits in it:
 
-- **`status` and `headers`**, as the provider sent them, without the headers of one hop.
+- **`status` and `headers`**, as the provider sent them, without the headers of one hop. For this, `judge_reply` takes the reply's headers, which it doesn't today.
 - **`body`**, the bytes, as base64: a JSON reply whole, or a streamed reply's events from first to last.
 - **`format`**, the API the request was written in, and whether the reply is a stream, so that the eval's own reader of that provider's replies is the one that reads it.
 
@@ -1103,8 +1107,9 @@ Inspect reads it with the code that reads a reply from the network, so the stop 
 | `awaiting_request` | No try is sent on to the provider. |
 | `awaiting_reply` | The request already with the provider can't be called back. Its reply, when it comes, is not judged, not kept and not passed on. |
 
-- **The call then reads as `not_judged`, with the reason `cancelled`.** The answer says `cancelled` is true.
-- **A call that has ended is left as it is**, and so is one no person was asked about, whose judging ends with its own exchange or with its sample. The answer says `cancelled` is false, as it does for a call the sidecar doesn't know.
+- **The call then reads as `not_judged`, with the reason `cancelled`.**
+- **A call that has ended is left as it is**, and so is one no person was asked about, whose judging ends with its own exchange or with its sample.
+- **The answer's `cancelled` says whether this `cancel_request` was what closed the operation.** It is false for a call that had already ended, one no person was asked about, and one the sidecar doesn't know. A second `cancel_request` for a call is answered false too, so false doesn't mean the operation is still open: `request_result` says where a call stands.
 - **It is not served with `--no-eval-results`**, like the two methods for questions: such a sidecar keeps no question, so it has no operation to cancel.
 
 **What ends an operation.** It ends when it is decided or not judged. Before that, it is closed, with nothing decided for it, when a later attempt at its sample begins, when the eval ends the sample, when a sentinel ends the run at another call, and when the eval cancels it with `cancel_request`, as Inspect does for a sample that is cancelled or fails while a call of it is open. Its questions close with it.
@@ -1906,6 +1911,7 @@ For a task in the tasks folder, nothing is stored and `fixed` is true. The sampl
 - **The answer describes the call, not one HTTP try of it.** A retried call keeps its `x-irid` ("Each agent model call" above). For a call no person was asked about, `state`, `outcome`, `message` and `judgment` are for its latest try, which is the reply the client got. For a call paused for a person, they are the operation's, and a try that reattaches to it changes none of them ("A review pauses the model call, not a connection" above). `recorded` holds every try's records in order.
 - **`reviews` says what became of each question a person was asked**, every try's in order. Each has the question's `id`, the `try_number` of the try that asked, from 1, the `stage`, the `call` by id only, and when it was `asked`. If the sidecar took an answer, it has the `decision`, the `reason` and when it was `answered`: the eval sent that answer, which doesn't show that a person chose it. `resolution` says how the wait ended: `answered`, when the sentinel was given the eval's answer; `timed_out`, when it was given the cautious one; or `cancelled`, when the step came to no decision, with the `cause`: `replaced_attempt`, `sample_ended`, `run_ended`, `cancelled` by the eval, or `stopped`. A call closed just after its answer was taken keeps the answer, which took no effect. `reviews` is left out when nobody was asked.
 - **`reply` is the provider's reply for a call that a person was asked about and that was decided with the turn going on**, whichever stage it was paused at: its `status`, `headers`, `body` as base64, and `format` ("A review pauses the model call, not a connection" above). It is left out of every other answer.
+- **`failure` is the provider's last failed exchange for such a call**, given with `awaiting_request` and a `reason`: the `try_number` of the try that was sent on, and, for `provider_error`, the provider's error as a `reply` of the same four members. Inspect acts on it, not on the error its own try got.
 - **`wait` makes the call a long poll.** While the call is `judging`, the sidecar answers when the state changes or after `wait` seconds, and never later than 30 seconds. Without `wait`, it answers at once ("Waiting while the sidecar judges" above).
 - **`judgment` is what was decided**, once the call is decided: every step judged in the exchange with its decision and records, what the exchange came to, and the turn withheld from the client or proposed by the model, with each call a decision acted on redacted. "The judgment" and "Redacted calls" above describe its members. Where the sidecar doesn't send results, the judgment is trimmed and says so, and `recorded` is left out ("A client that can't be trusted" below).
 
@@ -1920,7 +1926,7 @@ For a task in the tasks folder, nothing is stored and `fixed` is true. The sampl
 | `decided` | `outcome` says what was decided. |
 | `not_judged` | Judging ended without a decision. `reason` says why. |
 
-`reason` comes with `not_judged`. It also comes with `awaiting_request`, as `provider_error` or `cut_off`, when the call is there because the provider's last exchange failed.
+`reason` comes with `not_judged`. It also comes with `awaiting_request`, as `provider_error` or `cut_off`, when the call is there because the provider's last exchange failed, and `failure` then says what failed.
 
 | `reason` | Meaning |
 | --- | --- |
