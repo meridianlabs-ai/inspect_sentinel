@@ -328,7 +328,7 @@ A refused turn reaches the client as an HTTP error in place of the model's reply
   | a `terminate` ended the run, including the third rejected turn in a row | always 400 |
 
   - **403 is never used**, because Claude Code reports any 403 as a failure to authenticate, whatever the body says (**measured**).
-  - **With an Inspect client, `--reject-status` must be a status the provider SDKs don't retry.** The Anthropic and OpenAI SDKs retry 408, 409, 429 and every 5xx. Under those, the SDK resends the request under the same `x-irid`, the sidecar answers `request_result` for the latest attempt, and the refusal is retried away: Inspect sees only the retry. Under a status the SDKs don't retry, such as 400, Inspect receives the refusal, reads the judgment, puts the turn and its rejections into its own copy, and calls the model again, as in process.
+  - **With an Inspect client, `--reject-status` must be a status the provider SDKs don't retry.** The Anthropic and OpenAI SDKs retry 408, 409, 429 and every 5xx. Under those, the SDK resends the request under the same `x-irid`, the sidecar answers `request_result` for the call's latest try, and the refusal is retried away: Inspect sees only the retry. Under a status the SDKs don't retry, such as 400, Inspect receives the refusal, reads the judgment, puts the turn and its rejections into its own copy, and calls the model again, as in process.
   - **For a client that isn't Inspect, a status it retries by itself also works.** Under 503, for example, the client sends the request again and the sidecar adds the rejections to it (**measured** with an unmodified Inspect, on Anthropic and on both OpenAI APIs).
   - **The SDKs also obey `x-should-retry`.** The Anthropic and OpenAI SDKs read this non-HTTP response header, `true` or `false`, and retry or not as it says, whatever the status. The sidecar doesn't set it. Whether the proxies pass it to the client has not been probed.
 
@@ -915,7 +915,7 @@ An eval's calls to the endpoint for evals, and its model requests, are proved wi
 - **Inspect makes the token, and the sidecar never makes one.** Inspect makes it with `secrets.token_urlsafe(32)`, and it never changes. The sidecar refuses a token shorter than 32 characters with JSON-RPC's invalid params, `-32602`.
 - **In Inspect, a token belongs to one task and one sidecar.** Each task has its own `eval_id`, as the eval log names it, and a retried task gets a new one. Inspect makes a token for each task and each sidecar the task's calls go through, and sends it only to that sidecar. The methods let tasks of one eval share a token, and Inspect never does.
 - **The token travels only in a `register_task` to a sidecar that holds no token for the eval.** That is the eval's first registration, a resend of it whose answer was lost, or a registration after the sidecar lost the token in a restart or expiry. The sidecar keeps the token once the registration succeeds. It never sends the token back, in any answer.
-- **Every other call carries a `timestamp` and a `mac` in place of the token.** That is `complete_registration`, `request_result`, `sample_result`, `end_sample`, `pending_questions`, `answer_question`, and a `register_task` to a sidecar that already holds the eval's token. `timestamp` is the time of the call, in integer seconds since the epoch. `mac` is an HMAC-SHA256, keyed with the eval's token in UTF-8, as a hex digest:
+- **Every other call carries a `timestamp` and a `mac` in place of the token.** That is `complete_registration`, `request_result`, `sample_result`, `end_sample`, `pending_questions`, `answer_question`, `cancel_request`, and a `register_task` to a sidecar that already holds the eval's token. `timestamp` is the time of the call, in integer seconds since the epoch. `mac` is an HMAC-SHA256, keyed with the eval's token in UTF-8, as a hex digest:
 
   ```text
   mac = HMAC-SHA256(token, json.dumps([str(v) for v in [method, eval_id, timestamp]], separators=(",", ":"))), as a hex digest
@@ -925,7 +925,7 @@ An eval's calls to the endpoint for evals, and its model requests, are proved wi
 - **A call's `mac` covers no other params.** It proves only that the caller holds the eval's token. So a captured `mac` is a short-lived bearer credential: it can be sent again, with other params, for the same method and eval, until its `timestamp` falls outside the window. `answer_question` is the exception: its `mac` covers the answer as well, so one copied from an answer can't send another ("Questions for a person" below).
 - **`register_task` carries exactly one of `token`, or `timestamp` and `mac`.** A registration with both, or with neither, is refused with invalid params, `-32602`. A `token` sent to a sidecar that holds another token for the eval is refused with `unauthorized`, with the code `-32010`. The same token is taken as a resend, and registers as usual. A `mac` sent to a sidecar that holds no token for the eval is answered `unknown_task`, so that Inspect sends the registration again with the token.
 - **A `mac` that doesn't match, or a `timestamp` outside the window, is refused with `unauthorized`.** The window is the same as for model requests: 5 minutes unless set with `--timestamp-window` (section 7). The error's message says which check failed. For the window, it gives the difference in seconds, so that an operator can see a clock that is wrong.
-- **When the sidecar holds no token for the eval, everything looks unknown.** That is an eval never registered, or one whose token went with a restart or expiry. `complete_registration` answers `unknown_task`, and Inspect registers the task again, sending the token ("When registration fails" below). `request_result` answers `records` `unknown`, `sample_result` answers `unknown_sample`, `end_sample` answers `state` `unknown`, `pending_questions` answers with no questions, and `answer_question` answers `unknown_question`. A request whose `x-inspect-context` named another eval, and another eval's sample, get the same answers, so nothing tells a caller that they exist.
+- **When the sidecar holds no token for the eval, everything looks unknown.** That is an eval never registered, or one whose token went with a restart or expiry. `complete_registration` answers `unknown_task`, and Inspect registers the task again, sending the token ("When registration fails" below). `request_result` answers `records` `unknown`, `sample_result` answers `unknown_sample`, `end_sample` answers `state` `unknown`, `pending_questions` answers with no questions, `answer_question` answers `unknown_question`, and `cancel_request` answers that nothing was cancelled. A request whose `x-inspect-context` named another eval, and another eval's sample, get the same answers, so nothing tells a caller that they exist.
 - **The token never goes into a model request, a sandbox or the eval's log.** A model request carries a `mac` made with the token (section 7). So an agent, even one that can reach `/sentinel/`, can't read the eval's results or make a model request in another sample's name.
 - **A token lasts as long as a run.** It is dropped once nothing has named the eval for `--run-expiry`, a day by default. Every call to the endpoint for evals, and every model request naming the eval, restarts that time once the sidecar has checked its token or `mac`. The token is kept apart from its registration, which may expire sooner or, for a task in the tasks folder, take no room. So the token guards the eval's run records for as long as they are kept.
 - **The token and the task are kept in one step.** A registration that sends the token keeps the token and its task together, or neither. So a registration that fails leaves no token behind. And if two first registrations of an eval send different tokens at the same moment, the second finds the first's token kept and changes nothing: its task doesn't replace the first's. The sidecar's state promises this, so a state shared by several sidecars must keep the two in one transaction ([shared and durable state](sidecar-plan.md#follow-up-shared-and-durable-state)).
@@ -963,8 +963,14 @@ A person may take minutes or days to answer a question: they are sent to a porta
 **The operation.**
 
 - **An operation is one model call of an eval.** It is named by the eval and the call's `x-irid`.
-- **It is bound to the request that began it**: the sample, the attempt at the sample, the provider, the model, and a digest of the request's body as the client sent it.
-- **Every request with that `x-irid` and the same binding is a try of the same operation.** A client that sends the request again reattaches to the operation. It is never judged a second time, it never raises a second question, and it never reaches the provider unless the operation is waiting for exactly that.
+- **It is bound to the request that began it**, which is the try at which a sentinel first asked a person. The binding is what `judge_request` said of that request that a sentinel can read, or that says how the request is read:
+  - the sample, and the attempt at the sample;
+  - the provider, the model and the user, as the proxy names them;
+  - the API format the request is written in. One provider and model can take a request under two APIs, as OpenAI does with Chat Completions and Responses, and the same body means something different under each;
+  - the headers the proxy passed on, with `x-inspect-context` taken as its fields;
+  - a digest of the request's body as the client sent it.
+- **What changes from one try to the next is left out of the binding.** That is the `timestamp` and `mac` of `x-inspect-context`, which Inspect makes afresh for each try (section 7), and the proxy's own `id` for the exchange. Each try's `mac` is still checked, as on any request. Every other header the proxy passes on is bound, so an operator doesn't list one that changes with each try, such as an SDK's count of its retries: each try would then be another request.
+- **Every request with that `x-irid` and the same binding is a try of the same operation.** A client that sends the request again reattaches to the operation. It is never judged a second time, and it never raises a second question. Reattaching never causes a call to the provider by itself: a try is sent on only where the operation is waiting for a request ("A request sent again" below).
 - **A request with that `x-irid` and another binding is refused.** It is not judged, and it takes nothing from the operation: an approval is for the request the person was asked about, and no other.
 - **Only a call a sentinel asked a person about is kept this way.** Every other call is judged try by try, as before.
 
@@ -982,7 +988,7 @@ Inspect asks `request_result` after any call that comes back as an error, so it 
 | --- | --- | --- |
 | `awaiting_review` | A question is open for the call. | Shows it, sends the answer, and asks again. |
 | `judging` | The sentinel is at work, as after an answer, when the next protocol or the turn's next call is judged. | Asks again. |
-| `awaiting_request` | The request stage is finished and nothing was refused. The provider has not been called. | Sends the same request again, once. |
+| `awaiting_request` | The request may be sent on to the provider. Without a `reason`, the request stage is finished, nothing was refused, and the provider has not been called. With one, the provider's last exchange failed. | Without a `reason`, sends the same request again, once. With one, treats the error it got as the provider's, as for any failed call. |
 | `awaiting_reply` | A try was sent on to the provider, and its reply has not reached the sidecar. | Waits for that try's own response. |
 | `decided` | The call came to an end: `outcome`, the judgment, and, for a turn that goes on, `reply`. | Acts on it. |
 | `not_judged` | The call ended with nothing decided. `reason` says why. | Fails the attempt, as for any call not judged. |
@@ -1055,22 +1061,32 @@ sequenceDiagram
     P-->>I: The provider's reply
 ```
 
-**A request sent again.**
+**A request sent again.** Reattaching never causes a call to the provider by itself. A try is sent on only at `awaiting_request`, and only one at a time.
 
-- **While the operation is paused or being judged**, it is answered "pending review", and changes nothing.
+- **While the operation is paused or being judged**, a try is answered "pending review", and changes nothing.
 - **At `awaiting_request`, one try is sent on.** The sidecar moves the operation to `awaiting_reply` as it lets that try through, in one step, so two tries sent at once can't both reach the provider. The other is answered "pending review".
 - **At `awaiting_reply`**, a try is answered "pending review": a request is already with the provider.
-- **Once the operation is decided**, a try is refused, and told the result is read with `request_result`. The provider is not called again.
-- **If the proxy says the provider's exchange failed**, by handing over an error reply or saying the reply was cut off, the operation goes back to `awaiting_request`, and Inspect or its SDK may send the request again, as after any failed call.
+- **Once the operation has ended**, decided or not judged, a try is refused, and told the result is read with `request_result`. The provider is not called again.
+
+**When the provider is called again.** Only after an exchange with it that the sidecar knows to have failed.
+
+- **If the proxy says the provider's exchange failed**, by handing over an error reply or saying the reply was cut off, the operation goes back to `awaiting_request`, with the `reason` `provider_error` or `cut_off`. The try's client gets the provider's error, as from any call.
+- **One more try may then be sent on**, as Inspect or its SDK retries any failed call. That try is one of the call's retries and is counted as one. Nobody is asked again: the answers already taken stand.
+- **The `reason` tells Inspect which error it holds.** A "pending review" and a provider's own refusal can both be a 400. With a `reason`, the error is the provider's, and Inspect handles it as it does for any call. Without one, the request is only waiting to be sent.
 - **If the sidecar never hears of the reply**, as when the proxy stops, the operation stays at `awaiting_reply`. The sidecar can't tell whether the provider answered, so it lets no other try through. Inspect's own request has failed, and it reads the call's judgment as unavailable, as it does today for a reply the sidecar never saw. Nothing recovers such a call by itself.
 
-**The completed reply.** `request_result` gives a decided call's `reply` when the turn goes on and the call's own exchange was answered "pending review" at the reply. It is the provider's reply as the proxy would have passed it on, with the sentinel's edits in it:
+**The completed reply.** The sidecar keeps the reply of every operation that is decided with the turn going on, whichever stage it was paused at, and `request_result` gives it as `reply`. It is the provider's reply as the proxy passes it on, with the sentinel's edits in it:
 
 - **`status` and `headers`**, as the provider sent them, without the headers of one hop.
 - **`body`**, the bytes, as base64: a JSON reply whole, or a streamed reply's events from first to last.
 - **`format`**, the API the request was written in, and whether the reply is a stream, so that the eval's own reader of that provider's replies is the one that reads it.
 
-Inspect reads it with the code that reads a reply from the network, so the stop reason, the usage and what the provider needs sent back in the next request are what the provider sent, whatever version of inspect_ai the sidecar runs. Its usage is counted once, when it is read: a "pending review" counts no usage, isn't an attempt against the call's retries, and isn't logged as a failed call. The `reply` is separate from the judgment, which redacts as before, and only the eval whose call it is can read it. The sidecar keeps it until the sample ends, so it can be read again if an answer is lost.
+Inspect reads `reply` wherever the call's own exchange didn't bring it the reply:
+
+- **A call paused at its reply**, always. Its exchange was answered "pending review".
+- **A call paused at its request, when the response to the try sent on is lost** between the proxy and Inspect. The operation is decided by then, so a request sent again is refused and the provider isn't called a second time. Without the kept reply, nothing could give Inspect the turn.
+
+Inspect reads it with the code that reads a reply from the network, so the stop reason, the usage and what the provider needs sent back in the next request are what the provider sent, whatever version of inspect_ai the sidecar runs. Inspect takes the reply from its own exchange or from `reply`, never from both, so its usage is counted once. A "pending review" counts no usage, isn't an attempt against the call's retries, and isn't logged as a failed call. The `reply` is separate from the judgment, which redacts as before, and only the eval whose call it is can read it. The sidecar keeps it until the sample ends, so it can be read again if an answer is lost.
 
 **A question's expiry is not the operation's end.**
 
@@ -1078,9 +1094,22 @@ Inspect reads it with the code that reads a reply from the network, so the stop 
 - **A question that expires gives the sentinel the cautious answer**, `reject` if offered and `terminate` otherwise, and the judging goes on from there: the turn's other calls are still judged.
 - **A paused operation keeps what it needs.** While it is paused, its run, its eval's token and its task's registration don't expire.
 
-**`cancel_request` closes an operation the eval no longer waits for.** It takes the call's `x-irid`, signed as other calls are. It decides nothing: the paused judging is stopped, the question closes, and the call reads as not judged, with the reason `cancelled`. A call that isn't paused is left as it is.
+**`cancel_request` closes an operation the eval no longer waits for.** It takes the call's `x-irid`, signed as other calls are, and decides nothing. It closes an operation at any state before its end:
 
-**What ends an operation.** It ends when it is decided or not judged. Before that, it is closed, with nothing decided for it, when a later attempt at its sample begins, when the eval ends the sample, when a sentinel ends the run at another call, and when the eval cancels it with `cancel_request`, as Inspect does for a sample that is cancelled or fails while a call of it is paused. Its questions close with it.
+| `state` when cancelled | What cancelling does |
+| --- | --- |
+| `awaiting_review` | The paused judging is stopped, and the question closes. |
+| `judging` | The judging is stopped, so it asks no further question. |
+| `awaiting_request` | No try is sent on to the provider. |
+| `awaiting_reply` | The request already with the provider can't be called back. Its reply, when it comes, is not judged, not kept and not passed on. |
+
+- **The call then reads as `not_judged`, with the reason `cancelled`.** The answer says `cancelled` is true.
+- **A call that has ended is left as it is**, and so is one no person was asked about, whose judging ends with its own exchange or with its sample. The answer says `cancelled` is false, as it does for a call the sidecar doesn't know.
+- **It is not served with `--no-eval-results`**, like the two methods for questions: such a sidecar keeps no question, so it has no operation to cancel.
+
+**What ends an operation.** It ends when it is decided or not judged. Before that, it is closed, with nothing decided for it, when a later attempt at its sample begins, when the eval ends the sample, when a sentinel ends the run at another call, and when the eval cancels it with `cancel_request`, as Inspect does for a sample that is cancelled or fails while a call of it is open. Its questions close with it.
+
+**A closed operation stays closed**, however it was closed and at whatever state. No answer, no try and no reply that comes later opens it again. A reply from a request that was already with the provider is not judged, not kept and not passed on to the client.
 
 **What a restart loses.** Paused operations are kept in the sidecar's memory. After a restart, `request_result` reads such a call as `unknown`, and Inspect treats it as it does any call whose records are lost. Keeping a review across a restart belongs with [shared and durable state](sidecar-plan.md#follow-up-shared-and-durable-state).
 
@@ -1196,7 +1225,7 @@ A request that passes both can still name a task or a sample the sidecar doesn't
 - **The call is an agent turn**, one the sentinel would judge if it ran inside Inspect. Calls by a scorer's grader, an approver, a compaction summary, a monitor, or Inspect itself are not.
 - **The call goes to an endpoint where a probe found a sidecar**, whatever the model ("Finding the sidecar" above).
 
-Section 7 lists the fields of `x-inspect-context`, and says how Inspect makes a fresh `timestamp` and `mac` for each HTTP try. The other header, `x-irid`, is unchanged: Inspect sends it on every model call, as with no sidecar, and the `mac` in `x-inspect-context` covers its value. It names one logical model call, and a provider SDK's own retries of that call send the same `x-irid`. The sidecar answers `request_result` for the latest attempt, which is the reply Inspect got. The proxy removes both headers before the request reaches the provider.
+Section 7 lists the fields of `x-inspect-context`, and says how Inspect makes a fresh `timestamp` and `mac` for each HTTP try. The other header, `x-irid`, is unchanged: Inspect sends it on every model call, as with no sidecar, and the `mac` in `x-inspect-context` covers its value. It names one logical model call, and a provider SDK's own retries of that call send the same `x-irid`. The sidecar answers `request_result` for the call, not for one HTTP try of it. For a call no person was asked about, that is its latest try, whose reply Inspect got. For a call paused for a person, it is the one operation, whatever tries were sent ("A review pauses the model call, not a connection" above). The proxy removes both headers before the request reaches the provider.
 
 **Inspect's completion cache is off for these calls.** A cached reply never reaches the proxy, so none of its steps would be judged. The sidecar's decision on it in an earlier eval says nothing about this one. The provider's own prompt caching is unaffected.
 
@@ -1569,7 +1598,7 @@ sequenceDiagram
 
 ### Waiting while the sidecar judges
 
-- **`request_result` is a long poll.** Inspect passes `wait`, in seconds. While the latest attempt is `judging`, the sidecar holds its answer until the state changes or `wait` passes, for at most 30 seconds. Inspect calls again while the answer is still `judging`. Only `judging` is waited on. An unknown state, as from a newer sidecar, is taken as an answer with the decision unavailable.
+- **`request_result` is a long poll.** Inspect passes `wait`, in seconds. While the call is `judging`, the sidecar holds its answer until the state changes or `wait` passes, for at most 30 seconds. Inspect calls again while the answer is still `judging`. Only `judging` is waited on. An unknown state, as from a newer sidecar, is taken as an answer with the decision unavailable.
 - **There are no settings for the wait, as for a sentinel inside Inspect.** While Inspect waits, the sample's token, turn and working limits are paused, and its time limit still applies. That follows Meridian's decision that a sentinel's monitors count as waiting, not working (inspect_ai's `design/working-time-concurrency.md`). The only limit on judging itself is the sidecar's `--time-limit`, which the operator sets and is off by default.
 - **The limits are paused only while Inspect asks.** Time the sidecar spends judging inside the model call is still charged to the agent. Counting that time as waiting is a to do ([#162](https://github.com/meridianlabs-ai/inspect_sentinel/issues/162), section 8, "What holds something else in the sidecar").
 - **A sample that errors or is cancelled stops asking at once.**
@@ -1874,22 +1903,24 @@ For a task in the tasks folder, nothing is stored and `fixed` is true. The sampl
 
 - **`outcome`** is `proceed`, `reject` or `terminate`, and **`message`** is the text the model is told. Both are present only when `state` is `decided`. An `explanation` is written to the log only, never shown to the model.
 - **Each record carries `function`**, the monitor or protocol function that made it, and a record at a tool stage carries `call`, the id of the tool call it is about.
-- **A retried call keeps its `x-irid`** ("Each agent model call" above). `outcome`, `message` and `judgment` are for the latest attempt, which is the reply the client got, and `recorded` holds every attempt's records in order.
+- **The answer describes the call, not one HTTP try of it.** A retried call keeps its `x-irid` ("Each agent model call" above). For a call no person was asked about, `state`, `outcome`, `message` and `judgment` are for its latest try, which is the reply the client got. For a call paused for a person, they are the operation's, and a try that reattaches to it changes none of them ("A review pauses the model call, not a connection" above). `recorded` holds every try's records in order.
 - **`reviews` says what became of each question a person was asked**, every try's in order. Each has the question's `id`, the `try_number` of the try that asked, from 1, the `stage`, the `call` by id only, and when it was `asked`. If the sidecar took an answer, it has the `decision`, the `reason` and when it was `answered`: the eval sent that answer, which doesn't show that a person chose it. `resolution` says how the wait ended: `answered`, when the sentinel was given the eval's answer; `timed_out`, when it was given the cautious one; or `cancelled`, when the step came to no decision, with the `cause`: `replaced_attempt`, `sample_ended`, `run_ended`, `cancelled` by the eval, or `stopped`. A call closed just after its answer was taken keeps the answer, which took no effect. `reviews` is left out when nobody was asked.
-- **`reply` is the provider's reply for a call that was paused at its reply and then went on**: its `status`, `headers`, `body` as base64, and `format` ("A review pauses the model call, not a connection" above). It is left out of every other answer.
-- **`wait` makes the call a long poll.** While the latest attempt is `judging`, the sidecar answers when the state changes or after `wait` seconds, and never later than 30 seconds. Without `wait`, it answers at once ("Waiting while the sidecar judges" above).
-- **`judgment` is what was decided**, once the latest attempt is decided: every step judged in the exchange with its decision and records, what the exchange came to, and the turn withheld from the client or proposed by the model, with each call a decision acted on redacted. "The judgment" and "Redacted calls" above describe its members. Where the sidecar doesn't send results, the judgment is trimmed and says so, and `recorded` is left out ("A client that can't be trusted" below).
+- **`reply` is the provider's reply for a call that a person was asked about and that was decided with the turn going on**, whichever stage it was paused at: its `status`, `headers`, `body` as base64, and `format` ("A review pauses the model call, not a connection" above). It is left out of every other answer.
+- **`wait` makes the call a long poll.** While the call is `judging`, the sidecar answers when the state changes or after `wait` seconds, and never later than 30 seconds. Without `wait`, it answers at once ("Waiting while the sidecar judges" above).
+- **`judgment` is what was decided**, once the call is decided: every step judged in the exchange with its decision and records, what the exchange came to, and the turn withheld from the client or proposed by the model, with each call a decision acted on redacted. "The judgment" and "Redacted calls" above describe its members. Where the sidecar doesn't send results, the judgment is trimmed and says so, and `recorded` is left out ("A client that can't be trusted" below).
 
-`state` says where the latest attempt stands, so that an eval can tell a request that will have an answer from one that never will:
+`state` says where the call stands, so that an eval can tell a request that will have an answer from one that never will:
 
 | `state` | Meaning |
 | --- | --- |
 | `judging` | The sentinel is at work on the request or its reply. Asking later will give a different answer. |
 | `awaiting_reply` | The request was sent on, and the proxy has not handed over a reply. A proxy that hands over only successful replies, as Middleman's passthrough hook is designed to, leaves a call that failed at the provider in this state. |
 | `awaiting_review` | A sentinel asked a person about the call, and the question is open ("A review pauses the model call, not a connection" above). |
-| `awaiting_request` | A call that was paused at its request is ready to be sent again, once. |
+| `awaiting_request` | A call a person was asked about may be sent on to the provider: its request stage is finished, or the provider's last exchange failed, and then `reason` says how. |
 | `decided` | `outcome` says what was decided. |
 | `not_judged` | Judging ended without a decision. `reason` says why. |
+
+`reason` comes with `not_judged`. It also comes with `awaiting_request`, as `provider_error` or `cut_off`, when the call is there because the provider's last exchange failed.
 
 | `reason` | Meaning |
 | --- | --- |
@@ -1900,7 +1931,7 @@ For a task in the tasks folder, nothing is stored and `fixed` is true. The sampl
 | `cut_off` | The proxy stopped handing over a streamed reply before it ended and before it was judged, as when its client disconnected. |
 | `unregistered` | The request named a task or sample the sidecar doesn't take ("How strict the sidecar is" above). |
 | `replaced_attempt` | The request or reply belongs to an attempt at the sample that a later attempt replaced, or to another attempt with the same number (section 7). |
-| `cancelled` | The eval cancelled the call with `cancel_request` while it was paused for a person. |
+| `cancelled` | The eval cancelled the call with `cancel_request` before it ended, at any state after a person was first asked about it. |
 
 `records` says whether the sidecar has records for the request:
 
