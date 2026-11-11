@@ -18,7 +18,7 @@ MAX_TASK_EXPIRY = 30 * 24 * 60 * 60
 """The longest a task Inspect registers is kept once no request has named it, unless the sidecar is told otherwise, in seconds."""
 
 MAX_TASK_REGISTRATIONS = 1000
-"""How many tasks registered by evals are kept at once, unless the sidecar is told otherwise. Anything that can reach the endpoint for evals can register a task, so a registration past this is refused, rather than one still in use dropped."""
+"""How many tasks registered by evals are kept at once, and how many evals' tokens, unless the sidecar is told otherwise. Anything that can reach the endpoint for evals can register a task, so a registration past this is refused, rather than one still in use dropped. It also bounds the evals whose tokens are kept, with runtime registration on or off: a token is kept until no request has named its eval for the run expiry, so an eval that has finished holds a place until then."""
 
 
 class RegistrationError(Exception):
@@ -30,7 +30,7 @@ class RegistrationsFullError(RegistrationError):
 
 
 Strictness: TypeAlias = Literal["open", "known_tasks", "registered_only"]
-"""How strict a sidecar is about a request it can't place. `open` judges every request, without the task's facts where it holds none. `known_tasks` refuses a request that names a task it doesn't hold, and judges one that names no task. `registered_only` refuses any request that doesn't name a sample it holds, including one that names no task."""
+"""How strict a sidecar is about a request it can't place. Under every strictness, a request with an `x-inspect-context` header is refused, and not judged, unless it passes the check of that header, which needs the token its eval registered with. The strictness says what happens to a request that passes, and to one without the header. `open` judges each of those, without the task's facts where it holds none. `known_tasks` refuses a request that names a task it doesn't hold, and judges one that names no task. `registered_only` refuses any request that doesn't name a sample it holds, including one that names no task."""
 
 
 class UnregisteredSampleError(Exception):

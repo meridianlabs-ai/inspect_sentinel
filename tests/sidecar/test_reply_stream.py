@@ -26,6 +26,7 @@ from inspect_sentinel.sidecar._wire import UnreadableError
 from tests.sidecar._traffic import (
     STREAM,
     anthropic_recorded,
+    holding,
     inspect_headers,
     openai_recorded,
     openai_request,
@@ -115,10 +116,10 @@ async def test_a_reply_held_whole_comes_out_as_reply_answers_it(
     name: str, action: str, city: str, size: int, inspect: bool
 ) -> None:
     asked, answered = _exchange(name, inspect=inspect)
-    whole = Handler(weather_rule(action, city))
+    whole = await holding(Handler(weather_rule(action, city)))
     await whole.request(asked)
     answer = await whole.reply(answered)
-    streaming = Handler(weather_rule(action, city))
+    streaming = await holding(Handler(weather_rule(action, city)))
     await streaming.request(asked)
 
     outputs = await _streamed(
@@ -131,7 +132,7 @@ async def test_a_reply_held_whole_comes_out_as_reply_answers_it(
 @pytest.mark.anyio
 async def test_a_provider_error_goes_out_as_it_arrives() -> None:
     asked, answered = _exchange("anthropic stream", inspect=True)
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     await handler.request(asked)
     stream = handler.reply_stream(_start(answered, status=529))
     error = b'{"type":"error","error":{"type":"overloaded_error"}}'
@@ -157,7 +158,7 @@ async def test_a_provider_error_goes_out_as_it_arrives() -> None:
 @pytest.mark.anyio
 async def test_a_provider_error_is_not_held_to_the_limit() -> None:
     asked, answered = _exchange("anthropic stream")
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     await handler.request(asked)
     stream = handler.reply_stream(_start(answered, status=500), max_held_bytes=4)
 
@@ -174,7 +175,7 @@ async def test_a_reply_larger_than_the_limit_is_not_judged() -> None:
     # raised, as for a reply that can't be read, so that a proxy that lets
     # through what isn't judged can, rather than refused as if decided
     asked, answered = _exchange("anthropic stream", inspect=True)
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     await handler.request(asked)
     stream = handler.reply_stream(_start(answered), max_held_bytes=100)
 
@@ -188,7 +189,7 @@ async def test_a_reply_larger_than_the_limit_is_not_judged() -> None:
 @pytest.mark.anyio
 async def test_a_slow_proxy_holds_back_the_feeding_of_a_provider_error() -> None:
     asked, answered = _exchange("anthropic stream")
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     await handler.request(asked)
     stream = ReplyStream(
         handler,
@@ -224,7 +225,7 @@ async def test_a_slow_proxy_holds_back_the_feeding_of_a_provider_error() -> None
 @pytest.mark.anyio
 async def test_an_abort_ends_a_stream_whose_output_no_one_is_collecting() -> None:
     asked, answered = _exchange("anthropic stream")
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     await handler.request(asked)
     stream = ReplyStream(
         handler,
@@ -254,7 +255,7 @@ async def test_an_abort_ends_a_stream_whose_output_no_one_is_collecting() -> Non
 @pytest.mark.anyio
 async def test_a_reply_is_given_up_as_soon_as_it_is_fed_past_the_limit() -> None:
     asked, answered = _exchange("anthropic stream")
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     await handler.request(asked)
     stream = handler.reply_stream(_start(answered), max_held_bytes=100)
 
@@ -275,7 +276,7 @@ async def test_a_reply_is_given_up_as_soon_as_it_is_fed_past_the_limit() -> None
 @pytest.mark.anyio
 async def test_a_reply_cut_off_before_its_end_is_recorded_as_cut_off() -> None:
     asked, answered = _exchange("anthropic stream", inspect=True)
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     await handler.request(asked)
     stream = handler.reply_stream(_start(answered))
     outputs: list[Output] = []
@@ -312,7 +313,7 @@ def decides_when(started: anyio.Event, go: anyio.Event) -> Protocol:
 async def test_a_judgment_goes_on_after_the_client_has_gone() -> None:
     asked, answered = _exchange("anthropic stream", inspect=True)
     started, go = anyio.Event(), anyio.Event()
-    handler = Handler(decides_when(started, go))
+    handler = await holding(Handler(decides_when(started, go)))
     await handler.request(asked)
     stream = handler.reply_stream(_start(answered))
     outputs: list[Output] = []
@@ -351,7 +352,7 @@ def breaks() -> Protocol:
 @pytest.mark.anyio
 async def test_what_judging_raises_is_raised_to_the_reader() -> None:
     asked, answered = _exchange("anthropic stream")
-    handler = Handler(breaks())
+    handler = await holding(Handler(breaks()))
     await handler.request(asked)
 
     with pytest.raises(ExceptionGroup) as raised:
@@ -363,7 +364,7 @@ async def test_what_judging_raises_is_raised_to_the_reader() -> None:
 @pytest.mark.anyio
 async def test_bytes_after_the_end_are_a_mistake() -> None:
     asked, answered = _exchange("anthropic stream")
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     await handler.request(asked)
     stream = handler.reply_stream(_start(answered))
     await stream.end()

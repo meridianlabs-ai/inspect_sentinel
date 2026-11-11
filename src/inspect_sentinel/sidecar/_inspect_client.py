@@ -16,6 +16,9 @@ from ._wire import UnreadableError
 INSPECT_CONTEXT = "x-inspect-context"
 """The header an Inspect eval names the sample of each model request in."""
 
+REQUEST_ID = "x-irid"
+"""The header an Inspect eval names each of its model requests in."""
+
 
 class _Header(BaseModel):
     model_config = ConfigDict(strict=True)
@@ -29,16 +32,32 @@ class _Header(BaseModel):
     attempt: str
     attempt_number: int
     model: str | None = None
+    timestamp: int
+    mac: str
 
 
-def inspect_sample(headers: Mapping[str, str]) -> InspectSample | None:
-    """The sample an Inspect eval says a request is from, or None if the request has no `x-inspect-context`.
+@dataclass(frozen=True)
+class SignedSample:
+    """The sample an Inspect eval says a request is from, and the eval's id for the request, with what proves both: an HMAC of the values that name the run, the request's id and the timestamp, made with the eval's token."""
+
+    sample: InspectSample
+    """The sample, as the header names it."""
+    request_id: str
+    """The eval's id for the request, as its `x-irid` header gives it."""
+    timestamp: int
+    """When Inspect signed the header, in seconds since the epoch."""
+    mac: str
+    """The HMAC of the values that name the run, the request's id, and the timestamp."""
+
+
+def signed_sample(headers: Mapping[str, str]) -> SignedSample | None:
+    """The sample an Inspect eval says a request is from, the eval's id for the request, and what proves both, or None if the request has no `x-inspect-context`.
 
     Args:
         headers: The request's headers, by lowercase name.
 
     Raises:
-        UnreadableError: If the header is there and isn't what Inspect writes, so the request's run can't be told.
+        UnreadableError: If the header is there and isn't what Inspect writes, with a `timestamp` and a `mac`, so the request's run can't be told; or if the request has no `x-irid` with it, as Inspect always sends one, so the `mac` can't be checked.
     """
     value = headers.get(INSPECT_CONTEXT)
     if value is None:
@@ -49,7 +68,19 @@ def inspect_sample(headers: Mapping[str, str]) -> InspectSample | None:
         raise UnreadableError(
             f"The request's {INSPECT_CONTEXT} header isn't one this sidecar can read."
         ) from None
-    return InspectSample(**header.model_dump(exclude={"version"}))
+
+    # the mac signs the request's id, so a request without one can't be checked
+    request_id = headers.get(REQUEST_ID)
+    if not request_id:
+        raise UnreadableError(
+            f"The request has an {INSPECT_CONTEXT} header and no {REQUEST_ID} header, which Inspect sends with it."
+        )
+    return SignedSample(
+        InspectSample(**header.model_dump(exclude={"version", "timestamp", "mac"})),
+        request_id,
+        header.timestamp,
+        header.mac,
+    )
 
 
 @dataclass

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from pydantic.json_schema import GenerateJsonSchema, models_json_schema
 from starlette.requests import Request as HttpRequest
 from starlette.responses import JSONResponse, Response
@@ -35,6 +35,7 @@ from ._registration import (
     TaskRegistration,
     UnknownTaskError,
 )
+from ._sign import MIN_TOKEN_LENGTH
 from ._state import NotJudged, Outcome
 
 PATH = "/sentinel/v1"
@@ -50,22 +51,34 @@ TOKEN_VARIABLE = "INSPECT_SENTINEL_EVAL_TOKEN"
 """The environment variable the endpoint's own token is read from, when it has a port of its own."""
 
 
+_TIMESTAMP = "When the caller signed, in whole seconds since the epoch. A call whose timestamp is further from the sidecar's clock than its window, five minutes by default, is refused with `unauthorized`."
+
+_MAC = 'An HMAC-SHA256, in hex, made with the eval\'s token over `json.dumps([str(v) for v in [method, eval_id, timestamp]], separators=(",", ":"))`, such as `["sample_result","eval_789","1794182400"]`. It proves only that the caller holds the token, not the call\'s other parameters.'
+
+
 class EvalCall(BaseModel):
-    """What every call for an eval, but its first registration, presents: the eval, and the token its registration gave."""
+    """What every call for an eval presents, but a registration that sends the eval's token: the eval, and proof that the caller holds its token."""
 
     eval_id: str = Field(description="The eval's id, as its requests name it.")
-    token: str = Field(
-        description="The token `register_task` gave the eval. A call without the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps none for the eval, as after a restart, holds nothing of it for anyone."
+    timestamp: int = Field(description=_TIMESTAMP)
+    mac: str = Field(
+        description=f"{_MAC} A call whose `mac` isn't made with the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps no token for the eval, as after a restart, holds nothing of it for anyone."
     )
 
 
 class RegisterTaskParams(TaskRegistration):
-    """Parameters of `register_task`: a task an eval runs, and the ids of its samples, sent at task init."""
+    """Parameters of `register_task`: a task an eval runs, and the ids of its samples, sent at task init. It carries either the eval's `token`, or a `timestamp` and a `mac`, and not both."""
 
     eval_id: str = Field(description="The eval's id, as its requests name it.")
     token: str | None = Field(
         default=None,
-        description="The token the eval holds for this sidecar. At the eval's first registration, one the eval made, which the sidecar keeps and hands back, so the registration can be sent again if its answer was lost. A sidecar that keeps another token for the eval answers `unauthorized`.",
+        min_length=MIN_TOKEN_LENGTH,
+        description=f"The token the eval made for this sidecar, at least {MIN_TOKEN_LENGTH} characters, sent only to a sidecar that holds no token for the eval: at the eval's first registration, when that registration is sent again because its answer was lost, or after the sidecar lost the token in a restart or once it expired. The sidecar keeps it once the registration succeeds, and never sends it back. A sidecar that keeps another token for the eval answers `unauthorized`.",
+    )
+    timestamp: int | None = Field(default=None, description=_TIMESTAMP)
+    mac: str | None = Field(
+        default=None,
+        description=f"{_MAC} Sent in place of the token once the sidecar holds it. A sidecar that holds no token for the eval answers `unknown_task`, and the eval registers again with its token.",
     )
     expiry: float | None = Field(
         default=None,
@@ -73,14 +86,20 @@ class RegisterTaskParams(TaskRegistration):
         description="How long to keep the registration once no request has named the task, in seconds. A day if not given.",
     )
 
+    @model_validator(mode="after")
+    def _token_or_mac(self) -> RegisterTaskParams:
+        partly_signed = (self.timestamp is None) != (self.mac is None)
+        if partly_signed or (self.token is None) == (self.mac is None):
+            raise ValueError(
+                "A registration carries the eval's token, or a timestamp and a mac, and not both."
+            )
+        return self
+
 
 class RegisterTaskResult(BaseModel):
-    """What the sidecar stored, or that the task was registered beforehand and nothing was stored, and the eval's token."""
+    """What the sidecar stored, or that the task was registered beforehand and nothing was stored."""
 
     eval_id: str
-    token: str = Field(
-        description="The eval's token, which every later call for the eval presents. It is the one presented, kept now if the sidecar kept none for the eval, or one made here where none was presented. The eval keeps the latest, and never hands it to an agent."
-    )
     task: str
     samples: int = Field(description="How many samples the registration named.")
     fixed: bool = Field(
@@ -125,7 +144,7 @@ class RequestResultResult(BaseModel):
 
     id: str
     records: Literal["held", "dropped", "unknown"] = Field(
-        description="`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never saw the request, or the request's `x-inspect-context` named another eval."
+        description="`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never kept the request: one it never saw, one without an `x-inspect-context` it could read and check, or one whose `x-inspect-context` named another eval."
     )
     state: Literal["judging", "awaiting_reply", "decided", "not_judged"] | None = Field(
         default=None, description="Where the latest attempt stands."
@@ -214,11 +233,11 @@ _ERRORS: dict[int, tuple[str, str]] = {
     ),
     UNKNOWN_TASK: (
         "unknown_task",
-        "The sidecar holds no registration of the task by the eval: it was never registered, or is no longer kept. The eval registers the task again, then completes the sample's registration.",
+        "The sidecar holds no registration of the task by the eval: it was never registered, or is no longer kept. The eval registers the task again, then completes the sample's registration. Answered to a `register_task` with a `mac` when the sidecar holds no token for the eval, as after a restart or once the token expired: the eval registers again with its token.",
     ),
     UNAUTHORIZED: (
         "unauthorized",
-        "The call didn't present the token the sidecar keeps for the eval, which only the eval's own registration was given.",
+        "The call's `mac` isn't made with the token the sidecar keeps for the eval, or its `timestamp` is further from the sidecar's clock than the window allows; or a `register_task` sent another token than the one the sidecar keeps for the eval.",
     ),
 }
 
@@ -232,7 +251,7 @@ def eval_routes(
 ) -> list[Route]:
     """The routes of the endpoint for evals: the probe at `/sentinel/info`, and the methods at `/sentinel/v1`.
 
-    An eval registers its tasks and completes each sample's registration before the sample runs, asks what became of each request and of a sample, and ends a sample once it is scored. Every call but an eval's first registration presents the token that registration gave, so only the eval reads what was decided of its requests and samples. Every call is a JSON-RPC 2.0 request. No method allows a call, clears a tally or changes the sentinel. A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
+    An eval registers its tasks and completes each sample's registration before the sample runs, asks what became of each request and of a sample, and ends a sample once it is scored. The eval makes a token and sends it in a registration to a sidecar that holds none for the eval. Every other call proves the caller holds that token with a `timestamp` and a `mac`, so only the eval reads what was decided of its requests and samples. Every call is a JSON-RPC 2.0 request. No method allows a call, clears a tally or changes the sentinel. A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
 
     Args:
         handler: The handler the proxy's requests and replies are put to.
@@ -295,41 +314,44 @@ async def _answer(
     except ValidationError as ex:
         raise invalid_params(ex) from None
     try:
-        return await _answered(handler, given, results)
+        return await _answered(handler, method, given, results)
     except UnauthorizedError as ex:
         raise RpcError(UNAUTHORIZED, str(ex)) from None
 
 
-async def _answered(handler: Handler, given: BaseModel, results: bool) -> BaseModel:
+async def _answered(
+    handler: Handler, method: str, given: BaseModel, results: bool
+) -> BaseModel:
     if isinstance(given, RegisterTaskParams):
-        # the token first: a caller that can't present it registers nothing
-        kept = await handler.eval_token(given.eval_id, given.token)
+        # the token or the proof first: a caller that has neither registers
+        # nothing, and reads nothing of what the eval registered before
+        if given.token is not None:
+            await handler.eval_token(given.eval_id, given.token)
+        else:
+            assert given.timestamp is not None and given.mac is not None
+            if not await handler.holds_eval(
+                given.eval_id, method, given.timestamp, given.mac
+            ):
+                raise RpcError(
+                    UNKNOWN_TASK,
+                    f"The sidecar holds no token for the eval {given.eval_id!r}, as after a restart or once it expired, so the eval registers the task again with its token.",
+                )
         registration = TaskRegistration.model_validate(
             given.model_dump(include=set(TaskRegistration.model_fields))
         )
         try:
-            # before the registration, so one that can't be given a token
-            # isn't kept
-            if kept is None:
-                await handler.eval_token_room()
+            # The token is kept with the registration, in one step. So a
+            # registration that fails leaves no token behind, and one that
+            # finds another token kept meanwhile leaves no task.
             granted = await handler.register_task(
-                given.eval_id, registration, given.expiry
+                given.eval_id, registration, given.expiry, given.token
             )
         except RegistrationsFullError as ex:
             raise RpcError(REGISTRATIONS_FULL, str(ex)) from None
         except RegistrationError as ex:
             raise RpcError(REGISTRATION_REFUSED, str(ex)) from None
-        # kept only now, so a registration that failed leaves none behind; the
-        # eval's own token where it sent one, so that a first registration
-        # whose answer was lost gets the same token when it is sent again
-        token = (
-            kept
-            if kept is not None
-            else await handler.keep_eval_token(given.eval_id, given.token)
-        )
         return RegisterTaskResult(
             eval_id=given.eval_id,
-            token=token,
             task=given.task,
             samples=len(given.sample_ids),
             fixed=granted is None,
@@ -337,7 +359,7 @@ async def _answered(handler: Handler, given: BaseModel, results: bool) -> BaseMo
         )
     assert isinstance(given, EvalCall)
     # a sidecar that keeps no token for the eval holds nothing of it
-    holds = await handler.holds_eval(given.eval_id, given.token)
+    holds = await handler.holds_eval(given.eval_id, method, given.timestamp, given.mac)
     if isinstance(given, CompleteRegistrationParams):
         if not holds:
             raise RpcError(
