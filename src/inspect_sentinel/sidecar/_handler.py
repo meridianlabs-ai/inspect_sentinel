@@ -14,6 +14,7 @@ from inspect_ai.model import (
     ChatMessageAssistant,
     ChatMessageTool,
     ModelOutput,
+    ModelUsage,
 )
 from inspect_ai.tool import ToolCall, ToolCallView
 from inspect_ai.util import Store
@@ -45,7 +46,15 @@ from ._exchange import (
     succeeded,
 )
 from ._history import record_sent, with_sent_ids
-from ._host import Record, RunHost, SidecarHost, noting_models, stage
+from ._host import (
+    ModelUsed,
+    Record,
+    RunHost,
+    SidecarHost,
+    add_usage,
+    noting_models,
+    stage,
+)
 from ._inspect_ai import VIEWED_TOOLS, tool_call_view
 from ._inspect_client import (
     INSPECT_CONTEXT,
@@ -137,6 +146,8 @@ class RequestResult:
     """The latest attempt at it."""
     records: list[Record]
     """What was recorded, every attempt's in order."""
+    judging_usage: dict[ModelUsed, ModelUsage]
+    """What the provider billed for each model the sentinel called while judging every attempt, in the order first billed."""
 
 
 @dataclass(frozen=True)
@@ -190,7 +201,7 @@ class Handler:
             state: Where runs are kept. Defaults to this process's memory.
             reject_status: The HTTP status a rejected turn is refused with. The default, 400, is one a client takes as final. A status a client retries by itself, such as 503, brings the client back with the same request, which then goes on with the rejection added.
             time_limit: The longest the sentinel may take to judge one request or one reply, in seconds, after which it is cancelled. None, the default, is no limit.
-            eval_results: Whether the judgment `request_result` gives an Inspect eval holds the results: the explanations, references and metadata of the decisions, and what each monitor and protocol recorded. Without them, it holds only what Inspect acts on. A monitor's explanation tells an agent what the monitor looks for, so an eval that can't be trusted is not sent them.
+            eval_results: Whether the judgment `request_result` gives an Inspect eval holds the results: the explanations, references and metadata of the decisions, and what each monitor and protocol recorded. Without them, it holds only what Inspect acts on. A monitor's explanation tells an agent what the monitor looks for, so an eval that can't be trusted is not sent them. Either way, `request_result` gives how long the judging took and what the judge models' calls cost, by model and role, for the eval's accounting.
             tasks: Tasks registered beforehand, by name, as the tasks folder's files hold them. Nothing an eval registers replaces one, and a request for a sample one doesn't hold is refused.
             runtime_task_registration: Whether an eval may register its tasks itself, at task init.
             strictness: How strict the handler is about a request it can't place. Under every strictness, a request with an `x-inspect-context` header must first pass the check of that header: it is refused, and not judged, if the handler holds no token for the eval it names, if its `timestamp` or `mac` fails the check, or if it names a run another eval started (see `request`). The strictness says what happens to a request that passes, and to one without the header. `open`, the default, judges each of those, without the task's facts where it holds none. `known_tasks` refuses a request whose `x-inspect-context` names a task the handler doesn't hold, and judges one without the header. `registered_only` refuses any request that doesn't name a sample the handler holds, in an epoch the task's registration runs, including one without the header, and refuses a sample's registration that the task's registration doesn't name.
@@ -560,12 +571,16 @@ class Handler:
             with anyio.move_on_after(min(left, _RESULT_POLL)):
                 await latest.settled.wait()
         records: list[Record] = []
+        usage: dict[ModelUsed, ModelUsage] = {}
         for attempt in attempts:
             kept = await self._state.records(attempt.exchange)
             if kept is None:
                 return "dropped"
             records.extend(kept)
-        return RequestResult(attempts[-1], records)
+            # every attempt's judging was billed, a retried one's too
+            for used, billed in attempt.judging_usage.items():
+                add_usage(usage, used, billed)
+        return RequestResult(attempts[-1], records, usage)
 
     async def sample_result(
         self, sample_uuid: str, eval_id: str
@@ -1346,17 +1361,28 @@ class Handler:
     async def _judge(self, held: Held, run: Run, step: Step) -> Decision | None:
         recorded = len(held.recorder.records)
         # which models judged the step, for the eval: its roles don't reach here
-        with noting_models() as models:
-            decision = await run_sentinel(
-                self._protocol,
-                HostContext(
-                    host=RunHost(self._host, run.eval),
-                    recorder=held.recorder,
-                    store=held.store,
-                    proxy=held.proxy,
-                ),
-                step,
-            )
+        # each judge call's billed usage goes to the attempt as soon as the
+        # call is done, so an eval asking while the step is judged sees it
+        with noting_models(
+            held.attempt.judging_usage if held.attempt is not None else None
+        ) as models:
+            started = time.monotonic()
+            try:
+                decision = await run_sentinel(
+                    self._protocol,
+                    HostContext(
+                        host=RunHost(self._host, run.eval),
+                        recorder=held.recorder,
+                        store=held.store,
+                        proxy=held.proxy,
+                    ),
+                    step,
+                )
+            finally:
+                # the client waited on its model call while the step was
+                # judged, failed or not
+                if held.attempt is not None:
+                    held.attempt.judging_time += time.monotonic() - started
         call = (
             step.call.id if isinstance(step, BeforeToolCall | AfterToolCall) else None
         )
@@ -1366,7 +1392,7 @@ class Handler:
                 call,
                 decision,
                 held.recorder.records[recorded:],
-                tuple(models),
+                tuple(models.called),
             )
         )
         return decision

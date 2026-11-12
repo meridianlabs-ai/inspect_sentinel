@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import pytest
 from inspect_ai.model import ChatMessageUser, GenerateConfig
@@ -11,7 +12,7 @@ from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, Refuse, SidecarHost
-from inspect_sentinel.sidecar._host import RunHost
+from inspect_sentinel.sidecar._host import ModelUsed, RunHost, noting_models
 from tests.sidecar._traffic import message, reply, request, weather
 
 
@@ -100,6 +101,35 @@ async def test_generate_uses_the_role_model() -> None:
 
     # mockllm names itself as the model that answered
     assert output.model == "mockllm"
+
+
+@pytest.mark.anyio
+# inspect_ai calls a model on trio only once it is set up to, as an eval does;
+# the sidecar serves on asyncio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_a_reply_from_inspects_cache_bills_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("INSPECT_CACHE_DIR", str(tmp_path))
+    host = SidecarHost({"monitor": "mockllm/model"})
+    cached = GenerateConfig(cache=True)
+    judge = ModelUsed("monitor", "mockllm/model")
+
+    with noting_models() as noted:
+        first = await host.generate("Is this suspicious?", config=cached)
+        billed = noted.billed[judge]
+        # the same prompt again, answered from inspect_ai's cache
+        await host.generate("Is this suspicious?", config=cached)
+
+    assert first.usage is not None
+    assert billed.total_tokens == first.usage.total_tokens > 0
+    assert noted.billed == {judge: billed}
+
+    # a model whose only call was answered from the cache was called, and
+    # billed nothing
+    with noting_models() as noted:
+        await host.generate("Is this suspicious?", config=cached)
+    assert (noted.called, noted.billed) == ([judge], {})
 
 
 @pytest.mark.anyio

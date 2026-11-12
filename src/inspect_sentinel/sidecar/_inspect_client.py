@@ -142,6 +142,26 @@ class SentinelModel(BaseModel):
     model: str = Field(description="The model the call went to, as Inspect names it.")
 
 
+class JudgingUsage(SentinelModel):
+    """What the provider billed for a model a monitor or protocol called while a request was judged."""
+
+    usage: dict[str, Any] = Field(
+        description="The usage of the model's calls added up, as Inspect writes `ModelUsage`, with `total_cost` where Inspect knows the model's price."
+    )
+
+
+def judging_usage(usage: Mapping[ModelUsed, ModelUsage]) -> list[JudgingUsage]:
+    """The usage of each model the sentinel was billed for while judging a request, for the eval: empty where nothing was billed."""
+    return [
+        JudgingUsage(
+            role=used.role,
+            model=used.model,
+            usage=billed.model_dump(mode="json", exclude_none=True),
+        )
+        for used, billed in usage.items()
+    ]
+
+
 class SentinelStep(BaseModel):
     """One step judged during an exchange."""
 
