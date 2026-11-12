@@ -95,8 +95,8 @@ _REPLIED = "inspect_sentinel_replied"
 # keeps them with a reply
 _PROVIDER_HEADER = "llm_provider-"
 # a reply's headers the sidecar is never shown: a credential a provider echoes
-# or sets, and `content-type`, which is said apart, of the reply as LiteLLM
-# writes it, since LiteLLM may write a reply in another form than it came in
+# or sets, and `content-type`. That is sent separately as `content_type`, and
+# says how LiteLLM wrote the reply, which may differ from how it came in.
 _REPLY_NOT_SHOWN = _CREDENTIALS | {"set-cookie", "content-type"}
 _MAX_REPLY_BYTES = 32 * 1024 * 1024
 # where the sidecar serves the methods this calls, and the version of them
@@ -423,7 +423,29 @@ class LiteLLMGuardrail(CustomGuardrail):
         # before the stream is read, since LiteLLM 1.83 shows the reply to the
         # success hook while its last chunk is read
         _record(request_data)[_STREAMED] = True
-        relay = _Relay(self, told, chunks, _provider_headers(response, request_data))
+        # what LiteLLM hands over is a stream to iterate, which may not be an
+        # iterator itself
+        chunks = aiter(chunks)
+        try:
+            first = await anext(chunks)
+        except StopAsyncIteration:
+            first = _NO_CHUNK
+        except BaseException:
+            # The provider's call failed before its stream began. For some
+            # providers LiteLLM makes the call only at the stream's first read,
+            # as for Gemini and Vertex, so this is where their error comes.
+            # Nothing was handed to the sidecar, and LiteLLM calls the failure
+            # hook with the error, which hands it over as for a request that
+            # wasn't streamed.
+            _record(request_data).pop(_STREAMED, None)
+            raise
+        # the provider's headers, which LiteLLM has only once the call is made
+        relay = _Relay(
+            self,
+            told,
+            _starting_with(first, chunks),
+            _provider_headers(response, request_data),
+        )
         try:
             async for chunk in relay.released():
                 yield chunk
@@ -439,7 +461,7 @@ class LiteLLMGuardrail(CustomGuardrail):
     ) -> HTTPException | None:
         """Tell the sidecar that a request it let through came to an error, with no reply to judge.
 
-        LiteLLM calls this with whatever stopped a call: a provider's error, a provider it could not reach, or a refusal of its own or of a guardrail. Only a request the sidecar was asked about and let through is told to it, and only where the sidecar was not shown a reply: a reply that was refused, and a stream that failed once it began, the sidecar already knows of. The error is handed over as a `judge_reply`, with the status LiteLLM answers its caller with, the provider's headers where LiteLLM kept them, and what LiteLLM kept of the provider's body. The sidecar then stops waiting for a reply. For a model call that waited for a person, it lets the eval send the request again, and tells the eval what failed.
+        LiteLLM calls this with whatever stopped a call: a provider's error, a provider it could not reach, or a refusal of its own or of a guardrail. Only a request the sidecar was asked about and let through is told to it, and only where the sidecar was not shown a reply: a reply that was refused, and a stream that failed after its first chunk, the sidecar already knows of. A stream that failed before its first chunk, as one does whose provider is called only at its first read, is handed over here as an error, like a request that wasn't streamed. The error is handed over as a `judge_reply`, with the status LiteLLM answers its caller with, the provider's headers where LiteLLM kept them, and what LiteLLM kept of the provider's body. The sidecar then stops waiting for a reply. For a model call that waited for a person, it lets the eval send the request again, and tells the eval what failed.
 
         The caller is answered with LiteLLM's own error whatever the sidecar says, so nothing is returned, and a sidecar that gives no usable answer changes nothing.
         """
@@ -534,8 +556,10 @@ class LiteLLMGuardrail(CustomGuardrail):
                     timeout=_NO_TIMEOUT,
                     auto_decompress=False,
                 )
-                # a held reply that was streamed is passed on as it arrives,
-                # as the provider's own would be
+                # A held reply that was streamed is passed on as it arrives, as
+                # the provider's own would be, and `_StreamPassedOn` closes the
+                # sidecar's answer once it has ended or the caller has gone.
+                # Any other answer is read whole here, and closed at once.
                 if answer.content_type == _STREAM:
                     return _with_headers(_StreamPassedOn(answer), answer)
                 async with answer:
@@ -666,6 +690,18 @@ class LiteLLMGuardrail(CustomGuardrail):
         if not isinstance(answer, dict):
             raise _failed("an answer with no result")
         return cast("dict[str, Any]", answer)
+
+
+_NO_CHUNK = object()
+"""In place of the first chunk of a stream that had none."""
+
+
+async def _starting_with(first: Any, chunks: AsyncIterator[Any]) -> AsyncIterator[Any]:
+    # a stream whose first chunk was read already, whole again
+    if first is not _NO_CHUNK:
+        yield first
+    async for chunk in chunks:
+        yield chunk
 
 
 class _Relay:

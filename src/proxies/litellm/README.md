@@ -67,6 +67,8 @@ A request that the sidecar let through and that then came to an error is told to
 - The headers are the provider's, where it replied and LiteLLM kept them. They can say whether the call may be tried again, as `retry-after` does.
 - The body is what LiteLLM kept of the provider's error. On `/v1/messages` that is the provider's own body. On the other routes it is LiteLLM's account of the error as text, which holds the provider's.
 
+A streamed request counts as one that came to an error when its stream fails before its first chunk. For some providers, such as Gemini and Vertex, LiteLLM makes the call only when the stream is first read, so that is where their error comes. A stream that fails after its first chunk is told to the sidecar as a reply that was cut off.
+
 The caller is answered with LiteLLM's own error whatever the sidecar says. A caller that goes away before the provider replies is not told to the sidecar, as LiteLLM calls no guardrail then.
 
 The body is what LiteLLM is about to send, with one thing put right. LiteLLM writes a Claude model's thinking, asked for through `/responses`, as a `reasoning` item that OpenAI's own types reject. A client that sends that item back in a later request sends one the sidecar can't read, so the guardrail corrects the item in what it sends the sidecar. LiteLLM is still sent the item as the client sent it.

@@ -3534,7 +3534,7 @@ def _failed_after(
 ) -> tuple[list[Any], Any]:
     """Put a request through the guardrail, then tell it the call failed, as LiteLLM does: the calls the sidecar got, and what the failure hook returned.
 
-    `before` is what LiteLLM had done by then: `nothing` beyond sending the request on, shown the guardrail a `reply`, or begun a `stream`. With `again`, the failure is told twice.
+    `before` is what LiteLLM had done by then: `nothing` beyond sending the request on, shown the guardrail a `reply`, begun a `stream`, or begun `a stream that fails at its first read`, where the error comes. With `again`, the failure is told twice.
     """
     calls: list[Any] = []
     data = _data(on)
@@ -3553,6 +3553,18 @@ def _failed_after(
                     _USER, _chunks(on.stream()), data
                 ):
                     pass
+            if before == "a stream that fails at its first read":
+
+                async def failing() -> AsyncIterator[Any]:
+                    # as LiteLLM's stream for a provider it calls only now
+                    raise failure
+                    yield
+
+                with pytest.raises(type(failure)):
+                    async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                        _USER, failing(), data
+                    ):
+                        pass
             returned = await guardrail.async_post_call_failure_hook(
                 data, failure, _USER
             )
@@ -3639,6 +3651,31 @@ def test_a_request_that_came_to_an_error_is_told_to_the_sidecar(
     # what LiteLLM kept of the body is JSON only where it kept the provider's own
     is_json = body.startswith(b"{")
     assert reply["content_type"] == ("application/json" if is_json else "text/plain")
+
+
+def test_a_stream_whose_provider_fails_before_its_first_chunk_is_told_as_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # For some providers, such as Gemini and Vertex, LiteLLM makes the call
+    # only when the stream is first read, so their error comes from there.
+    passed = _result({"action": "pass"})
+
+    calls, returned = _failed_after(
+        monkeypatch,
+        _CHAT,
+        _rate_limited(),
+        passed,
+        passed,
+        before="a stream that fails at its first read",
+    )
+
+    # told as the request's error, with the provider's status and headers,
+    # and not as a reply stream begun and then cut off
+    assert returned is None
+    assert [call["method"] for call in calls] == ["judge_request", "judge_reply"]
+    reply = calls[1]["params"]
+    assert reply["status"] == 429
+    assert reply["headers"]["retry-after"] == "7"
 
 
 def test_a_providers_error_is_told_as_the_provider_wrote_it_on_the_messages_route(
