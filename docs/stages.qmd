@@ -134,6 +134,8 @@ Each stage has its own step type. This table lists every field and the stages th
 | `output` | `AfterToolCall` | The tool's return value, before any truncation. |
 | `truncated` | `AfterToolCall` | Whether Inspect cut the tool's output before the agent's model saw it. |
 
+At the tool stages, four fields come from the model call that produced the tool call: `input`, `tools`, `tool_choice`, and `assistant_message`. They are set together, and they are `None` together in the cases listed under [Input, History, and Agent Messages](#input-history-and-agent-messages).
+
 Note that `output` means different things at its two stages: the reply from the agent's model at `AfterGenerate`, and the tool's return value at `AfterToolCall`.
 
 The lists on a step are shared with Inspect, not copied, so don't modify them or the messages in them. Copy a list first if you need to change it. The sections below cover the fields that need care. See the [reference](reference/index.qmd) for the complete type of each field.
@@ -179,14 +181,12 @@ def deletes_then_submits() -> Monitor:
     return check
 ```
 
-`assistant_message` is the message as the model returned it, from the same model call as `input`. So it is the same in an eval and in replay from a log. It is also set for a solver that calls `generate()` in its own loop, where `agent_messages` is `None`. Find this step's call among its tool calls by `step.call.id`.
+`assistant_message` is the message as the model returned it, so it is the same in an eval and in replay from a log. It is also set for a solver that calls `generate()` in its own loop, where `agent_messages` is `None`. Find this step's call among its tool calls by `step.call.id`.
 
 `call` is the call as it runs. When an approver or a protocol modifies the call, `call` shows the modified arguments, and `assistant_message` still shows the arguments the model proposed. Likewise, if the scaffold edits the message before running its calls, `assistant_message` shows the model's version.
 
-`assistant_message` is `None` whenever `input` is `None` (see the list above).
-
 ::: {.callout-note appearance="simple"}
-If your scaffold rebuilds the model's message as a new message before running its calls, `assistant_message` is `None` in an eval, as `input` is, while replay from a log shows the model's message.
+If your scaffold rebuilds the model's message as a new message before running its calls, the four fields from the model call (`input`, `tools`, `tool_choice`, and `assistant_message`) are `None` in an eval, while replay from a log fills them in.
 :::
 
 ### Tool Results and Truncation

@@ -173,15 +173,15 @@ class BeforeToolCall:
     conversation: str
     message: str                # assistant text alongside the call
     message_id: str             # id of the assistant message that made the call
-    assistant_message: ChatMessageAssistant | None = field(default=None, kw_only=True)  # the reply that made the call, as the model returned it; None exactly when input is
+    assistant_message: ChatMessageAssistant | None = field(default=None, kw_only=True)  # the reply that made the call, as the model returned it; None exactly when input is None
     call: ToolCall              # the call as it will execute
     view: ToolCallView
     input: Sequence[ChatMessage] | None  # the request that produced the call; None without one
     agent_messages: Sequence[ChatMessage] | None  # the same live agent list as at generate stages; None without one
     history: Sequence[ChatMessage] | None = field(default=None, kw_only=True)  # as for BeforeGenerate
     human_decisions: Sequence[HumanDecision] | None = field(default=None, kw_only=True)
-    tools: Sequence[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
-    tool_choice: ToolChoice | None = None  # that request's tool choice; None exactly when input is
+    tools: Sequence[ToolInfo] | None = None  # the tools that request offered; None exactly when input is None
+    tool_choice: ToolChoice | None = None  # that request's tool choice; None exactly when input is None
 
 
 @dataclass(frozen=True)
@@ -198,8 +198,8 @@ class AfterToolCall:
     agent_messages: Sequence[ChatMessage] | None
     history: Sequence[ChatMessage] | None = field(default=None, kw_only=True)
     human_decisions: Sequence[HumanDecision] | None = field(default=None, kw_only=True)
-    tools: Sequence[ToolInfo] | None = None  # the tools that request offered; None exactly when input is
-    tool_choice: ToolChoice | None = None  # that request's tool choice; None exactly when input is
+    tools: Sequence[ToolInfo] | None = None  # the tools that request offered; None exactly when input is None
+    tool_choice: ToolChoice | None = None  # that request's tool choice; None exactly when input is None
     truncated: Truncation | Literal[False] | None = None  # the host's cut; False: not cut; None: can't tell
 
 

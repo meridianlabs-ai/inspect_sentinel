@@ -104,7 +104,7 @@ def test_messages_project_each_turn_into_its_steps_in_the_order_they_ran() -> No
     before_y = by_key[("tool_call", "y")]
     assert isinstance(before_y, BeforeToolCall)
     assert (before_y.input, before_y.tools, before_y.message_id) == (None, None, "a0")
-    # unknown without the model call that produced it, as `input` is
+    # `None` without the model call that produced it, like `input` and `tools`
     assert before_y.assistant_message is None
     after_y = by_key[("tool_result", "y")]
     assert isinstance(after_y, AfterToolCall)

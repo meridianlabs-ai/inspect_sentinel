@@ -134,6 +134,10 @@ class Truncation:
 class BeforeToolCall:
     """A tool call about to execute.
 
+    `input`, `tools`, `tool_choice` and `assistant_message` all come from one model call: the one that produced the call (in-process, the transcript's `ModelEvent`). So they are the same live and in a replay from a log.
+
+    They are set or `None` together. They are `None` when no model call produced the call (a pre-filled message, a human agent, or a call the scaffold made itself), when the transcript event that recorded the model call is no longer available, or when the host does not have it (a replay from messages). A scaffold that rebuilds the model's message under a new id before running its calls gets `None` live, while a replay from a log finds the model call.
+
     `input`, `tools`, `history`, `agent_messages` and `human_decisions` are read-only sequences that can share the lists the host keeps for the conversation rather than copy them; a monitor that wants a list calls `list()` on one, at its own cost. Monitors and protocols must not mutate them or the messages and tool definitions in them.
     """
 
@@ -147,9 +151,9 @@ class BeforeToolCall:
     """Id of the assistant message that made the call, so a monitor model can cite it."""
 
     assistant_message: ChatMessageAssistant | None = field(default=None, kw_only=True)
-    """The assistant message that made the call, as the model returned it: its text, its reasoning and all of its tool calls, this one among them (find it by `call.id`). It comes from the model call that `input` was sent to (in-process, the transcript's `ModelEvent`), so it is the same live and in a replay from a log, and it is set for a solver that calls `generate()` in its own loop.
+    """The assistant message that made the call, as the model returned it: its text, its reasoning and all of its tool calls, this one among them (find it by `call.id`). It is set for a solver that calls `generate()` in its own loop.
 
-    `None` exactly when `input` is `None`: no model call produced the call (a pre-filled message, a human agent, or a call the scaffold made itself), the transcript event that recorded the model call is no longer available, or the host does not have it (a replay from messages). A scaffold that rebuilds the model's message under a new id before running its calls gets `None` live, as for `input`, while replay finds the model's message.
+    `None` when the model call that returned it is not available (see `BeforeToolCall`).
 
     It shows the calls as the model proposed them: an approver's or a sentinel's `modify` changes `call`, not this message. Through a sentinel sidecar, the calls the sidecar took out are redacted, as in the `ModelEvent`. A turn's steps share one object, the host's own: monitors must not mutate it."""
 
@@ -160,7 +164,7 @@ class BeforeToolCall:
     """Rendering of the tool call and its context: custom when the tool registers a viewer, a default Python-call rendering otherwise."""
 
     input: Sequence[ChatMessage] | None
-    """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `None` when no model call produced the assistant message (a pre-filled message, a human agent, or one the scaffold built itself) or when the transcript event that recorded the model call is no longer available; it is never approximated from `agent_messages`. `context.eval.sample_input` is the sample's input, the assignment."""
+    """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `None` when that model call is not available (see `BeforeToolCall`); it is never approximated from `agent_messages`. `context.eval.sample_input` is the sample's input, the assignment."""
 
     agent_messages: Sequence[ChatMessage] | None
     """The outermost running agent function's own message list, read live by reference, or `None`, as for `BeforeGenerate.agent_messages`. For `react` and other scaffolds that append to the state they were called with, it includes the assistant message holding the call. Monitors must not mutate it."""
@@ -172,15 +176,19 @@ class BeforeToolCall:
     """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, for annotating the past calls a person already reviewed when rendering the conversation, so a monitor does not flag them again; `human_decision_for()` finds the one covering a call. Decisions from a parent or sibling agent's conversation are not included. Not a standing permission: mark the exact call, and never lower suspicion of a new call that resembles an approved one (see `HumanDecision`). A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. A prompt the person cancelled or closed without choosing is recorded as the surface's fail-closed answer, with an explanation that says so; render it, never as the person's judgment. Empty when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     tools: Sequence[ToolInfo] | None = None
-    """The tool definitions offered to the model call that produced the call, as the transcript's `ModelEvent` recorded them, after any model hooks (so they can differ from that call's `AfterGenerate.tools` when a hook changed them): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""
+    """The tool definitions offered to the model call that produced the call, as the transcript's `ModelEvent` recorded them, after any model hooks (so they can differ from that call's `AfterGenerate.tools` when a hook changed them): what each tool does bears on how suspicious a call to it is. `None` when that model call is not available (see `BeforeToolCall`); it is never approximated from the tools available now. Monitors must not mutate them."""
 
     tool_choice: ToolChoice | None = None
-    """The tool choice of the model call that produced the call, as the transcript's `ModelEvent` recorded it. `None` exactly when `input` is `None`."""
+    """The tool choice of the model call that produced the call, as the transcript's `ModelEvent` recorded it. `None` when that model call is not available (see `BeforeToolCall`)."""
 
 
 @dataclass(frozen=True)
 class AfterToolCall:
     """A tool call that has executed, before the model sees its result.
+
+    `input`, `tools`, `tool_choice` and `assistant_message` all come from one model call: the one that produced the call (in-process, the transcript's `ModelEvent`). So they are the same live and in a replay from a log.
+
+    They are set or `None` together. They are `None` when no model call produced the call (a pre-filled message, a human agent, or a call the scaffold made itself), when the transcript event that recorded the model call is no longer available, or when the host does not have it (a replay from messages). A scaffold that rebuilds the model's message under a new id before running its calls gets `None` live, while a replay from a log finds the model call.
 
     `input`, `tools`, `history`, `agent_messages` and `human_decisions` are read-only sequences that can share the lists the host keeps for the conversation rather than copy them; a monitor that wants a list calls `list()` on one, at its own cost. Monitors and protocols must not mutate them or the messages and tool definitions in them.
     """
@@ -195,9 +203,9 @@ class AfterToolCall:
     """Id of the assistant message that made the call, so a monitor model can cite it."""
 
     assistant_message: ChatMessageAssistant | None = field(default=None, kw_only=True)
-    """The assistant message that made the call, as the model returned it: its text, its reasoning and all of its tool calls, this one among them (find it by `call.id`). It comes from the model call that `input` was sent to (in-process, the transcript's `ModelEvent`), so it is the same live and in a replay from a log, and it is set for a solver that calls `generate()` in its own loop.
+    """The assistant message that made the call, as the model returned it: its text, its reasoning and all of its tool calls, this one among them (find it by `call.id`). It is set for a solver that calls `generate()` in its own loop.
 
-    `None` exactly when `input` is `None`: no model call produced the call (a pre-filled message, a human agent, or a call the scaffold made itself), the transcript event that recorded the model call is no longer available, or the host does not have it (a replay from messages). A scaffold that rebuilds the model's message under a new id before running its calls gets `None` live, as for `input`, while replay finds the model's message.
+    `None` when the model call that returned it is not available (see `AfterToolCall`).
 
     It shows the calls as the model proposed them: an approver's or a sentinel's `modify` changes `call`, not this message. Through a sentinel sidecar, the calls the sidecar took out are redacted, as in the `ModelEvent`. A turn's steps share one object, the host's own: monitors must not mutate it."""
 
@@ -214,7 +222,7 @@ class AfterToolCall:
     """Rendering of the tool call and its context: custom when the tool registers a viewer, a default Python-call rendering otherwise."""
 
     input: Sequence[ChatMessage] | None
-    """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `None` when no model call produced the assistant message (a pre-filled message, a human agent, or one the scaffold built itself) or when the transcript event that recorded the model call is no longer available; it is never approximated from `agent_messages`. `context.eval.sample_input` is the sample's input, the assignment."""
+    """Exactly what the model was sent for the generate that produced the call: what a monitor should judge the call against. `None` when that model call is not available (see `AfterToolCall`); it is never approximated from `agent_messages`. `context.eval.sample_input` is the sample's input, the assignment."""
 
     agent_messages: Sequence[ChatMessage] | None
     """The outermost running agent function's own message list, read live by reference, or `None`, as for `BeforeToolCall.agent_messages`. The agent may not have added `result` yet. Monitors must not mutate it."""
@@ -226,10 +234,10 @@ class AfterToolCall:
     """Decisions a person made through `human()` at earlier steps of this agent's conversation (`conversation`), oldest first, for annotating the past calls a person already reviewed when rendering the conversation, so a monitor does not flag them again; `human_decision_for()` finds the one covering a call. Decisions from a parent or sibling agent's conversation are not included. Not a standing permission: mark the exact call, and never lower suspicion of a new call that resembles an approved one (see `HumanDecision`). A step is its stage and its step id, so a decision before a call is here after that call, and a decision about a turn at `model_output` is here at each of its calls' tool stages. It holds only decisions made at steps that had finished before this step began, so never one from this step or from a parallel step still running, and only those that took effect (one a sibling's `decide_final()` superseded is dropped); it never holds a monitor's observation or another protocol's decision. A prompt the person cancelled or closed without choosing is recorded as the surface's fail-closed answer, with an explanation that says so; render it, never as the person's judgment. Empty when there are none; `None` when the host cannot tell, as under a proxy that keeps no record of them."""
 
     tools: Sequence[ToolInfo] | None = None
-    """The tool definitions offered to the model call that produced the call, as the transcript's `ModelEvent` recorded them, after any model hooks (so they can differ from that call's `AfterGenerate.tools` when a hook changed them): what each tool does bears on how suspicious a call to it is. `None` exactly when `input` is `None`; it is never approximated from the tools available now. Monitors must not mutate them."""
+    """The tool definitions offered to the model call that produced the call, as the transcript's `ModelEvent` recorded them, after any model hooks (so they can differ from that call's `AfterGenerate.tools` when a hook changed them): what each tool does bears on how suspicious a call to it is. `None` when that model call is not available (see `AfterToolCall`); it is never approximated from the tools available now. Monitors must not mutate them."""
 
     tool_choice: ToolChoice | None = None
-    """The tool choice of the model call that produced the call, as the transcript's `ModelEvent` recorded it. `None` exactly when `input` is `None`."""
+    """The tool choice of the model call that produced the call, as the transcript's `ModelEvent` recorded it. `None` when that model call is not available (see `AfterToolCall`)."""
 
     truncated: Truncation | Literal[False] | None = None
     """Whether the host cut the tool's output before the model saw it in `result`. A `Truncation` when it did; `False` when it did not, which is always so for structured content; `None` when this host cannot tell (a proxy, a replay from messages alone, or a log older than the record of cuts). `if step.truncated:` is true only for a cut. It is built from the value the transcript's `ToolEvent.truncated` records (`Truncation(*event.truncated)` when that is set), so a monitor reads the same answer live and from a log. A cut made before the host's limit applies, by a sandbox output limit or a timeout, is not reported here: `result.error` reports it, with type `"limit"` or `"timeout"`. Use this field, not the "output was too long" notice in `result`, to tell whether the host cut the result: that notice is text a tool's output can contain, so it can be forged."""
