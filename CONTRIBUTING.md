@@ -43,10 +43,10 @@ Inspect Sentinel uses [uv](https://docs.astral.sh/uv/) for environment and depen
 ```bash
 git clone https://github.com/meridianlabs-ai/inspect_sentinel
 cd inspect_sentinel
-uv sync --extra dev
+uv sync --locked --extra dev
 ```
 
-`uv sync` creates `.venv` with the exact versions in `uv.lock`, the `dev` extra included, and installs sentinel editable. Run Python commands from it: `.venv/bin/<command>`, `uv run --no-sync <command>`, or an activated venv (`source .venv/bin/activate`). A plain `uv run` also works, but it reinstalls the locked inspect_ai and inspect_scout over a local editable checkout (below). `make check` and `make test` call the tools directly. `uv sync` without `--extra dev` removes the dev tools again.
+`uv sync --locked` creates `.venv` with the exact versions in `uv.lock`, the `dev` extra included, and installs sentinel editable. It fails if `uv.lock` is out of date with `pyproject.toml`. Run Python commands from the environment: `.venv/bin/<command>`, `uv run --no-sync <command>`, or an activated venv (`source .venv/bin/activate`). A plain `uv run` also works, but it reinstalls the locked inspect_ai and inspect_scout over a local editable checkout (below). `make check` and `make test` call the tools directly. `uv sync --locked` without `--extra dev` removes the dev tools again.
 
 The development environment pins 3.13 (`.python-version`). CI covers both ends of the supported range: 3.11 proves the floor still works, and 3.14 exercises the newest interpreter. `make check` only ever sees the 3.13 environment, so a construct that is new in 3.12 or later passes locally and fails in CI on 3.11. To reproduce the floor locally, install the same lock into a second environment:
 
@@ -56,40 +56,14 @@ UV_PROJECT_ENVIRONMENT=/tmp/py311 uv sync --locked --extra dev --python 3.11
 /tmp/py311/bin/pytest
 ```
 
-### Dependencies and the cooldown
+### Dependencies
 
-`uv.lock` pins every Python dependency. CI's lint, type-check, test and build jobs install their dependencies from it, and fail when `uv.lock` is out of date with `pyproject.toml`. When you change dependencies in `pyproject.toml`, run `uv lock` and commit both files.
+[DEPENDENCIES.md](https://github.com/meridianlabs-ai/actions/blob/main/DEPENDENCIES.md) in meridianlabs-ai/actions tells how the Inspect repositories install and change dependencies. It covers the lock file, the cooldown, the canaries, inspect_ai `main`, the release build tools, and the procedures to add or update a dependency. Follow it. It is the same for every Inspect repository, so this file does not repeat it.
 
-The build tools (`build`, `hatchling`, `hatch-vcs`) come from `scripts/build-dist/requirements.txt` instead, pinned with hashes, and CI and the publish job build with `python -m build --no-isolation`, so the build installs nothing else. Dependabot updates the file weekly. To update it by hand, run `uv pip compile --no-config --generate-hashes --python-version 3.11 --python-platform x86_64-unknown-linux-gnu --exclude-newer "7 days" --only-binary :all: --upgrade requirements.in -o requirements.txt` in `scripts/build-dist`.
+For this repository:
 
-`pyproject.toml` sets `exclude-newer = "7 days"` under `[tool.uv]`, so `uv lock`, `uv sync` and `uv pip` only pick releases that have been on PyPI for at least seven days. A compromised release is usually found and removed within that time, before it reaches `uv.lock`, CI or your machine. A few packages wait 6 hours instead, so sentinel can adopt a new release the day it ships: `inspect-ai`, `inspect-scout`, and the `anthropic` and `openai` SDKs. They are listed with `"6 hours"` in `[tool.uv.exclude-newer-package]`. Only a direct dependency (a package in `dependencies` or an extra in `pyproject.toml`) that is a model provider SDK or an Inspect package gets this exception. Every other package keeps the seven-day cooldown, including the CA bundle (`certifi`). Dependabot's `uv` entry in `.github/dependabot.yml` repeats the cooldown and the list, except `inspect-ai` and `inspect-scout`, which it ignores. When you add a `"6 hours"` entry, also add the package to `cooldown.exclude` and the `six-hour-cooldown` group there. `tests/test_dependency_cooldown.py` checks that each entry is a direct dependency, that dated entries (below) are less than seven days old, and that the two files match. Whether a package is a provider SDK or an Inspect package is up to review.
-
-Dependabot proposes `uv.lock` updates daily, once a release has cleared its cooldown. To adopt a release sooner, run `uv lock --upgrade-package <package>` and commit `uv.lock`. A release still inside its cooldown can't be locked; wait for it rather than overriding `exclude-newer`, unless it's an emergency (below).
-
-In an emergency, for example a security fix, you can adopt a release that is less than seven days old with a one-time dated entry:
-
-1. Under `[tool.uv.exclude-newer-package]` in `pyproject.toml`, add `<package> = "<timestamp>"`. The package must be a direct dependency. Use an RFC 3339 timestamp just after the upload time of the fixed release. Don't add a dated entry to `.github/dependabot.yml`.
-2. Run `uv lock --upgrade-package <package>` and commit both files.
-3. Within seven days, once the normal cooldown includes the release, delete the entry, run `uv lock --upgrade-package <package>`, and commit both files. A plain `uv lock` doesn't reliably remove the entry from `uv.lock`, and CI then fails. A test fails when a dated entry is seven days old or older.
-
-Testing against the newest release of every dependency happens in the nightly canary in [meridianlabs-ai/canaries](https://github.com/meridianlabs-ai/canaries), so sentinel's own CI doesn't need to.
-
-### inspect_ai and inspect_scout main
-
-Development and CI track inspect_ai's and inspect_scout's `main` branches. Tracking `main` is deliberate: sentinel and inspect_ai co-develop, and most sentinel changes need hooks that have not shipped yet. Scout is tracked the same way, so a Scout change that alters what a monitor's model is shown reaches CI at once. `[tool.uv.sources]` in `pyproject.toml` points `inspect-ai` and `inspect-scout` at their git repositories, and `uv.lock` records a commit of each. Only uv reads `[tool.uv.sources]`: the published package requires the `inspect-ai>=` and `inspect-scout>=` floors in `[project]`.
-
-- CI moves both to the latest `main` commit before every install (`.github/actions/uv-sync`), so it always tests against their `main`. Every other package stays at its locked version.
-- `uv sync --extra dev` installs the commits in `uv.lock`. To move to the latest `main` commits, run `uv sync --upgrade-package inspect-ai --upgrade-package inspect-scout --extra dev`. Committing the updated `uv.lock` is optional.
-- On the release PR, CI ignores the git sources and installs the newest releases that have cleared their cooldown (below).
-
-To work against a local inspect_ai or inspect_scout checkout, install it over the locked one:
-
-```bash
-uv sync --extra dev
-uv pip install -e ../inspect_ai
-```
-
-Then run commands with `.venv/bin/<command>` or `uv run --no-sync <command>`. A plain `uv run` or `uv sync` reinstalls the locked version.
+- inspect_sentinel needs unreleased inspect_ai and inspect_scout changes. `[tool.uv.sources]` in `pyproject.toml` points `inspect-ai` and `inspect-scout` at their `main` branches. Tracking `main` is deliberate: sentinel and inspect_ai co-develop, and most sentinel changes need hooks that have not shipped yet. Scout is tracked the same way, so a Scout change that alters what a monitor's model is shown reaches CI at once.
+- The 6-hour packages are in `[tool.uv.exclude-newer-package]` in `pyproject.toml`.
 
 ## Checks and tests
 
@@ -128,7 +102,7 @@ See [`AGENTS.md`](AGENTS.md) for the full conventions used in this repo.
 Docs live in `docs/` and are built with [Quarto](https://quarto.org). The Quarto CLI and the doc-build dependencies are in the `doc` extra. `dev` leaves it out, so CI doesn't install them. `make docs` installs the `doc` extra and renders the docs to `docs/_site/`. To run Quarto yourself:
 
 ```bash
-uv sync --extra dev --extra doc
+uv sync --locked --extra dev --extra doc
 cd docs
 source ../.venv/bin/activate
 quarto render        # outputs to docs/_site/

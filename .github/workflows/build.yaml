@@ -98,7 +98,7 @@ jobs:
       # guardrail, the matrix LiteLLM and the test tools, with no cooldown, as
       # the Makefile has it.
       - name: Install the guardrail's environment
-        uses: meridianlabs-ai/actions/install-python-dependencies@3bc608093ab8b8dd7f82764a863d9d5f9dce61a5 # main
+        uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
         with:
           versions: unlocked
           python-version: ${{ matrix.python-version }}
@@ -142,7 +142,7 @@ jobs:
       # update the file, see publish.yaml. No Actions cache, so that the
       # uv-sync call below, which uses the same setup, matches.
       - name: Install build toolchain
-        uses: meridianlabs-ai/actions/install-python-dependencies@3bc608093ab8b8dd7f82764a863d9d5f9dce61a5 # main
+        uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
         with:
           versions: hashed-requirements
           python-version: ${{ matrix.python-version }}
@@ -178,7 +178,7 @@ jobs:
       # LiteLLM pinned, as in the litellm-guardrail job: the wheel alone would
       # take the newest release.
       - name: Install the LiteLLM guardrail
-        uses: meridianlabs-ai/actions/install-python-dependencies@3bc608093ab8b8dd7f82764a863d9d5f9dce61a5 # main
+        uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
         with:
           versions: unlocked
           python-version: ${{ matrix.python-version }}
