@@ -1433,6 +1433,41 @@
       "type": "object"
     },
     "JsonValue": {},
+    "JudgingUsage": {
+      "description": "What the provider billed for a model a monitor or protocol called while a request was judged.",
+      "properties": {
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model role the call asked for, as Inspect names roles. Left out where the call named its model without a role.",
+          "title": "Role"
+        },
+        "model": {
+          "description": "The model the call went to, as Inspect names it.",
+          "title": "Model",
+          "type": "string"
+        },
+        "usage": {
+          "additionalProperties": true,
+          "description": "The usage of the model's calls added up, as Inspect writes `ModelUsage`, with `total_cost` where Inspect knows the model's price.",
+          "title": "Usage",
+          "type": "object"
+        }
+      },
+      "required": [
+        "model",
+        "usage"
+      ],
+      "title": "JudgingUsage",
+      "type": "object"
+    },
     "Judgment": {
       "description": "What a sentinel decided during one exchange, for an Inspect eval, which asks for it with `request_result`.",
       "properties": {
@@ -2088,6 +2123,36 @@
           ],
           "default": null,
           "description": "The provider's last failed exchange, with `awaiting_request` and a `reason`."
+        },
+        "judging_time": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How long the sentinel spent judging the latest attempt's request and reply so far, in seconds. The client waited on its model call meanwhile, so an eval counts this time as waiting, not as the agent's working time. 0 where nothing was judged. Sent with `judging_usage` on every answer about records the sidecar holds, whether or not the judgment is trimmed.",
+          "title": "Judging Time"
+        },
+        "judging_usage": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/JudgingUsage"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the provider billed for each model the sentinel called while judging every attempt at the request, retried attempts included, since each was billed. One entry per role and model that was billed, in the order first billed: a reply from inspect_ai's cache and a call that failed weren't billed. Empty where nothing was billed. Sent with `judging_time` on every answer about records the sidecar holds, whether or not the judgment is trimmed.",
+          "title": "Judging Usage"
         }
       },
       "required": [

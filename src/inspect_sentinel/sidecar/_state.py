@@ -9,14 +9,14 @@ from dataclasses import dataclass, field
 from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar
 
 import anyio
-from inspect_ai.model import ChatMessage
+from inspect_ai.model import ChatMessage, ModelUsage
 from inspect_ai.tool import ToolChoice, ToolInfo
 from inspect_ai.util import Store
 from pydantic import JsonValue
 
 from .._context import EvalContext, ProxyContext
 from ._exchange import Refuse, Request
-from ._host import ListRecorder, Record
+from ._host import ListRecorder, ModelUsed, Record
 from ._inspect_client import Exchange
 from ._registration import RegisteredTask
 from ._review import Review
@@ -96,6 +96,14 @@ class Attempt:
 
     judged: Exchange | None = None
     """What was decided during the attempt, for an Inspect eval, from which `request_result` writes its judgment."""
+
+    judging_time: float = 0.0
+    """How long the sentinel spent judging the attempt's request and reply, in seconds, while the client waited on the model call."""
+
+    judging_usage: dict[ModelUsed, ModelUsage] = field(
+        default_factory=dict[ModelUsed, ModelUsage]
+    )
+    """What the provider billed for each model the sentinel called while judging the attempt, in the order first billed. A reply from inspect_ai's cache and a call that failed weren't billed, so a model with only those has no entry. Kept for an attempt whose reply never came too, since its request was judged and billed."""
 
     settled: anyio.Event = field(default_factory=anyio.Event)
     """Set once the attempt is decided or not judged, for a `request_result` that waits."""

@@ -1,7 +1,7 @@
 import argparse
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 
@@ -26,7 +26,7 @@ from inspect_sentinel.sidecar import (
     _handler,
     _state,
 )
-from inspect_sentinel.sidecar._errors import UnauthorizedError
+from inspect_sentinel.sidecar._errors import TimeLimitError, UnauthorizedError
 from inspect_sentinel.sidecar._eval_endpoint import (
     HELD_REPLY_PATH,
     INFO_PATH,
@@ -36,6 +36,7 @@ from inspect_sentinel.sidecar._eval_endpoint import (
     eval_routes,
     schema,
 )
+from inspect_sentinel.sidecar._host import SidecarHost
 from inspect_sentinel.sidecar._json_rpc import (
     INVALID_PARAMS,
     METHOD_NOT_FOUND,
@@ -416,11 +417,14 @@ async def test_a_request_awaiting_its_reply() -> None:
     handler = await holding(Handler(weather_rule()))
     await handler.request(_asked("x"))
 
+    # weather_rule watches only tool calls, so nothing was judged or billed yet
     assert await _request_result(handler) == {
         "id": "irid-1",
         "records": "held",
         "state": "awaiting_reply",
         "recorded": [],
+        "judging_time": 0.0,
+        "judging_usage": [],
     }
 
 
@@ -606,6 +610,244 @@ async def test_a_retried_request_holds_every_attempts_records() -> None:
         "reject",
         "proceed",
     ]
+
+
+@protocol
+def asks_models() -> Protocol:
+    # rejects Tokyo, after asking its role's model and a model it names
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision:
+        await context.host.generate("Is this call suspicious?")
+        await context.host.generate("Is it?", model="mockllm/named")
+        if "Tokyo" in json.dumps(step.call.arguments):
+            return Decision.reject("Tokyo is not allowed.")
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.anyio
+# inspect_ai calls a model on trio only once it is set up to, as an eval does;
+# the sidecar serves on asyncio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.parametrize("results", [True, False], ids=["sent", "trimmed"])
+async def test_request_result_gives_the_judging_usage_of_every_attempt(
+    results: bool,
+) -> None:
+    handler = await holding(
+        Handler(
+            asks_models(),
+            host=SidecarHost({"monitor": "mockllm/monitor"}),
+            reject_status=503,
+        )
+    )
+
+    async def judging_usage() -> list[dict[str, Any]]:
+        eval = await _eval(handler, "request_result")
+        async with _client(handler, results=results) as client:
+            answered = await _call(client, "request_result", {"id": "irid-1"} | eval)
+        used: list[dict[str, Any]] = answered["result"]["judging_usage"]
+        return used
+
+    await handler.request(_asked("x1"))
+    await handler.reply(reply(_message("Tokyo"), id="x1"))
+    once = await judging_usage()
+    # the client retries the request under the same id, and the sentinel's
+    # models are billed again
+    await handler.request(_asked("x2"))
+    await handler.reply(reply(_message("Oslo"), id="x2"))
+    twice = await judging_usage()
+
+    # by the sidecar's role, and with no role for a model the monitor named
+    assert [(used.get("role"), used["model"]) for used in once] == [
+        ("monitor", "mockllm/monitor"),
+        (None, "mockllm/named"),
+    ]
+    for first, both in zip(once, twice, strict=True):
+        assert first["usage"]["total_tokens"] > 0
+        assert both["usage"]["total_tokens"] == 2 * first["usage"]["total_tokens"]
+
+
+@protocol
+def takes_its_time() -> ProtocolGroup:
+    # on the test's clock: 2 s to judge each request, and 3 s to reject a call
+    # for Tokyo or 1 s to pass any other
+    async def request(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision:
+        _Clock.now += 2.0
+        return Decision.proceed()
+
+    async def call(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision:
+        if "Tokyo" in json.dumps(step.call.arguments):
+            _Clock.now += 3.0
+            return Decision.reject("Tokyo is not allowed.")
+        _Clock.now += 1.0
+        return Decision.proceed()
+
+    return ProtocolGroup(request, call)
+
+
+@pytest.mark.anyio
+async def test_request_result_gives_how_long_the_latest_attempt_was_judged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_handler, "time", _Clock)
+    _Clock.now = 0.0
+    handler = await holding(Handler(takes_its_time(), reject_status=503))
+    await handler.request(_asked("x1"))
+    await handler.reply(reply(_message("Tokyo"), id="x1"))
+    first = (await _request_result(handler))["judging_time"]
+    # the client retries the request under the same id
+    await handler.request(_asked("x2"))
+    await handler.reply(reply(_message("Oslo"), id="x2"))
+
+    result = await _request_result(handler)
+
+    # the request's judging and its reply's, together
+    assert first == 2.0 + 3.0
+    # only the latest attempt: an earlier one's time isn't the eval's to count
+    # again
+    assert result["judging_time"] == 2.0 + 1.0
+    # no model judged, so nothing was billed, and the answer says so
+    assert result["judging_usage"] == []
+
+
+@protocol
+def bills_then_fails() -> Protocol:
+    # asks its model, which is billed, takes 4 s on the test's clock, then
+    # fails
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision:
+        await context.host.generate("Is this request suspicious?")
+        _Clock.now += 4.0
+        raise RuntimeError("the monitor broke")
+
+    return decide
+
+
+@protocol
+def judges_the_request() -> Protocol:
+    # asks its model about each request, which is billed, takes 2 s on the
+    # test's clock, and passes it
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision:
+        await context.host.generate("Is this request suspicious?")
+        _Clock.now += 2.0
+        return Decision.proceed()
+
+    return decide
+
+
+@protocol
+def bills_then_hangs() -> Protocol:
+    # asks its model, which is billed, then never decides
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision:
+        await context.host.generate("Is this request suspicious?")
+        await anyio.sleep_forever()
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.anyio
+# inspect_ai calls a model on trio only once it is set up to, as an eval does;
+# the sidecar serves on asyncio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_judging_cut_off_by_the_time_limit_is_still_counted() -> None:
+    # the sentinel is cancelled at the time limit, so its time and its billed
+    # judge call are kept only by what runs as it is cancelled
+    handler = await holding(
+        Handler(
+            bills_then_hangs(),
+            host=SidecarHost({"monitor": "mockllm/monitor"}),
+            time_limit=0.1,
+        )
+    )
+    with pytest.raises(TimeLimitError):
+        await handler.request(_asked("x"))
+
+    result = await _request_result(handler)
+
+    assert (result["state"], result["reason"]) == ("not_judged", "time_limit")
+    assert result["judging_time"] > 0
+    [used] = result["judging_usage"]
+    assert (used["role"], used["model"]) == ("monitor", "mockllm/monitor")
+    assert used["usage"]["total_tokens"] > 0
+
+
+async def _fails_its_sentinel(handler: Handler) -> None:
+    # the sentinel's failure is the request's
+    with pytest.raises(RuntimeError, match="the monitor broke"):
+        await handler.request(_asked("x"))
+
+
+async def _gets_a_provider_error(handler: Handler) -> None:
+    await handler.request(_asked("x"))
+    await handler.reply(reply(b"overloaded", status=529))
+
+
+async def _never_gets_a_reply(handler: Handler) -> None:
+    await handler.request(_asked("x"))
+
+
+async def _has_its_reply_cut_off(handler: Handler) -> None:
+    # the proxy refused the reply without handing it over
+    await handler.request(_asked("x"))
+    await handler.reply_not_judged("x", "cut_off")
+
+
+@pytest.mark.anyio
+# inspect_ai calls a model on trio only once it is set up to, as an eval does;
+# the sidecar serves on asyncio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.parametrize(
+    ("sentinel", "ends", "judged_for", "state"),
+    [
+        (bills_then_fails, _fails_its_sentinel, 4.0, None),
+        (judges_the_request, _gets_a_provider_error, 2.0, "not_judged"),
+        (judges_the_request, _never_gets_a_reply, 2.0, "awaiting_reply"),
+        (judges_the_request, _has_its_reply_cut_off, 2.0, "not_judged"),
+    ],
+    ids=[
+        "a sentinel that failed",
+        "a provider error",
+        "a reply that never came",
+        "a reply cut off",
+    ],
+)
+async def test_judging_that_ended_without_a_decision_is_still_counted(
+    sentinel: Callable[[], Protocol],
+    ends: Callable[[Handler], Awaitable[None]],
+    judged_for: float,
+    state: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the request is judged, and the judge model billed, and the call never
+    # comes to a decision
+    monkeypatch.setattr(_handler, "time", _Clock)
+    _Clock.now = 0.0
+    handler = await holding(
+        Handler(sentinel(), host=SidecarHost({"monitor": "mockllm/monitor"}))
+    )
+    await ends(handler)
+
+    result = await _request_result(handler)
+
+    assert result["state"] != "decided"
+    if state is not None:
+        assert result["state"] == state
+    assert result["judging_time"] == judged_for
+    [used] = result["judging_usage"]
+    assert (used["role"], used["model"]) == ("monitor", "mockllm/monitor")
+    assert used["usage"]["total_tokens"] > 0
 
 
 @pytest.mark.anyio
@@ -1064,6 +1306,44 @@ def waits_to_be_told() -> ProtocolGroup:
         return Decision.proceed()
 
     return ProtocolGroup(before, call)
+
+
+@protocol
+def bills_then_waits() -> Protocol:
+    # asks its model, which is billed, then waits to be told to decide
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision:
+        await context.host.generate("Is this request suspicious?")
+        _gates[0].set()
+        await _gates[1].wait()
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.anyio
+# inspect_ai calls a model on trio only once it is set up to, as an eval does;
+# the sidecar serves on asyncio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_a_judge_call_counts_while_its_step_is_still_judged() -> None:
+    # an eval asking about an attempt still being judged, as for one it
+    # retried, is told of the calls already billed
+    _gates[:] = [anyio.Event(), anyio.Event()]
+    handler = await holding(
+        Handler(bills_then_waits(), host=SidecarHost({"monitor": "mockllm/monitor"}))
+    )
+
+    result: dict[str, Any] = {}
+    async with anyio.create_task_group() as group:
+        group.start_soon(handler.request, _asked("x"))
+        await _gates[0].wait()
+        result = await _request_result(handler)
+        _gates[1].set()
+
+    assert result["state"] == "judging"
+    [used] = result["judging_usage"]
+    assert used["usage"]["total_tokens"] > 0
 
 
 @pytest.mark.anyio

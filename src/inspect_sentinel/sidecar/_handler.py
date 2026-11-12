@@ -19,6 +19,7 @@ from inspect_ai.model import (
     ChatMessageAssistant,
     ChatMessageTool,
     ModelOutput,
+    ModelUsage,
 )
 from inspect_ai.tool import ToolCall, ToolCallView
 from inspect_ai.util import Store
@@ -50,7 +51,16 @@ from ._exchange import (
     succeeded,
 )
 from ._history import record_sent, with_sent_ids
-from ._host import AskHuman, Record, RunHost, SidecarHost, noting_models, stage
+from ._host import (
+    AskHuman,
+    ModelUsed,
+    Record,
+    RunHost,
+    SidecarHost,
+    add_usage,
+    noting_models,
+    stage,
+)
 from ._inspect_ai import VIEWED_TOOLS, tool_call_view
 from ._inspect_client import (
     INSPECT_CONTEXT,
@@ -222,6 +232,8 @@ class RequestResult:
     """What was recorded, every attempt's in order."""
     reviews: list[tuple[int, Review]]
     """What became of each question a sentinel asked a person, in order, each with the number of the try that asked, from 1."""
+    judging_usage: dict[ModelUsed, ModelUsage]
+    """What the provider billed for each model the sentinel called while judging every attempt, in the order first billed."""
     failure: Failure | None = None
     """The provider's last failed exchange, for a model call a person was asked about that may be sent on again because of it."""
 
@@ -308,6 +320,8 @@ class _Judging:
     """How much of the time limit was left when the judging began to wait on a person."""
     detached: bool = False
     """Whether the exchange was answered "pending review", so that the judging goes on with no connection open."""
+    detached_at: float | None = None
+    """When the exchange was answered "pending review", on the monotonic clock. Judging after it isn't time the client waited on its model call."""
     reattached: Refuse | None = None
     """What the exchange is refused with, where another try of the call asked a person first and holds the operation."""
     answer: Answer | None = None
@@ -372,7 +386,7 @@ class Handler:
             state: Where runs are kept. Defaults to this process's memory.
             reject_status: The HTTP status a rejected turn is refused with. The default, 400, is one a client takes as final. A status a client retries by itself, such as 503, brings the client back with the same request, which then goes on with the rejection added.
             time_limit: The longest the sentinel may take to judge one request or one reply, in seconds, after which it is cancelled. None, the default, is no limit.
-            eval_results: Whether the judgment `request_result` gives an Inspect eval holds the results: the explanations, references and metadata of the decisions, and what each monitor and protocol recorded. Without them, it holds only what Inspect acts on. A monitor's explanation tells an agent what the monitor looks for, so an eval that can't be trusted is not sent them. Such an eval is not asked to answer for a person either: without results, a sentinel's question to a person is answered with caution, as for a run no eval names.
+            eval_results: Whether the judgment `request_result` gives an Inspect eval holds the results: the explanations, references and metadata of the decisions, and what each monitor and protocol recorded. Without them, it holds only what Inspect acts on. A monitor's explanation tells an agent what the monitor looks for, so an eval that can't be trusted is not sent them. Such an eval is not asked to answer for a person either: without results, a sentinel's question to a person is answered with caution, as for a run no eval names. Either way, `request_result` gives how long the judging took and what the judge models' calls cost, by model and role, for the eval's accounting.
             tasks: Tasks registered beforehand, by name, as the tasks folder's files hold them. Nothing an eval registers replaces one, and a request for a sample one doesn't hold is refused.
             runtime_task_registration: Whether an eval may register its tasks itself, at task init.
             strictness: How strict the handler is about a request it can't place. Under every strictness, a request with an `x-inspect-context` header must first pass the check of that header: it is refused, and not judged, if the handler holds no token for the eval it names, if its `timestamp` or `mac` fails the check, or if it names a run another eval started (see `request`). The strictness says what happens to a request that passes, and to one without the header. `open`, the default, judges each of those, without the task's facts where it holds none. `known_tasks` refuses a request whose `x-inspect-context` names a task the handler doesn't hold, and judges one without the header. `registered_only` refuses any request that doesn't name a sample the handler holds, in an epoch the task's registration runs, including one without the header, and refuses a sample's registration that the task's registration doesn't name.
@@ -1105,11 +1119,15 @@ class Handler:
             with anyio.move_on_after(min(left, _RESULT_POLL)):
                 await latest.settled.wait()
         records: list[Record] = []
+        usage: dict[ModelUsed, ModelUsage] = {}
         for attempt in attempts:
             kept = await self._state.records(attempt.exchange)
             if kept is None:
                 return "dropped"
             records.extend(kept)
+            # every attempt's judging was billed, a retried one's too
+            for used, billed in attempt.judging_usage.items():
+                add_usage(usage, used, billed)
         asked = operation.asked if operation is not None else {}
         reviews = [
             (asked.get(review.id, number), review)
@@ -1117,12 +1135,13 @@ class Handler:
             for review in attempt.reviews
         ]
         if operation is None:
-            return RequestResult(latest, records, reviews)
+            return RequestResult(latest, records, reviews, usage)
         failed = latest.state == "awaiting_request" and latest.reason is not None
         return RequestResult(
             latest,
             records,
             reviews,
+            usage,
             failure=operation.failure if failed else None,
         )
 
@@ -2033,17 +2052,34 @@ class Handler:
         recorded = len(held.recorder.records)
         reviewed = len(held.attempt.reviews) if held.attempt is not None else 0
         # which models judged the step, for the eval: its roles don't reach here
-        with noting_models() as models:
-            decision = await run_sentinel(
-                self._protocol,
-                HostContext(
-                    host=RunHost(self._host, run.eval, self._asker(held)),
-                    recorder=held.recorder,
-                    store=held.store,
-                    proxy=held.proxy,
-                ),
-                step,
-            )
+        # each judge call's billed usage goes to the attempt as soon as the
+        # call is done, so an eval asking while the step is judged sees it
+        judging = _JUDGING.get()
+        with noting_models(
+            held.attempt.judging_usage if held.attempt is not None else None
+        ) as models:
+            started = time.monotonic()
+            try:
+                decision = await run_sentinel(
+                    self._protocol,
+                    HostContext(
+                        host=RunHost(self._host, run.eval, self._asker(held)),
+                        recorder=held.recorder,
+                        store=held.store,
+                        proxy=held.proxy,
+                    ),
+                    step,
+                )
+            finally:
+                # The client waited on its model call while the step was
+                # judged, failed or not, until the call was answered
+                # "pending review". The time a person takes, and any judging
+                # after it, isn't time the client waited on the call.
+                if held.attempt is not None:
+                    ended = time.monotonic()
+                    if judging is not None and judging.detached_at is not None:
+                        ended = min(ended, judging.detached_at)
+                    held.attempt.judging_time += max(0.0, ended - started)
         call = (
             step.call.id if isinstance(step, BeforeToolCall | AfterToolCall) else None
         )
@@ -2053,7 +2089,7 @@ class Handler:
                 call,
                 decision,
                 held.recorder.records[recorded:],
-                tuple(models),
+                tuple(models.called),
                 tuple(
                     review.id
                     for review in (
@@ -2182,6 +2218,7 @@ class Handler:
                 # the exchange is answered "pending review" now, and no
                 # connection waits for the person
                 judging.detached = True
+                judging.detached_at = time.monotonic()
                 judging.turned.set()
             # the time a question is open isn't the sentinel's
             limit = judging.limit

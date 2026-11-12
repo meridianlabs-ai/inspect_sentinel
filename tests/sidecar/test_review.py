@@ -1273,6 +1273,20 @@ async def test_a_paused_call_keeps_the_records_of_its_earlier_tries_past_their_e
     assert (result["records"], result["outcome"]) == ("held", "proceed")
 
 
+@pytest.mark.anyio
+async def test_the_time_a_person_takes_isnt_judging_time() -> None:
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        question = await _asked(handler, client)
+        # the person takes a while, with no connection waiting on the call
+        await anyio.sleep(0.5)
+        await _answer(client, question["id"], "approve")
+        result = await _result(client, until="decided")
+
+    # the judging counts only until the call was answered "pending review"
+    assert 0 <= result["judging_time"] < 0.5
+
+
 # --- who is asked, and who may answer ---
 
 

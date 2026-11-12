@@ -17,7 +17,13 @@ from ._errors import UnauthorizedError
 from ._exchange import Refuse
 from ._handler import MAX_RESULT_WAIT, Handler, HeldReply, RequestResult
 from ._http import discard_within, read_within
-from ._inspect_client import Judgment, judgment, record_json
+from ._inspect_client import (
+    JudgingUsage,
+    Judgment,
+    judging_usage,
+    judgment,
+    record_json,
+)
 from ._json_rpc import (
     ANSWER_REFUSED,
     METHOD_NOT_FOUND,
@@ -272,6 +278,15 @@ class RequestResultResult(BaseModel):
     failure: FailureRecord | None = Field(
         default=None,
         description="The provider's last failed exchange, with `awaiting_request` and a `reason`.",
+    )
+    judging_time: float | None = Field(
+        default=None,
+        ge=0,
+        description="How long the sentinel spent judging the latest attempt's request and reply so far, in seconds. The client waited on its model call meanwhile, so an eval counts this time as waiting, not as the agent's working time. 0 where nothing was judged. Sent with `judging_usage` on every answer about records the sidecar holds, whether or not the judgment is trimmed.",
+    )
+    judging_usage: list[JudgingUsage] | None = Field(
+        default=None,
+        description="What the provider billed for each model the sentinel called while judging every attempt at the request, retried attempts included, since each was billed. One entry per role and model that was billed, in the order first billed: a reply from inspect_ai's cache and a call that failed weren't billed. Empty where nothing was billed. Sent with `judging_time` on every answer about records the sidecar holds, whether or not the judgment is trimmed.",
     )
 
 
@@ -700,6 +715,8 @@ async def _answered(
                 and latest.outcome is not None
                 else None
             ),
+            judging_time=latest.judging_time,
+            judging_usage=judging_usage(found.judging_usage),
             reviews=[
                 ReviewRecord(
                     id=review.id,
