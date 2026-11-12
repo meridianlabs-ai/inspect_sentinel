@@ -49,7 +49,7 @@ DOWNLOAD_INPUTS = {
     "path": "dist/",
 }
 EXEMPT_COOLDOWN = "6 hours"
-# CI moves these to their main, so Dependabot leaves them alone.
+# Development tracks their main; CI moves both to main's latest commit.
 MAIN_TRACKED = ["inspect-ai", "inspect-scout"]
 
 spec = importlib.util.spec_from_file_location(
@@ -172,13 +172,13 @@ def verify_dependabot_cooldown(
 ) -> None:
     cooldown = dependabot["cooldown"]
     assert cooldown["default-days"] == cooldown_days(config["exclude-newer"])
-    assert dependabot["ignore"] == [{"dependency-name": p} for p in MAIN_TRACKED]
+    assert "ignore" not in dependabot
     # Dependabot's cooldown counts whole days, so it leaves the "6 hours"
     # entries to uv. Dated entries are locked by hand.
     exempt = sorted(
         package
         for package, cooldown in config["exclude-newer-package"].items()
-        if cooldown == EXEMPT_COOLDOWN and package not in MAIN_TRACKED
+        if cooldown == EXEMPT_COOLDOWN
     )
     assert sorted(cooldown["exclude"]) == exempt
     # The exempt packages have their own group, listed before the catch-all.

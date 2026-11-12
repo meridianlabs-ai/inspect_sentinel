@@ -30,8 +30,10 @@ updates:
   # counts whole days, so those packages' 6-hour cooldown is left to uv. They
   # get their own group, so a broken update elsewhere can't hold them up. It
   # comes first because a package that matches both groups goes to the first.
-  # inspect-ai and inspect-scout are ignored: they come from their main
-  # branches, which CI moves to the latest commit on every run.
+  # inspect-ai and inspect-scout come from their main branches, and uv.lock
+  # records a commit of each. CI moves both to main's latest commit on every
+  # run, but Dependabot resolves against the recorded commit, so they are left
+  # to Dependabot like any other package.
   - package-ecosystem: "uv"
     versioning-strategy: "lockfile-only"
     directory: "/"
@@ -41,14 +43,15 @@ updates:
       default-days: 7
       exclude:
         - "anthropic"
+        - "inspect-ai"
+        - "inspect-scout"
         - "openai"
-    ignore:
-      - dependency-name: "inspect-ai"
-      - dependency-name: "inspect-scout"
     groups:
       six-hour-cooldown:
         patterns:
           - "anthropic"
+          - "inspect-ai"
+          - "inspect-scout"
           - "openai"
       python-packages:
         patterns:
