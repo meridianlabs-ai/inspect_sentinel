@@ -65,7 +65,7 @@ class Reply:
     """Which API the body is written in, if the proxy said. Without it, the API is worked out from `provider` and the body."""
 
     body_follows: bool = False
-    """Whether the body is still passing on to the client, and isn't in `body`. A provider's error is shown this way by a proxy that passes it on as it comes, which then hands the body to `Handler.error_body` once it has all passed."""
+    """Whether the body is still arriving and passing on to the client, and isn't in `body`. A provider's error is shown this way by a proxy that passes it on as it comes, which then hands the body to `Handler.error_body` once it has all arrived from the provider, or tells `Handler.reply_not_judged` that it was cut off."""
 
     headers: Mapping[str, str] = field(default_factory=dict[str, str])
     """The reply's headers as the provider sent them, by lowercase name, where the proxy hands them over. They are kept with the reply of a model call that waited for a person, which the eval reads as the provider's own."""

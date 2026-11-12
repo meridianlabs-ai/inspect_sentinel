@@ -168,13 +168,16 @@ class _Exchange:
         self._model = ""
         self._status = 0
         self._content_type = ""
-        # the reply's headers as the provider sent them, without HTTP/2's own
+        # the reply's headers as the provider sent them, without pseudo-headers
+        # such as `:status`; nothing else is left out here
         self._reply_headers: dict[str, str] = {}
         # a copy of a provider's error as it passes, or None once it is too
         # large to keep
         self._error_body: bytearray | None = None
-        # whether the handler waits to be told a provider's error has all passed
+        # whether the handler waits to be told a provider's error has all
+        # arrived, and the handler being shown that error, while it is
         self._error_follows = False
+        self._error_shown: asyncio.Future[Answer] | None = None
         self._declared_length = False
         self._request_encoding = "identity"
         self._replied = False
@@ -232,7 +235,14 @@ class _Exchange:
             # eval can be given: it failed as a reply cut off does
             self._error_follows = False
             self._error_body = None
-            await self._handler.reply_not_judged(self._id, "cut_off")
+            shown, self._error_shown = self._error_shown, None
+            if shown is not None and not shown.done():
+                # Envoy stopped waiting while the handler was still being
+                # shown the error. The handler is told once it has been, or
+                # it would wait for the error's body for good.
+                self._spawn(self._cut_off_once_shown(shown))
+            else:
+                await self._handler.reply_not_judged(self._id, "cut_off")
         if self._stream is not None:
             await self._stream.abort()
         elif self._forwarded and not self._replied:
@@ -436,19 +446,27 @@ class _Exchange:
         # A provider's error goes on unjudged: the handler is told at the
         # headers, and the body passes through as it comes, whatever its size
         # or encoding. A copy of a body no larger than `ERROR_BODY_BYTES` is
-        # handed over once it has all passed, for an eval whose model call
-        # waited for a person and reads the error from the sidecar.
+        # handed over once it has all arrived from the provider, for an eval
+        # whose model call waited for a person and reads the error from the
+        # sidecar.
         self._replied = self._passing = True
-        answer = await self._judge(
-            self._handler.reply(self._reply_of(b"", body_follows=not end_of_stream)),
-            "reply",
-            reply=True,
+        # set before the handler is shown the error, so that an exchange
+        # Envoy stops while it is still being shown tells the handler the
+        # error didn't all pass (`close`)
+        self._error_follows = not end_of_stream
+        shown = asyncio.ensure_future(
+            self._handler.reply(self._reply_of(b"", body_follows=not end_of_stream))
         )
+        self._error_shown = shown
+        answer = await self._judge(shown, "reply", reply=True)
+        self._error_shown = None
         if isinstance(answer, Refuse):
+            self._error_follows = False
             return [self._refusal(answer)]
         self.finished = end_of_stream
-        self._error_follows = not end_of_stream
-        # a compressed error isn't copied: the copy is kept as plain bytes
+        # A compressed error isn't copied: the sidecar drops `content-encoding`
+        # from what it keeps of a reply, so a compressed copy couldn't be read.
+        # Its body is then left empty.
         encoding = self._reply_headers.get("content-encoding", "identity").lower()
         if not end_of_stream and encoding == "identity":
             self._error_body = bytearray()
@@ -507,10 +525,17 @@ class _Exchange:
         except Exception as ex:
             await self._answer(self._refusal(self._not_judged(ex, "reply", reply=True)))
 
+    async def _cut_off_once_shown(self, shown: asyncio.Future[Answer]) -> None:
+        # what the handler is told of an error whose exchange Envoy stopped
+        # while the handler was still being shown it: that it didn't all pass
+        await asyncio.wait({shown})
+        await self._handler.reply_not_judged(self._id, "cut_off")
+
     async def _error_passed(self) -> None:
-        # A provider's error has all passed on to the client. The handler is
-        # always told, so that it knows the error is whole: without a body
-        # where there was none, or one too large or compressed to copy.
+        # A provider's error has all arrived from the provider, as the shim
+        # is handed its last chunk to pass on. The handler is always told, so
+        # that it knows the error is whole: without a body where there was
+        # none, or one too large or compressed to copy.
         if not self._error_follows:
             return
         self._error_follows = False

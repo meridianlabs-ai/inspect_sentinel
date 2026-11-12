@@ -464,6 +464,71 @@ async def test_a_compressed_error_is_passed_on_and_not_copied() -> None:
     assert [body for _, body in handler.error_bodies] == [b""]
 
 
+class _SlowToBeShownAnError(NotingHandler):
+    """A handler that is slow to be shown a provider's error, and notes what it is told of it, in order."""
+
+    def __init__(self, *args: Any, **options: Any) -> None:
+        super().__init__(*args, **options)
+        self.shown = asyncio.Event()
+        self.go_on = asyncio.Event()
+        self.told: list[str] = []
+
+    async def reply(self, reply: Reply, *, released: bytes = b"") -> Any:
+        if not reply.body_follows:
+            return await super().reply(reply, released=released)
+        self.shown.set()
+        await self.go_on.wait()
+        answer = await super().reply(reply, released=released)
+        self.told.append("shown the error")
+        return answer
+
+    async def reply_not_judged(self, id: str, reason: Any) -> None:
+        self.told.append(f"not judged: {reason}")
+        await super().reply_not_judged(id, reason)
+
+    async def error_body(self, id: str, body: bytes) -> None:
+        self.told.append("the error's body")
+        await super().error_body(id, body)
+
+
+@pytest.mark.anyio(backends=["asyncio"])
+async def test_an_error_envoy_stops_waiting_for_while_it_is_shown_is_told_as_cut_off() -> (
+    None
+):
+    handler = _SlowToBeShownAnError(weather_rule())
+    shim = EnvoyShim(handler, max_body_bytes=1024 * 1024)
+
+    async def sent() -> AsyncIterator[pb.ProcessingRequest]:
+        for each in [
+            *_REQUEST,
+            pb.ProcessingRequest(
+                response_headers=_headers(
+                    {":status": "529", "content-type": "application/json"}
+                )
+            ),
+        ]:
+            yield each
+        await asyncio.Event().wait()
+
+    answers = cast(
+        AsyncGenerator[pb.ProcessingResponse],
+        shim.Process(sent(), cast(Any, _Context(_ANTHROPIC))),
+    )
+    await answers.__anext__()
+    await answers.__anext__()
+    # Envoy goes away while the handler is still being shown the error
+    await handler.shown.wait()
+    await answers.aclose()
+    handler.go_on.set()
+    with anyio.fail_after(5):
+        while len(handler.told) < 2:
+            await asyncio.sleep(0.01)
+
+    # once it has been shown the error, it is told the error didn't all pass,
+    # so it doesn't wait for the error's body for good
+    assert handler.told == ["shown the error", "not judged: cut_off"]
+
+
 class _ReplacesEveryReply:
     async def request(self, request: Request) -> Pass:
         return Pass()

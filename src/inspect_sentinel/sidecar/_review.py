@@ -103,7 +103,12 @@ class Review:
     """When the answer was taken."""
 
     resolution: Literal["answered", "timed_out", "cancelled"] | None = None
-    """How the wait ended, or None while the step still waits: on the answer, on nobody answering in time, when the step was answered with caution, or cancelled, when the step came to no decision."""
+    """How the wait ended, or None while the step still waits.
+
+    - `answered`: the eval's answer was taken, and the sentinel was given it.
+    - `timed_out`: nobody answered in time, and the step was given the cautious answer.
+    - `cancelled`: the step stopped with no decision; `cause` says why.
+    """
 
     cause: Cause | None = None
     """Why the wait was cancelled, when it was."""

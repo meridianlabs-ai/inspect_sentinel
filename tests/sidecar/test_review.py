@@ -27,6 +27,7 @@ from inspect_sentinel.sidecar import (
     Reply,
     Request,
     SidecarHost,
+    _state,
 )
 from inspect_sentinel.sidecar._eval_endpoint import (
     HELD_REPLY_PATH,
@@ -317,6 +318,28 @@ async def test_an_approved_call_is_decided_and_its_reply_is_kept_for_the_eval() 
         assert (held.status_code, held.headers["content-type"]) == (200, JSON)
         assert held.content == body
         assert await _pending(client) == []
+
+
+@pytest.mark.anyio
+async def test_neither_a_held_reply_nor_a_served_error_carries_the_providers_cookies() -> (
+    None
+):
+    cookies = {"content-type": JSON, "set-cookie": "session=abc; Path=/"}
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        await _approved(
+            handler, client, replace(reply(message(weather("Oslo"))), headers=cookies)
+        )
+        held = await _held_reply(client)
+    errors = _at_results()
+    async with _serving(errors) as client:
+        await _failed_at_the_provider(
+            errors, client, replace(_error(status=403), headers=cookies)
+        )
+        served = await _held_reply(client, "irid-2")
+
+    assert held.status_code == 200 and "set-cookie" not in held.headers
+    assert served.status_code == 403 and "set-cookie" not in served.headers
 
 
 @pytest.mark.anyio
@@ -1184,21 +1207,69 @@ async def test_the_time_a_question_is_open_isnt_counted_against_the_time_limit()
 
 
 @pytest.mark.anyio
-async def test_a_call_that_waits_for_a_person_keeps_what_it_needs_past_its_expiry() -> (
-    None
-):
-    # long enough for the question to be asked before anything expires
-    handler = _reviewed(state=MemoryState(expiry=1))
+def _state_clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    # the state's own clock, which the test moves on: the event loop keeps
+    # the real one
+    now = [0.0]
+
+    class Clock:
+        @staticmethod
+        def monotonic() -> float:
+            return now[0]
+
+    monkeypatch.setattr(_state, "time", Clock)
+    return now
+
+
+async def _decided_or_dropped(client: httpx.AsyncClient) -> dict[str, Any]:
+    # what `request_result` says once the call is decided, or once its
+    # records are no longer kept
+    with anyio.fail_after(10):
+        while True:
+            result = await _result(client)
+            if result["records"] != "held" or result.get("state") == "decided":
+                return result
+            await anyio.sleep(0.01)
+
+
+@pytest.mark.anyio
+async def test_a_call_that_waits_for_a_person_keeps_what_it_needs_past_its_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _state_clock(monkeypatch)
+    handler = _reviewed(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
         question = await _asked(handler, client)
         # longer than the run, the eval's token and the request's records are kept
-        await anyio.sleep(1.3)
+        now[0] = 100.0
 
         # the eval's token still proves its calls, and the run is still there
         answered = await _answer(client, question["id"], "approve")
         assert answered["result"]["decision"] == "approve"
-        result = await _result(client, until="decided")
+        result = await _decided_or_dropped(client)
 
+    assert (result["records"], result["outcome"]) == ("held", "proceed")
+
+
+@pytest.mark.anyio
+async def test_a_paused_call_keeps_the_records_of_its_earlier_tries_past_their_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _state_clock(monkeypatch)
+    handler = _reviewed(state=MemoryState(expiry=10))
+    async with _serving(handler) as client:
+        # a first try of the call, whose reply never came
+        assert isinstance(await handler.request(_from_eval("x1")), Pass)
+        await handler.reply_not_judged("x1", "cut_off")
+        # the eval tries again under the same x-irid, and a person is asked
+        question = await _asked(handler, client, id="x2")
+        # the person takes longer than records are kept
+        now[0] = 100.0
+
+        await _answer(client, question["id"], "approve")
+        result = await _decided_or_dropped(client)
+
+    # `request_result` reads every try's records, the first's included
     assert (result["records"], result["outcome"]) == ("held", "proceed")
 
 

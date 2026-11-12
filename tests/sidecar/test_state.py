@@ -82,7 +82,7 @@ async def test_requests_whose_replies_never_come_are_dropped_as_more_arrive(
 @pytest.mark.anyio
 async def test_what_is_pinned_is_kept_past_its_expiry_until_it_is_unpinned() -> None:
     state = MemoryState(expiry=0.1)
-    pinned = _state.Pinned("eval_789", "philadelphia", "run", "irid-1", "x")
+    pinned = _state.Pinned("eval_789", "philadelphia", "run", "irid-1", ("x",))
     run = await state.run("run")
     other = await state.run("other")
     recorder = await state.recorder("x")
@@ -112,8 +112,8 @@ async def test_what_is_pinned_is_kept_past_its_expiry_until_it_is_unpinned() -> 
 @pytest.mark.anyio
 async def test_a_pin_is_undone_by_as_many_unpins() -> None:
     state = MemoryState(expiry=0.1)
-    first = _state.Pinned("eval_789", "philadelphia", "run", "irid-1", "x")
-    second = _state.Pinned("eval_789", "philadelphia", "run", "irid-2", "y")
+    first = _state.Pinned("eval_789", "philadelphia", "run", "irid-1", ("x",))
+    second = _state.Pinned("eval_789", "philadelphia", "run", "irid-2", ("y",))
     run = await state.run("run")
 
     # two calls of one run wait for a person, and one of them ends

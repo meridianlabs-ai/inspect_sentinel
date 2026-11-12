@@ -315,8 +315,8 @@ class Pinned:
     request: str
     """The eval's id for the request, whose attempts are kept."""
 
-    exchange: str
-    """The proxy's id for the exchange that asked, whose records are kept."""
+    exchanges: tuple[str, ...]
+    """The proxy's ids for the exchanges of every attempt at the request, whose records are kept: `request_result` reads them all, those of tries before the one that asked included."""
 
 
 class State(Protocol):
@@ -515,14 +515,16 @@ class MemoryState:
         self._runs.pin(pinned.run)
         self._tokens.pin(pinned.eval_id)
         self._attempts.pin(_request_key(pinned.request, pinned.eval_id))
-        self._recorders.pin(pinned.exchange)
+        for exchange in pinned.exchanges:
+            self._recorders.pin(exchange)
         self._pinned_tasks[(pinned.eval_id, pinned.task)] += 1
 
     async def unpin(self, pinned: Pinned) -> None:
         self._runs.unpin(pinned.run)
         self._tokens.unpin(pinned.eval_id)
         self._attempts.unpin(_request_key(pinned.request, pinned.eval_id))
-        self._recorders.unpin(pinned.exchange)
+        for exchange in pinned.exchanges:
+            self._recorders.unpin(exchange)
         task = (pinned.eval_id, pinned.task)
         self._pinned_tasks[task] -= 1
         if self._pinned_tasks[task] <= 0:

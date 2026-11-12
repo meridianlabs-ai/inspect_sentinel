@@ -193,6 +193,9 @@ _NOT_KEPT = frozenset(
         "trailer",
         "transfer-encoding",
         "upgrade",
+        # the provider's cookies for the proxy's client, which an eval that
+        # gets the held reply has no use for, and LiteLLM's guardrail drops
+        "set-cookie",
         # the sidecar's own, which a provider can't set
         FAILED_TRY,
     }
@@ -278,7 +281,9 @@ class _Operation:
     go: Pass | Replace | None = None
     """What a try that is sent on is answered with."""
     reply: HeldReply | None = None
+    """The provider's reply, once the call is decided with the turn going on, for the eval to get from the held-reply path."""
     failure: Failure | None = None
+    """The provider's latest failed exchange, for as long as the call waits to be sent on again because of it."""
     ended: float | None = None
     """When it ended, on the monotonic clock."""
 
@@ -306,7 +311,9 @@ class _Judging:
     reattached: Refuse | None = None
     """What the exchange is refused with, where another try of the call asked a person first and holds the operation."""
     answer: Answer | None = None
+    """What the exchange that began the judging is answered with, once the judging is over or has asked a person."""
     error: Exception | None = None
+    """What the judging raised, which the exchange that began it raises in its place."""
 
 
 # the judging this task is part of, where it is an eval's
@@ -394,6 +401,10 @@ class Handler:
         # the model calls a sentinel asked a person about, by eval and x-irid,
         # each kept until its sample ends or long after it ended
         self._operations: dict[tuple[str, str], _Operation] = {}
+        # The same operations, by the attempt that asked. An attempt isn't
+        # hashable by value, so it is keyed by `id()`; the operation holds the
+        # attempt until it is dropped from here, so the id can't be reused
+        # for another attempt meanwhile.
         self._by_attempt: dict[int, _Operation] = {}
         # the model call each open question was asked for, by question id
         self._asking: dict[str, _Operation] = {}
@@ -699,7 +710,7 @@ class Handler:
         self._finish(held.attempt)
 
     async def error_body(self, id: str, body: bytes) -> None:
-        """Take the body of a provider's error that the handler was shown without it, once all of it has passed on to the client.
+        """Take the body of a provider's error that the handler was shown without it, once all of it has arrived from the provider.
 
         A provider's error is not held: `reply` is shown it as its status and headers arrive, with `body_follows` set, and its body goes on as it comes. For a model call a person was asked about, the eval gets the error from the sidecar, so the call stays at `awaiting_reply` until the proxy says here that the error is whole. Only then is the eval told that the provider failed, and never of an error it can't yet be given.
 
@@ -741,6 +752,8 @@ class Handler:
         if operation is None:
             return
         attempt = operation.attempt
+        # back to judging once no question of the call still waits for an
+        # answer: each has ended, or has the answer just taken
         if attempt.state == "awaiting_review" and all(
             review.resolution is not None or review.decision is not None
             for review in attempt.reviews
@@ -2116,7 +2129,7 @@ class Handler:
                         sample.task,
                         held.run,
                         request_id,
-                        attempt.exchange,
+                        (attempt.exchange,),
                     ),
                 )
                 self._operations[key] = operation
@@ -2131,6 +2144,16 @@ class Handler:
                             if tried is attempt
                         ),
                         operation.tries,
+                    )
+                    # `request_result` reads the records of every try of the
+                    # request, so those of tries before this one are kept too
+                    operation.pinned = replace(
+                        operation.pinned,
+                        exchanges=tuple(
+                            dict.fromkeys(
+                                [*(tried.exchange for tried in tries), attempt.exchange]
+                            )
+                        ),
                     )
                 # a person may take days, so what the call needs doesn't expire
                 await self._state.pin(operation.pinned)
