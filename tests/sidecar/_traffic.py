@@ -138,14 +138,11 @@ def inspect_headers(
     irid: str = "request_456",
     token: str = TOKEN,
     timestamp: int | None = None,
-    held_reply_for: str | None = None,
     **changes: Any,
 ) -> dict[str, str]:
     """The headers an Inspect eval sends with each model request, for `SAMPLE` with `changes` and the request id `irid`, signed with `token` at `timestamp`, now if not given."""
     fields = SAMPLE | changes
     fields["timestamp"] = int(time.time()) if timestamp is None else timestamp
-    if held_reply_for is not None:
-        fields["held_reply_for"] = held_reply_for
     fields["mac"] = signed(
         token,
         [
@@ -163,7 +160,6 @@ def inspect_headers(
             ),
             irid,
             fields["timestamp"],
-            *([held_reply_for] if held_reply_for is not None else []),
         ],
     )
     return {"x-inspect-context": json.dumps(fields), "x-irid": irid}

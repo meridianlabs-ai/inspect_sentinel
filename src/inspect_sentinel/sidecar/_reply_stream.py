@@ -292,7 +292,7 @@ class ReplyStream:
         # start, and the body goes out as it comes, whatever its size. A copy
         # of a body no larger than `ERROR_BODY_BYTES` is handed over once it
         # has all come, for an eval whose model call waited for a person.
-        answer = await self._handler.reply(self._reply(b""))
+        answer = await self._handler.reply(self._reply(b"", body_follows=True))
         if isinstance(answer, Refuse):
             await self._out(answer)
             return
@@ -309,10 +309,16 @@ class ReplyStream:
                         body = None
                 await self._out(Release(data))
             if self._aborted:
+                # the body didn't all pass, so the error isn't one the eval
+                # can be given: it failed as a reply cut off does
+                await self._handler.reply_not_judged(self._start.id, "cut_off")
                 return
             if self._ended and not self._held:
-                if body:
-                    await self._handler.error_body(self._start.id, bytes(body))
+                # always said, so that the handler knows the error is whole:
+                # without a body where there was none, or one too large to copy
+                await self._handler.error_body(
+                    self._start.id, bytes(body) if body is not None else b""
+                )
                 await self._out(Finished())
                 return
 
@@ -485,7 +491,7 @@ class ReplyStream:
                     pass
             self._last_out = anyio.current_time()
 
-    def _reply(self, body: bytes) -> Reply:
+    def _reply(self, body: bytes, *, body_follows: bool = False) -> Reply:
         start = self._start
         return Reply(
             id=start.id,
@@ -496,6 +502,7 @@ class ReplyStream:
             status=start.status,
             content_type=start.content_type,
             body=body,
+            body_follows=body_follows,
             headers=start.headers,
         )
 

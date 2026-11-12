@@ -14,8 +14,9 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from ._errors import UnauthorizedError
-from ._handler import MAX_RESULT_WAIT, Handler, KeptReply, RequestResult
-from ._http import read_within
+from ._exchange import Refuse
+from ._handler import MAX_RESULT_WAIT, Handler, HeldReply, RequestResult
+from ._http import discard_within, read_within
 from ._inspect_client import Judgment, judgment, record_json
 from ._json_rpc import (
     ANSWER_REFUSED,
@@ -53,6 +54,9 @@ from ._state import NotJudged, Outcome
 
 PATH = "/sentinel/v1"
 """Where the methods are served. The `v1` is the version of the methods."""
+
+HELD_REPLY_PATH = f"{PATH}/held-reply"
+"""Where an eval gets the reply held for a model call a person was asked about. Not a method: the eval sends the model call's own request here, with the code that sends it to the provider, and is answered as the provider would answer."""
 
 INFO_PATH = "/sentinel/info"
 """The probe, which has no version, since it is how an eval learns which versions there are."""
@@ -264,10 +268,6 @@ class RequestResultResult(BaseModel):
     reviews: list[ReviewRecord] | None = Field(
         default=None,
         description="What became of each question a sentinel asked a person, in order, including one whose step was stopped before it came to a decision. A judged step names its questions in its `reviews`. Left out where nobody was asked.",
-    )
-    reply: ReplyRecord | None = Field(
-        default=None,
-        description="The provider's reply, for a request a person was asked about that was decided with the turn going on, whichever stage it waited at. The eval reads it where its own exchange didn't bring it the reply: always for a request that waited at its reply, and for one that waited at its request when the response to the try sent on was lost. Left out of every other answer.",
     )
     failure: FailureRecord | None = Field(
         default=None,
@@ -486,15 +486,17 @@ def eval_routes(
     token: str | None = None,
     results: bool = True,
 ) -> list[Route]:
-    """The routes of the endpoint for evals: the probe at `/sentinel/info`, and the methods at `/sentinel/v1`.
+    """The routes of the endpoint for evals: the probe at `/sentinel/info`, the methods at `/sentinel/v1`, and a held reply at `/sentinel/v1/held-reply`.
 
     An eval registers its tasks and completes each sample's registration before the sample runs, asks what became of each request and of a sample, and ends a sample once it is scored. The eval makes a token and sends it in a registration to a sidecar that holds none for the eval. Every other call proves the caller holds that token with a `timestamp` and a `mac`, so only the eval reads what was decided of its requests and samples. Every call is a JSON-RPC 2.0 request. No method clears a tally or changes the sentinel, and one allows a call: `answer_question`, which answers a question the sentinel itself asked a person, for now on the eval's token, and only for the eval's own runs (`design/sidecar-plan.md`, step 13). A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
+
+    `/sentinel/v1/held-reply` is not a method. Once a model call that waited for a person is decided with the turn going on, the eval POSTs the call's own request there, under the same `x-irid` and with an `x-inspect-context` signed as any model request's is, and is answered with the reply the sidecar held: the provider's status, headers and body, a stream's events from first to last. The eval's code for that provider reads it as the provider's own. Only the headers that prove the call are read, never the body. Any other request is refused with a 400 and a JSON `error`, and the eval reads where the call stands with `request_result`. Getting the reply changes nothing, so it can be got again.
 
     Args:
         handler: The handler the proxy's requests and replies are put to.
         max_body_bytes: The largest call that is read.
         token: A credential every call to the methods must present as a bearer token, when the endpoint has a port of its own. None where it shares the proxy's port and access control.
-        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited. Without results, `pending_questions` and `answer_question` aren't served either: an eval that isn't trusted with a monitor's explanation isn't trusted to answer for a person. Build the handler with `eval_results` off as well, so that it asks no question nobody can answer.
+        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited. Without results, `pending_questions`, `answer_question`, `cancel_request` and `/sentinel/v1/held-reply` aren't served either: an eval that isn't trusted with a monitor's explanation isn't trusted to answer for a person. Build the handler with `eval_results` off as well, so that it asks no question nobody can answer.
     """
 
     async def info(http: HttpRequest) -> Response:
@@ -509,15 +511,23 @@ def eval_routes(
             }
         )
 
+    def unauthorized(http: HttpRequest) -> Response | None:
+        # the endpoint's own credential, where it has a port of its own
+        if token is None:
+            return None
+        presented = http.headers.get("authorization", "")
+        if hmac.compare_digest(presented.encode(), f"Bearer {token}".encode()):
+            return None
+        return JSONResponse(
+            {"error": "A bearer token is required."},
+            status_code=401,
+            headers={"www-authenticate": "Bearer"},
+        )
+
     async def call(http: HttpRequest) -> Response:
-        if token is not None:
-            presented = http.headers.get("authorization", "")
-            if not hmac.compare_digest(presented.encode(), f"Bearer {token}".encode()):
-                return JSONResponse(
-                    {"error": "A bearer token is required."},
-                    status_code=401,
-                    headers={"www-authenticate": "Bearer"},
-                )
+        refused = unauthorized(http)
+        if refused is not None:
+            return refused
         body = await read_within(http, max_body_bytes)
         if body is None:
             return JSONResponse(
@@ -543,9 +553,37 @@ def eval_routes(
             return failed(id, ex)
         return answered(id, result)
 
+    async def held_reply(http: HttpRequest) -> Response:
+        # Every refusal is a status that a provider's SDK doesn't send again
+        # by itself, so an eval's request for a reply that isn't there fails
+        # once, and the eval asks `request_result` what became of the call.
+        refused = unauthorized(http)
+        if refused is not None:
+            return refused
+        if not results:
+            return JSONResponse(
+                {
+                    "error": "This sidecar doesn't send results, so it asks no person through an eval, and holds no reply for one."
+                },
+                status_code=404,
+            )
+        # the body is the model call's request, which nothing here reads
+        if not await discard_within(http, max_body_bytes):
+            return JSONResponse(
+                {"error": f"A request is at most {max_body_bytes} bytes."},
+                status_code=413,
+            )
+        held = await handler.held_reply(
+            {name.lower(): value for name, value in http.headers.items()}
+        )
+        if isinstance(held, Refuse):
+            return JSONResponse({"error": held.message}, status_code=held.status)
+        return _held_reply_response(held)
+
     return [
         Route(INFO_PATH, info, methods=["GET"]),
         Route(PATH, call, methods=["POST"]),
+        Route(HELD_REPLY_PATH, held_reply, methods=["POST"]),
     ]
 
 
@@ -681,7 +719,6 @@ async def _answered(
                 for number, review in found.reviews
             ]
             or None,
-            reply=_reply_record(found.reply) if found.reply is not None else None,
             failure=(
                 FailureRecord(
                     try_number=found.failure.try_number,
@@ -764,7 +801,18 @@ async def _answer_question(
     return AnswerQuestionResult(id=given.id, decision=given.decision)
 
 
-def _reply_record(reply: KeptReply) -> ReplyRecord:
+def _held_reply_response(held: HeldReply) -> Response:
+    # The reply as the provider sent it and the proxy passed it on, for the
+    # provider's own client code to read. Its body is sent whole, a stream's
+    # events from first to last, with a length of its own: the headers of
+    # one hop were left out when it was held.
+    headers = dict(held.headers)
+    if held.stream and "event-stream" not in headers.get("content-type", "").lower():
+        headers["content-type"] = "text/event-stream"
+    return Response(content=held.body, status_code=held.status, headers=headers)
+
+
+def _reply_record(reply: HeldReply) -> ReplyRecord:
     return ReplyRecord(
         status=reply.status,
         headers=dict(reply.headers),
@@ -811,7 +859,7 @@ def schema() -> dict[str, Any]:
     _, definitions = models_json_schema(
         [(model, "validation") for model in models],
         title="Inspect Sentinel: the endpoint for evals",
-        description=f"JSON-RPC 2.0 methods, POSTed to {PATH}, with a probe at GET {INFO_PATH}. `methods` names the definitions that a method's `params` and `result` fit. `errors` lists the codes of the method errors of the endpoint's own.",
+        description=f"JSON-RPC 2.0 methods, POSTed to {PATH}, with a probe at GET {INFO_PATH}. A model call's request POSTed to {HELD_REPLY_PATH} is not a method: it is answered with the reply held for that call, as the provider sent it. `methods` names the definitions that a method's `params` and `result` fit. `errors` lists the codes of the method errors of the endpoint's own.",
     )
     return {
         "$schema": GenerateJsonSchema.schema_dialect,

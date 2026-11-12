@@ -28,6 +28,7 @@ from inspect_sentinel.sidecar import (
 )
 from inspect_sentinel.sidecar._errors import UnauthorizedError
 from inspect_sentinel.sidecar._eval_endpoint import (
+    HELD_REPLY_PATH,
     INFO_PATH,
     PATH,
     SCHEMA_FILE,
@@ -970,7 +971,7 @@ def test_both_endpoints_share_a_port_by_default() -> None:
     served = apps(Handler(weather_rule()), _arguments())
 
     assert [(port, _paths(app)) for app, port in served] == [
-        (8900, {"/proxy/v1", "/health", INFO_PATH, PATH})
+        (8900, {"/proxy/v1", "/health", INFO_PATH, PATH, HELD_REPLY_PATH})
     ]
 
 
@@ -983,7 +984,7 @@ def test_the_endpoint_for_evals_can_have_a_port_and_a_token_of_its_own(
 
     assert [(port, _paths(app)) for app, port in served] == [
         (8900, {"/proxy/v1", "/health"}),
-        (8901, {"/health", INFO_PATH, PATH}),
+        (8901, {"/health", INFO_PATH, PATH, HELD_REPLY_PATH}),
     ]
 
 

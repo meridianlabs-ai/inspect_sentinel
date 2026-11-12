@@ -529,44 +529,6 @@
       "title": "ReplyChunkParams",
       "type": "object"
     },
-    "RespondResult": {
-      "description": "Send nothing on to the provider, and answer the caller with this reply in its place: the reply the sidecar held for a model call while a person decided, given when the eval sends the call's request again. Only `judge_request` answers with it.",
-      "properties": {
-        "action": {
-          "const": "respond",
-          "default": "respond",
-          "title": "Action",
-          "type": "string"
-        },
-        "status": {
-          "description": "The provider's HTTP status for the reply.",
-          "maximum": 299,
-          "minimum": 200,
-          "title": "Status",
-          "type": "integer"
-        },
-        "headers": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "The provider's headers for the reply, by lowercase name, `content-type` among them, without the headers of one hop.",
-          "title": "Headers",
-          "type": "object"
-        },
-        "body": {
-          "description": "The reply's body, as base64: a JSON reply whole, or a streamed reply's events from first to last.",
-          "title": "Body",
-          "type": "string"
-        }
-      },
-      "required": [
-        "status",
-        "headers",
-        "body"
-      ],
-      "title": "RespondResult",
-      "type": "object"
-    },
     "StreamParams": {
       "description": "Parameters of `end_reply` and `abort_reply`: a reply, by its request's `id`.",
       "properties": {
@@ -613,9 +575,6 @@
           },
           {
             "$ref": "#/$defs/RefuseResult"
-          },
-          {
-            "$ref": "#/$defs/RespondResult"
           }
         ]
       }

@@ -64,6 +64,9 @@ class Reply:
     format: Format | None = None
     """Which API the body is written in, if the proxy said. Without it, the API is worked out from `provider` and the body."""
 
+    body_follows: bool = False
+    """Whether the body is still passing on to the client, and isn't in `body`. A provider's error is shown this way by a proxy that passes it on as it comes, which then hands the body to `Handler.error_body` once it has all passed."""
+
     headers: Mapping[str, str] = field(default_factory=dict[str, str])
     """The reply's headers as the provider sent them, by lowercase name, where the proxy hands them over. They are kept with the reply of a model call that waited for a person, which the eval reads as the provider's own."""
 
@@ -100,22 +103,5 @@ class Refuse:
     """What the client is told. A client that carries on hands this to the model."""
 
 
-@dataclass(frozen=True)
-class Respond:
-    """Don't send the request on. Answer the client with this reply in its place.
-
-    It is the reply the sidecar held for a model call while a person decided, given to the eval when it sends the call's request again. The provider is not called a second time.
-    """
-
-    status: int
-    """The provider's HTTP status."""
-
-    headers: Mapping[str, str]
-    """The provider's headers, by lowercase name, `content-type` among them."""
-
-    body: bytes
-    """The reply's body: a JSON reply whole, or a streamed reply's events from first to last."""
-
-
-Answer: TypeAlias = Pass | Replace | Refuse | Respond
-"""What a proxy does with a request or a reply: what was decided, never how to do it. `Respond` comes only for a request."""
+Answer: TypeAlias = Pass | Replace | Refuse
+"""What a proxy does with a request or a reply: what was decided, never how to do it."""

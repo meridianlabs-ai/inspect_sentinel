@@ -24,7 +24,7 @@ from inspect_sentinel._decorators import protocol
 from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import BeforeToolCall
 from inspect_sentinel._types import Protocol
-from inspect_sentinel.sidecar import Handler, Pass, Replace, Reply, Request, Respond
+from inspect_sentinel.sidecar import Handler, Pass, Replace, Reply, Request
 from inspect_sentinel.sidecar._handler import RequestResult
 from inspect_sentinel.sidecar._serve import (
     parse_arguments,
@@ -459,8 +459,9 @@ async def test_a_compressed_error_is_passed_on_and_not_copied() -> None:
         handler,
     )
 
-    # a copy is kept as plain bytes, so one that isn't plain is left out
-    assert handler.error_bodies == []
+    # A copy is kept as plain bytes, so one that isn't plain is left out. The
+    # handler is still told the error has all passed, without a copy.
+    assert [body for _, body in handler.error_bodies] == [b""]
 
 
 class _ReplacesEveryReply:
@@ -671,35 +672,3 @@ async def test_a_request_sent_on_whose_reply_never_began_is_recorded_as_cut_off(
     await answers.aclose()
 
     assert await _not_judged(handler) == ("not_judged", "cut_off")
-
-
-class _HandsBackAHeldReply:
-    async def request(self, request: Request) -> Respond:
-        return Respond(
-            200, {"content-type": "application/json", "request-id": "req_011"}, b"{}"
-        )
-
-
-@pytest.mark.anyio
-async def test_a_held_reply_is_sent_in_the_providers_place() -> None:
-    answers = await _process(
-        [
-            _from_inspect(),
-            pb.ProcessingRequest(
-                request_body=pb.HttpBody(body=_BODY, end_of_stream=True)
-            ),
-        ],
-        _HandsBackAHeldReply(),
-    )
-
-    # the request goes no further, and the client is sent the reply whole
-    sent = answers[-1].immediate_response
-    assert sent.status.code == 200
-    assert sent.body == b"{}"
-    assert {
-        header.header.key: header.header.raw_value
-        for header in sent.headers.set_headers
-    } == {
-        "content-type": b"application/json",
-        "request-id": b"req_011",
-    }

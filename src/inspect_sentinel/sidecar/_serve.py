@@ -165,7 +165,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=None,
         metavar="SECONDS",
-        help="How long a question waits for a person's answer before it expires, when the sentinel asks one during an Inspect eval, which shows the question in its approval UI. A question that expires is answered with caution: rejected if that was offered, otherwise the run is ended. By default a question has no expiry, as a person may take days. No connection waits meanwhile, and the wait is not counted against --time-limit.",
+        help="How long a question waits for a person's answer before it expires, when the sentinel asks one during an Inspect eval, which shows the question in its approval UI. A question that expires is answered with caution: rejected if that was offered, otherwise the run is ended. The eval's prompt for it stays open until someone answers, and that answer is then not used. By default a question has no expiry, as a person may take days. No connection waits meanwhile, and the wait is not counted against --time-limit.",
     )
 
 

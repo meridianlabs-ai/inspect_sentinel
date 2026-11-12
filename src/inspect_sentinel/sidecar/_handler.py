@@ -47,7 +47,6 @@ from ._exchange import (
     Replace,
     Reply,
     Request,
-    Respond,
     succeeded,
 )
 from ._history import record_sent, with_sent_ids
@@ -156,9 +155,24 @@ _OVER = Refuse(
     400,
     "This model call has ended. The eval reads what it came to with request_result.",
 )
-_NO_HELD_CALL = Refuse(
+FAILED_TRY = "x-sentinel-failed-try"
+"""The header the sidecar adds to a provider's error it serves from the held-reply path: the number of the failed try the error is of. No refusal of the sidecar's own has it, so an eval can tell a provider's error from one."""
+
+_NO_CALL_NAMED = Refuse(
     400,
-    "The request is for the held reply of a model call this sidecar holds nothing for. It was not judged.",
+    f"The request has no {INSPECT_CONTEXT} header, so it names no model call whose held reply it asks for.",
+)
+_NO_HELD_REPLY = Refuse(
+    400,
+    f"This sidecar holds no reply for a model call of the eval with this {REQUEST_ID}: no person was asked about the call, or what was held for it is no longer kept. The eval reads where a call stands with request_result.",
+)
+_NOT_ENDED = Refuse(
+    400,
+    "This model call has not ended, so no reply is held for the eval yet. The eval reads where the call stands with request_result.",
+)
+_NOT_GOING_ON = Refuse(
+    400,
+    "This model call ended without its turn going on, so no reply is held for the eval. The eval reads what it came to with request_result.",
 )
 
 # how long what is left of a model call that waited for a person is kept once
@@ -179,6 +193,8 @@ _NOT_KEPT = frozenset(
         "trailer",
         "transfer-encoding",
         "upgrade",
+        # the sidecar's own, which a provider can't set
+        FAILED_TRY,
     }
 )
 
@@ -203,15 +219,13 @@ class RequestResult:
     """What was recorded, every attempt's in order."""
     reviews: list[tuple[int, Review]]
     """What became of each question a sentinel asked a person, in order, each with the number of the try that asked, from 1."""
-    reply: KeptReply | None = None
-    """The provider's reply, for a model call a person was asked about that was decided with the turn going on."""
     failure: Failure | None = None
     """The provider's last failed exchange, for a model call a person was asked about that may be sent on again because of it."""
 
 
 @dataclass(frozen=True)
-class KeptReply:
-    """A provider's reply as the proxy passes it on, with the sentinel's edits in it, kept for the eval whose model call waited for a person."""
+class HeldReply:
+    """A provider's reply as the proxy passes it on, with the sentinel's edits in it, held for the eval whose model call waited for a person."""
 
     status: int
     """The provider's HTTP status."""
@@ -231,8 +245,10 @@ class Failure:
 
     try_number: int
     """The number of the try that was sent on, from 1."""
-    reply: KeptReply | None
+    reply: HeldReply | None
     """The provider's error, or None for a reply that was cut off."""
+    received: float = 0.0
+    """When the error came, on the monotonic clock, so that a wait the provider asked for is counted from then."""
 
 
 @dataclass(eq=False)
@@ -261,7 +277,7 @@ class _Operation:
     """The request, once its stage is finished, for as long as it waits to be sent on."""
     go: Pass | Replace | None = None
     """What a try that is sent on is answered with."""
-    reply: KeptReply | None = None
+    reply: HeldReply | None = None
     failure: Failure | None = None
     ended: float | None = None
     """When it ended, on the monotonic clock."""
@@ -383,7 +399,7 @@ class Handler:
         self._asking: dict[str, _Operation] = {}
         # the provider's errors whose bodies are still passing, by the
         # proxy's id for the exchange, each with the try it is of
-        self._failing: dict[str, tuple[_Operation, int]] = {}
+        self._failing: dict[str, tuple[_Operation, Failure]] = {}
         # where judging that outlives its exchange runs, while serving
         self._group: anyio.abc.TaskGroup | None = None
         self._release: Literal["whole", "early"] = release
@@ -500,18 +516,11 @@ class Handler:
             if refused is not None:
                 return Refuse(400, refused)
             binding = _binding(request, signed.sample)
-            # Inspect gives each request it sends a new `x-irid`, so a request
-            # sent again for a held reply names the call it is for apart
-            held_for = signed.held_reply_for
-            operation = self._operations.get(
-                (signed.sample.eval_id, held_for or signed.request_id)
-            )
+            operation = self._operations.get((signed.sample.eval_id, signed.request_id))
             if operation is not None:
                 # a try of a model call a person was asked about: it is not
                 # judged again, whatever becomes of it
                 return await self._reattach(operation, request, binding)
-            if held_for is not None:
-                return _NO_HELD_CALL
             attempt = await self._state.attempt(
                 signed.request_id, request.id, signed.sample.eval_id
             )
@@ -546,8 +555,6 @@ class Handler:
                     # request went nowhere. It is kept until the eval sends
                     # it again, and that try is sent on in its place.
                     waited.held = await self._state.release(request.id)
-                    # judging a request never answers with a held reply
-                    assert not isinstance(answer, Respond)
                     waited.go = answer
                     attempt.state = "awaiting_request"
             elif attempt.judged is not None and attempt.judged.replaced:
@@ -610,7 +617,7 @@ class Handler:
                 if waited is not None:
                     # kept whichever stage the call waited at: the reply
                     # passed on now may never reach the eval
-                    waited.reply = _kept_reply(reply, held.format, answer)
+                    waited.reply = _held_reply(reply, held.format, answer)
                 attempt.decide("proceed")
             elif held.exchange.replaced:
                 attempt.not_judged("replaced_attempt")
@@ -661,6 +668,24 @@ class Handler:
             id: The proxy's id for the request.
             reason: Why the reply was not judged.
         """
+        failing = self._failing.pop(id, None)
+        if failing is not None:
+            # A provider's error whose body didn't all pass. The eval can't be
+            # given the error whole, and what is missing may be what says
+            # whether the call may be tried again, so it failed as a reply cut
+            # off does: with no reply, for the eval to handle as a connection
+            # that failed.
+            operation, failure = failing
+            attempt = operation.attempt
+            if (
+                operation.ended is None
+                and not attempt.settled.is_set()
+                and attempt.state == "awaiting_reply"
+                and operation.sent == failure.try_number
+            ):
+                operation.failure = replace(failure, reply=None)
+                attempt.state, attempt.reason = "awaiting_request", "cut_off"
+            return
         held = await self._state.release(id)
         if held is None or held.attempt is None or held.attempt.settled.is_set():
             return
@@ -676,25 +701,28 @@ class Handler:
     async def error_body(self, id: str, body: bytes) -> None:
         """Take the body of a provider's error that the handler was shown without it, once all of it has passed on to the client.
 
-        A provider's error is not held: `reply` is shown it as its status and headers arrive, and its body goes on as it comes. For a model call a person was asked about, the eval reads the error from `request_result`, so a proxy that passes the body on in parts hands a copy over here.
+        A provider's error is not held: `reply` is shown it as its status and headers arrive, with `body_follows` set, and its body goes on as it comes. For a model call a person was asked about, the eval gets the error from the sidecar, so the call stays at `awaiting_reply` until the proxy says here that the error is whole. Only then is the eval told that the provider failed, and never of an error it can't yet be given.
 
         Args:
             id: The proxy's id for the request the error answers.
-            body: The error's whole body.
+            body: The error's whole body. Empty where it had none, and where the proxy doesn't copy it, as one too large. A proxy whose error didn't all pass says so with `reply_not_judged`, and not here.
         """
         failing = self._failing.pop(id, None)
         if failing is None:
             return
-        operation, number = failing
-        failure = operation.failure
+        operation, failure = failing
+        attempt = operation.attempt
         if (
-            failure is not None
-            and failure.try_number == number
-            and failure.reply is not None
+            failure.reply is None
+            or operation.ended is not None
+            or attempt.settled.is_set()
+            or attempt.state != "awaiting_reply"
+            or operation.sent != failure.try_number
         ):
-            operation.failure = replace(
-                failure, reply=replace(failure.reply, body=body)
-            )
+            # the call was closed, or went on, while the error passed
+            return
+        operation.failure = replace(failure, reply=replace(failure.reply, body=body))
+        attempt.state, attempt.reason = "awaiting_request", "provider_error"
 
     def answer_question(
         self, eval_id: str, id: str, decision: str, reason: str | None
@@ -751,11 +779,6 @@ class Handler:
         operation.tries += 1
         attempt = operation.attempt
         if attempt.settled.is_set():
-            reply = operation.reply
-            if attempt.outcome == "proceed" and reply is not None:
-                # the reply the sidecar held, as the proxy passed it on or
-                # would have: the provider is not called again
-                return Respond(reply.status, reply.headers, reply.body)
             return _OVER
         held, go = operation.held, operation.go
         if attempt.state != "awaiting_request" or held is None or go is None:
@@ -778,13 +801,20 @@ class Handler:
         # about. The request stage stands, with the answers taken for it, and
         # the eval is told what failed apart from the error its own try got.
         operation.held = held
-        operation.failure = Failure(
+        failure = Failure(
             operation.sent,
-            _kept_reply(reply, held.format, Pass()) if reply is not None else None,
+            _held_reply(reply, held.format, Pass()) if reply is not None else None,
+            time.monotonic(),
         )
-        if reply is not None and not reply.body:
-            # its body is still passing on to the client
-            self._failing[reply.id] = (operation, operation.sent)
+        if reply is not None and reply.body_follows:
+            # Its body is still passing on to the client. The call stays at
+            # `awaiting_reply` until the proxy says the error is whole
+            # (`error_body`), so the eval is never told of an error that it
+            # can't yet be given.
+            self._failing[reply.id] = (operation, failure)
+            operation.attempt.state, operation.attempt.reason = "awaiting_reply", None
+            return
+        operation.failure = failure
         operation.attempt.state, operation.attempt.reason = "awaiting_request", reason
 
     def _operation_of(self, attempt: Attempt) -> _Operation | None:
@@ -1004,12 +1034,7 @@ class Handler:
             return f"This sidecar holds no registration of the eval {eval_id!r}, as after a restart, so it can't check the request's {INSPECT_CONTEXT} header. The eval registers its task again."
         problem = unproven(
             kept,
-            request_values(
-                signed.sample,
-                signed.request_id,
-                signed.timestamp,
-                signed.held_reply_for,
-            ),
+            request_values(signed.sample, signed.request_id, signed.timestamp),
             signed.timestamp,
             signed.mac,
             window=self._timestamp_window,
@@ -1080,15 +1105,66 @@ class Handler:
         ]
         if operation is None:
             return RequestResult(latest, records, reviews)
-        went_on = latest.state == "decided" and latest.outcome == "proceed"
         failed = latest.state == "awaiting_request" and latest.reason is not None
         return RequestResult(
             latest,
             records,
             reviews,
-            reply=operation.reply if went_on else None,
             failure=operation.failure if failed else None,
         )
+
+    async def held_reply(self, headers: Mapping[str, str]) -> HeldReply | Refuse:
+        """The reply held for a model call a person was asked about, for the eval that sends the call's request again to get it.
+
+        The request is the model call's own, sent again under the same `x-irid`, so its `x-inspect-context` is checked as any model request's is: the `timestamp` and the `mac` prove the eval, the run and the `x-irid`. Nothing else of the request is read. The reply is given once the call is decided with the turn going on, as `request_result` says, and for as long as what was held for it is still kept. `request_result` doesn't carry it. While the call waits to be sent on again because the provider failed it (`awaiting_request`, with the reason `provider_error`), the provider's error is given in the reply's place, with the `FAILED_TRY` header naming the try it is of. Nothing of the call is changed, so either can be read again, and the provider is never called.
+
+        Args:
+            headers: The request's headers, by lowercase name.
+
+        Returns:
+            The held reply or the provider's error, or the refusal that says why there is none to give: the header is missing, unreadable or fails the check; the sidecar holds no such call for the eval; the call has not ended; or it ended without its turn going on.
+        """
+        try:
+            signed = signed_sample(headers)
+        except UnreadableError as ex:
+            return Refuse(400, str(ex))
+        if signed is None:
+            return _NO_CALL_NAMED
+        refused = await self._unproven_request(signed)
+        if refused is not None:
+            return Refuse(400, refused)
+
+        # as `request_result` finds the call: the eval's own, by its
+        # `x-irid`, for as long as its records are kept
+        eval_id = signed.sample.eval_id
+        operation = self._operations.get((eval_id, signed.request_id))
+        if operation is None:
+            return _NO_HELD_REPLY
+        attempts = await self._state.attempts(signed.request_id, eval_id)
+        if (
+            attempts is None
+            or isinstance(attempts, Dropped)
+            or not any(attempt is operation.attempt for attempt in attempts)
+        ):
+            return _NO_HELD_REPLY
+
+        attempt = operation.attempt
+        failure = operation.failure
+        if (
+            attempt.state == "awaiting_request"
+            and attempt.reason == "provider_error"
+            and failure is not None
+            and failure.reply is not None
+        ):
+            # the provider's latest error, which the call waits to be sent on
+            # again because of
+            return _served_error(failure)
+        if not attempt.settled.is_set():
+            return _NOT_ENDED
+        reply = operation.reply
+        if attempt.state != "decided" or attempt.outcome != "proceed" or reply is None:
+            return _NOT_GOING_ON
+        return reply
 
     async def sample_result(
         self, sample_uuid: str, eval_id: str
@@ -2239,6 +2315,10 @@ def _settle_stopped(attempt: Attempt) -> None:
         attempt.decide("terminate")
 
 
+_NOT_BOUND = frozenset({INSPECT_CONTEXT, "x-stainless-retry-count"})
+"""The headers that are no part of what a request is, as each try has its own: Inspect's context, whose `timestamp` and `mac` are made afresh, and the count that a provider's SDK gives its own retries."""
+
+
 def _binding(request: Request, sample: InspectSample) -> str:
     # What a request is, for telling a try of a model call from another
     # request sent under its `x-irid`: everything the proxy said of it that a
@@ -2252,12 +2332,10 @@ def _binding(request: Request, sample: InspectSample) -> str:
     except UnreadableError:
         # such a request is never judged, so it begins no operation
         format = None
-    # `x-irid` is left out too: a request sent for a held reply has an id of
-    # its own, and names the call in `held_reply_for`
     headers = sorted(
         (name, value)
         for name, value in request.headers.items()
-        if name not in (INSPECT_CONTEXT, REQUEST_ID)
+        if name not in _NOT_BOUND
     )
     return hashlib.sha256(
         json.dumps(
@@ -2276,14 +2354,48 @@ def _binding(request: Request, sample: InspectSample) -> str:
     ).hexdigest()
 
 
-def _kept_reply(reply: Reply, format: Format, answer: Answer) -> KeptReply:
+def _served_error(failure: Failure) -> HeldReply:
+    # A provider's error as the held-reply path serves it, for the eval's code
+    # for that provider to read as the provider's own. It is marked with the
+    # try it is of, which no refusal of the sidecar's has. The eval's SDK is
+    # told not to send the request again by itself, as it would only get this
+    # answer again: whether the provider is called again is the eval's own
+    # retry rules' to say. A wait the provider asked for is counted from when
+    # the error came, not from when it is served.
+    assert failure.reply is not None
+    waited = time.monotonic() - failure.received
+    headers = {
+        name: _time_left(name, value, waited)
+        for name, value in failure.reply.headers.items()
+    }
+    headers[FAILED_TRY] = str(failure.try_number)
+    headers["x-should-retry"] = "false"
+    return replace(failure.reply, headers=headers)
+
+
+def _time_left(name: str, value: str, waited: float) -> str:
+    # what is left of a wait given in seconds (`retry-after`) or milliseconds
+    # (`retry-after-ms`); a date, or anything else, is as it was sent
+    scale = {"retry-after": 1.0, "retry-after-ms": 1000.0}.get(name)
+    if scale is None:
+        return value
+    try:
+        asked = float(value)
+    except ValueError:
+        return value
+    if not math.isfinite(asked) or asked < 0:
+        return value
+    return str(math.ceil(max(0.0, asked - waited * scale)))
+
+
+def _held_reply(reply: Reply, format: Format, answer: Answer) -> HeldReply:
     # the reply as the proxy passes it on, for the eval to read as the
     # provider's own
     headers = {
         name: value for name, value in reply.headers.items() if name not in _NOT_KEPT
     }
     headers.setdefault("content-type", reply.content_type)
-    return KeptReply(
+    return HeldReply(
         reply.status,
         headers,
         answer.body if isinstance(answer, Replace) else reply.body,

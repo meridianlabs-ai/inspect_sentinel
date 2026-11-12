@@ -23,6 +23,7 @@ from inspect_sentinel.sidecar import (
     Request,
 )
 from inspect_sentinel.sidecar._handler import RequestResult
+from inspect_sentinel.sidecar._reply_stream import ERROR_BODY_BYTES
 from inspect_sentinel.sidecar._wire import UnreadableError
 from tests.sidecar._traffic import (
     STREAM,
@@ -397,7 +398,28 @@ async def test_a_provider_errors_headers_and_body_are_handed_over() -> None:
     assert b"".join(o.data for o in outputs if isinstance(o, Release)) == error
     (shown,) = handler.replies
     assert (shown.status, shown.headers, shown.body) == (529, {"retry-after": "7"}, b"")
+    # shown as an error whose body is still to pass
+    assert shown.body_follows
     assert handler.error_bodies == [("x", error)]
+
+
+@pytest.mark.anyio
+async def test_the_handler_is_told_an_error_has_passed_though_it_isnt_copied() -> None:
+    asked, answered = _exchange("anthropic stream", inspect=True)
+    handler = NotingHandler(weather_rule())
+    await holding(handler)
+    await handler.request(asked)
+    # larger than a copy is kept of
+    error = b"x" * (ERROR_BODY_BYTES + 1)
+
+    outputs = await _streamed(
+        handler.reply_stream(_start(answered, status=500)), error, 65536
+    )
+
+    # the client is sent it all, and the handler is told it has passed,
+    # without a body, so that it knows the error is whole
+    assert b"".join(o.data for o in outputs if isinstance(o, Release)) == error
+    assert handler.error_bodies == [("x", b"")]
 
 
 @pytest.mark.anyio

@@ -10,16 +10,7 @@ from typing import Any, TypeVar, cast, get_args
 import grpc
 
 from .._errors import bounded, error_body, refusal_for
-from .._exchange import (
-    Answer,
-    Pass,
-    Refuse,
-    Replace,
-    Reply,
-    Request,
-    Respond,
-    succeeded,
-)
+from .._exchange import Answer, Pass, Refuse, Replace, Reply, Request, succeeded
 from .._handler import Handler
 from .._reply_stream import (
     ERROR_BODY_BYTES,
@@ -182,6 +173,8 @@ class _Exchange:
         # a copy of a provider's error as it passes, or None once it is too
         # large to keep
         self._error_body: bytearray | None = None
+        # whether the handler waits to be told a provider's error has all passed
+        self._error_follows = False
         self._declared_length = False
         self._request_encoding = "identity"
         self._replied = False
@@ -234,6 +227,12 @@ class _Exchange:
         """Stop the reply's stream if it hasn't ended, as when Envoy has stopped waiting. A request sent on whose reply never began is recorded as cut off."""
         if self._delivery is not None:
             self._delivery.cancel()
+        if self._error_follows:
+            # the error's body didn't all pass, so the error isn't one an
+            # eval can be given: it failed as a reply cut off does
+            self._error_follows = False
+            self._error_body = None
+            await self._handler.reply_not_judged(self._id, "cut_off")
         if self._stream is not None:
             await self._stream.abort()
         elif self._forwarded and not self._replied:
@@ -266,6 +265,7 @@ class _Exchange:
                 self._trailers = self._body_ended = True
                 await self._stream.end()
                 return []
+            await self._error_passed()
             self.finished = True
             return [pb.ProcessingResponse(response_trailers=pb.TrailersResponse())]
         # request trailers are not asked for, and nothing else needs an answer
@@ -340,8 +340,6 @@ class _Exchange:
         )
         if isinstance(answer, Refuse):
             return self._refusal(answer)
-        if isinstance(answer, Respond):
-            return self._held_reply(answer)
         self._forwarded = True
         if isinstance(answer, Pass):
             return pb.ProcessingResponse(
@@ -442,11 +440,14 @@ class _Exchange:
         # waited for a person and reads the error from the sidecar.
         self._replied = self._passing = True
         answer = await self._judge(
-            self._handler.reply(self._reply_of(b"")), "reply", reply=True
+            self._handler.reply(self._reply_of(b"", body_follows=not end_of_stream)),
+            "reply",
+            reply=True,
         )
         if isinstance(answer, Refuse):
             return [self._refusal(answer)]
         self.finished = end_of_stream
+        self._error_follows = not end_of_stream
         # a compressed error isn't copied: the copy is kept as plain bytes
         encoding = self._reply_headers.get("content-encoding", "identity").lower()
         if not end_of_stream and encoding == "identity":
@@ -465,9 +466,8 @@ class _Exchange:
                 copy.extend(body.body)
                 if len(copy) > ERROR_BODY_BYTES:
                     self._error_body = None
-                elif body.end_of_stream and copy:
-                    self._error_body = None
-                    await self._handler.error_body(self._id, bytes(copy))
+            if body.end_of_stream:
+                await self._error_passed()
             return [_streamed(body.body, end_of_stream=body.end_of_stream)]
         if self._stream is None:
             return []
@@ -507,7 +507,17 @@ class _Exchange:
         except Exception as ex:
             await self._answer(self._refusal(self._not_judged(ex, "reply", reply=True)))
 
-    def _reply_of(self, body: bytes) -> Reply:
+    async def _error_passed(self) -> None:
+        # A provider's error has all passed on to the client. The handler is
+        # always told, so that it knows the error is whole: without a body
+        # where there was none, or one too large or compressed to copy.
+        if not self._error_follows:
+            return
+        self._error_follows = False
+        copy, self._error_body = self._error_body, None
+        await self._handler.error_body(self._id, bytes(copy) if copy else b"")
+
+    def _reply_of(self, body: bytes, *, body_follows: bool = False) -> Reply:
         return Reply(
             id=self._id,
             provider=self._provider,
@@ -517,6 +527,7 @@ class _Exchange:
             status=self._status,
             content_type=self._content_type,
             body=body,
+            body_follows=body_follows,
             headers=self._reply_headers,
         )
 
@@ -533,25 +544,6 @@ class _Exchange:
 
     def _not_judged(self, ex: Exception, what: str, *, reply: bool) -> Refuse:
         return refusal_for(ex, what, self._id, reply=reply)
-
-    def _held_reply(self, held: Respond) -> pb.ProcessingResponse:
-        # the reply the sidecar held for the call, sent to the client in the
-        # provider's place: the request goes no further
-        self.finished = True
-        return pb.ProcessingResponse(
-            immediate_response=pb.ImmediateResponse(
-                status=http_status.HttpStatus(
-                    code=cast("http_status.StatusCode.ValueType", held.status)
-                ),
-                headers=pb.HeaderMutation(
-                    set_headers=[
-                        _header(name, value) for name, value in held.headers.items()
-                    ]
-                ),
-                body=held.body,
-                details="sentinel_held_reply",
-            )
-        )
 
     def _refuse(self, status: int, message: str) -> pb.ProcessingResponse:
         return self._refusal(Refuse(status, message))

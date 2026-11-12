@@ -26,11 +26,15 @@ from inspect_sentinel.sidecar import (
     Replace,
     Reply,
     Request,
-    Respond,
     SidecarHost,
 )
-from inspect_sentinel.sidecar._eval_endpoint import PATH, SCHEMA_FILE, eval_routes
-from inspect_sentinel.sidecar._handler import PENDING
+from inspect_sentinel.sidecar._eval_endpoint import (
+    HELD_REPLY_PATH,
+    PATH,
+    SCHEMA_FILE,
+    eval_routes,
+)
+from inspect_sentinel.sidecar._handler import FAILED_TRY, PENDING, _time_left
 from inspect_sentinel.sidecar._json_rpc import (
     ANSWER_REFUSED,
     METHOD_NOT_FOUND,
@@ -44,7 +48,9 @@ from inspect_sentinel.sidecar._review import UnknownQuestionError
 from inspect_sentinel.sidecar._state import MemoryState
 from tests.sidecar._traffic import (
     JSON,
+    STREAM,
     TOKEN,
+    anthropic_recorded,
     eval_call,
     holding,
     inspect_headers,
@@ -256,14 +262,6 @@ async def _asked_at_result(
     return question
 
 
-def _held_for(irid: str, id: str = "x3") -> Request:
-    # the eval's request sent again under an id of its own, for the reply the
-    # sidecar held for the call `irid`
-    return replace(
-        request(id), headers=inspect_headers(irid=f"{irid}-again", held_reply_for=irid)
-    )
-
-
 def _at_results(**options: Any) -> Handler:
     return Handler(human(stages=["tool_result"]), **options)
 
@@ -295,7 +293,7 @@ async def test_a_question_answers_the_model_call_pending_review_at_once() -> Non
         assert "waiting for a person's review" in answer.message
         result = await _result(client)
         assert result["state"] == "awaiting_review"
-        assert "outcome" not in result and "reply" not in result
+        assert "outcome" not in result
         (question,) = await _pending(client)
         assert question["request_id"] == "irid-1"
 
@@ -312,19 +310,17 @@ async def test_an_approved_call_is_decided_and_its_reply_is_kept_for_the_eval() 
         assert answered["result"] == {"id": question["id"], "decision": "approve"}
         result = await _result(client, until="decided")
         assert result["outcome"] == "proceed"
-        # the provider's reply, for the eval to read as the provider's own
-        assert result["reply"] == {
-            "status": 200,
-            "headers": {"content-type": JSON},
-            "body": base64.b64encode(body).decode(),
-            "format": "anthropic-messages",
-            "stream": False,
-        }
+        # The provider's reply is held for the eval, which gets it by sending
+        # the call's request again. `request_result` doesn't carry it.
+        assert "reply" not in result
+        held = await _held_reply(client)
+        assert (held.status_code, held.headers["content-type"]) == (200, JSON)
+        assert held.content == body
         assert await _pending(client) == []
 
 
 @pytest.mark.anyio
-async def test_a_kept_reply_has_the_providers_headers_without_those_of_one_hop() -> (
+async def test_a_held_reply_has_the_providers_headers_without_those_of_one_hop() -> (
     None
 ):
     handler = _reviewed()
@@ -344,13 +340,15 @@ async def test_a_kept_reply_has_the_providers_headers_without_those_of_one_hop()
         (question,) = await _pending(client)
         await _answer(client, question["id"], "approve")
 
-        result = await _result(client, until="decided")
+        await _result(client, until="decided")
+        got = await _held_reply(client)
 
-    assert result["reply"]["headers"] == {
-        "content-type": JSON,
-        "request-id": "req_011",
-        "anthropic-ratelimit-requests-remaining": "49",
-    }
+    assert got.headers["content-type"] == JSON
+    assert got.headers["request-id"] == "req_011"
+    assert got.headers["anthropic-ratelimit-requests-remaining"] == "49"
+    # the headers of one hop are the sidecar's own for this answer
+    assert "transfer-encoding" not in got.headers
+    assert got.headers["content-length"] == str(len(got.content))
 
 
 @pytest.mark.anyio
@@ -387,8 +385,6 @@ async def test_a_person_who_rejects_has_the_model_told_their_reason() -> None:
         result = await _result(client, until="decided")
     assert result["outcome"] == "reject"
     assert result["message"] == "Not Oslo today."
-    # a refused turn has no reply for the eval to read
-    assert "reply" not in result
 
 
 @pytest.mark.anyio
@@ -401,7 +397,6 @@ async def test_a_person_who_terminates_ends_the_run() -> None:
 
         result = await _result(client, until="decided")
         assert result["outcome"] == "terminate"
-        assert "reply" not in result
         # every later request of the run is refused
         later = await handler.request(_from_eval(id="y", irid="irid-2"))
         assert isinstance(later, Refuse)
@@ -431,7 +426,7 @@ async def test_an_accepted_answer_is_not_the_end_while_another_call_is_judged() 
 
 
 @pytest.mark.anyio
-async def test_a_kept_reply_has_the_sentinels_edits_in_it() -> None:
+async def test_a_held_reply_has_the_sentinels_edits_in_it() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
         first = await _asked(
@@ -444,11 +439,11 @@ async def test_a_kept_reply_has_the_sentinels_edits_in_it() -> None:
         await _answer(client, second["id"], "reject", "Not Bergen.")
 
         result = await _result(client, until="decided")
+        got = await _held_reply(client)
 
     # the turn goes on without the rejected call, as the proxy would pass it
     assert result["outcome"] == "proceed"
-    passed = json.loads(base64.b64decode(result["reply"]["body"]))
-    assert [block["id"] for block in passed["content"]] == ["toolu_1"]
+    assert [block["id"] for block in got.json()["content"]] == ["toolu_1"]
 
 
 # --- a request sent again reattaches, and is never judged again ---
@@ -469,11 +464,8 @@ async def test_a_request_sent_again_while_a_person_decides_is_pending_too() -> N
 
 
 @pytest.mark.anyio
-async def test_a_request_sent_again_once_its_call_is_approved_gets_the_held_reply() -> (
-    None
-):
+async def test_a_request_sent_again_once_its_call_is_decided_is_refused() -> None:
     handler = _reviewed()
-    body = message(weather("Oslo"))
     async with _serving(handler) as client:
         question = await _asked(handler, client)
         await _answer(client, question["id"], "approve")
@@ -481,74 +473,11 @@ async def test_a_request_sent_again_once_its_call_is_approved_gets_the_held_repl
 
         again = await handler.request(_from_eval("x2"))
 
-        # the reply the provider gave the first time: it is not called again
-        assert again == Respond(200, {"content-type": JSON}, body)
+        # the provider is not called a second time: the result is read
+        assert isinstance(again, Refuse)
+        assert "has ended" in again.message and "request_result" in again.message
         assert await _result(client) == decided
         assert await _pending(client) == []
-
-
-@pytest.mark.anyio
-async def test_a_request_for_a_held_reply_under_a_new_irid_gets_it() -> None:
-    handler = _reviewed()
-    body = message(weather("Oslo"))
-    async with _serving(handler) as client:
-        question = await _asked(handler, client)
-        await _answer(client, question["id"], "approve")
-        await _result(client, until="decided")
-
-        # Inspect gives each request it sends an id of its own, and names the
-        # call whose held reply it is for in its header
-        held = await handler.request(_held_for("irid-1"))
-
-        assert held == Respond(200, {"content-type": JSON}, body)
-
-
-@pytest.mark.anyio
-async def test_a_request_sent_again_once_its_call_is_rejected_is_refused() -> None:
-    handler = _reviewed()
-    async with _serving(handler) as client:
-        question = await _asked(handler, client)
-        await _answer(client, question["id"], "reject", "Not Oslo.")
-        await _result(client, until="decided")
-
-        again = await handler.request(_held_for("irid-1"))
-
-    # a refused turn has no reply to hand back: the eval reads the judgment
-    assert isinstance(again, Refuse)
-    assert "has ended" in again.message and "request_result" in again.message
-
-
-@pytest.mark.anyio
-async def test_a_request_for_a_held_reply_of_an_unknown_call_is_refused() -> None:
-    handler = _reviewed()
-    async with _serving(handler) as client:
-        await _asked(handler, client)
-
-        refused = await handler.request(_held_for("irid-never-sent"))
-
-    assert isinstance(refused, Refuse)
-    assert "holds nothing for" in refused.message
-
-
-@pytest.mark.anyio
-async def test_held_reply_for_is_signed_with_the_request() -> None:
-    handler = _reviewed()
-    async with _serving(handler) as client:
-        question = await _asked(handler, client)
-        await _answer(client, question["id"], "approve")
-        await _result(client, until="decided")
-        signed = _held_for("irid-1")
-        context = json.loads(signed.headers["x-inspect-context"])
-        # signed for another call's held reply, and sent for this one
-        context["held_reply_for"] = "irid-other"
-        forged = replace(
-            signed,
-            headers={**signed.headers, "x-inspect-context": json.dumps(context)},
-        )
-
-        refused = await handler.request(forged)
-
-    assert isinstance(refused, Refuse) and "mac" in refused.message
 
 
 @pytest.mark.anyio
@@ -649,10 +578,11 @@ async def test_an_approved_result_waits_for_the_request_to_be_sent_again() -> No
         body = message({"type": "text", "text": "It rains."}, stop_reason="end_turn")
         assert isinstance(await handler.reply(reply(body, id="y2")), Pass)
         result = await _result(client, "irid-2")
+        got = await _held_reply(client, "irid-2")
 
     assert (result["state"], result["outcome"]) == ("decided", "proceed")
     # kept though the eval's own exchange brought the reply: it may be lost on the way
-    assert base64.b64decode(result["reply"]["body"]) == body
+    assert got.content == body
     (review,) = result["reviews"]
     assert (review["stage"], review["resolution"]) == ("tool_result", "answered")
 
@@ -693,30 +623,9 @@ async def test_a_reply_lost_on_its_way_to_the_eval_is_read_from_the_sidecar() ->
         # the eval never got the response, and sends the request again
         again = await handler.request(_result_request("y3"))
 
-        # and is handed the reply the provider gave, which isn't asked again
-        assert isinstance(again, Respond) and again.body == body
-        result = await _result(client, "irid-2")
-    assert base64.b64decode(result["reply"]["body"]) == body
-
-
-@pytest.mark.anyio
-async def test_a_request_sent_for_a_held_call_at_a_tools_result_goes_on() -> None:
-    handler = _at_results()
-    async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
-        await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
-
-        # sent under an id of its own, naming the call it is for
-        sent = await handler.request(
-            replace(
-                request("y2", then=ran("Oslo", "Rain.")),
-                headers=inspect_headers(irid="irid-2b", held_reply_for="irid-2"),
-            )
-        )
-
-        assert isinstance(sent, Pass)
-        assert (await _result(client, "irid-2"))["state"] == "awaiting_reply"
+        assert isinstance(again, Refuse) and "has ended" in again.message
+        got = await _held_reply(client, "irid-2")
+    assert (got.status_code, got.content) == (200, body)
 
 
 @pytest.mark.anyio
@@ -853,14 +762,104 @@ async def test_an_errors_body_that_passed_in_parts_is_handed_over_afterwards() -
         await _result(client, "irid-2", until="awaiting_request")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         # a proxy that passes an error on as it comes shows it without its body
-        await handler.reply(_error(body=b""))
+        await handler.reply(replace(_error(body=b""), body_follows=True))
+
+        # the eval isn't told the provider failed while the error still passes
+        passing = await _result(client, "irid-2")
+        assert passing["state"] == "awaiting_reply" and "failure" not in passing
+        _refused(await _held_reply(client, "irid-2"))
 
         await handler.error_body("y2", b'{"type":"overloaded"}')
 
         failed = await _result(client, "irid-2")
+    assert (failed["state"], failed["reason"]) == ("awaiting_request", "provider_error")
     assert base64.b64decode(failed["failure"]["reply"]["body"]) == (
         b'{"type":"overloaded"}'
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("how", ["no copy", "cut off"])
+async def test_an_error_whose_body_isnt_handed_over_is_kept_without_it(
+    how: str,
+) -> None:
+    handler = _at_results()
+    async with _serving(handler) as client:
+        question = await _asked_at_result(handler, client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-2", until="awaiting_request")
+        assert isinstance(await handler.request(_result_request("y2")), Pass)
+        await handler.reply(replace(_error(body=b""), body_follows=True))
+
+        if how == "no copy":
+            # one too large or compressed to copy: the proxy says it passed
+            await handler.error_body("y2", b"")
+        else:
+            # the client went before the error's body had all passed
+            await handler.reply_not_judged("y2", "cut_off")
+
+        failed = await _result(client, "irid-2")
+        got = await _held_reply(client, "irid-2")
+    assert failed["state"] == "awaiting_request"
+    if how == "no copy":
+        # the provider's error, whole as far as the proxy says, without a copy
+        assert failed["reason"] == "provider_error"
+        assert failed["failure"]["reply"]["status"] == 529
+        assert failed["failure"]["reply"]["body"] == ""
+        assert got.status_code == 529
+    else:
+        # An error that didn't all pass isn't one to give the eval: what is
+        # missing may say whether the call may be tried again. It failed as a
+        # connection does, and there is no error to get.
+        assert failed["reason"] == "cut_off"
+        assert "reply" not in failed["failure"]
+        assert got.status_code == 400 and FAILED_TRY not in got.headers
+
+
+@pytest.mark.anyio
+async def test_an_error_that_passes_after_its_call_was_cancelled_reopens_nothing() -> (
+    None
+):
+    handler = _at_results()
+    async with _serving(handler) as client:
+        question = await _asked_at_result(handler, client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-2", until="awaiting_request")
+        assert isinstance(await handler.request(_result_request("y2")), Pass)
+        await handler.reply(replace(_error(body=b""), body_follows=True))
+        assert await _cancel(client, "irid-2") is True
+
+        await handler.error_body("y2", b'{"type":"overloaded"}')
+
+        result = await _result(client, "irid-2")
+    assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
+    assert "failure" not in result
+
+
+@pytest.mark.anyio
+async def test_an_sdks_own_retry_is_the_same_request_whatever_its_retry_count() -> None:
+    handler = _at_results()
+    async with _serving(handler) as client:
+        question = await _asked_at_result(handler, client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-2", until="awaiting_request")
+        first = _result_request("y2")
+
+        # shown to the sidecar where an operator lists it, and counted up by
+        # the SDK on each retry of its own
+        retry = replace(
+            first, headers={**first.headers, "x-stainless-retry-count": "1"}
+        )
+        sent_on = await handler.request(retry)
+        # a header a sentinel may decide on is still part of what was approved
+        other = replace(
+            _result_request("y3"),
+            headers={**first.headers, "x-environment": "production"},
+        )
+        refused = await handler.request(other)
+
+    assert isinstance(sent_on, Pass)
+    assert isinstance(refused, Refuse) and "not the same request" in refused.message
 
 
 # --- cancel_request closes the call wherever it stands ---
@@ -876,7 +875,7 @@ async def test_cancelling_a_call_a_person_is_asked_about_closes_its_question() -
 
         result = await _result(client)
         assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
-        assert "outcome" not in result and "reply" not in result
+        assert "outcome" not in result
         (review,) = result["reviews"]
         assert (review["resolution"], review["cause"]) == ("cancelled", "cancelled")
         assert await _pending(client) == []
@@ -967,7 +966,7 @@ async def test_a_reply_that_comes_after_its_call_was_cancelled_doesnt_revive_it(
         assert isinstance(late, Refuse) and "was closed" in late.message
         result = await _result(client, "irid-2")
         assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
-        assert "reply" not in result
+        _refused(await _held_reply(client, "irid-2"))
         assert await _pending(client) == []
 
 
@@ -1469,17 +1468,17 @@ async def test_an_answer_taken_isnt_replaced_once_its_question_closes() -> None:
     assert (review.decision, review.reason) == ("approve", "Fine.")
 
 
-def test_a_replaced_reply_is_what_is_kept() -> None:
+def test_a_replaced_reply_is_what_is_held() -> None:
     # the body the proxy passes on in the reply's place
     from inspect_sentinel.sidecar._handler import (
-        _kept_reply,  # pyright: ignore[reportPrivateUsage]
+        _held_reply,  # pyright: ignore[reportPrivateUsage]
     )
 
-    kept = _kept_reply(
+    held = _held_reply(
         reply(b"as the provider sent it"), "anthropic-messages", Replace(b"edited")
     )
 
-    assert kept.body == b"edited"
+    assert held.body == b"edited"
 
 
 @pytest.mark.anyio
@@ -1522,7 +1521,6 @@ async def test_the_sentinels_own_time_still_counts_after_a_person_answered() -> 
         result = await _result(client, until="not_judged")
 
     assert result["reason"] == "time_limit"
-    assert "reply" not in result
 
 
 @pytest.mark.anyio
@@ -1575,10 +1573,453 @@ async def test_a_proxy_is_told_to_refuse_a_call_that_waits_for_a_person() -> Non
         assert "waiting for a person's review" in refused["message"]
         (question,) = await _pending(client)
         await _answer(client, question["id"], "approve")
-        result = await _result(client, until="decided")
+        await _result(client, until="decided")
+        got = await _held_reply(client)
 
-    # and the eval reads the reply the proxy handed over, headers and all
-    assert result["reply"]["headers"] == {
-        "request-id": "req_011",
+    # and the eval gets the reply the proxy handed over, headers and all
+    assert (got.headers["request-id"], got.headers["content-type"]) == ("req_011", JSON)
+
+
+# --- the held reply, which the eval gets by sending the call's request again ---
+
+# what a provider's SDK doesn't send again by itself
+_NOT_SENT_AGAIN = {400, 401, 404, 413}
+
+
+async def _held_reply(
+    client: httpx.AsyncClient,
+    irid: str = "irid-1",
+    *,
+    body: bytes = b'{"model": "claude-test"}',
+    **signing: Any,
+) -> httpx.Response:
+    # the model call's own request, sent again under its `x-irid`, as the
+    # eval's code for the provider sends it
+    return await client.post(
+        HELD_REPLY_PATH, headers=inspect_headers(irid=irid, **signing), content=body
+    )
+
+
+def _refused(answered: httpx.Response, *said: str) -> None:
+    assert answered.status_code == 400
+    message: str = answered.json()["error"]
+    assert all(part in message for part in said), message
+
+
+async def _approved(handler: Handler, client: httpx.AsyncClient, held: Reply) -> None:
+    # a person approves the call in `held`, and the call is decided
+    assert isinstance(await handler.request(_from_eval()), Pass)
+    assert await handler.reply(held) is PENDING
+    (question,) = await _pending(client)
+    await _answer(client, question["id"], "approve")
+    await _result(client, until="decided")
+
+
+async def _failed_at_the_provider(
+    handler: Handler, client: httpx.AsyncClient, error: Reply
+) -> None:
+    # a person approved the call, its request was sent on, and the provider
+    # answered with `error`
+    question = await _asked_at_result(handler, client)
+    await _answer(client, question["id"], "approve")
+    await _result(client, "irid-2", until="awaiting_request")
+    assert isinstance(await handler.request(_result_request("y2")), Pass)
+    await handler.reply(error)
+
+
+@pytest.mark.anyio
+async def test_a_providers_error_is_served_where_the_held_reply_is() -> None:
+    handler = _at_results()
+    body = b'{"type":"error","error":{"type":"permission_error","message":"No."}}'
+    async with _serving(handler) as client:
+        await _failed_at_the_provider(
+            handler,
+            client,
+            replace(
+                _error(status=403, body=body),
+                headers={
+                    "content-type": JSON,
+                    "request-id": "req_403",
+                    # a provider can't set the sidecar's own header
+                    FAILED_TRY: "99",
+                    "x-should-retry": "true",
+                },
+            ),
+        )
+
+        got = await _held_reply(client, "irid-2")
+        again = await _held_reply(client, "irid-2")
+        after = await _result(client, "irid-2")
+
+    # the provider's own status, headers and body, for the eval's code for
+    # that provider to raise as the provider's error
+    assert (got.status_code, got.content) == (403, body)
+    assert got.headers["request-id"] == "req_403"
+    # marked with the try it is of, as `request_result` numbers it
+    assert got.headers[FAILED_TRY] == str(after["failure"]["try_number"]) == "2"
+    # the eval's SDK isn't to send the request again by itself
+    assert got.headers["x-should-retry"] == "false"
+    # getting it changes nothing, so it can be got again
+    assert (again.status_code, again.content) == (403, body)
+    assert (after["state"], after["reason"]) == ("awaiting_request", "provider_error")
+
+
+@pytest.mark.anyio
+async def test_no_refusal_of_the_held_reply_path_is_marked_as_a_providers_error() -> (
+    None
+):
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        await _asked(handler, client)
+
+        # a person still decides: the sidecar's own 400
+        refused = await _held_reply(client)
+        unknown = await _held_reply(client, "irid-none")
+
+    assert (refused.status_code, unknown.status_code) == (400, 400)
+    assert FAILED_TRY not in refused.headers and FAILED_TRY not in unknown.headers
+
+
+@pytest.mark.anyio
+async def test_a_held_reply_never_carries_the_failed_try_header() -> None:
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        held = replace(
+            reply(message(weather("Oslo"))),
+            headers={"content-type": JSON, FAILED_TRY: "1"},
+        )
+        await _approved(handler, client, held)
+
+        got = await _held_reply(client)
+
+    assert got.status_code == 200 and FAILED_TRY not in got.headers
+
+
+@pytest.mark.anyio
+async def test_a_reply_cut_off_has_no_error_to_serve() -> None:
+    handler = _at_results()
+    async with _serving(handler) as client:
+        question = await _asked_at_result(handler, client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-2", until="awaiting_request")
+        assert isinstance(await handler.request(_result_request("y2")), Pass)
+        await handler.reply_not_judged("y2", "cut_off")
+
+        got = await _held_reply(client, "irid-2")
+
+    # nothing came from the provider, so the eval sends the request again
+    assert got.status_code == 400 and FAILED_TRY not in got.headers
+
+
+@pytest.mark.anyio
+async def test_a_wait_the_provider_asked_for_is_counted_from_when_the_error_came() -> (
+    None
+):
+    handler = _at_results()
+    async with _serving(handler) as client:
+        await _failed_at_the_provider(
+            handler,
+            client,
+            replace(
+                _error(status=429),
+                headers={"content-type": JSON, "retry-after": "30"},
+            ),
+        )
+
+        got = await _held_reply(client, "irid-2")
+
+    # never longer than the provider asked, and less by the time since
+    assert 0 <= int(got.headers["retry-after"]) <= 30
+
+
+def test_what_is_left_of_a_wait_is_what_the_provider_asked_less_the_time_since() -> (
+    None
+):
+    assert _time_left("retry-after", "30", 12.4) == "18"
+    assert _time_left("retry-after-ms", "1500", 1.0) == "500"
+    # a wait that has passed is none
+    assert _time_left("retry-after", "5", 60.0) == "0"
+    # a date says when, whatever the time since, and no other header is a wait
+    date = "Wed, 21 Oct 2026 07:28:00 GMT"
+    assert _time_left("retry-after", date, 12.4) == date
+    assert _time_left("x-ratelimit-reset-requests", "30", 12.4) == "30"
+
+
+@pytest.mark.anyio
+async def test_the_held_reply_is_answered_as_the_provider_answered() -> None:
+    handler = _reviewed()
+    body = message(weather("Oslo"))
+    async with _serving(handler) as client:
+        await _approved(
+            handler,
+            client,
+            replace(
+                reply(body),
+                headers={
+                    "content-type": JSON,
+                    "content-length": "7",
+                    "transfer-encoding": "chunked",
+                    "request-id": "req_011",
+                },
+            ),
+        )
+
+        answered = await _held_reply(client)
+
+    assert answered.status_code == 200
+    assert answered.content == body
+    # the provider's headers, and a length that is the body's own
+    assert dict(answered.headers) == {
         "content-type": JSON,
+        "request-id": "req_011",
+        "content-length": str(len(body)),
     }
+
+
+@pytest.mark.anyio
+async def test_a_held_stream_is_answered_with_its_events_from_first_to_last() -> None:
+    handler = _reviewed()
+    events = anthropic_recorded("single-tool-call")
+    async with _serving(handler) as client:
+        await _approved(handler, client, reply(events, content_type=STREAM))
+
+        answered = await _held_reply(client)
+
+    assert answered.status_code == 200
+    assert answered.headers["content-type"] == STREAM
+    assert answered.content == events
+
+
+@pytest.mark.anyio
+async def test_the_held_reply_can_be_got_again_and_getting_it_changes_nothing() -> None:
+    handler = _reviewed()
+    body = message(weather("Oslo"))
+    async with _serving(handler) as client:
+        await _approved(handler, client, reply(body))
+        decided = await _result(client)
+
+        first = await _held_reply(client)
+        second = await _held_reply(client)
+
+        assert first.content == second.content == body
+        assert await _result(client) == decided
+        # and a try sent to the provider's route is still refused
+        again = await handler.request(_from_eval("x2"))
+        assert isinstance(again, Refuse) and "has ended" in again.message
+
+
+@pytest.mark.anyio
+async def test_nothing_of_the_request_but_its_proof_is_read_for_the_held_reply() -> (
+    None
+):
+    handler = _reviewed()
+    body = message(weather("Oslo"))
+    async with _serving(handler) as client:
+        await _approved(handler, client, reply(body))
+
+        # another body than the call's request had, and no body at all
+        other = await _held_reply(client, body=b'{"model": "another"}')
+        none = await _held_reply(client, body=b"")
+
+    assert other.content == none.content == body
+
+
+@pytest.mark.anyio
+async def test_a_call_a_person_still_decides_has_no_held_reply_yet() -> None:
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        question = await _asked(handler, client)
+
+        answered = await _held_reply(client)
+
+        _refused(answered, "has not ended", "request_result")
+        # the question is still open, and still the eval's to answer
+        assert [q["id"] for q in await _pending(client)] == [question["id"]]
+        assert (await _result(client))["state"] == "awaiting_review"
+
+
+@pytest.mark.anyio
+async def test_asking_for_a_held_reply_never_sends_a_waiting_request_on() -> None:
+    handler = _at_results()
+    async with _serving(handler) as client:
+        question = await _asked_at_result(handler, client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-2", until="awaiting_request")
+
+        answered = await _held_reply(client, "irid-2")
+
+        _refused(answered, "has not ended")
+        # the call still waits for its request, which is sent on as before
+        assert (await _result(client, "irid-2"))["state"] == "awaiting_request"
+        assert isinstance(await handler.request(_result_request("y2")), Pass)
+
+
+@pytest.mark.anyio
+async def test_a_rejected_call_has_no_held_reply() -> None:
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        question = await _asked(handler, client)
+        await _answer(client, question["id"], "reject", "Not Oslo.")
+        await _result(client, until="decided")
+
+        answered = await _held_reply(client)
+
+    _refused(answered, "ended without its turn going on", "request_result")
+
+
+@pytest.mark.anyio
+async def test_a_cancelled_call_has_no_held_reply() -> None:
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        await _asked(handler, client)
+        assert await _cancel(client) is True
+
+        answered = await _held_reply(client)
+
+    _refused(answered, "ended without its turn going on")
+
+
+@pytest.mark.anyio
+async def test_a_call_nobody_was_asked_about_has_no_held_reply() -> None:
+    # its reply went to the eval with its own exchange, and none was held
+    handler = Handler(human(stages=["tool_result"]))
+    async with _serving(handler) as client:
+        assert isinstance(await handler.request(_from_eval()), Pass)
+        assert isinstance(await handler.reply(reply(message(weather("Oslo")))), Pass)
+
+        judged = await _held_reply(client)
+        never_seen = await _held_reply(client, "irid-9")
+
+    _refused(judged, "holds no reply", "request_result")
+    _refused(never_seen, "holds no reply")
+
+
+@pytest.mark.anyio
+async def test_a_held_reply_is_not_kept_past_its_samples_end() -> None:
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        await _approved(handler, client, reply(message(weather("Oslo"))))
+        assert (await _held_reply(client)).status_code == 200
+        await _call(
+            client,
+            "end_sample",
+            eval_call("end_sample") | {"sample_uuid": "sample_123"},
+        )
+
+        answered = await _held_reply(client)
+
+    _refused(answered, "holds no reply")
+
+
+@pytest.mark.anyio
+async def test_another_eval_cant_get_the_held_reply() -> None:
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        await holding(handler, "eval_other", _OTHER_TOKEN)
+        await _approved(handler, client, reply(message(weather("Oslo"))))
+
+        # the call's `x-irid`, signed by another eval for a sample of its own,
+        # and for the sample the call is of
+        own_sample = await _held_reply(
+            client,
+            eval_id="eval_other",
+            token=_OTHER_TOKEN,
+            sample_uuid="sample_of_the_other",
+        )
+        this_sample = await _held_reply(
+            client, eval_id="eval_other", token=_OTHER_TOKEN
+        )
+
+    _refused(own_sample, "holds no reply")
+    _refused(this_sample, "names a sample of another eval")
+
+
+@pytest.mark.anyio
+async def test_a_held_reply_is_given_only_to_a_request_that_proves_its_call() -> None:
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        await _approved(handler, client, reply(message(weather("Oslo"))))
+        signed_for_it = inspect_headers(irid="irid-1")
+
+        no_header = await client.post(HELD_REPLY_PATH, headers={"x-irid": "irid-1"})
+        unreadable = await client.post(
+            HELD_REPLY_PATH,
+            headers={"x-irid": "irid-1", "x-inspect-context": "not json"},
+        )
+        no_irid = await client.post(
+            HELD_REPLY_PATH,
+            headers={"x-inspect-context": signed_for_it["x-inspect-context"]},
+        )
+        # a mac made for another request of the sample, and one made with
+        # another key, and one made too long ago
+        another_irid = await client.post(
+            HELD_REPLY_PATH,
+            headers=inspect_headers(irid="irid-2") | {"x-irid": "irid-1"},
+        )
+        another_key = await _held_reply(client, token=_OTHER_TOKEN)
+        stale = await _held_reply(client, timestamp=int(time.time()) - 3600)
+
+    _refused(no_header, "no x-inspect-context header")
+    _refused(unreadable, "isn't one this sidecar can read")
+    _refused(no_irid, "no x-irid header")
+    _refused(another_irid, "mac isn't one made with the eval's token")
+    _refused(another_key, "mac isn't one made with the eval's token")
+    _refused(stale, "timestamp")
+
+
+@pytest.mark.anyio
+async def test_a_sidecar_that_sends_no_results_serves_no_held_reply() -> None:
+    handler = _reviewed(eval_results=False)
+    async with _serving(handler, results=False) as client:
+        answered = await _held_reply(client)
+
+    assert answered.status_code == 404
+    assert "doesn't send results" in answered.json()["error"]
+
+
+@pytest.mark.anyio
+async def test_the_held_reply_needs_the_endpoints_own_credential_where_it_has_one() -> (
+    None
+):
+    handler = _reviewed()
+    credential = "the-endpoint-credential-for-these-tests"
+    async with _serving(handler, token=credential) as client:
+        client.headers["authorization"] = f"Bearer {credential}"
+        await _approved(handler, client, reply(message(weather("Oslo"))))
+
+        with_it = await _held_reply(client)
+        del client.headers["authorization"]
+        without = await _held_reply(client)
+
+    assert with_it.status_code == 200
+    assert without.status_code == 401
+    assert without.headers["www-authenticate"] == "Bearer"
+
+
+@pytest.mark.anyio
+async def test_a_request_for_a_held_reply_larger_than_the_limit_is_not_read() -> None:
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        await _approved(handler, client, reply(message(weather("Oslo"))))
+
+        # the endpoint in these tests reads at most 1 MiB
+        answered = await _held_reply(client, body=b" " * (1024 * 1024 + 1))
+
+    assert answered.status_code == 413
+
+
+@pytest.mark.anyio
+async def test_no_refusal_of_a_held_reply_is_a_status_an_sdk_sends_again() -> None:
+    # 408, 409, 429 and 5xx are what the providers' SDKs retry by themselves
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        await _asked(handler, client)
+
+        statuses = {
+            (await _held_reply(client)).status_code,
+            (await _held_reply(client, "irid-9")).status_code,
+            (await _held_reply(client, token=_OTHER_TOKEN)).status_code,
+            (await client.post(HELD_REPLY_PATH)).status_code,
+        }
+
+    assert statuses <= _NOT_SENT_AGAIN

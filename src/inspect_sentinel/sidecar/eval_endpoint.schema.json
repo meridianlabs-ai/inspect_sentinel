@@ -2077,18 +2077,6 @@
           "description": "What became of each question a sentinel asked a person, in order, including one whose step was stopped before it came to a decision. A judged step names its questions in its `reviews`. Left out where nobody was asked.",
           "title": "Reviews"
         },
-        "reply": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ReplyRecord"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The provider's reply, for a request a person was asked about that was decided with the turn going on, whichever stage it waited at. The eval reads it where its own exchange didn't bring it the reply: always for a request that waited at its reply, and for one that waited at its request when the response to the try sent on was lost. Left out of every other answer."
-        },
         "failure": {
           "anyOf": [
             {
@@ -2654,7 +2642,7 @@
     }
   },
   "title": "Inspect Sentinel: the endpoint for evals",
-  "description": "JSON-RPC 2.0 methods, POSTed to /sentinel/v1, with a probe at GET /sentinel/info. `methods` names the definitions that a method's `params` and `result` fit. `errors` lists the codes of the method errors of the endpoint's own.",
+  "description": "JSON-RPC 2.0 methods, POSTed to /sentinel/v1, with a probe at GET /sentinel/info. A model call's request POSTed to /sentinel/v1/held-reply is not a method: it is answered with the reply held for that call, as the provider sent it. `methods` names the definitions that a method's `params` and `result` fit. `errors` lists the codes of the method errors of the endpoint's own.",
   "methods": {
     "register_task": {
       "params": {

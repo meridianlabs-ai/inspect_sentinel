@@ -15,7 +15,7 @@ from starlette.requests import Request as HttpRequest
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from ._exchange import MAX_BODY_BYTES, Answer, Pass, Refuse, Reply, Request, Respond
+from ._exchange import MAX_BODY_BYTES, Answer, Pass, Refuse, Reply, Request
 from ._handler import Handler, TimeLimitError
 from ._http import health_route, read_within
 from ._json_rpc import (
@@ -128,21 +128,6 @@ class RefuseResult(BaseModel):
     message: str = Field(description="What the caller is told.")
 
 
-class RespondResult(BaseModel):
-    """Send nothing on to the provider, and answer the caller with this reply in its place: the reply the sidecar held for a model call while a person decided, given when the eval sends the call's request again. Only `judge_request` answers with it."""
-
-    action: Literal["respond"] = "respond"
-    status: int = Field(
-        ge=200, le=299, description="The provider's HTTP status for the reply."
-    )
-    headers: dict[str, str] = Field(
-        description="The provider's headers for the reply, by lowercase name, `content-type` among them, without the headers of one hop."
-    )
-    body: str = Field(
-        description="The reply's body, as base64: a JSON reply whole, or a streamed reply's events from first to last."
-    )
-
-
 _NOT_JUDGED = "A proxy hook refuses the call, unless its operator has chosen to let calls that weren't judged through."
 
 _ERRORS: dict[int, tuple[str, str]] = {
@@ -171,7 +156,7 @@ _ERRORS: dict[int, tuple[str, str]] = {
 _METHODS: dict[str, tuple[type[BaseModel], tuple[type[BaseModel], ...]]] = {
     "judge_request": (
         JudgeRequestParams,
-        (PassResult, ReplaceRequestResult, RefuseResult, RespondResult),
+        (PassResult, ReplaceRequestResult, RefuseResult),
     ),
     "judge_reply": (
         JudgeReplyParams,
@@ -343,12 +328,6 @@ def _result(answer: Answer, *, reply: bool) -> BaseModel:
         return RefuseResult(status=answer.status, message=answer.message)
     if isinstance(answer, Pass):
         return PassResult()
-    if isinstance(answer, Respond):
-        return RespondResult(
-            status=answer.status,
-            headers=dict(answer.headers),
-            body=base64.b64encode(answer.body).decode("ascii"),
-        )
     if reply:
         return ReplaceReplyResult(body=base64.b64encode(answer.body).decode("ascii"))
     return ReplaceRequestResult(body=json.loads(answer.body))
