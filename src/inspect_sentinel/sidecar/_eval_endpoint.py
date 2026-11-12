@@ -282,7 +282,7 @@ class RequestResultResult(BaseModel):
     judging_time: float | None = Field(
         default=None,
         ge=0,
-        description="How long the sentinel spent judging the latest attempt's request and reply so far, in seconds. The client waited on its model call meanwhile, so an eval counts this time as waiting, not as the agent's working time. 0 where nothing was judged. Sent with `judging_usage` on every answer about records the sidecar holds, whether or not the judgment is trimmed.",
+        description="How long the sentinel spent judging the latest attempt's request and reply so far, in seconds. The client waited on its model call meanwhile, so an eval counts this time as waiting, not as the agent's working time. For a call a person was asked about, it is added up over the call's tries, each counted only while it was open. 0 where nothing was judged. Sent with `judging_usage` on every answer about records the sidecar holds, whether or not the judgment is trimmed.",
     )
     judging_usage: list[JudgingUsage] | None = Field(
         default=None,
