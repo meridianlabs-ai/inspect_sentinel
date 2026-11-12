@@ -87,6 +87,11 @@ An Inspect eval knows only the base URL of the model API it calls, which here is
 
 LiteLLM checks the caller's key on these routes as it does on its model routes, and a key that may call LiteLLM's OpenAI routes may call these too. The sidecar is never sent the key.
 
+- **What the sidecar is sent:** the request's body, its `content-type`, and Inspect's own `x-irid` and `x-inspect-context` headers. No other header is passed on.
+- **What the eval is sent back:** the sidecar's status, its headers and its body. The headers of one hop, such as `content-length` and `connection`, are LiteLLM's own. An event stream is passed on as it arrives.
+
+An eval also gets a held reply this way. When a sentinel asks a person about a tool call, the sidecar holds the provider's reply until the person decides. Once the turn may go on, Inspect sends the model call's request to `/sentinel/v1/held-reply`, under the call's `x-irid`. The sidecar answers with the provider's reply as it held it, so LiteLLM doesn't call the provider again.
+
 ## What LiteLLM decides
 
 The guardrail is tested with LiteLLM 1.83 and 1.105.

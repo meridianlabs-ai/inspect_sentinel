@@ -5,6 +5,9 @@ These tests run in an environment of their own, with one LiteLLM version, and im
 
 import asyncio
 import base64
+import gzip
+import hashlib
+import hmac
 import importlib
 import importlib.metadata
 import inspect
@@ -34,7 +37,7 @@ from openai.types.responses import Response, ResponseReasoningItem
 from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request as HttpRequest
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 from starlette.responses import Response as HttpResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp
@@ -340,10 +343,11 @@ def _sidecar(
     release: str = "whole",
     action: str = "reject",
     max_body_bytes: int | None = None,
+    rule_text: str | None = None,
 ) -> Generator[str]:
-    """The address of a real sidecar, whose sentinel rejects a weather lookup of `city`, or every lookup for None, or ends the run there, releasing replies as `release` says."""
+    """The address of a real sidecar, whose sentinel rejects a weather lookup of `city`, or every lookup for None, or ends the run there, releasing replies as `release` says. With `rule_text`, its sentinel is the `weather_rule` that text defines."""
     rule = tmp_path / "weather_rule.py"
-    rule.write_text(_RULE.format(city=city, action=action))
+    rule.write_text(rule_text or _RULE.format(city=city, action=action))
     with socket.socket() as free:
         free.bind(("127.0.0.1", 0))
         port = free.getsockname()[1]
@@ -1946,7 +1950,9 @@ def test_eval_routes_reach_the_sidecar_through_litellm(
     paths = [getattr(route, "path", None) for route in proxy.app.router.routes]
     assert paths[0] == "/sentinel/{rest:path}"
     assert paths.count("/sentinel/{rest:path}") == 1
-    assert {"/sentinel/info", "/sentinel/v1"} <= set(routes.openai_routes.value)
+    assert {"/sentinel/info", "/sentinel/v1", "/sentinel/v1/held-reply"} <= set(
+        routes.openai_routes.value
+    )
     assert (probe.status_code, probe.json()) == (201, {"answered": "/sentinel/info"})
     assert (asked.status_code, asked.json()) == (201, {"answered": "/sentinel/v1"})
     assert [(s["method"], s["path"], s["query"]) for s in seen] == [
@@ -1990,6 +1996,7 @@ def test_eval_route_answers_502_when_the_sidecar_cannot_be_reached(
         b"/sentinel/v1/%2E%2E/%2e%2e/proxy/v1",
         b"/sentinel/./v1",
         b"/sentinel//v1",
+        b"/sentinel/v1/held-reply/%2e%2e/%2e%2e/%2e%2e/proxy/v1",
     ],
 )
 def test_eval_route_passes_on_nothing_outside_sentinel(
@@ -2051,6 +2058,542 @@ def test_eval_route_passes_on_nothing_outside_sentinel(
 
     assert (status, json.loads(body)) == (404, {"error": "Not found."})
     assert seen == []
+
+
+_HELD_REPLY = "/sentinel/v1/held-reply"
+_MODEL_REQUEST = json.dumps({"model": "claude", "messages": [_QUESTION]}).encode()
+
+
+def _sidecar_answering(
+    seen: list[dict[str, Any]], answer: Callable[[], HttpResponse]
+) -> Starlette:
+    """A stand-in for the sidecar's endpoint for evals that answers each call as `answer` says, and says what it was sent."""
+
+    async def respond(http: HttpRequest) -> HttpResponse:
+        seen.append(
+            {
+                "method": http.method,
+                "path": http.url.path,
+                "headers": dict(http.headers),
+                "body": await http.body(),
+            }
+        )
+        return answer()
+
+    return Starlette(
+        routes=[Route("/sentinel/{rest:path}", respond, methods=["GET", "POST"])]
+    )
+
+
+def _asked_for_a_held_reply(
+    monkeypatch: pytest.MonkeyPatch,
+    sidecar: Starlette,
+    headers: dict[str, str] | None = None,
+) -> Any:
+    """LiteLLM's answer to a request for a held reply, sent to its app as an eval's provider SDK sends it."""
+    proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
+    _without_eval_route(proxy)
+
+    async def ask(guardrail: Any) -> Any:
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=proxy.app), base_url="http://litellm"
+            ) as client:
+                return await client.post(
+                    _HELD_REPLY,
+                    content=_MODEL_REQUEST,
+                    headers={"authorization": "Bearer sk-caller"} | (headers or {}),
+                )
+        finally:
+            await guardrail.aclose()
+
+    with _serving(sidecar) as url:
+        guardrail = _make(monkeypatch, url)
+        guardrail.serve_eval_routes()
+        return asyncio.run(ask(guardrail))
+
+
+def test_a_request_for_a_held_reply_reaches_the_sidecar_with_inspects_headers_and_no_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict[str, Any]] = []
+    inspects = {
+        "content-type": "application/json",
+        "x-irid": "request_456",
+        "x-inspect-context": '{"version": 1, "eval_id": "eval_1"}',
+    }
+
+    answered = _asked_for_a_held_reply(
+        monkeypatch,
+        _sidecar_answering(seen, lambda: JSONResponse({"type": "message"})),
+        inspects
+        | {
+            "x-api-key": "sk-the-callers-own",
+            "anthropic-version": "2023-06-01",
+            "cookie": "session=1",
+        },
+    )
+
+    assert answered.status_code == 200
+    [request] = seen
+    assert (request["method"], request["path"]) == ("POST", _HELD_REPLY)
+    assert request["body"] == _MODEL_REQUEST
+    sent = request["headers"]
+    assert {name: sent.get(name) for name in inspects} == inspects
+    # Nothing else of the caller's, so neither its key for LiteLLM nor one for
+    # a provider: the rest are the guardrail's own client's.
+    assert set(sent) - set(inspects) == {
+        "host",
+        "accept",
+        "accept-encoding",
+        "user-agent",
+        "content-length",
+    }
+    assert sent["accept-encoding"] == "identity"
+    assert "httpx" not in sent["user-agent"]
+
+
+def test_a_held_reply_comes_back_with_its_status_its_headers_and_its_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    held = json.dumps({"type": "message", "content": []}).encode()
+
+    def answer() -> HttpResponse:
+        response = HttpResponse(
+            held,
+            headers={
+                "content-type": "application/json",
+                "request-id": "req_1",
+                "anthropic-ratelimit-requests-remaining": "9",
+            },
+        )
+        response.raw_headers.extend([(b"x-twice", b"1"), (b"x-twice", b"2")])
+        return response
+
+    answered = _asked_for_a_held_reply(monkeypatch, _sidecar_answering([], answer))
+
+    assert (answered.status_code, answered.content) == (200, held)
+    # as the sidecar wrote it, with nothing added
+    assert answered.headers["content-type"] == "application/json"
+    assert answered.headers["request-id"] == "req_1"
+    assert answered.headers["anthropic-ratelimit-requests-remaining"] == "9"
+    assert answered.headers.get_list("x-twice") == ["1", "2"]
+    assert answered.headers.get_list("content-length") == [str(len(held))]
+    # what the sidecar's own server wrote for its hop is not passed on
+    assert "server" not in answered.headers
+    assert "date" not in answered.headers
+
+
+def test_an_answer_the_sidecar_compressed_comes_back_as_it_was_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plain = b'{"type": "message"}' * 50
+    packed = gzip.compress(plain)
+
+    answered = _asked_for_a_held_reply(
+        monkeypatch,
+        _sidecar_answering(
+            [],
+            lambda: HttpResponse(
+                packed,
+                headers={
+                    "content-type": "application/json",
+                    "content-encoding": "gzip",
+                },
+            ),
+        ),
+    )
+
+    # the bytes and what says how to read them still go together
+    assert answered.headers["content-encoding"] == "gzip"
+    assert answered.headers["content-length"] == str(len(packed))
+    assert answered.content == plain
+
+
+def test_a_refused_request_for_a_held_reply_comes_back_as_the_sidecar_wrote_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refusal = {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": "A person is asked."},
+    }
+
+    answered = _asked_for_a_held_reply(
+        monkeypatch,
+        _sidecar_answering(
+            [],
+            lambda: JSONResponse(
+                refusal, status_code=400, headers={"x-should-retry": "false"}
+            ),
+        ),
+    )
+
+    assert (answered.status_code, answered.json()) == (400, refusal)
+    assert answered.headers["content-type"] == "application/json"
+    assert answered.headers["x-should-retry"] == "false"
+
+
+def _http_scope(spec_version: str) -> dict[str, Any]:
+    return {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": spec_version},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": _HELD_REPLY,
+        "raw_path": _HELD_REPLY.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"host", b"litellm"),
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer sk-caller"),
+            (b"x-irid", b"request_456"),
+        ],
+        "client": ("127.0.0.1", 1),
+        "server": ("litellm", 80),
+    }
+
+
+def test_a_streamed_held_reply_reaches_the_caller_event_by_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
+    _without_eval_route(proxy)
+    events = [
+        b"event: message_start\ndata: {}\n\n",
+        b"event: message_stop\ndata: {}\n\n",
+    ]
+    first_reached_the_caller = threading.Event()
+
+    async def held() -> AsyncIterator[bytes]:
+        yield events[0]
+        # The rest is written only once the caller has the first event, which
+        # it never has from a relay that reads the whole stream before it
+        # answers.
+        for _ in range(500):
+            if first_reached_the_caller.is_set():
+                yield events[1]
+                return
+            await asyncio.sleep(0.01)
+        yield b"event: error\ndata: the first event never reached the caller\n\n"
+
+    async def call(guardrail: Any) -> list[dict[str, Any]]:
+        sent: list[dict[str, Any]] = []
+        asked = False
+        answered = asyncio.Event()
+
+        async def receive() -> dict[str, Any]:
+            nonlocal asked
+            if not asked:
+                asked = True
+                return {
+                    "type": "http.request",
+                    "body": _MODEL_REQUEST,
+                    "more_body": False,
+                }
+            # the caller stays for the whole of the answer
+            await answered.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+            if message["type"] == "http.response.body" and message.get("body"):
+                first_reached_the_caller.set()
+
+        try:
+            # straight to the app, since httpx's transport for one hands over
+            # an answer only once it is whole
+            await proxy.app(_http_scope("2.4"), receive, send)
+        finally:
+            answered.set()
+            await guardrail.aclose()
+        return sent
+
+    sidecar = _sidecar_answering(
+        [],
+        lambda: StreamingResponse(
+            held(), media_type="text/event-stream", headers={"request-id": "req_1"}
+        ),
+    )
+    with _serving(sidecar) as url:
+        guardrail = _make(monkeypatch, url)
+        guardrail.serve_eval_routes()
+        sent = asyncio.run(call(guardrail))
+
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    headers = {name.decode(): value.decode() for name, value in start["headers"]}
+    assert start["status"] == 200
+    assert headers["content-type"].startswith("text/event-stream")
+    assert headers["request-id"] == "req_1"
+    assert "content-length" not in headers
+    bodies = [
+        m["body"] for m in sent if m["type"] == "http.response.body" and m.get("body")
+    ]
+    assert bodies == events
+
+
+@pytest.mark.parametrize("spec_version", ["2.3", "2.4"])
+def test_the_sidecars_stream_is_closed_when_the_caller_goes_before_its_end(
+    monkeypatch: pytest.MonkeyPatch, spec_version: str
+) -> None:
+    proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
+    _without_eval_route(proxy)
+    closed = threading.Event()
+
+    async def held() -> AsyncIterator[bytes]:
+        try:
+            # for far longer than the test waits
+            for _ in range(160):
+                yield b"event: ping\ndata: {}\n\n"
+                await asyncio.sleep(0.05)
+        finally:
+            closed.set()
+
+    async def call(guardrail: Any) -> tuple[float, bool]:
+        scope = _http_scope(spec_version)
+        asked = False
+        reading = asyncio.Event()
+
+        async def receive() -> dict[str, Any]:
+            nonlocal asked
+            if not asked:
+                asked = True
+                return {
+                    "type": "http.request",
+                    "body": _MODEL_REQUEST,
+                    "more_body": False,
+                }
+            # an earlier server only tells the app that its caller has gone
+            await reading.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict[str, Any]) -> None:
+            if message["type"] == "http.response.body" and message.get("body"):
+                if reading.is_set() and spec_version == "2.4":
+                    # a later server fails the write to a caller that has gone
+                    raise OSError("The caller has gone.")
+                reading.set()
+
+        # the route as LiteLLM's app calls it, without the app's own layers,
+        # which each have their own way with a caller that goes
+        forward = proxy.app.router.routes[0].endpoint
+        began = time.monotonic()
+        try:
+            response = await forward(HttpRequest(scope, receive), "v1/held-reply")
+            try:
+                await response(scope, receive, send)
+            except Exception:
+                pass
+            await asyncio.to_thread(closed.wait, 6)
+            # the session is the guardrail's for every call, and stays open
+            return time.monotonic() - began, guardrail._session.closed
+        finally:
+            await guardrail.aclose()
+
+    sidecar = _sidecar_answering(
+        [], lambda: StreamingResponse(held(), media_type="text/event-stream")
+    )
+    with _serving(sidecar) as url:
+        guardrail = _make(monkeypatch, url)
+        guardrail.serve_eval_routes()
+        took, session_closed = asyncio.run(call(guardrail))
+
+    # long before the 8 seconds the sidecar would have gone on writing
+    assert took < 4
+    assert not session_closed
+
+
+_REVIEWED = """
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Decision,
+    Escalations,
+    human,
+    protocol,
+    sequential,
+)
+
+
+@protocol
+def escalates():
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        return Decision.escalate("every weather lookup is checked by a person")
+
+    return decide
+
+
+@protocol
+def weather_rule():
+    return sequential([escalates(), human(stages=["tool_call"])])
+"""
+
+_EVAL_KEY = "eval-1-key-that-inspect-made-for-this-test"
+
+
+def _mac(values: list[Any]) -> str:
+    # as Inspect makes one: an HMAC-SHA256 over the values, each as a string
+    written = json.dumps([str(value) for value in values], separators=(",", ":"))
+    return hmac.new(_EVAL_KEY.encode(), written.encode(), hashlib.sha256).hexdigest()
+
+
+def _from_the_eval(irid: str) -> dict[str, str]:
+    # the headers Inspect sends with a model request of its sample
+    sample = {
+        "task": "weather_desk",
+        "sample_id": 1,
+        "epoch": 1,
+        "sample_uuid": "sample_1",
+        "attempt": "attempt_1",
+        "attempt_number": 1,
+    }
+    at = int(time.time())
+    context = {
+        "version": 1,
+        "eval_id": "eval_1",
+        **sample,
+        "timestamp": at,
+        "mac": _mac(["model-request", *sample.values(), irid, at]),
+    }
+    return {"x-irid": irid, "x-inspect-context": json.dumps(context)}
+
+
+def _by_the_eval(method: str, *more: Any) -> dict[str, Any]:
+    # what a call to the endpoint for evals presents for the eval
+    at = int(time.time())
+    return {
+        "eval_id": "eval_1",
+        "timestamp": at,
+        "mac": _mac([method, "eval_1", at, *more]),
+    }
+
+
+def test_an_approved_calls_held_reply_comes_through_litellm_from_a_real_sidecar(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Everything the eval sends goes to LiteLLM, and LiteLLM's relay passes
+    # it to a real sidecar: the eval's calls, and the request that gets the
+    # reply the sidecar held while a person decided.
+    proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
+    _without_eval_route(proxy)
+    key = {"authorization": "Bearer sk-caller"}
+    provider_reply = _MESSAGES.whole()
+
+    async def run(url: str) -> tuple[Any, ...]:
+        guardrail = _make(monkeypatch, url)
+        guardrail.serve_eval_routes()
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=proxy.app), base_url="http://litellm"
+            ) as eval_client:
+
+                async def call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+                    answered = await eval_client.post(
+                        "/sentinel/v1",
+                        json={
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": method,
+                            "params": params,
+                        },
+                        headers=key,
+                        timeout=40,
+                    )
+                    return cast(dict[str, Any], answered.json())
+
+                registered = await call(
+                    "register_task",
+                    {
+                        "eval_id": "eval_1",
+                        "token": _EVAL_KEY,
+                        "task": "weather_desk",
+                        "task_description": None,
+                        "metadata": {},
+                        "expiry": 3600,
+                        "sample_ids": [1],
+                        "epochs": 1,
+                    },
+                )
+                # the model call, as LiteLLM puts it to its guardrail: the
+                # provider replies with a tool call, and a person is asked
+                data = _data(_MESSAGES, _from_the_eval("request-1"))
+                await guardrail.async_pre_call_hook(
+                    _USER, None, data, _MESSAGES.call_type
+                )
+                with pytest.raises(HTTPException) as pending:
+                    await guardrail.async_post_call_success_hook(
+                        data, _USER, provider_reply
+                    )
+                too_soon = await eval_client.post(
+                    "/sentinel/v1/held-reply",
+                    json=_MESSAGES.body,
+                    headers=key | _from_the_eval("request-1"),
+                )
+                questions = await call(
+                    "pending_questions",
+                    _by_the_eval("pending_questions") | {"sample_uuid": "sample_1"},
+                )
+                [question] = questions["result"]["questions"]
+                answered = await call(
+                    "answer_question",
+                    _by_the_eval("answer_question", question["id"], "approve", "")
+                    | {"id": question["id"], "decision": "approve"},
+                )
+                result = await call(
+                    "request_result",
+                    _by_the_eval("request_result") | {"id": "request-1", "wait": 30},
+                )
+                held = await eval_client.post(
+                    "/sentinel/v1/held-reply",
+                    json=_MESSAGES.body,
+                    headers=key | _from_the_eval("request-1"),
+                )
+                unproven = await eval_client.post(
+                    "/sentinel/v1/held-reply",
+                    json=_MESSAGES.body,
+                    headers=key | _from_the_eval("request-1") | {"x-irid": "request-2"},
+                )
+                return (
+                    registered,
+                    pending.value,
+                    too_soon,
+                    answered,
+                    result,
+                    held,
+                    unproven,
+                )
+        finally:
+            await guardrail.aclose()
+
+    with _sidecar(None, tmp_path, rule_text=_REVIEWED) as url:
+        registered, pending, too_soon, answered, result, held, unproven = asyncio.run(
+            run(url)
+        )
+
+    assert "result" in registered, registered
+    # the model call is answered at once, with a status no SDK sends again
+    assert pending.status_code == 400
+    assert "waiting for a person's review" in str(pending.detail)
+    # no reply is given while the person decides, and the refusal is the
+    # sidecar's own, passed back as it wrote it
+    assert too_soon.status_code == 400 and "error" in too_soon.json()
+    assert answered["result"]["decision"] == "approve", answered
+    assert (result["result"]["state"], result["result"]["outcome"]) == (
+        "decided",
+        "proceed",
+    ), result
+    # The provider's reply comes back through LiteLLM as the sidecar held it:
+    # the relay passed the eval's two headers on, and the sidecar checked them.
+    assert held.status_code == 200, held.text
+    assert held.headers["content-type"].startswith("application/json")
+    reply = held.json()
+    assert [block["type"] for block in reply["content"]] == ["tool_use"]
+    assert reply["content"][0]["input"] == {"location": "Paris"}
+    # a request whose headers don't prove the call gets no reply
+    assert unproven.status_code == 400
 
 
 def test_credentials_among_a_requests_fields_never_reach_the_sidecar(

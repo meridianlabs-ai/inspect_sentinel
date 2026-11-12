@@ -14,7 +14,7 @@ It is set in LiteLLM's config, beside `guardrail`, `mode` and `default_on`:
 
 Which requests reach the class is LiteLLM's own choice: `default_on`, or a request or key that names the guardrail.
 
-The guardrail also adds a route to LiteLLM's app, so that an Inspect eval reaches the sidecar's endpoint for evals at LiteLLM's own address: everything under `/sentinel/` is passed on to the sidecar, behind LiteLLM's own check of the caller's key.
+The guardrail also adds a route to LiteLLM's app, so that an Inspect eval reaches the sidecar's endpoint for evals at LiteLLM's own address: everything under `/sentinel/` is passed on to the sidecar, behind LiteLLM's own check of the caller's key. That is also how an eval gets a reply the sidecar held while a person decided: it sends the model call's request to `/sentinel/v1/held-reply`, and is answered with the provider's reply, headers and all, a streamed one as a stream.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 from fastapi import Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.utils import (  # pyright: ignore[reportMissingTypeStubs]
     all_litellm_params,
@@ -111,9 +112,27 @@ _PENDING_BYTES = 1024 * 1024
 # the size a chunk this can't write counts as, for what is kept of it
 _UNSIZED = 1024
 # what an eval reaches through LiteLLM: everything under it is the sidecar's
-# endpoint for evals, and the paths an eval calls first
+# endpoint for evals, and the paths of it an eval calls, which LiteLLM is told
+# a key for its OpenAI routes may call
 _EVAL_PREFIX = "/sentinel"
-_EVAL_PATHS = ("/sentinel/info", "/sentinel/v1")
+_EVAL_PATHS = ("/sentinel/info", "/sentinel/v1", "/sentinel/v1/held-reply")
+# headers of the sidecar's answer that are never passed on to an eval: those
+# that describe one hop, and those the server at each hop writes for itself
+_ONE_HOP = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "content-length",
+        "date",
+        "server",
+    }
+)
 # one segment of a path under it that is passed on: never `.` or `..`
 _SEGMENT = re.compile(r"(?!\.{1,2}$)[A-Za-z0-9._~-]+")
 # a request's fields that carry a credential or say where a call goes, which
@@ -459,6 +478,8 @@ class LiteLLMGuardrail(CustomGuardrail):
 
         An Inspect eval knows only the base URL of the model API it calls, which here is LiteLLM's, and reaches the sidecar's endpoint for evals there. LiteLLM's own routes would otherwise answer these paths first, or forward them to a provider, so the route is put ahead of them. A key that may call LiteLLM's OpenAI routes may call these too.
 
+        The sidecar is sent the request's body, its `content-type`, and Inspect's own `x-irid` and `x-inspect-context`, which a request for a held reply names its model call with. It is sent no other header, so never the caller's key. Its answer goes back with its status and its headers, apart from those of one hop, and an event stream goes back as it arrives.
+
         LiteLLM's proxy calls this when it makes the guardrail. Calling it again adds nothing.
         """
         from litellm.proxy._types import LiteLLMRoutes
@@ -486,25 +507,43 @@ class LiteLLMGuardrail(CustomGuardrail):
                 )
             session = self._session_to_sidecar()
             url = f"{self._base}{_EVAL_PREFIX}/{rest}"
-            # only the body and what it is: the caller's key was LiteLLM's to
-            # check, and is never the sidecar's to see
-            headers = {"content-type": request.headers.get("content-type", _JSON)}
+            # Only the body, what it is, and Inspect's own headers, which name
+            # the model call and prove which eval sent it: the caller's key
+            # was LiteLLM's to check, and is never the sidecar's to see. The
+            # sidecar is asked not to compress its answer, since the caller
+            # it is passed on to may not have asked for that.
+            headers = {
+                "content-type": request.headers.get("content-type", _JSON),
+                "accept-encoding": "identity",
+            }
+            for name in _INSPECT_HEADERS:
+                if name in request.headers:
+                    headers[name] = request.headers[name]
             # Not the guardrail's timeout, which is for judging a call: the
             # sidecar bounds these itself, and `request_result` holds its
             # answer for up to 30 seconds while a call is still being judged.
+            # The answer's bytes are passed on as they are, never decoded, so
+            # that they are what its `content-encoding` says.
             try:
-                async with session.request(
+                answer = await session.request(
                     request.method,
                     url,
                     params=list(request.query_params.multi_items()),
                     data=await request.body(),
                     headers=headers,
                     timeout=_NO_TIMEOUT,
-                ) as answer:
-                    return Response(
-                        content=await answer.read(),
-                        status_code=answer.status,
-                        media_type=answer.headers.get("content-type"),
+                    auto_decompress=False,
+                )
+                # a held reply that was streamed is passed on as it arrives,
+                # as the provider's own would be
+                if answer.content_type == _STREAM:
+                    return _with_headers(_StreamPassedOn(answer), answer)
+                async with answer:
+                    return _with_headers(
+                        Response(
+                            content=await answer.read(), status_code=answer.status
+                        ),
+                        answer,
                     )
             except (aiohttp.ClientError, asyncio.TimeoutError) as ex:
                 logger.warning(
@@ -1006,6 +1045,55 @@ def _listed(headers: str | Iterable[str] | None) -> tuple[str, ...]:
 
 def _covers(pattern: str, name: str) -> bool:
     return name.startswith(pattern[:-1]) if pattern.endswith("*") else name == pattern
+
+
+class _StreamPassedOn(StreamingResponse):
+    """An event stream the sidecar answers an eval with, sent to the caller as it arrives.
+
+    The sidecar's answer is closed when the caller has all of it, and when the caller goes away first, so that the sidecar isn't left writing a stream nobody reads. The session it came on stays open, for the guardrail's other calls.
+    """
+
+    def __init__(self, answer: aiohttp.ClientResponse) -> None:
+        super().__init__(_as_it_arrives(answer), status_code=answer.status)
+        self._answer = answer
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # nothing to do once the answer was read to its end: its
+            # connection has gone back to the session by then
+            self._answer.close()
+
+
+async def _as_it_arrives(answer: aiohttp.ClientResponse) -> AsyncIterator[bytes]:
+    try:
+        async for chunk in answer.content.iter_any():
+            yield chunk
+    except (aiohttp.ClientError, asyncio.TimeoutError) as ex:
+        # The caller's status has gone by now, so the stream is cut short
+        # rather than ended, and a client reads it as a connection that failed.
+        logger.warning(
+            "The sentinel sidecar's stream ended before its end (%s).",
+            type(ex).__name__,
+        )
+        raise
+
+
+def _with_headers(response: Response, answer: aiohttp.ClientResponse) -> Response:
+    # The sidecar's answer is the caller's, headers and all: a held reply's are
+    # the provider's own, which a provider's SDK reads. Each hop's own headers
+    # are left to LiteLLM's server, with any the answer's `connection` names,
+    # and the length is the one written for the body as it is sent on.
+    one_hop = _ONE_HOP | {
+        name.strip().lower()
+        for value in answer.headers.getall("connection", [])
+        for name in value.split(",")
+    }
+    for name, value in answer.headers.items():
+        if name.lower() not in one_hop:
+            response.headers.append(name, value)
+    return response
 
 
 def _record(data: dict[str, Any]) -> dict[str, Any]:
