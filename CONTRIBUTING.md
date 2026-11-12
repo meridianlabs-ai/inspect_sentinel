@@ -62,7 +62,8 @@ UV_PROJECT_ENVIRONMENT=/tmp/py311 uv sync --locked --extra dev --python 3.11
 
 For this repository:
 
-- inspect_sentinel needs unreleased inspect_ai and inspect_scout changes. `[tool.uv.sources]` in `pyproject.toml` points `inspect-ai` and `inspect-scout` at their `main` branches. Tracking `main` is deliberate: sentinel and inspect_ai co-develop, and most sentinel changes need hooks that have not shipped yet. Scout is tracked the same way, so a Scout change that alters what a monitor's model is shown reaches CI at once.
+- inspect-ai and inspect-scout come from PyPI, like every other dependency. Their `pyproject.toml` entries are ordinary version floors, and `uv.lock` records the releases CI installs. They have no uv cooldown (`false` in `[tool.uv.exclude-newer-package]`), so a new release can be locked at once.
+- A change that needs an inspect_ai or inspect_scout API that has not been released can be developed against a local checkout (`uv pip install --no-deps -e ../inspect_ai`), but it cannot merge until that release is on PyPI and the floor and `uv.lock` are updated.
 - The 6-hour packages are in `[tool.uv.exclude-newer-package]` in `pyproject.toml`.
 
 ## Checks and tests
@@ -151,12 +152,7 @@ Anything that isn't a user-facing feature or fix should avoid `feat:`/`fix:` so 
 
 ### The inspect_ai and inspect_scout pins at release time
 
-`pyproject.toml` names inspect_ai and inspect_scout by PyPI floors, and every CI build installs their `main` through `[tool.uv.sources]`, except on the Release Please release PR. There, CI ignores the git sources (`UV_NO_SOURCES=1`) and installs the newest inspect-ai and inspect-scout releases that have cleared their cooldown, the way a published sentinel is installed. Two workflows keep its floors honest:
-
-- `release-pin-deps.yml` raises the `inspect-ai` and `inspect-scout` floors to those releases and pushes them to the release PR. It runs on release-PR events and every two hours, because an inspect_ai or inspect_scout release produces no event in this repository. The raised floors land on `main` with the release. Main keeps the git sources, so nothing has to be restored after a release.
-- `release-dep-guard.yml` fails the release PR if any runtime dependency points at a git ref, as a backstop: a published package cannot depend on one (PyPI rejects it, and a moving ref is not reproducible).
-
-If the release PR then fails its build or tests, sentinel needs an inspect_ai or inspect_scout change that has not shipped: cut a release of that package first, and the scheduled run raises the floor once it is on PyPI and has cleared its cooldown.
+`pyproject.toml` names inspect_ai and inspect_scout by PyPI floors, and every CI build, the release PR's included, installs the releases in `uv.lock`. A change that raises a floor raises it by hand, with `uv lock` in the same PR. `release-dep-guard.yml` fails the release PR if any runtime dependency points at a git ref, as a backstop: a published package cannot depend on one (PyPI rejects it, and a moving ref is not reproducible).
 
 ## Reporting issues
 

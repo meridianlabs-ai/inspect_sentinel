@@ -22,8 +22,9 @@ jobs:
         with:
           persist-credentials: false
       # The ruff version uv.lock pins, not the newest release.
-      - uses: ./.github/actions/uv-sync
+      - uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
         with:
+          versions: locked
           python-version: "3.13"
           extras: dev
       - name: Lint with Ruff
@@ -43,8 +44,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/uv-sync
+      - uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
         with:
+          versions: locked
           python-version: ${{ matrix.python-version }}
           extras: dev
       - name: Run pyright
@@ -63,8 +65,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/uv-sync
+      - uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
         with:
+          versions: locked
           python-version: ${{ matrix.python-version }}
           extras: dev
       - name: Run tests
@@ -89,8 +92,9 @@ jobs:
       # The sidecar, which the tests start, from this repository's environment.
       # No Actions cache: the guardrail's environment below has none, and both
       # calls in a job use the same setup.
-      - uses: ./.github/actions/uv-sync
+      - uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
         with:
+          versions: locked
           python-version: ${{ matrix.python-version }}
           extras: dev
           actions-cache: none
@@ -140,7 +144,7 @@ jobs:
           persist-credentials: false
       # The build toolchain that publish.yaml uses, pinned with hashes. To
       # update the file, see publish.yaml. No Actions cache, so that the
-      # uv-sync call below, which uses the same setup, matches.
+      # locked install below, which uses the same setup, matches.
       - name: Install build toolchain
         uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
         with:
@@ -164,8 +168,9 @@ jobs:
           echo "guardrail=./${guardrail[0]}" >> "$GITHUB_OUTPUT"
       # The project's locked dependencies, not the project itself, then the
       # wheel with --no-deps.
-      - uses: ./.github/actions/uv-sync
+      - uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
         with:
+          versions: locked
           python-version: ${{ matrix.python-version }}
           project-install: skip
           actions-cache: none
