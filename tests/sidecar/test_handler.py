@@ -1169,6 +1169,79 @@ async def test_a_result_is_judged_against_what_the_model_was_sent() -> None:
     )
 
 
+@protocol
+def rejects_tokyo_and_reports_the_turn() -> ProtocolGroup:
+    def turn(step: BeforeToolCall | AfterToolCall) -> str:
+        message = step.assistant_message
+        assert message is not None
+        calls = [call.id for call in message.tool_calls or []]
+        return f"{step.call.id}:{message.id == step.message_id}:{message.text}:{calls}"
+
+    async def before(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        if step.call.arguments.get("location") == "Tokyo":
+            return Decision.reject(turn(step), message="Tokyo is not allowed.")
+        return Decision.proceed(turn(step))
+
+    async def after(
+        context: Context, step: AfterToolCall, escalations: Escalations
+    ) -> Decision | None:
+        return Decision.proceed(turn(step))
+
+    return ProtocolGroup(before, after)
+
+
+@pytest.mark.anyio
+async def test_a_call_s_steps_carry_the_reply_as_the_model_returned_it() -> None:
+    handler = Handler(rejects_tokyo_and_reports_the_turn())
+    await handler.request(request("a"))
+    edited = await handler.reply(
+        reply(
+            message(
+                {"type": "text", "text": "Checking both."},
+                weather("Tokyo", "toolu_1"),
+                weather("Oslo", "toolu_2"),
+            ),
+            id="a",
+        )
+    )
+    assert isinstance(edited, Replace)
+    # the client ran the call it was handed, from the reply without Tokyo
+    await handler.request(
+        request(
+            "b",
+            then=[
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Checking both."},
+                        weather("Oslo", "toolu_2"),
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_2",
+                            "content": "rain",
+                        }
+                    ],
+                },
+            ],
+        )
+    )
+
+    turn = "True:Checking both.:['toolu_1', 'toolu_2']"
+    assert set(_explanations(await handler.records("a"))) == {
+        f"toolu_1:{turn}",
+        f"toolu_2:{turn}",
+    }
+    # the result's step has the reply the model returned, not the client's copy
+    assert set(_explanations(await handler.records("b"))) == {f"toolu_2:{turn}"}
+
+
 @pytest.mark.anyio
 async def test_samples_share_nothing() -> None:
     # two epochs of one sample: the same conversation, and nothing in common

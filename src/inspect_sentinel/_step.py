@@ -4,7 +4,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal, TypeAlias
 
-from inspect_ai.model import ChatMessage, ChatMessageTool, GenerateConfig, ModelOutput
+from inspect_ai.model import (
+    ChatMessage,
+    ChatMessageAssistant,
+    ChatMessageTool,
+    GenerateConfig,
+    ModelOutput,
+)
 from inspect_ai.tool import ToolCall, ToolCallView, ToolChoice, ToolInfo, ToolResult
 
 from ._report import Decision, Reported
@@ -140,6 +146,9 @@ class BeforeToolCall:
     message_id: str
     """Id of the assistant message that made the call, so a monitor model can cite it."""
 
+    assistant_message: ChatMessageAssistant | None = field(default=None, kw_only=True)
+    """The assistant message that made the call, as the model returned it: its text, its reasoning and all of its tool calls, this one among them (find it by `call.id`). It is the output of the model call that `input` was sent to, as the host recorded it (in-process, the output the transcript's `ModelEvent` records), so it is the same live and in a replay from a log, including for a solver that calls `generate()` in its own loop. It shows the call as the model proposed it: an approver's or a sentinel's `modify` changes `call`, not this message. `None` exactly when `input` is `None`: no model call produced the message (a pre-filled message, a human agent, or one the scaffold built itself), the transcript event that recorded the model call is no longer available, or the host does not have it (a replay from messages). It is the host's own object, not a copy; monitors must not mutate it."""
+
     call: ToolCall
     """The call as it will execute."""
 
@@ -180,6 +189,9 @@ class AfterToolCall:
 
     message_id: str
     """Id of the assistant message that made the call, so a monitor model can cite it."""
+
+    assistant_message: ChatMessageAssistant | None = field(default=None, kw_only=True)
+    """The assistant message that made the call, as the model returned it: its text, its reasoning and all of its tool calls, this one among them (find it by `call.id`). It is the output of the model call that `input` was sent to, as the host recorded it (in-process, the output the transcript's `ModelEvent` records), so it is the same live and in a replay from a log, including for a solver that calls `generate()` in its own loop. It shows the call as the model proposed it: an approver's or a sentinel's `modify` changes `call`, not this message. `None` exactly when `input` is `None`: no model call produced the message (a pre-filled message, a human agent, or one the scaffold built itself), the transcript event that recorded the model call is no longer available, or the host does not have it (a replay from messages). It is the host's own object, not a copy; monitors must not mutate it."""
 
     call: ToolCall
     """The call as executed, after any `modify`."""

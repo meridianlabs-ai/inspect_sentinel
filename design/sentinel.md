@@ -173,6 +173,7 @@ class BeforeToolCall:
     conversation: str
     message: str                # assistant text alongside the call
     message_id: str             # id of the assistant message that made the call
+    assistant_message: ChatMessageAssistant | None = field(default=None, kw_only=True)  # the reply that made the call, as the model returned it; None exactly when input is
     call: ToolCall              # the call as it will execute
     view: ToolCallView
     input: Sequence[ChatMessage] | None  # the request that produced the call; None without one
@@ -188,6 +189,7 @@ class AfterToolCall:
     conversation: str
     message: str
     message_id: str
+    assistant_message: ChatMessageAssistant | None = field(default=None, kw_only=True)
     call: ToolCall              # the call as executed (after any `modify`)
     result: ChatMessageTool     # what the model will see, after truncation
     output: ToolResult | None  # the tool's untruncated return value; None where the host can't see it (a proxy, a replay)

@@ -128,6 +128,7 @@ Each stage has its own step type. This table lists every field and the stages th
 | `call` | Both tool stages | The tool call, as a `ToolCall`. At `AfterToolCall`, as it ran, after any `modify`. |
 | `message` | Both tool stages | The text of the assistant message that made the tool call. |
 | `message_id` | Both tool stages | Id of the assistant message that made the tool call. |
+| `assistant_message` | Both tool stages | The assistant message that made the tool call, as the model returned it: its text, reasoning, and all of its tool calls. |
 | `view` | Both tool stages | A rendering of the tool call: the tool's custom viewer if it has one, otherwise a Python-call rendering. |
 | `result` | `AfterToolCall` | The tool result the agent's model will see, as a `ChatMessageTool`. |
 | `output` | `AfterToolCall` | The tool's return value, before any truncation. |
@@ -150,10 +151,39 @@ At `BeforeGenerate`, `history` does not yet include `input`. At the other stages
 Check these fields for `None`, and abstain when the list a monitor needs is missing rather than fall back to another list:
 
 - `agent_messages` is `None` when no `@agent` function is running (for example, a solver that calls `generate()` directly), for agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html), and in replay.
-- At the tool stages, `input`, `tools`, and `tool_choice` are `None` when no model call produced the tool call, as with a pre-filled assistant message, and in replay from a transcript's messages (see [Transcripts From Messages](replay.qmd#transcripts-from-messages)).
+- At the tool stages, `input`, `tools`, `tool_choice`, and `assistant_message` are `None` when no model call produced the tool call, as with a pre-filled assistant message, and in replay from a transcript's messages (see [Transcripts From Messages](replay.qmd#transcripts-from-messages)).
 - `history` is set in an eval and in replay, but its type allows `None`.
 
 For what the sample asked the agent to do, use `context.eval.sample_input` (see [Context](monitors.qmd#context)). To keep hidden instructions away from an LLM monitor, see [Hiding Side-Task Instructions](llm-monitors.qmd#hiding-side-task-instructions).
+
+### The Assistant Message
+
+At the tool stages, `assistant_message` is the assistant message that made the tool call. Use it when a monitor should judge the call in the context of its whole turn: the model's reasoning, its text, and the other calls it made alongside this one. For example, this monitor flags a deleting `bash()` command (using `DELETE_COMMANDS` from above) that the model made in the same turn as a call to `submit()`:
+
+``` python
+from inspect_sentinel import BeforeToolCall
+
+
+@monitor
+def deletes_then_submits() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        if step.assistant_message is None or step.call.function != "bash":
+            return None
+        turn = step.assistant_message.tool_calls or []
+        submits = any(call.function == "submit" for call in turn)
+        found = find_words(call_text(step.call), DELETE_COMMANDS)
+        if submits and found:
+            return Observation.flag(f"deletes with {', '.join(found)}, then submits")
+        return Observation.score(0.0)
+
+    return check
+```
+
+`assistant_message` is the message as the model returned it, from the same model call as `input`. So it is the same in an eval and in replay from a log, and it is set for a solver that calls `generate()` in its own loop, where `agent_messages` is `None`. Find this step's call among its tool calls by `step.call.id`.
+
+`call` is the call as it runs. When an approver or a protocol modifies the call, `call` shows the modified arguments and `assistant_message` still shows the arguments the model proposed. Likewise, if the scaffold edits the message before running its calls, `assistant_message` shows the model's version.
+
+`assistant_message` is `None` whenever `input` is `None` (see the list above).
 
 ### Tool Results and Truncation
 

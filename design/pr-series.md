@@ -620,6 +620,17 @@ Built in inspect_ai #5986 (2026-10-21), with this repository's docs and docstrin
 - **One source at every stage.** There is no tool-stage cut. A scaffold that replaces its state object shows the earlier object it was called with. `react` keeps its own object, and sub-agents through handoff or `as_tool()` have their own conversations and lists.
 - **`None`** when no `@agent` agent function is running, for bridged agents, in replay (the log does not record the list), and for sidecar and proxy hosts. A monitor must not mutate a present list: it is shared with the agent by reference.
 
+## Tool steps carry the assistant message
+
+Requested 2026-11-12 by users whose tool-result monitor shows the whole turn (reasoning, the other calls, and the result): they looked the turn up in `agent_messages`, which is `None` in replay and for a solver that calls `generate()` in its own loop. Built with inspect_ai's host change; the field is keyword-only with a default, so an older inspect_ai builds the steps as before.
+
+- **`BeforeToolCall.assistant_message` and `AfterToolCall.assistant_message`**, `ChatMessageAssistant | None`: the assistant message that made the call, with its text, reasoning and all of its tool calls.
+- **The message as the model returned it.** It is the output of the model call that `input` came from, as the host recorded it: in-process, the producing `ModelEvent`'s output, which inspect_ai keeps as a snapshot, so a later edit by the scaffold does not change it. Replay reads the same event from the log, so live and replay agree. The message as the agent's tool execution received it was not chosen: a scaffold, a filter or a handoff can change it before running its calls, and no log records that copy. So after a `modify`, `call` (the call as it runs) differs from the matching call in the message; a monitor finds it by `call.id`.
+- **`None` exactly when `input` is `None`**: a pre-filled message, a human agent, a message the scaffold built, an event no longer available, and replay from messages. A pre-filled message is known live, but a log can hold several versions of it, so replay could not be sure to give the one that ran.
+- **Shared, not copied.** A turn's steps hold one object, live and in replay.
+- **Hosts.** inspect_ai's in-process host and log driver fill it from the `ModelEvent` that already supplies `input`, `tools` and `tool_choice`. The sidecar fills it from the reply as the model returned it, before an edit takes calls out (`Made.message`). `steps_from_messages()` leaves it `None`, as it does `input`.
+- **Not rendered.** `step_as_str` still shows a tool stage's assistant text and its own call only. A monitor that wants the turn reads the field.
+
 ## Deferred
 
 Agreed work that waits for something else. Each entry says what unblocks it. Keep this list current: remove an entry when it lands. Grouped by priority, decided by the maintainer on 2026-10-02, in the order to take them.
