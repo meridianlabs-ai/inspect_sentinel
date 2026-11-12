@@ -3,8 +3,8 @@
 services:
   litellm:
     build:
-      context: ../..
-      dockerfile: examples/always_sunny/Dockerfile.litellm
+      context: .
+      dockerfile: litellm/Dockerfile
     depends_on:
       sidecar:
         condition: service_healthy
@@ -29,8 +29,8 @@ services:
 
   sidecar:
     build:
-      context: ../..
-      dockerfile: examples/always_sunny/Dockerfile.sidecar
+      context: .
+      dockerfile: sidecar/Dockerfile
     command:
       - --sentinel
       - /sentinel/sentinel.yaml

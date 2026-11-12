@@ -42,6 +42,12 @@ LOCKED_JOBS = {
     },
 }
 BUILD_REQUIREMENTS = "scripts/build-dist/requirements.txt"
+SHARED_BUILD = SHARED_ACTIONS + ".github/workflows/build-python-dist.yml@"
+PUBLISH_STEPS = ("actions/download-artifact@", "pypa/gh-action-pypi-publish@")
+DOWNLOAD_INPUTS = {
+    "artifact-ids": "${{ needs.build.outputs.artifact-id }}",
+    "path": "dist/",
+}
 EXEMPT_COOLDOWN = "6 hours"
 # CI moves these to their main, so Dependabot leaves them alone.
 MAIN_TRACKED = ["inspect-ai", "inspect-scout"]
@@ -330,20 +336,47 @@ def test_no_install_bypasses_the_shared_action(command: str) -> None:
 
 
 # The build toolchain comes from the hashed file, as wheels, and the build
-# resolves nothing more.
+# resolves nothing more. The release build runs in the shared workflow, which
+# does the same.
 def test_builds_use_the_hashed_toolchain_without_isolation() -> None:
     hashed = [
         step["with"]
         for _, step in all_steps()
         if step.get("with", {}).get("versions") == "hashed-requirements"
     ]
-    assert len(hashed) == 2
+    assert len(hashed) == 1
     for inputs in hashed:
         assert inputs["requirements-file"] == BUILD_REQUIREMENTS
         assert inputs["package-format"] == "wheels-only"
     builds = [line for _, line in workflow_run_lines() if " -m build" in line]
-    assert len(builds) == 3
+    assert len(builds) == 2
     assert [line for line in builds if "--no-isolation" not in line.split()] == []
+
+
+# A job with `id-token: write` only downloads the shared build's dist and
+# publishes it. A job that calls a shared workflow, such as a docs deploy, has
+# no steps here.
+def test_publish_jobs_only_upload_the_shared_build() -> None:
+    publishers = [
+        (f"{path.name}:{name}", job)
+        for path in workflows()
+        for name, job in yaml.safe_load(path.read_text())["jobs"].items()
+        if isinstance(job.get("permissions"), dict)
+        and job["permissions"].get("id-token") == "write"
+        and "uses" not in job
+    ]
+    assert publishers, "no job holds id-token: write"
+    for where, job in publishers:
+        uses = [step.get("uses", "") for step in job["steps"]]
+        assert len(uses) == len(PUBLISH_STEPS), where
+        for action, prefix in zip(uses, PUBLISH_STEPS, strict=True):
+            assert action.startswith(prefix), where
+        needs = job.get("needs", [])
+        assert "build" in ([needs] if isinstance(needs, str) else needs), where
+        assert job["steps"][0].get("with") == DOWNLOAD_INPUTS, where
+    build = yaml.safe_load((WORKFLOWS / "publish.yaml").read_text())["jobs"]["build"]
+    assert build["uses"].startswith(SHARED_BUILD), build["uses"]
+    assert re.fullmatch(r"[0-9a-f]{40}", build["uses"].split("@")[1].split()[0])
 
 
 # pip installs skip uv.lock, so they may only add local packages without their
