@@ -150,8 +150,8 @@ class JudgingUsage(SentinelModel):
     )
 
 
-def judging_usage(usage: Mapping[ModelUsed, ModelUsage]) -> list[JudgingUsage] | None:
-    """The usage of each model the sentinel called while judging a request, for the eval, or None where it called none."""
+def judging_usage(usage: Mapping[ModelUsed, ModelUsage]) -> list[JudgingUsage]:
+    """The usage of each model the sentinel was billed for while judging a request, for the eval: empty where nothing was billed."""
     return [
         JudgingUsage(
             role=used.role,
@@ -159,7 +159,7 @@ def judging_usage(usage: Mapping[ModelUsed, ModelUsage]) -> list[JudgingUsage] |
             usage=billed.model_dump(mode="json", exclude_none=True),
         )
         for used, billed in usage.items()
-    ] or None
+    ]
 
 
 class SentinelStep(BaseModel):

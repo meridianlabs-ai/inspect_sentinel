@@ -387,13 +387,14 @@ async def test_a_request_awaiting_its_reply() -> None:
     handler = await holding(Handler(weather_rule()))
     await handler.request(_asked("x"))
 
-    # weather_rule watches only tool calls, so nothing was judged yet
+    # weather_rule watches only tool calls, so nothing was judged or billed yet
     assert await _request_result(handler) == {
         "id": "irid-1",
         "records": "held",
         "state": "awaiting_reply",
         "recorded": [],
         "judging_time": 0.0,
+        "judging_usage": [],
     }
 
 
@@ -681,8 +682,8 @@ async def test_request_result_gives_how_long_the_latest_attempt_was_judged(
     # only the latest attempt: an earlier one's time isn't the eval's to count
     # again
     assert result["judging_time"] == 2.0 + 1.0
-    # no model judged, so nothing was billed
-    assert "judging_usage" not in result
+    # no model judged, so nothing was billed, and the answer says so
+    assert result["judging_usage"] == []
 
 
 @protocol

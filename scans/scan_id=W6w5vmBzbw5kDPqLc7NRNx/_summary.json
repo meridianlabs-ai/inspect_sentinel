@@ -1,1 +1,0 @@
-{"complete":true,"scanners":{"suspicion":{"scans":152,"results":125,"errors":0,"validation":null,"metrics":null,"tokens":223945,"model_usage":{"anthropic/claude-haiku-4-5":{"input_tokens":165568,"output_tokens":58377,"total_tokens":223945,"input_tokens_cache_write":0,"input_tokens_cache_read":0,"reasoning_tokens":0,"total_cost":null}}}}}
