@@ -629,7 +629,8 @@ Requested 2026-11-12 by users whose tool-result monitor shows the whole turn (re
 - **`None` exactly when `input` is `None`**: a pre-filled message, a human agent, a message the scaffold built, an event no longer available, and replay from messages. A pre-filled message is known live, but a log can hold several versions of it, so replay could not be sure to give the one that ran.
 - **Shared, not copied.** A turn's steps hold one object, live and in replay.
 - **Hosts.** inspect_ai's in-process host and log driver fill it from the `ModelEvent` that already supplies `input`, `tools` and `tool_choice`. The sidecar fills it from the reply as the model returned it, before an edit takes calls out (`Made.message`). `steps_from_messages()` leaves it `None`, as it does `input`.
-- **Not rendered.** `step_as_str` still shows a tool stage's assistant text and its own call only. A monitor that wants the turn reads the field.
+- **Not rendered.** `step_as_str` still shows a tool stage's assistant text and its own call only. A monitor that wants the turn reads the field. `StepPreprocessor`'s omissions (reasoning, system, provider tool use) apply to it, as to every message the step holds.
+- **Known difference.** A scaffold that copies the model's message under a new id before running its calls gets `None` live, as it already did for `input`, since inspect_ai's host finds the model call by the id of the message holding the call; replay finds it by the call's id. A call the scaffold added to the model's message under the model's id has none live or in replay. Through a sentinel sidecar, an in-process `ModelEvent` records the turn with the calls the sidecar took out redacted, so that is the message both see.
 
 ## Deferred
 

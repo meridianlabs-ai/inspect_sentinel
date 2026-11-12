@@ -127,7 +127,7 @@ async def preprocess_step(
 ) -> S:
     """`step`, thinned as `preprocessor` says (`StepPreprocessor()` when None).
 
-    Each window cuts its list as it is. A list with no window becomes `[]`, even one the host could not provide; a windowed list the host could not provide stays None. The omissions apply to `input`, `history`, `agent_messages`, a tool call's result and a generate's reply.
+    Each window cuts its list as it is. A list with no window becomes `[]`, even one the host could not provide; a windowed list the host could not provide stays None. The omissions apply to `input`, `history`, `agent_messages`, a tool call's assistant message and result, and a generate's reply.
 
     Args:
         step: The step a monitor was given.
@@ -162,6 +162,13 @@ async def preprocess_step(
     if isinstance(thinned, AfterToolCall):
         [result] = _omitted([thinned.result], p)
         thinned = replace(thinned, result=result)
+    if (
+        isinstance(thinned, BeforeToolCall | AfterToolCall)
+        and thinned.assistant_message is not None
+    ):
+        [made] = _omitted([thinned.assistant_message], p)
+        assert isinstance(made, ChatMessageAssistant)
+        thinned = replace(thinned, assistant_message=made)
     if isinstance(thinned, AfterGenerate):
         output = thinned.output.model_copy(
             update={

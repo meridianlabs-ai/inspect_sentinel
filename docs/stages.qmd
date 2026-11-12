@@ -181,6 +181,8 @@ def deletes_then_submits() -> Monitor:
 
 `assistant_message` is the message as the model returned it, from the same model call as `input`. So it is the same in an eval and in replay from a log, and it is set for a solver that calls `generate()` in its own loop, where `agent_messages` is `None`. Find this step's call among its tool calls by `step.call.id`.
 
+One case differs: a scaffold that copies the model's message under a new id before running its calls gets `None` in an eval, as it does for `input`, while replay finds the model's message.
+
 `call` is the call as it runs. When an approver or a protocol modifies the call, `call` shows the modified arguments and `assistant_message` still shows the arguments the model proposed. Likewise, if the scaffold edits the message before running its calls, `assistant_message` shows the model's version.
 
 `assistant_message` is `None` whenever `input` is `None` (see the list above).
