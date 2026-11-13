@@ -506,6 +506,13 @@ def test_a_review_timeout_of_no_time_is_an_error() -> None:
         Handler(weather_rule(), review_timeout=0)
 
 
+def test_a_review_timeout_without_end_is_an_error() -> None:
+    # no expiry is said by leaving the timeout out: a question tells the eval
+    # when it closes, and a time without end can't be written there
+    with pytest.raises(ValueError, match="review timeout"):
+        Handler(weather_rule(), review_timeout=float("inf"))
+
+
 def test_a_timestamp_window_of_no_time_is_an_error() -> None:
     with pytest.raises(ValueError, match="timestamp window"):
         Handler(weather_rule(), timestamp_window=0)

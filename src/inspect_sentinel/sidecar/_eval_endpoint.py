@@ -582,17 +582,19 @@ def eval_routes(
                 },
                 status_code=404,
             )
+        # The headers alone decide the answer, so a request that is refused
+        # is refused before any of its body is read.
+        held = await handler.held_reply(
+            {name.lower(): value for name, value in http.headers.items()}
+        )
+        if isinstance(held, Refuse):
+            return JSONResponse({"error": held.message}, status_code=held.status)
         # the body is the model call's request, which nothing here reads
         if not await discard_within(http, max_body_bytes):
             return JSONResponse(
                 {"error": f"A request is at most {max_body_bytes} bytes."},
                 status_code=413,
             )
-        held = await handler.held_reply(
-            {name.lower(): value for name, value in http.headers.items()}
-        )
-        if isinstance(held, Refuse):
-            return JSONResponse({"error": held.message}, status_code=held.status)
         return _held_reply_response(held)
 
     return [

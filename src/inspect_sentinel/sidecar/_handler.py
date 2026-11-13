@@ -85,7 +85,13 @@ from ._registration import (
     UnknownTaskError,
     UnregisteredSampleError,
 )
-from ._reply_stream import KEEPALIVE_SECONDS, PENDING_BYTES, ReplyStart, ReplyStream
+from ._reply_stream import (
+    ERROR_BODY_BYTES,
+    KEEPALIVE_SECONDS,
+    PENDING_BYTES,
+    ReplyStart,
+    ReplyStream,
+)
 from ._review import Question, Review, Reviews, escalated
 from ._sign import TIMESTAMP_WINDOW, call_values, request_values, unproven
 from ._state import (
@@ -197,9 +203,12 @@ _NOT_KEPT = frozenset(
         "connection",
         "content-encoding",
         "content-length",
+        # the sidecar's own server sends its own with every response
+        "date",
         "keep-alive",
         "proxy-authenticate",
         "proxy-authorization",
+        "server",
         "te",
         "trailer",
         "transfer-encoding",
@@ -922,6 +931,11 @@ class Handler:
         operation.held = held
         # it waits from now, for a request or for the rest of an error
         operation.heard = time.monotonic()
+        if reply is not None and len(reply.body) > ERROR_BODY_BYTES:
+            # An error handed over whole is kept as one that passed as it
+            # came is: without a body over the bound. Part of a body may not
+            # be read as the error it is, so none of it is kept.
+            reply = replace(reply, body=b"")
         failure = Failure(
             operation.sent,
             _held_reply(reply, held.format, Pass()) if reply is not None else None,
@@ -2533,7 +2547,7 @@ class Handler:
                     limit.deadline = math.inf
             judging.asking += 1
             try:
-                return await self._reviews.ask(question)
+                answer = await self._reviews.ask(question)
             finally:
                 self._asking.pop(question.id, None)
                 judging.asking -= 1
@@ -2543,6 +2557,14 @@ class Handler:
                         judging.left = None
                     if attempt.state == "awaiting_review":
                         attempt.state = "judging"
+            if attempt.stopped is not None:
+                # The call was closed as its answer was taken, as by a
+                # `cancel_request` that came in the same turn. A closed call
+                # decides nothing, so the judging stops here, with the
+                # answer unused, as it stops before asking.
+                judging.scope.cancel()
+                await anyio.lowlevel.checkpoint()
+            return answer
 
         return ask
 

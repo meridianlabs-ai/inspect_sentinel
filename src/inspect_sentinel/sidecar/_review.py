@@ -15,6 +15,7 @@ A question belongs to one model call. What became of it is kept in a `Review`, w
 from __future__ import annotations
 
 import logging
+import math
 import time
 import uuid
 from collections import OrderedDict
@@ -217,9 +218,11 @@ class Reviews:
             timeout: How long a question waits for an answer, in seconds, before it expires and its step is answered with caution. None, the default, is no expiry.
 
         Raises:
-            ValueError: If `timeout` isn't a positive number of seconds.
+            ValueError: If `timeout` isn't a positive, finite number of seconds.
         """
-        if timeout is not None and not timeout > 0:
+        # None is how no expiry is said: an infinite time can't be told to an
+        # eval, whose question says when it closes
+        if timeout is not None and not (timeout > 0 and math.isfinite(timeout)):
             raise ValueError(f"The review timeout is some seconds, not {timeout}.")
         self._timeout = timeout
         self._open: dict[str, Question] = {}

@@ -47,6 +47,7 @@ from inspect_sentinel.sidecar._json_rpc import (
 )
 from inspect_sentinel.sidecar._proxy_endpoint import PATH as PROXY_PATH
 from inspect_sentinel.sidecar._proxy_endpoint import proxy_app
+from inspect_sentinel.sidecar._reply_stream import ERROR_BODY_BYTES
 from inspect_sentinel.sidecar._review import UnknownQuestionError
 from inspect_sentinel.sidecar._state import MemoryState
 from inspect_sentinel.sidecar._wire import UnreadableError
@@ -358,6 +359,8 @@ async def test_a_held_reply_has_the_providers_headers_without_those_of_one_hop()
                 "content-type": JSON,
                 "content-length": "311",
                 "transfer-encoding": "chunked",
+                "date": "Thu, 01 Jan 2026 00:00:00 GMT",
+                "server": "the-providers",
                 "request-id": "req_011",
                 "anthropic-ratelimit-requests-remaining": "49",
             },
@@ -374,6 +377,9 @@ async def test_a_held_reply_has_the_providers_headers_without_those_of_one_hop()
     assert got.headers["anthropic-ratelimit-requests-remaining"] == "49"
     # the headers of one hop are the sidecar's own for this answer
     assert "transfer-encoding" not in got.headers
+    # as are those the sidecar's server sends with every response, so the
+    # provider's aren't sent beside them
+    assert "date" not in got.headers and "server" not in got.headers
     assert got.headers["content-length"] == str(len(got.content))
 
 
@@ -1093,6 +1099,31 @@ async def test_a_providers_error_sends_the_call_back_to_wait_for_a_request() -> 
 
 
 @pytest.mark.anyio
+async def test_a_providers_error_handed_over_whole_is_kept_without_a_body_over_the_bound() -> (
+    None
+):
+    handler = _at_results()
+    async with _serving(handler) as client:
+        question = await _asked_at_result(handler, client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-2", until="awaiting_request")
+        assert isinstance(await handler.request(_result_request("y2")), Pass)
+
+        # as a hook that holds whole replies hands it over, with `judge_reply`
+        large = b"x" * (ERROR_BODY_BYTES + 1)
+        assert isinstance(await handler.reply(_error(body=large)), Pass)
+
+        failed = await _result(client, "irid-2")
+
+    # the eval is told the error, with what says whether to try again, and
+    # none of a body that is over the bound
+    assert (failed["state"], failed["reason"]) == ("awaiting_request", "provider_error")
+    assert failed["failure"]["reply"]["status"] == 529
+    assert failed["failure"]["reply"]["headers"]["retry-after"] == "7"
+    assert failed["failure"]["reply"]["body"] == ""
+
+
+@pytest.mark.anyio
 async def test_a_failure_is_the_providers_whatever_error_the_eval_holds() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
@@ -1397,6 +1428,28 @@ async def test_a_call_cancelled_as_its_answer_is_taken_stays_cancelled() -> None
         assert isinstance(again, Refuse) and "has ended" in again.message
         result = await _result(client, "irid-2")
     assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
+
+
+@pytest.mark.anyio
+async def test_a_call_cancelled_as_a_person_ends_the_run_leaves_the_run_going() -> None:
+    # a sentinel that only asks, so nothing is awaited between the answer and
+    # the decision it comes to
+    handler = Handler(human(stages=["tool_call"]))
+    async with _serving(handler) as client:
+        question = await _asked(handler, client)
+
+        # The answer wakes the judging, and the call is cancelled before the
+        # judging next runs. An answer that ends the run has nothing left to
+        # wait for, so cancelling the judging's wait can't stop it.
+        handler.answer_question("eval_789", question["id"], "terminate", "Stop here.")
+        assert await handler.cancel_request("irid-1", "eval_789") is True
+        await anyio.wait_all_tasks_blocked()
+
+        # a closed call decides nothing: the run was not ended
+        result = await _result(client)
+        assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
+        later = await handler.request(_from_eval(id="y", irid="irid-2"))
+        assert isinstance(later, Pass)
 
 
 @pytest.mark.anyio
@@ -2897,6 +2950,23 @@ async def test_a_request_for_a_held_reply_larger_than_the_limit_is_not_read() ->
         answered = await _held_reply(client, body=b" " * (1024 * 1024 + 1))
 
     assert answered.status_code == 413
+
+
+@pytest.mark.anyio
+async def test_a_request_for_a_held_reply_is_refused_on_its_headers_before_its_body_is_read() -> (
+    None
+):
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        await _approved(handler, client, reply(message(weather("Oslo"))))
+
+        # larger than the endpoint reads, and signed with another token: it
+        # is refused for its header, and none of its body is read to say so
+        answered = await _held_reply(
+            client, body=b" " * (1024 * 1024 + 1), token="not-the-evals-token"
+        )
+
+    _refused(answered)
 
 
 @pytest.mark.anyio
