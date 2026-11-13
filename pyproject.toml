@@ -19,20 +19,10 @@ dependencies = [
     # The wire types a monitor reads (ChatMessage, ToolCall, ModelOutput) live
     # in inspect-ai today. design/inspect-core.md describes extracting them
     # into a leaf package; when that lands this dependency narrows to it.
-    #
-    # Development tracks inspect_ai's `main`, because sentinel and inspect_ai
-    # co-develop and most sentinel changes need hooks that have not shipped.
-    # That is done by [tool.uv.sources] below, not by this line: only uv reads
-    # it, and the published package requires this floor. Only the Release
-    # Please release PR ignores the sources, so a release is tested against
-    # PyPI, after release-pin-deps.yml raises this floor to the release it
-    # was tested against.
     "inspect-ai>=0.3.288",
     # step_as_str, and so Host.score, renders with Scout's messages_as_str and
     # message_numbering, until message rendering moves from Scout into
-    # inspect_ai (design/pr-series.md). Development tracks Scout's `main` the
-    # same way as inspect_ai's, and release-pin-deps.yml raises this floor
-    # on the Release Please release PR too.
+    # inspect_ai (design/pr-series.md).
     "inspect-scout>=0.6.2",
     # Host.score's templates are Jinja. Scout depends on it too, but it is
     # imported directly here, and a transitive dependency is not a promise.
@@ -142,22 +132,13 @@ required-version = ">=0.13.4"
 # Only resolve releases at least 7 days old (see CONTRIBUTING.md).
 exclude-newer = "7 days"
 
-# 6 hours only for direct dependencies that are a model provider SDK or an
-# Inspect package; see CONTRIBUTING.md.
+# No cooldown for Inspect packages, and 6 hours for direct dependencies that
+# are a model provider SDK; see CONTRIBUTING.md.
 [tool.uv.exclude-newer-package]
 anthropic = "6 hours"
-inspect-ai = "6 hours"
-inspect-scout = "6 hours"
+inspect-ai = false
+inspect-scout = false
 openai = "6 hours"
-
-# Development and CI track inspect_ai's and inspect_scout's main. uv.lock
-# records a commit of each, and CI moves both to main's latest before
-# installing (.github/actions/uv-sync). Only uv reads this; the published
-# package requires the floors above, and the release PR's CI installs the
-# newest releases instead.
-[tool.uv.sources]
-inspect-ai = { git = "https://github.com/UKGovernmentBEIS/inspect_ai", branch = "main" }
-inspect-scout = { git = "https://github.com/meridianlabs-ai/inspect_scout", branch = "main" }
 
 [tool.ruff]
 # generated code, from `make envoy-protos`
