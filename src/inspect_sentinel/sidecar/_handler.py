@@ -113,6 +113,7 @@ from ._wire import (
     UnreadableError,
     amend_request,
     amendments,
+    bound_body,
     call_texts,
     edit_reply,
     entry_digests,
@@ -920,6 +921,12 @@ class Handler:
                                 sample.eval_id,
                                 ex,
                             )
+                if judging.reattached is None:
+                    # Another try of the call may have asked a person while
+                    # this one was judged, and this one never asked: the
+                    # call is one operation all the same, and its own result
+                    # isn't given.
+                    judging.reattached = self._reattached(judging)
                 if judging.reattached is not None:
                     # another try of the call holds the operation, and this
                     # one adds nothing to what the eval reads of it
@@ -952,6 +959,21 @@ class Handler:
             raise judging.error
         assert judging.answer is not None
         return judging.answer
+
+    def _reattached(self, judging: _Judging) -> Refuse | None:
+        # What a try being judged is answered with where another try of its
+        # model call asked a person first and holds the call as one
+        # operation, as a try sent later is: the call's own answer, or a
+        # refusal of another request or of a call that has ended. None where
+        # no other try holds it.
+        first = self._operations.get((judging.sample.eval_id, judging.request_id))
+        if first is None or first.attempt is judging.attempt:
+            return None
+        if first.binding != judging.binding:
+            return _OTHER_REQUEST
+        if first.attempt.settled.is_set():
+            return _OVER
+        return PENDING
 
     async def eval_token(self, eval_id: str, presented: str) -> str | None:
         """The secret the sidecar keeps for an eval, which a registration that sends a secret must send.
@@ -2138,17 +2160,12 @@ class Handler:
             operation = self._operation_of(attempt)
             if operation is None:
                 key = (sample.eval_id, request_id)
-                first = self._operations.get(key)
-                if first is not None:
+                reattached = self._reattached(judging)
+                if reattached is not None:
                     # Another try of the call asked a person while this one
                     # was judged. The call is one operation, and that try
                     # holds it: this one stops here and reattaches.
-                    if first.binding != judging.binding:
-                        judging.reattached = _OTHER_REQUEST
-                    elif first.attempt.settled.is_set():
-                        judging.reattached = _OVER
-                    else:
-                        judging.reattached = PENDING
+                    judging.reattached = reattached
                     judging.scope.cancel()
                     await anyio.lowlevel.checkpoint()
                 # The call becomes one operation, bound to this request. It
@@ -2386,7 +2403,8 @@ def _binding(request: Request, sample: InspectSample) -> str:
     # not judged, so what an approval was given for must be what goes on. The
     # header's `timestamp` and `mac` are made afresh for each try, and are
     # checked on each, so they are left out, as is the proxy's id for the
-    # exchange.
+    # exchange, and so is a caching hint that changes with the time between
+    # tries ("bound_body").
     try:
         format = request_format(request.provider, request.body, request.format)
     except UnreadableError:
@@ -2406,7 +2424,9 @@ def _binding(request: Request, sample: InspectSample) -> str:
                 request.user,
                 headers,
                 asdict(sample),
-                hashlib.sha256(request.body).hexdigest(),
+                hashlib.sha256(
+                    bound_body(request.provider, request.body, request.format)
+                ).hexdigest(),
             ],
             sort_keys=True,
             default=str,

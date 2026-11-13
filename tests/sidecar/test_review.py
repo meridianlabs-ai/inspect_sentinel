@@ -565,6 +565,133 @@ async def test_a_try_that_was_already_being_judged_reattaches_when_it_would_ask(
     assert [review["id"] for review in result["reviews"]] == [question["id"]]
 
 
+@pytest.mark.anyio
+async def test_a_try_that_finished_without_asking_follows_the_call_another_try_paused() -> (
+    None
+):
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        # two tries of one request reach the provider before either is asked
+        # about, and the first one's reply asks a person
+        assert isinstance(await handler.request(_from_eval("x")), Pass)
+        assert isinstance(await handler.request(_from_eval("x2")), Pass)
+        assert await handler.reply(reply(message(weather("Oslo")))) is PENDING
+
+        # the second one's reply has no call to ask about
+        text = message({"type": "text", "text": "Sunny."}, stop_reason="end_turn")
+        second = await handler.reply(reply(text, id="x2"))
+
+        # It follows the paused call, as a try sent later would, and its own
+        # reply isn't given: the eval and request_result both see one call.
+        assert second is PENDING
+        assert (await _result(client))["state"] == "awaiting_review"
+        (question,) = await _pending(client)
+        await _answer(client, question["id"], "approve")
+        assert (await _result(client, until="decided"))["outcome"] == "proceed"
+        got = await _held_reply(client)
+    assert got.content == message(weather("Oslo"))
+
+
+def _cached(
+    id: str,
+    ttl: str | None = None,
+    city: str = "Oslo",
+    schema: str = "Where to look.",
+    result: str = "Rain.",
+) -> Request:
+    # Anthropic's cache_control at each place the Messages API reads it, with
+    # the TTL given; and a key of the same name in the request's own data: a
+    # tool's schema, a call's input and a tool's result
+    control: dict[str, Any] = {"type": "ephemeral"}
+    if ttl is not None:
+        control["ttl"] = ttl
+    call = weather(city)
+    call["input"] = {**call["input"], "cache_control": "the caller's own"}
+    body = {
+        "cache_control": control,
+        "system": [
+            {"type": "text", "text": "You are helpful.", "cache_control": control}
+        ],
+        "tools": [
+            {
+                "name": "weather",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "cache_control": {"type": "string", "description": schema}
+                    },
+                },
+                "cache_control": control,
+            }
+        ],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What's the weather?",
+                        "cache_control": control,
+                    }
+                ],
+            },
+            {"role": "assistant", "content": [call]},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": call["id"],
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps({"cache_control": result}),
+                                "cache_control": control,
+                            }
+                        ],
+                        "cache_control": control,
+                    }
+                ],
+            },
+        ],
+    }
+    return replace(_from_eval(id, "irid-2"), body=json.dumps(body).encode())
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "later,same",
+    [
+        ({"ttl": "1h"}, True),
+        ({"city": "Bergen"}, False),
+        ({"schema": "Where not to look."}, False),
+        ({"result": "Snow."}, False),
+    ],
+    ids=["cache ttl", "call input", "tool schema", "tool result"],
+)
+async def test_a_later_try_may_change_its_cache_ttl_and_nothing_the_model_reads(
+    later: dict[str, Any], same: bool
+) -> None:
+    handler = _at_results()
+    async with _serving(handler) as client:
+        # the request holding the tool's result is asked about, and approved
+        assert await handler.request(_cached("y")) is PENDING
+        (question,) = await _pending(client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-2", until="awaiting_request")
+
+        # sent again once the person answered, past five minutes
+        sent = await handler.request(_cached("y2", **later))
+
+        if same:
+            # the same request: it is sent on to the provider
+            assert isinstance(sent, Pass)
+        else:
+            # what the model reads changed, though under a key of that name
+            assert isinstance(sent, Refuse) and sent is not PENDING
+            assert "not the same request" in sent.message
+
+
 # --- a question at a tool's result: the provider has not been called ---
 
 

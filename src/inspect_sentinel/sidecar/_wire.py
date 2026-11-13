@@ -811,6 +811,39 @@ def check_internal_kept(
         )
 
 
+def bound_body(provider: str, body: bytes, format: Format | None = None) -> bytes:
+    """A request's body as a model call a person was asked about is bound to it: as written, but for what a client changes from one try of the call to the next without changing what the model is sent.
+
+    That is Anthropic's `cache_control`, at the places its Messages API reads it: the request's own, and each system block's, tool's, message content block's and tool result content block's. inspect_ai's Anthropic client moves a sample's prompt cache to the hour-long TTL once five minutes have passed since its last cached request, which a person's review often takes, so the call's later tries carry another `cache_control`. A key of that name anywhere else, as in a tool's schema, a call's input or a tool's result, is the request's own, and stays bound. A body in any other format, or one that can't be read, is bound as written.
+    """
+    try:
+        if request_format(provider, body, format) != "anthropic-messages":
+            return body
+        request = json_object(body, "request")
+    except UnreadableError:
+        return body
+    request.pop("cache_control", None)
+    for block in _blocks(request.get("system")):
+        block.pop("cache_control", None)
+    for tool in _blocks(request.get("tools")):
+        tool.pop("cache_control", None)
+    for message in _blocks(request.get("messages")):
+        for block in _blocks(message.get("content")):
+            block.pop("cache_control", None)
+            if block.get("type") == "tool_result":
+                for part in _blocks(block.get("content")):
+                    part.pop("cache_control", None)
+    return json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _blocks(value: object) -> list[dict[str, Any]]:
+    # the objects of a list in a request, where it is a list
+    if not isinstance(value, list):
+        return []
+    items = cast("list[object]", value)
+    return [cast("dict[str, Any]", item) for item in items if isinstance(item, dict)]
+
+
 def json_object(body: bytes, what: str) -> dict[str, Any]:
     try:
         parsed: object = json.loads(body)
