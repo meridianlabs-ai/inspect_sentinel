@@ -17,7 +17,7 @@ from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
 from inspect_sentinel._host import HumanAnswer
 from inspect_sentinel._report import Decision, Escalations
-from inspect_sentinel._step import BeforeToolCall
+from inspect_sentinel._step import BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import (
     Handler,
@@ -590,6 +590,89 @@ async def test_a_try_that_finished_without_asking_follows_the_call_another_try_p
         assert (await _result(client, until="decided"))["outcome"] == "proceed"
         got = await _held_reply(client)
     assert got.content == message(weather("Oslo"))
+
+
+@protocol
+def bills_each_request() -> Protocol:
+    # asks its role's model about every request, and decides nothing
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
+        await context.host.generate("Is this request suspicious?")
+        return None
+
+    return decide
+
+
+@pytest.mark.anyio
+# inspect_ai calls a model on trio only once it is set up to, as an eval does;
+# the sidecar serves on asyncio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_a_try_that_reattaches_keeps_its_billed_judging() -> None:
+    handler = Handler(
+        sequential([bills_each_request(), escalates(), human(stages=["tool_call"])]),
+        host=SidecarHost({"monitor": "mockllm/monitor"}),
+    )
+    async with _serving(handler) as client:
+        assert isinstance(await handler.request(_from_eval("x")), Pass)
+        (once,) = (await _result(client))["judging_usage"]
+        # a second try of the request is judged, and its judge model billed,
+        # before the first one's reply asks a person
+        assert isinstance(await handler.request(_from_eval("x2")), Pass)
+        assert await handler.reply(reply(message(weather("Oslo")))) is PENDING
+        text = message({"type": "text", "text": "Sunny."}, stop_reason="end_turn")
+        assert await handler.reply(reply(text, id="x2")) is PENDING
+
+        (both,) = (await _result(client))["judging_usage"]
+
+    # the second try reattached, and what its judging was billed still counts
+    assert once["usage"]["total_tokens"] > 0
+    assert both["usage"]["total_tokens"] == 2 * once["usage"]["total_tokens"]
+
+
+@pytest.mark.anyio
+async def test_a_try_overtaken_by_a_later_one_that_was_answered_asks_nobody() -> None:
+    reached, release = anyio.Event(), anyio.Event()
+
+    @protocol
+    def escalates_once_released() -> Protocol:
+        async def decide(
+            context: Context, step: BeforeToolCall, escalations: Escalations
+        ) -> Decision | None:
+            reached.set()
+            await release.wait()
+            return Decision.escalate("every weather lookup is checked by a person")
+
+        return decide
+
+    handler = Handler(
+        sequential([escalates_once_released(), human(stages=["tool_call"])])
+    )
+    async with _serving(handler) as client:
+        answers: list[Any] = []
+        decided: dict[str, Any] = {}
+
+        async def first() -> None:
+            answers.append(await handler.reply(reply(message(weather("Oslo")))))
+
+        assert isinstance(await handler.request(_from_eval("x")), Pass)
+        assert isinstance(await handler.request(_from_eval("x2")), Pass)
+        async with anyio.create_task_group() as group:
+            # the first try's reply is judged up to the point it would ask
+            group.start_soon(first)
+            await reached.wait()
+            # the second try's reply has no call to ask about, and is answered
+            text = message({"type": "text", "text": "Sunny."}, stop_reason="end_turn")
+            assert isinstance(await handler.reply(reply(text, id="x2")), Pass)
+            decided.update(await _result(client))
+            release.set()
+
+        # the first try asks nobody, and what the call came to stands
+        (answer,) = answers
+        assert isinstance(answer, Refuse) and "has ended" in answer.message
+        assert await _pending(client) == []
+        assert await _result(client) == decided
+    assert (decided["state"], decided["outcome"]) == ("decided", "proceed")
 
 
 def _cached(

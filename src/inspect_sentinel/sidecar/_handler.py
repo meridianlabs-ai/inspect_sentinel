@@ -928,11 +928,11 @@ class Handler:
                     # isn't given.
                     judging.reattached = self._reattached(judging)
                 if judging.reattached is not None:
-                    # another try of the call holds the operation, and this
-                    # one adds nothing to what the eval reads of it
-                    await self._state.forget_attempt(
-                        request_id, sample.eval_id, attempt
-                    )
+                    # another try of the call holds the operation, or came
+                    # to an end after this one began, and this one adds
+                    # nothing to what the eval reads of it but its billed
+                    # judging
+                    await self._forget_try(judging)
                     judging.answer = judging.reattached
                 elif judging.answer is None and judging.error is None:
                     # stopped, with nothing decided
@@ -959,6 +959,45 @@ class Handler:
             raise judging.error
         assert judging.answer is not None
         return judging.answer
+
+    async def _superseded(self, judging: _Judging) -> bool:
+        # Whether a try of the model call that began after this one was
+        # decided, so that its answer went to the client. An earlier try's
+        # decision doesn't count: this try may be the client's own retry of
+        # it, after its answer was lost.
+        tries = await self._state.attempts(judging.request_id, judging.sample.eval_id)
+        if not isinstance(tries, list):
+            return False
+        later = False
+        for tried in tries:
+            if tried is judging.attempt:
+                later = True
+            elif later and tried.state == "decided":
+                return True
+        return False
+
+    async def _forget_try(self, judging: _Judging) -> None:
+        # Drop a try that reattached from what `request_result` reads of the
+        # call. Its judge models were billed, so their usage stays, with the
+        # try the eval reads: the operation's, or the latest other one.
+        eval_id, request_id = judging.sample.eval_id, judging.request_id
+        operation = self._operations.get((eval_id, request_id))
+        into = operation.attempt if operation is not None else None
+        if into is None:
+            tries = await self._state.attempts(request_id, eval_id)
+            if isinstance(tries, list):
+                into = next(
+                    (
+                        tried
+                        for tried in reversed(tries)
+                        if tried is not judging.attempt
+                    ),
+                    None,
+                )
+        if into is not None and into is not judging.attempt:
+            for used, billed in judging.attempt.judging_usage.items():
+                add_usage(into.judging_usage, used, billed)
+        await self._state.forget_attempt(request_id, eval_id, judging.attempt)
 
     def _reattached(self, judging: _Judging) -> Refuse | None:
         # What a try being judged is answered with where another try of its
@@ -2158,7 +2197,15 @@ class Handler:
                 judging.scope.cancel()
                 await anyio.lowlevel.checkpoint()
             operation = self._operation_of(attempt)
+            if operation is None and await self._superseded(judging):
+                # A later try of the call came to an end, and its answer was
+                # given: this one asks nobody, and is answered as a call
+                # that has ended.
+                judging.reattached = _OVER
+                judging.scope.cancel()
+                await anyio.lowlevel.checkpoint()
             if operation is None:
+                # nothing is awaited from here until the operation is kept
                 key = (sample.eval_id, request_id)
                 reattached = self._reattached(judging)
                 if reattached is not None:
