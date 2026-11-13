@@ -100,8 +100,18 @@ class JudgeReplyParams(BaseModel):
     )
 
 
+_RELEASE = "How the sidecar will release this request's reply, if it is streamed: `whole` holds the reply until it is judged, and `early` sends the text and reasoning before the turn's first tool call as they arrive, with keepalives while nothing goes out. A proxy hook that hands a streamed reply over as it arrives can tell from it whether its caller is sent anything while the provider is silent. A hook that doesn't need it ignores it, and a sidecar that doesn't say holds replies whole."
+
+
+class PassRequestResult(BaseModel):
+    """Send the request on as it is."""
+
+    action: Literal["pass"] = "pass"
+    release: Literal["whole", "early"] = Field(default="whole", description=_RELEASE)
+
+
 class PassResult(BaseModel):
-    """Send the request or the reply on as it is."""
+    """Send the reply on as it is."""
 
     action: Literal["pass"] = "pass"
 
@@ -111,6 +121,7 @@ class ReplaceRequestResult(BaseModel):
 
     action: Literal["replace"] = "replace"
     body: dict[str, Any] = Field(description="The request's JSON body.")
+    release: Literal["whole", "early"] = Field(default="whole", description=_RELEASE)
 
 
 class ReplaceReplyResult(BaseModel):
@@ -156,7 +167,7 @@ _ERRORS: dict[int, tuple[str, str]] = {
 _METHODS: dict[str, tuple[type[BaseModel], tuple[type[BaseModel], ...]]] = {
     "judge_request": (
         JudgeRequestParams,
-        (PassResult, ReplaceRequestResult, RefuseResult),
+        (PassRequestResult, ReplaceRequestResult, RefuseResult),
     ),
     "judge_reply": (
         JudgeReplyParams,
@@ -180,7 +191,7 @@ def proxy_app(
 ) -> Starlette:
     """An ASGI app that answers proxies: the sidecar's endpoint for them.
 
-    Every call is a JSON-RPC 2.0 request POSTed to `/proxy/v1`. A proxy hook calls `judge_request` with each model request and `judge_reply` with the provider's reply, and each is answered with a result whose `action` is `pass`, `replace` or `refuse`. A proxy hook is a package of its own, and nothing of this package runs in the proxy.
+    Every call is a JSON-RPC 2.0 request POSTed to `/proxy/v1`. A proxy hook calls `judge_request` with each model request and `judge_reply` with the provider's reply, and each is answered with a result whose `action` is `pass`, `replace` or `refuse`. A request that goes on is also answered with `release`, how the sidecar will release its reply. A proxy hook is a package of its own, and nothing of this package runs in the proxy.
 
     A proxy hook that hands over a streamed reply as it arrives uses a reply stream instead of `judge_reply`: `begin_reply` with the reply's status and headers, `reply_chunk` with each part of its body in order, and `end_reply` once it has ended, or `abort_reply` if its caller goes. Meanwhile it calls `next_release` again and again, and sends the caller what each answer gives: bytes to send, a refusal with a status, which comes only while nothing has been sent, an error event to send once something has, or the reply's end. Every call can be sent again safely. The reply is held whole, or released as it arrives, as the handler's `release` says. A reply stream runs in the app's lifespan.
 
@@ -264,7 +275,10 @@ async def _judge(
     else:
         raise TypeError(f"No method takes {type(given).__name__}.")
     try:
-        return _result(await judging, reply=what == "reply")
+        answer = await judging
+        if what == "reply":
+            return _reply_result(answer)
+        return _request_result(answer, handler.release)
     except Exception as ex:
         raise _not_judged(ex, what, id) from None
 
@@ -323,14 +337,22 @@ def _reply(given: JudgeReplyParams) -> Reply:
     )
 
 
-def _result(answer: Answer, *, reply: bool) -> BaseModel:
+def _request_result(answer: Answer, release: Literal["whole", "early"]) -> BaseModel:
+    # A request that goes on is answered with how its reply will be released,
+    # which a proxy hook that hands the reply over as it arrives goes by.
+    if isinstance(answer, Refuse):
+        return RefuseResult(status=answer.status, message=answer.message)
+    if isinstance(answer, Pass):
+        return PassRequestResult(release=release)
+    return ReplaceRequestResult(body=json.loads(answer.body), release=release)
+
+
+def _reply_result(answer: Answer) -> BaseModel:
     if isinstance(answer, Refuse):
         return RefuseResult(status=answer.status, message=answer.message)
     if isinstance(answer, Pass):
         return PassResult()
-    if reply:
-        return ReplaceReplyResult(body=base64.b64encode(answer.body).decode("ascii"))
-    return ReplaceRequestResult(body=json.loads(answer.body))
+    return ReplaceReplyResult(body=base64.b64encode(answer.body).decode("ascii"))
 
 
 def schema() -> dict[str, Any]:

@@ -2,7 +2,7 @@ import base64
 import json
 import re
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 import anyio
 import httpx
@@ -58,6 +58,9 @@ _REQUEST: dict[str, Any] = {
     "body": {"messages": [{"role": "user", "content": "What is the weather?"}]},
 }
 
+# a request let through, by a sidecar that holds replies whole, as one does
+# unless it is set to release them early
+_PASSED_ON: dict[str, Any] = {"action": "pass", "release": "whole"}
 _REFUSED: dict[str, Any] = {
     "action": "refuse",
     "status": 400,
@@ -120,7 +123,7 @@ async def test_request_and_reply_are_judged(
         asked = await _call(client, "judge_request", _REQUEST)
         answered = await _call(client, "judge_reply", _reply(message(weather(city))))
 
-    assert asked == {"jsonrpc": "2.0", "id": 1, "result": {"action": "pass"}}
+    assert asked == {"jsonrpc": "2.0", "id": 1, "result": _PASSED_ON}
     assert answered["result"] == expected
     assert _fits(_SCHEMA["methods"]["judge_request"]["result"], asked["result"])
     assert _fits(_SCHEMA["methods"]["judge_reply"]["result"], answered["result"])
@@ -145,7 +148,7 @@ async def test_an_inspect_client_is_answered_as_any_client(city: str) -> None:
         )
         answered = await _call(client, "judge_reply", _reply(message(weather(city))))
 
-    assert asked["result"] == {"action": "pass"}
+    assert asked["result"] == _PASSED_ON
     result = answered["result"]
     assert _fits(_SCHEMA["methods"]["judge_reply"]["result"], result)
     if city == "Oslo":
@@ -187,7 +190,7 @@ async def test_body_is_read_in_the_format_the_proxy_names() -> None:
             client, "judge_reply", _reply(message(weather("Tokyo"))) | named
         )
 
-    assert asked["result"] == {"action": "pass"}
+    assert asked["result"] == _PASSED_ON
     assert answered["result"] == _REFUSED
     assert _fits(_SCHEMA["methods"]["judge_request"]["params"], _REQUEST | named)
 
@@ -244,7 +247,7 @@ async def test_run_that_a_sentinel_ended_is_refused_from_then_on() -> None:
         other = await _call(client, "judge_request", _REQUEST | {"id": "z"})
 
     assert [ended["result"], later["result"]] == [refused, refused]
-    assert other["result"] == {"action": "pass"}
+    assert other["result"] == _PASSED_ON
 
 
 @pytest.mark.anyio
@@ -488,3 +491,51 @@ async def test_a_providers_error_is_handed_over_whole() -> None:
         {"retry-after": "7"},
         error,
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("release", ["whole", "early"])
+async def test_a_request_that_goes_on_is_answered_with_how_its_reply_is_released(
+    release: Literal["whole", "early"],
+) -> None:
+    handler = Handler(weather_rule("reject", "Oslo"), release=release)
+    turn = message(weather("Oslo", "toolu_1"), weather("Tokyo", "toolu_2"))
+    # the next request of the conversation, which holds the turn as the
+    # client was handed it, with the rejected call taken out
+    edited = message(weather("Tokyo", "toolu_2"))
+    later = _REQUEST | {
+        "id": "y",
+        "body": {
+            **_REQUEST["body"],
+            "messages": [
+                *_REQUEST["body"]["messages"],
+                {"role": "assistant", "content": json.loads(edited)["content"]},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_2",
+                            "content": "Sunny.",
+                        }
+                    ],
+                },
+            ],
+        },
+    }
+
+    async with _client(handler) as client:
+        passed = await _call(client, "judge_request", _REQUEST)
+        reply = await _call(client, "judge_reply", _reply(turn))
+        replaced = await _call(client, "judge_request", later)
+
+    # a request sent on as it is, and one sent on replaced, both say it
+    assert passed["result"] == {"action": "pass", "release": release}
+    assert replaced["result"]["action"] == "replace"
+    assert replaced["result"]["release"] == release
+    for result in (passed["result"], replaced["result"]):
+        assert _fits(_SCHEMA["methods"]["judge_request"]["result"], result)
+    # a reply's answer says nothing of it: the reply is already here
+    assert "release" not in reply["result"]
+    # and a proxy hook that reads a result as it did before the field still can
+    assert _fits(_SCHEMA["methods"]["judge_request"]["result"], {"action": "pass"})

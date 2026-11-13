@@ -2215,7 +2215,7 @@ async def test_a_proxy_is_told_to_refuse_a_call_that_waits_for_a_person() -> Non
             )
 
         # a refusal in a status no provider SDK sends again by itself
-        assert passed == {"action": "pass"}
+        assert passed == {"action": "pass", "release": "whole"}
         assert refused["action"] == "refuse" and refused["status"] == 400
         assert "waiting for a person's review" in refused["message"]
         (question,) = await _pending(client)

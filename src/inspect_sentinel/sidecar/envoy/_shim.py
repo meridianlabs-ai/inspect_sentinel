@@ -168,8 +168,10 @@ class _Exchange:
         self._model = ""
         self._status = 0
         self._content_type = ""
-        # the reply's headers as the provider sent them, without pseudo-headers
-        # such as `:status`; nothing else is left out here
+        # The reply's headers as the provider sent them, without pseudo-headers
+        # such as `:status`. A header sent more than once has its values
+        # joined with a comma, which HTTP reads as the same header. Nothing
+        # else is left out here.
         self._reply_headers: dict[str, str] = {}
         # a copy of a provider's error as it passes, or None once it is too
         # large to keep
@@ -380,7 +382,9 @@ class _Exchange:
         self._status = int(received.get(":status", "0") or 0)
         self._content_type = received.get("content-type", "")
         self._reply_headers = {
-            name: value for name, value in received.items() if not name.startswith(":")
+            name: value
+            for name, value in _read_every_value(headers.headers).items()
+            if not name.startswith(":")
         }
         if not succeeded(self._status):
             return await self._provider_error(headers.end_of_stream)
@@ -607,13 +611,28 @@ def _streamed(body: bytes, *, end_of_stream: bool) -> pb.ProcessingResponse:
 
 
 def _read(headers: core.HeaderMap) -> dict[str, str]:
-    # Envoy sends a value as bytes in `raw_value`, or as text in `value`
+    # Envoy sends a value as bytes in `raw_value`, or as text in `value`. Of a
+    # header sent more than once, the last value is the one read.
     return {
         header.key.lower(): (
             header.raw_value.decode("latin-1") if header.raw_value else header.value
         )
         for header in headers.headers
     }
+
+
+def _read_every_value(headers: core.HeaderMap) -> dict[str, str]:
+    # Headers that are kept to be served again, so none of their values is
+    # dropped. Envoy sends a header that came more than once as an entry for
+    # each value. They are joined with a comma, in order, which HTTP gives the
+    # same meaning for every header but `set-cookie`, and the handler never
+    # keeps that one.
+    read: dict[str, str] = {}
+    for header in headers.headers:
+        name = header.key.lower()
+        value = header.raw_value.decode("latin-1") if header.raw_value else header.value
+        read[name] = f"{read[name]}, {value}" if name in read else value
+    return read
 
 
 def _header(name: str, value: str) -> core.HeaderValueOption:

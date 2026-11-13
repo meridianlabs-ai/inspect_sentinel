@@ -529,6 +529,80 @@ async def test_an_error_envoy_stops_waiting_for_while_it_is_shown_is_told_as_cut
     assert handler.told == ["shown the error", "not judged: cut_off"]
 
 
+@pytest.mark.anyio
+async def test_an_error_cut_off_after_it_was_shown_is_told_as_cut_off() -> None:
+    handler = _SlowToBeShownAnError(weather_rule())
+    handler.go_on.set()
+    await holding(handler)
+
+    # the error's body has begun to pass when Envoy's stream ends, as when the
+    # client goes away or the provider's connection is lost
+    await _process(
+        [
+            _from_inspect(),
+            pb.ProcessingRequest(
+                request_body=pb.HttpBody(body=_BODY, end_of_stream=True)
+            ),
+            pb.ProcessingRequest(
+                response_headers=_headers(
+                    {":status": "529", "content-type": "application/json"}
+                )
+            ),
+            pb.ProcessingRequest(
+                response_body=pb.HttpBody(body=b'{"type": "err', end_of_stream=False)
+            ),
+        ],
+        handler,
+    )
+
+    # the handler is told the error didn't all pass, and never handed a body
+    assert handler.told == ["shown the error", "not judged: cut_off"]
+    assert handler.error_bodies == []
+
+
+@pytest.mark.anyio
+async def test_a_reply_header_sent_more_than_once_keeps_every_value() -> None:
+    handler = NotingHandler(weather_rule())
+    await holding(handler)
+    sent = [
+        (":status", "529"),
+        ("content-type", "application/json"),
+        ("warning", '199 - "first"'),
+        ("retry-after", "7"),
+        ("warning", '199 - "second"'),
+    ]
+
+    await _process(
+        [
+            _from_inspect(),
+            pb.ProcessingRequest(
+                request_body=pb.HttpBody(body=_BODY, end_of_stream=True)
+            ),
+            pb.ProcessingRequest(
+                response_headers=pb.HttpHeaders(
+                    headers=core.HeaderMap(
+                        headers=[
+                            core.HeaderValue(key=name, raw_value=value.encode())
+                            for name, value in sent
+                        ]
+                    ),
+                    end_of_stream=True,
+                )
+            ),
+        ],
+        handler,
+    )
+
+    # Envoy hands over an entry for each value, and they are kept as one
+    # header whose values are joined in order, as HTTP reads them
+    (shown,) = handler.replies
+    assert shown.headers == {
+        "content-type": "application/json",
+        "warning": '199 - "first", 199 - "second"',
+        "retry-after": "7",
+    }
+
+
 class _ReplacesEveryReply:
     async def request(self, request: Request) -> Pass:
         return Pass()

@@ -2,7 +2,7 @@ import base64
 import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 import anyio
 import httpx
@@ -23,6 +23,7 @@ from inspect_sentinel.sidecar._json_rpc import (
 from inspect_sentinel.sidecar._proxy_endpoint import PATH, proxy_app
 from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
 from tests.sidecar._traffic import (
+    JSON,
     STREAM,
     NotingHandler,
     anthropic_recorded,
@@ -494,3 +495,67 @@ async def test_a_replys_headers_are_handed_over_as_it_begins() -> None:
     # by lowercase name, with the reply once it is judged
     (shown,) = handler.replies
     assert shown.headers == {"request-id": "req_011", "retry-after": "7"}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("release", ["whole", "early"])
+@pytest.mark.parametrize("content_type", [STREAM, JSON])
+async def test_a_reply_stream_begun_and_aborted_with_nothing_fed_is_recorded_as_cut_off(
+    release: Literal["whole", "early"], content_type: str
+) -> None:
+    # how a proxy hook says that no reply will come, as when its caller went
+    # away before the provider answered
+    handler = await holding(Handler(weather_rule(), release=release))
+    await handler.request(request(sample="sample_123"))
+
+    with anyio.fail_after(10):
+        async with _serving(handler) as client:
+            begun = await _call(
+                client,
+                "begin_reply",
+                **_begun(content_type=content_type),
+                keepalive=False,
+            )
+            assert begun["result"] == {"taken": True}
+            assert "result" in await _call(client, "abort_reply", id="x")
+            while (await _latest(handler))[0] != "not_judged":
+                await anyio.sleep(0.01)
+
+    assert await _latest(handler) == ("not_judged", "cut_off")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("release", ["whole", "early"])
+async def test_an_error_handed_over_whole_is_kept_as_the_error_though_its_reply_stream_is_then_aborted(
+    release: Literal["whole", "early"],
+) -> None:
+    # A proxy hook that began a reply stream before the provider's first
+    # chunk, so that keepalives could flow, and whose provider then failed:
+    # it hands the error over with `judge_reply`, and ends the stream after.
+    handler = NotingHandler(weather_rule(), release=release)
+    await holding(handler)
+    await handler.request(request(sample="sample_123"))
+    error = b'{"type":"error","error":{"type":"overloaded_error"}}'
+
+    with anyio.fail_after(10):
+        async with _serving(handler) as client:
+            await _call(client, "begin_reply", **_begun())
+            answered = await _call(
+                client,
+                "judge_reply",
+                **_begun(status=529, content_type=JSON),
+                headers={"retry-after": "7"},
+                body=_b64(error),
+            )
+            assert answered["result"] == {"action": "pass"}
+            assert "result" in await _call(client, "abort_reply", id="x")
+            # the aborted stream has nothing left to record as cut off
+            await anyio.wait_all_tasks_blocked()
+
+    (shown,) = handler.replies
+    assert (shown.status, shown.headers, shown.body) == (
+        529,
+        {"retry-after": "7"},
+        error,
+    )
+    assert await _latest(handler) == ("not_judged", "provider_error")

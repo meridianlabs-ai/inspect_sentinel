@@ -50,6 +50,11 @@ A request with an MCP tool that LiteLLM's own MCP gateway would run is refused t
 
 A streamed reply is handed to the sidecar as LiteLLM yields it, and the caller is sent what the sidecar releases. By default the sidecar holds the whole reply until it is judged, so a reply that is refused is refused before any of it has gone out. A sidecar started with `--release early` releases the text and reasoning before the turn's first tool call as they arrive, and the rest of the turn once it is judged; a reply refused after some of it has gone out ends with an error event that the provider's SDK raises on. `unreachable_fallback` decides what happens when the sidecar gives no usable answer, or doesn't judge the reply, only while none of the reply has gone out, keepalives aside; after that, the reply ends with an error event. While the turn is held, the sidecar sends a keepalive the caller's SDK skips, so that a quiet connection isn't closed. LiteLLM 1.83 can't pass one on for `/chat/completions` or `/responses`, so with that version only `/v1/messages` replies get them.
 
+The guardrail begins handing a streamed reply over once its first chunk has come, because LiteLLM has the provider's headers only then. A provider can be silent for a long time before that chunk, so where the sidecar releases replies early and the route can carry a keepalive, the guardrail waits 5 seconds for it. It then begins handing the reply over without it, and the sidecar's keepalives reach the caller while the provider is silent.
+
+- **How the guardrail knows:** the sidecar says how it will release a request's reply when it lets the request through, as `release` in its answer to `judge_request`: `whole` or `early`. A sidecar that doesn't say, as an earlier version, is taken to hold replies whole, and the guardrail then waits for the first chunk however long it takes.
+- **What a reply begun this way lacks:** the provider's headers, where LiteLLM doesn't have them yet. That is so for a provider LiteLLM calls only when the stream is first read.
+
 ## What it sends
 
 Each request and each reply that isn't streamed is one JSON-RPC 2.0 call to the sidecar, `judge_request` or `judge_reply`. A streamed reply is a reply stream: `begin_reply`, a `reply_chunk` call for what has arrived each time the last one is answered, and `end_reply`, while a `next_release` call waits beside them for what to send the caller. A call carries the route's format, the model's name in LiteLLM, the user's id, the request's or the reply's body, and some of the request's headers:
@@ -67,9 +72,17 @@ A request that the sidecar let through and that then came to an error is told to
 - The headers are the provider's, where it replied and LiteLLM kept them. They can say whether the call may be tried again, as `retry-after` does.
 - The body is what LiteLLM kept of the provider's error. On `/v1/messages` that is the provider's own body. On the other routes it is LiteLLM's account of the error as text, which holds the provider's.
 
-A streamed request counts as one that came to an error when its stream fails before its first chunk. For some providers, such as Gemini and Vertex, LiteLLM makes the call only when the stream is first read, so that is where their error comes. A stream that fails after its first chunk is told to the sidecar as a reply that was cut off.
+A streamed request counts as one that came to an error when its stream fails before its first chunk. For some providers, such as Gemini and Vertex, LiteLLM makes the call only when the stream is first read, so that is where their error comes. A stream that fails after its first chunk is told to the sidecar as a reply that was cut off. A stream that fails at its first read after the guardrail has begun handing the reply over, as above, is told as an error all the same. The caller gets the error's own status unless a keepalive has gone out, after which LiteLLM writes the error into the stream. On `/v1/messages` and `/chat/completions` it writes an error the provider's SDK raises on. On `/responses` it would write a `response.failed` event that the OpenAI SDK doesn't raise on, so there the guardrail ends the stream with a `response.failed` event of its own, as for a refusal, whose error code follows the provider's status.
 
-The caller is answered with LiteLLM's own error whatever the sidecar says. A caller that goes away before the provider replies is not told to the sidecar, as LiteLLM calls no guardrail then.
+The caller is answered with LiteLLM's own error whatever the sidecar says.
+
+A caller that goes away before a reply comes is not a provider's error, and is told to the sidecar as a reply that never came, which an Inspect eval treats as a connection that was lost. The guardrail says so wherever LiteLLM lets it know:
+
+- **A streamed call whose first chunk LiteLLM stops waiting for.** LiteLLM 1.105 cancels that wait when the caller disconnects.
+- **A call LiteLLM cancels under its `cancel_on_disconnect` setting.** LiteLLM reports it as an error of its own with status 499, which the sidecar is never handed as an error.
+- **A stream the caller leaves part way.** The guardrail stops handing it over, and the sidecar records it as cut off.
+
+Where LiteLLM goes on with the provider's call after its caller has gone, the reply is put to the sidecar as any reply is.
 
 The body is what LiteLLM is about to send, with one thing put right. LiteLLM writes a Claude model's thinking, asked for through `/responses`, as a `reasoning` item that OpenAI's own types reject. A client that sends that item back in a later request sends one the sidecar can't read, so the guardrail corrects the item in what it sends the sidecar. LiteLLM is still sent the item as the client sent it.
 
@@ -89,7 +102,7 @@ An Inspect eval knows only the base URL of the model API it calls, which here is
 
 LiteLLM checks the caller's key on these routes as it does on its model routes, and a key that may call LiteLLM's OpenAI routes may call these too. The sidecar is never sent the key.
 
-- **What the sidecar is sent:** the request's body, its `content-type`, and Inspect's own `x-irid` and `x-inspect-context` headers. No other header is passed on.
+- **What the sidecar is sent:** the request's body, its `content-type`, and Inspect's own `x-irid` and `x-inspect-context` headers. No other header of the caller's is passed on. The guardrail adds `accept-encoding: identity`, so that the sidecar's answer comes uncompressed.
 - **What the eval is sent back:** the sidecar's status, its headers and its body. The headers of one hop, such as `content-length` and `connection`, are LiteLLM's own. An event stream is passed on as it arrives.
 
 An eval also gets a held reply this way. When a sentinel asks a person about a tool call, the sidecar holds the provider's reply until the person decides. Once the turn may go on, Inspect sends the model call's request to `/sentinel/v1/held-reply`, under the call's `x-irid`. The sidecar answers with the provider's reply as it held it, so LiteLLM doesn't call the provider again.

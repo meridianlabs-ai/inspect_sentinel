@@ -367,8 +367,31 @@
       "title": "NextReleaseResult",
       "type": "object"
     },
+    "PassRequestResult": {
+      "description": "Send the request on as it is.",
+      "properties": {
+        "action": {
+          "const": "pass",
+          "default": "pass",
+          "title": "Action",
+          "type": "string"
+        },
+        "release": {
+          "default": "whole",
+          "description": "How the sidecar will release this request's reply, if it is streamed: `whole` holds the reply until it is judged, and `early` sends the text and reasoning before the turn's first tool call as they arrive, with keepalives while nothing goes out. A proxy hook that hands a streamed reply over as it arrives can tell from it whether its caller is sent anything while the provider is silent. A hook that doesn't need it ignores it, and a sidecar that doesn't say holds replies whole.",
+          "enum": [
+            "whole",
+            "early"
+          ],
+          "title": "Release",
+          "type": "string"
+        }
+      },
+      "title": "PassRequestResult",
+      "type": "object"
+    },
     "PassResult": {
-      "description": "Send the request or the reply on as it is.",
+      "description": "Send the reply on as it is.",
       "properties": {
         "action": {
           "const": "pass",
@@ -494,6 +517,16 @@
           "description": "The request's JSON body.",
           "title": "Body",
           "type": "object"
+        },
+        "release": {
+          "default": "whole",
+          "description": "How the sidecar will release this request's reply, if it is streamed: `whole` holds the reply until it is judged, and `early` sends the text and reasoning before the turn's first tool call as they arrive, with keepalives while nothing goes out. A proxy hook that hands a streamed reply over as it arrives can tell from it whether its caller is sent anything while the provider is silent. A hook that doesn't need it ignores it, and a sidecar that doesn't say holds replies whole.",
+          "enum": [
+            "whole",
+            "early"
+          ],
+          "title": "Release",
+          "type": "string"
         }
       },
       "required": [
@@ -569,7 +602,7 @@
       "result": {
         "oneOf": [
           {
-            "$ref": "#/$defs/PassResult"
+            "$ref": "#/$defs/PassRequestResult"
           },
           {
             "$ref": "#/$defs/ReplaceRequestResult"
