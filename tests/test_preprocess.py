@@ -854,6 +854,19 @@ async def test_omissions_reach_every_list_and_the_steps_own_messages(
 
 
 @pytest.mark.anyio
+async def test_omissions_reach_a_tool_step_s_assistant_message() -> None:
+    made = thinks("the call", "m1")
+    step = replace(tool_step(None, None), assistant_message=made)
+    thinned = await preprocess_step(step, StepPreprocessor(omit_reasoning=True))
+    assert thinned.assistant_message is not None
+    assert not any(
+        isinstance(part, ContentReasoning) for part in thinned.assistant_message.content
+    )
+    # the host's message is not changed
+    assert any(isinstance(part, ContentReasoning) for part in made.content)
+
+
+@pytest.mark.anyio
 async def test_preprocessing_leaves_the_hosts_objects_unchanged() -> None:
     step = thoughtful_reply()
     before = step.output.model_dump()
