@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.3.1...0.3.2) (2026-11-13)
+
+
+### Features
+
+* **sidecar:** tell an Inspect eval how long its sentinel judged each call and what its judge models cost ([#207](https://github.com/meridianlabs-ai/inspect_sentinel/issues/207)) ([8d92901](https://github.com/meridianlabs-ai/inspect_sentinel/commit/8d92901f0ed231cdcca81f0b4ef6bd90093e8020))
+* tool steps carry the assistant message that made the call ([#216](https://github.com/meridianlabs-ai/inspect_sentinel/issues/216)) ([d6d9bc4](https://github.com/meridianlabs-ai/inspect_sentinel/commit/d6d9bc4cb40bc01abaf004dd8aae72080e26fb82))
+
 ## [0.3.1](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.3.0...0.3.1) (2026-11-10)
 
 
