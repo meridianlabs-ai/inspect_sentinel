@@ -2793,7 +2793,7 @@
     },
     "-32011": {
       "name": "unknown_question",
-      "description": "The sidecar holds no such question for the eval: it was another eval's, or it closed when nobody answered in time, and the step was answered with caution."
+      "description": "The sidecar holds no such question for the eval. It was never asked, or it was another eval's. Or it closed unanswered: nobody answered in time, and the step was answered with caution, or its model call was closed first, as when the eval cancelled the call or ended the sample. Or it was answered, and the receipt of its answer is no longer kept, as once the eval has ended the sample."
     },
     "-32012": {
       "name": "question_answered",

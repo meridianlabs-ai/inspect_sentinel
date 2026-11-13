@@ -477,7 +477,7 @@ _ERRORS: dict[int, tuple[str, str]] = {
     ),
     UNKNOWN_QUESTION: (
         "unknown_question",
-        "The sidecar holds no such question for the eval: it was another eval's, or it closed when nobody answered in time, and the step was answered with caution.",
+        "The sidecar holds no such question for the eval. It was never asked, or it was another eval's. Or it closed unanswered: nobody answered in time, and the step was answered with caution, or its model call was closed first, as when the eval cancelled the call or ended the sample. Or it was answered, and the receipt of its answer is no longer kept, as once the eval has ended the sample.",
     ),
     QUESTION_ANSWERED: (
         "question_answered",

@@ -9,7 +9,7 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal
 
 import anyio
@@ -287,8 +287,6 @@ class _Operation:
     """How many tries of the call have come."""
     sent: int = 1
     """The number of the try whose request or reply the operation holds: the one that asked, then each one sent on."""
-    asked: dict[str, int] = field(default_factory=dict[str, int])
-    """The number of the try each question was asked at, by the question's id."""
     held: Held | None = None
     """The request, once its stage is finished, for as long as it waits to be sent on."""
     go: Pass | Replace | None = None
@@ -329,6 +327,8 @@ class _Judging:
     """What the exchange that began the judging is answered with, once the judging is over or has asked a person."""
     error: Exception | None = None
     """What the judging raised, which the exchange that began it raises in its place."""
+    held: Held | None = None
+    """For the judging of a reply, the request the reply answers. A model call a person was asked about goes back to waiting with it, should the judging be stopped because nobody waits for its exchange."""
 
 
 # the judging this task is part of, where it is an eval's
@@ -561,11 +561,31 @@ class Handler:
                     request.id,
                 )
             except Exception as ex:
-                if attempt is not None:
-                    attempt.not_judged(_not_judged(ex))
+                if attempt is None:
+                    raise
+                if attempt.settled.is_set():
+                    # closed while it was judged, as below: it stays as its
+                    # closing left it, whatever the judging raised
+                    logger.warning(
+                        "Judging the request %r failed after its model call was closed: %s",
+                        request.id,
+                        ex,
+                    )
+                    return _stopped_answer(attempt)
+                attempt.not_judged(_not_judged(ex))
                 raise
             if attempt is None or signed is None:
                 return answer
+            if attempt.settled.is_set():
+                # The model call was closed while its request was judged, as
+                # when the eval cancelled it. Closing it stops the judging
+                # only where the judging next waits, so judging with nothing
+                # left to wait for runs to its end. A closed call stays
+                # closed: what the judging came to is dropped, the request
+                # is not kept to be sent on, and the call reads as its
+                # closing left it.
+                await self._state.release(request.id)
+                return _stopped_answer(attempt)
             if answer is _ANOTHER_EVALS:
                 # as when the check above refuses it: nothing of the request
                 # is kept, so `request_result` reads it as unknown
@@ -628,11 +648,29 @@ class Handler:
                     self._reply(reply, held, released), "reply", reply.id
                 )
             except Exception as ex:
-                if attempt is not None:
-                    attempt.not_judged(_not_judged(ex))
+                if attempt is None:
+                    raise
+                if attempt.settled.is_set():
+                    # closed while it was judged, as below: it stays as its
+                    # closing left it, whatever the judging raised
+                    logger.warning(
+                        "Judging the reply %r failed after its model call was closed: %s",
+                        reply.id,
+                        ex,
+                    )
+                    return _CLOSED
+                attempt.not_judged(_not_judged(ex))
                 raise
             if attempt is None or held is None:
                 return answer
+            if attempt.settled.is_set():
+                # The model call was closed while its reply was judged, as
+                # when the eval cancelled it. Closing it stops the judging
+                # only where the judging next waits, so judging with nothing
+                # left to wait for runs to its end. A closed call stays
+                # closed: the reply is not kept and not passed on, and the
+                # call reads as its closing left it.
+                return _CLOSED
             waited = self._operation_of(attempt)
             if not succeeded(reply.status):
                 if waited is None:
@@ -657,7 +695,9 @@ class Handler:
         request_id = held.proxy.headers.get(REQUEST_ID) if held is not None else None
         if attempt is None or held is None or sample is None or request_id is None:
             return await judge()
-        return await self._exchange(judge, attempt, sample, request_id, held.binding)
+        return await self._exchange(
+            judge, attempt, sample, request_id, held.binding, held
+        )
 
     def reply_stream(
         self,
@@ -867,7 +907,9 @@ class Handler:
                 del self._failing[exchange]
         if self._group is not None:
             self._group.start_soon(self._state.unpin, operation.pinned)
-        # what ended long ago goes, for an eval that never ends its samples
+        # What ended long ago goes, for an eval that never ends its samples.
+        # It is looked for only here, when a call ends, so a call that ended
+        # long ago is kept until another one ends.
         for key, kept in list(self._operations.items()):
             if kept.ended is not None and now - kept.ended >= _OPERATION_KEPT:
                 self._forget(key)
@@ -884,14 +926,22 @@ class Handler:
         sample: InspectSample,
         request_id: str,
         binding: str,
+        held: Held | None = None,
     ) -> Answer:
         # Judge an eval's request or reply, and answer the exchange it came
         # in. Where a person may be asked through the eval, the judging runs
         # in a task of the handler's own, so that it can outlive the exchange:
         # at the first question the exchange is answered "pending review", and
-        # the judging goes on when the answer comes.
+        # the judging goes on when the answer comes. `held` is the request a
+        # reply answers.
         judging = _Judging(
-            attempt, sample, request_id, binding, anyio.CancelScope(), anyio.Event()
+            attempt,
+            sample,
+            request_id,
+            binding,
+            anyio.CancelScope(),
+            anyio.Event(),
+            held=held,
         )
         group = self._group
         if group is None or not self._asks_eval:
@@ -934,9 +984,24 @@ class Handler:
                     # judging
                     await self._forget_try(judging)
                     judging.answer = judging.reattached
+                    if judging.error is not None:
+                        # The try's own result isn't given, and what its
+                        # judging raised is part of that result: the
+                        # exchange is answered as the call is, so the error
+                        # is said here and nowhere else.
+                        logger.warning(
+                            "Judging a try of the model call %s of the eval %s failed, and the try follows the call another try holds: %s",
+                            request_id,
+                            sample.eval_id,
+                            judging.error,
+                        )
+                        judging.error = None
                 elif judging.answer is None and judging.error is None:
                     # stopped, with nothing decided
-                    _settle_stopped(attempt)
+                    if attempt.stopped is None:
+                        self._abandoned(judging)
+                    else:
+                        _settle_stopped(attempt)
                     judging.answer = _stopped_answer(attempt)
                 self._finish(attempt)
             finally:
@@ -948,8 +1013,9 @@ class Handler:
         try:
             await judging.turned.wait()
         except anyio.get_cancelled_exc_class():
-            # the proxy went away before anyone was asked, so nobody waits
-            # for this judging
+            # The exchange's caller went away before anyone was asked, so
+            # nobody waits for this judging. It is stopped, and its task
+            # then says that nothing came of the try (`_abandoned`).
             if not judging.detached:
                 judging.scope.cancel()
             raise
@@ -959,6 +1025,26 @@ class Handler:
             raise judging.error
         assert judging.answer is not None
         return judging.answer
+
+    def _abandoned(self, judging: _Judging) -> None:
+        # The judging was stopped because its exchange's caller went away
+        # before anyone was asked, and nothing was decided. Nothing came of
+        # the try, so it reads as cut off, and not as still being judged.
+        #
+        # For a model call a person was asked about, this is the reply of
+        # the try that was sent on, and it is lost with the caller. The call
+        # goes back to waiting for a request, as when the proxy says a reply
+        # was cut off, so that one more try may be sent on. Left at
+        # `judging`, it would answer every later try "pending review" for
+        # good.
+        attempt = judging.attempt
+        if attempt.settled.is_set():
+            return
+        operation = self._operation_of(attempt)
+        if operation is not None and judging.held is not None:
+            self._failed(operation, judging.held, "cut_off", None)
+        else:
+            attempt.not_judged("cut_off")
 
     async def _superseded(self, judging: _Judging) -> bool:
         # Whether a try of the model call that began after this one was
@@ -979,7 +1065,11 @@ class Handler:
     async def _forget_try(self, judging: _Judging) -> None:
         # Drop a try that reattached from what `request_result` reads of the
         # call. Its judge models were billed, so their usage stays, with the
-        # try the eval reads: the operation's, or the latest other one.
+        # try the eval reads: the operation's, or the latest other one. The
+        # client waited on the try while it was judged, so for a call a
+        # person was asked about, whose judging time is added up over its
+        # tries, that time stays too. A call nobody was asked about counts
+        # its latest try's time alone.
         eval_id, request_id = judging.sample.eval_id, judging.request_id
         operation = self._operations.get((eval_id, request_id))
         into = operation.attempt if operation is not None else None
@@ -997,6 +1087,8 @@ class Handler:
         if into is not None and into is not judging.attempt:
             for used, billed in judging.attempt.judging_usage.items():
                 add_usage(into.judging_usage, used, billed)
+            if operation is not None:
+                into.judging_time += judging.attempt.judging_time
         await self._state.forget_attempt(request_id, eval_id, judging.attempt)
 
     def _reattached(self, judging: _Judging) -> Refuse | None:
@@ -1189,9 +1281,8 @@ class Handler:
             # every attempt's judging was billed, a retried one's too
             for used, billed in attempt.judging_usage.items():
                 add_usage(usage, used, billed)
-        asked = operation.asked if operation is not None else {}
         reviews = [
-            (asked.get(review.id, number), review)
+            (attempt.review_tries.get(review.id, number), review)
             for number, attempt in enumerate(attempts, 1)
             for review in attempt.reviews
         ]
@@ -2279,7 +2370,10 @@ class Handler:
             )
             # kept with the try whether or not the step comes to a decision
             attempt.reviews.append(question.review)
-            operation.asked[question.id] = operation.sent
+            # Kept with the try, and not with the operation, which is
+            # forgotten when its sample ends: the record of a question says
+            # which try asked for as long as the record is kept.
+            attempt.review_tries[question.id] = operation.sent
             self._asking[question.id] = operation
             attempt.state = "awaiting_review"
             if not judging.detached:

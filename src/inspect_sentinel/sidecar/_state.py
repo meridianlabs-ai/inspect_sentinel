@@ -114,9 +114,13 @@ class Attempt:
     reviews: list[Review] = field(default_factory=list[Review])
     """What became of each question a sentinel asked a person during the attempt, in order."""
 
+    review_tries: dict[str, int] = field(default_factory=dict[str, int])
+    """The number of the try each of `reviews` was asked at, from 1, by the question's id. A try sent again for a model call a person was asked about adds no attempt, so the attempt's place among the request's attempts doesn't give it."""
+
     def decide(self, outcome: Outcome, message: str | None = None) -> None:
-        """Mark the attempt decided."""
+        """Mark the attempt decided. A decided attempt has no `reason`: one left from an earlier state, as from a provider's failure the attempt waited after, goes."""
         self.state, self.outcome, self.message = "decided", outcome, message
+        self.reason = None
         self.settled.set()
 
     def not_judged(self, reason: NotJudged) -> None:

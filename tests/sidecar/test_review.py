@@ -630,6 +630,67 @@ async def test_a_try_that_reattaches_keeps_its_billed_judging() -> None:
     assert both["usage"]["total_tokens"] == 2 * once["usage"]["total_tokens"]
 
 
+@protocol
+def takes_a_while_at_each_request() -> Protocol:
+    # slow at every request, and decides nothing
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
+        await anyio.sleep(0.05)
+        return None
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_try_that_reattaches_keeps_its_judging_time() -> None:
+    handler = Handler(
+        sequential(
+            [takes_a_while_at_each_request(), escalates(), human(stages=["tool_call"])]
+        )
+    )
+    async with _serving(handler) as client:
+        # two tries of one request are judged, each for a while, before the
+        # first one's reply asks a person
+        assert isinstance(await handler.request(_from_eval("x")), Pass)
+        assert isinstance(await handler.request(_from_eval("x2")), Pass)
+        assert await handler.reply(reply(message(weather("Oslo")))) is PENDING
+        first = (await _result(client))["judging_time"]
+        text = message({"type": "text", "text": "Sunny."}, stop_reason="end_turn")
+        assert await handler.reply(reply(text, id="x2")) is PENDING
+
+        both = (await _result(client))["judging_time"]
+
+    # the client waited on the second try too, so its judging still counts
+    # once it has reattached; the margin allows for a coarse clock
+    assert first >= 0.04
+    assert both >= first + 0.04
+
+
+@pytest.mark.anyio
+async def test_a_try_whose_judging_fails_still_follows_the_call_another_try_paused() -> (
+    None
+):
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        # two tries of one request reach the provider, and the first one's
+        # reply asks a person
+        assert isinstance(await handler.request(_from_eval("x")), Pass)
+        assert isinstance(await handler.request(_from_eval("x2")), Pass)
+        assert await handler.reply(reply(message(weather("Oslo")))) is PENDING
+
+        # the second one's reply can't be read, so judging it fails
+        second = await handler.reply(reply(b"not a reply", id="x2"))
+
+        # its own result isn't given, and the error is part of that: it is
+        # answered as the paused call is
+        assert second is PENDING
+        assert (await _result(client))["state"] == "awaiting_review"
+        (question,) = await _pending(client)
+        await _answer(client, question["id"], "approve")
+        assert (await _result(client, until="decided"))["outcome"] == "proceed"
+
+
 @pytest.mark.anyio
 async def test_a_try_overtaken_by_a_later_one_that_was_answered_asks_nobody() -> None:
     reached, release = anyio.Event(), anyio.Event()
@@ -1204,6 +1265,68 @@ async def test_a_reply_that_comes_after_its_call_was_cancelled_doesnt_revive_it(
 
 
 @pytest.mark.anyio
+async def test_a_call_cancelled_as_its_answer_is_taken_stays_cancelled() -> None:
+    handler = _at_results()
+    async with _serving(handler) as client:
+        question = await _asked_at_result(handler, client)
+
+        # The answer wakes the judging, and the call is cancelled before the
+        # judging next runs: nothing is awaited between the two. The judging
+        # then has nothing left to wait for, so cancelling it can't stop it,
+        # and it runs to the end of the request stage.
+        handler.answer_question("eval_789", question["id"], "approve", None)
+        assert await handler.cancel_request("irid-2", "eval_789") is True
+        await anyio.wait_all_tasks_blocked()
+
+        # the call stays as cancelling it left it, and no try is sent on
+        result = await _result(client, "irid-2")
+        assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
+        again = await handler.request(_result_request("y2"))
+        assert isinstance(again, Refuse) and "has ended" in again.message
+        result = await _result(client, "irid-2")
+    assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
+
+
+@pytest.mark.anyio
+# Two tasks started together first run in the order they were started on
+# asyncio, which the sidecar serves on, and in no fixed order on trio.
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_a_call_cancelled_as_its_reply_arrives_doesnt_pass_the_reply_on() -> None:
+    handler = _at_results()
+    async with _serving(handler) as client:
+        question = await _asked_at_result(handler, client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-2", until="awaiting_request")
+        assert isinstance(await handler.request(_result_request("y2")), Pass)
+        answers: dict[str, Any] = {}
+
+        async def the_reply() -> None:
+            answers["reply"] = await handler.reply(
+                reply(message(weather("Bergen", "toolu_2")), id="y2")
+            )
+
+        async def the_cancel() -> None:
+            answers["cancelled"] = await handler.cancel_request("irid-2", "eval_789")
+
+        # The reply's judging is started as a task, and the eval's cancel
+        # runs before that task first does. This handler judges nothing in a
+        # reply, so the judging has nothing to wait for, and cancelling it
+        # can't stop it.
+        async with anyio.create_task_group() as group:
+            group.start_soon(the_reply)
+            group.start_soon(the_cancel)
+
+        # the judging ran to its end, and the call stays closed all the
+        # same: its reply is not kept and not passed on
+        assert answers["cancelled"] is True
+        late = answers["reply"]
+        assert isinstance(late, Refuse) and "was closed" in late.message
+        result = await _result(client, "irid-2")
+        assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
+        _refused(await _held_reply(client, "irid-2"))
+
+
+@pytest.mark.anyio
 async def test_cancelling_closes_only_a_call_a_person_was_asked_about() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
@@ -1246,6 +1369,65 @@ async def test_ending_the_sample_closes_its_calls_and_their_questions() -> None:
         assert (result["state"], result["outcome"]) == ("decided", "terminate")
         (review,) = result["reviews"]
         assert (review["resolution"], review["cause"]) == ("cancelled", "sample_ended")
+
+
+@pytest.mark.anyio
+async def test_a_failed_call_closed_with_its_sample_reads_as_decided_with_no_reason() -> (
+    None
+):
+    handler = _at_results()
+    async with _serving(handler) as client:
+        await _failed_at_the_provider(handler, client, _error())
+        failed = await _result(client, "irid-2")
+        assert (failed["state"], failed["reason"]) == (
+            "awaiting_request",
+            "provider_error",
+        )
+
+        await _call(
+            client,
+            "end_sample",
+            eval_call("end_sample") | {"sample_uuid": "sample_123"},
+        )
+
+        result = await _result(client, "irid-2")
+    # the reason was why the call waited, and it waits no more
+    assert (result["state"], result["outcome"]) == ("decided", "terminate")
+    assert "reason" not in result
+    assert "failure" not in result
+
+
+@pytest.mark.anyio
+async def test_a_question_keeps_the_try_it_was_asked_at_once_its_sample_has_ended() -> (
+    None
+):
+    handler = Handler(human(stages=["tool_result", "tool_call"]))
+    async with _serving(handler) as client:
+        question = await _asked_at_result(handler, client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-2", until="awaiting_request")
+        # the second try is sent on, and a person is asked about its reply
+        assert isinstance(await handler.request(_result_request("y2")), Pass)
+        held = reply(message(weather("Bergen", "toolu_2")), id="y2")
+        assert await handler.reply(held) is PENDING
+        (second,) = await _pending(client)
+        await _answer(client, second["id"], "approve")
+        before = await _result(client, "irid-2", until="decided")
+
+        await _call(
+            client,
+            "end_sample",
+            eval_call("end_sample") | {"sample_uuid": "sample_123"},
+        )
+
+        after = await _result(client, "irid-2")
+    asked_at = [(review["stage"], review["try_number"]) for review in before["reviews"]]
+    assert asked_at == [("tool_result", 1), ("tool_call", 2)]
+    # the sidecar no longer holds the call as one operation, and its record
+    # still says which try asked
+    assert [
+        (review["stage"], review["try_number"]) for review in after["reviews"]
+    ] == asked_at
 
 
 @pytest.mark.anyio
@@ -1416,7 +1598,6 @@ async def test_the_time_a_question_is_open_isnt_counted_against_the_time_limit()
     assert result["outcome"] == "proceed"
 
 
-@pytest.mark.anyio
 def _state_clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     # the state's own clock, which the test moves on: the event loop keeps
     # the real one
@@ -1797,6 +1978,68 @@ async def test_judging_whose_proxy_goes_away_before_anyone_is_asked_asks_nobody(
 
         # nobody waits for the judging, so it didn't go on to ask a person
         assert await _pending(client) == []
+
+
+@pytest.mark.anyio
+async def test_a_try_whose_proxy_goes_away_while_it_is_judged_reads_as_cut_off() -> (
+    None
+):
+    reached, go = anyio.Event(), anyio.Event()
+    handler = Handler(
+        sequential([waits_at("toolu_1", reached, go), human(stages=["tool_call"])])
+    )
+    async with _serving(handler) as client:
+        assert isinstance(await handler.request(_from_eval()), Pass)
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(handler.reply, reply(message(weather("Oslo"))))
+            await reached.wait()
+            # the proxy's own caller goes away, and its call with it
+            group.cancel_scope.cancel()
+        await anyio.wait_all_tasks_blocked()
+
+        # the judging was stopped, and the try doesn't read as still judged
+        result = await _result(client)
+    assert (result["state"], result.get("reason")) == ("not_judged", "cut_off")
+
+
+@pytest.mark.anyio
+async def test_a_try_sent_on_whose_proxy_goes_away_lets_one_more_try_through() -> None:
+    reached, go = anyio.Event(), anyio.Event()
+    handler = Handler(
+        sequential(
+            [
+                waits_at("toolu_2", reached, go),
+                human(stages=["tool_call", "tool_result"]),
+            ]
+        )
+    )
+    async with _serving(handler) as client:
+        question = await _asked_at_result(handler, client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-2", until="awaiting_request")
+        # the second try is sent on, and its reply is being judged
+        assert isinstance(await handler.request(_result_request("y2")), Pass)
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(
+                handler.reply, reply(message(weather("Bergen", "toolu_2")), id="y2")
+            )
+            await reached.wait()
+            # the proxy's own caller goes away before anyone is asked
+            group.cancel_scope.cancel()
+        await anyio.wait_all_tasks_blocked()
+
+        # The reply is lost with the caller, as one cut off is. The call is
+        # not left being judged, where every later try would be answered
+        # "pending review" for good: one more try may be sent on.
+        failed = await _result(client, "irid-2")
+        assert (failed["state"], failed.get("reason")) == (
+            "awaiting_request",
+            "cut_off",
+        )
+        assert failed["failure"] == {"try_number": 2}
+        assert isinstance(await handler.request(_result_request("y3")), Pass)
 
 
 @pytest.mark.anyio
