@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import anthropic
+import anyio
 import httpx
 import jsonschema
 import openai
@@ -2944,6 +2945,57 @@ def test_nothing_is_left_running_when_the_caller_goes_mid_poll(
         left = asyncio.run(run(url))
 
     assert left == []
+
+
+def test_a_caller_that_leaves_through_a_cancel_scope_is_told_to_the_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Any] = []
+
+    async def provider() -> AsyncIterator[Any]:
+        yield _MESSAGES.stream()[0]
+        # then silent, as a model that is thinking
+        await asyncio.Event().wait()
+
+    async def run(url: str) -> list[str]:
+        guardrail = _make(monkeypatch, url)
+        data = _data(_MESSAGES)
+        sent: list[Any] = []
+
+        async def read() -> None:
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                _USER, provider(), data
+            ):
+                sent.append(chunk)
+
+        try:
+            await guardrail.async_pre_call_hook(_USER, None, data, _MESSAGES.call_type)
+            # Starlette's `StreamingResponse` sends a stream from a task of a
+            # task group, and cancels the group's scope when the caller goes.
+            # A cancelled scope cancels every later wait of that task as well
+            # as the one it was in, which one `Task.cancel()` does not.
+            async with anyio.create_task_group() as serving:
+                serving.start_soon(read)
+                # a guardrail that sent nothing would leave the test waiting
+                deadline = time.monotonic() + 10
+                while not (sent and "reply_chunk" in _methods(calls)):
+                    assert time.monotonic() < deadline
+                    await asyncio.sleep(0.01)
+                # the caller goes part way through the reply
+                serving.cancel_scope.cancel()
+            # A guardrail that never said would leave the sidecar to find out
+            # by its own sweep, so the wait for it to say is a short one.
+            deadline = time.monotonic() + 5
+            while "abort_reply" not in _methods(calls) and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            return _methods(calls)
+        finally:
+            await guardrail.aclose()
+
+    with _serving(_releasing(calls, "early", keepalive=True)) as url:
+        told = asyncio.run(run(url))
+
+    assert told == ["judge_request", "begin_reply", "reply_chunk", "abort_reply"]
 
 
 def test_a_reply_let_through_is_read_no_faster_than_the_caller_takes_it(

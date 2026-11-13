@@ -30,7 +30,13 @@ import logging
 import re
 import sys
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Mapping
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Coroutine,
+    Iterable,
+    Mapping,
+)
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
@@ -505,12 +511,12 @@ class LiteLLMGuardrail(CustomGuardrail):
                 async for chunk in relay.released():
                     yield chunk
             finally:
-                await relay.close()
+                await _shielded(relay.close())
         finally:
             if not first.done():
                 # nothing read the first chunk, so nothing else ends the read
                 first.cancel()
-                await asyncio.wait({first})
+                await _shielded(asyncio.wait({first}))
 
     async def async_post_call_failure_hook(
         self,
@@ -808,6 +814,41 @@ def _retrieved(first: asyncio.Future[Any]) -> None:
         first.exception()
 
 
+_CLEAN_UP_WAIT = 10.0
+"""How long the clean-up at a stream's end may take, in seconds.
+
+The clean-up waits on the sidecar, to tell it that the guardrail is done with the stream, and it goes on once the caller has gone. The guardrail's own `timeout` is unset by default, so without a bound of its own the clean-up could wait for good on a sidecar that never answers. It is given as long as a call that says no reply will come is. A sidecar that isn't told in that time lets go of the request once no call names it.
+"""
+
+_cleaning_up: set[asyncio.Future[None]] = set()
+"""The clean-ups under way. asyncio keeps only a weak reference to a task, so one that nothing waits for any more is kept here until it is done."""
+
+
+async def _shielded(clean_up: Coroutine[Any, Any, Any]) -> None:
+    # Run a stream's clean-up where the cancellation of the stream can't cut
+    # it short. Starlette sends LiteLLM's streamed response, and stops it for
+    # a caller that has gone by cancelling a cancel scope. That cancels every
+    # later wait of the response's task as well as the one it was in, so a
+    # clean-up awaited in that task would end at its first wait, and the
+    # sidecar would never be told. The clean-up is run in a task of its own
+    # instead, which the scope doesn't reach, for no longer than
+    # `_CLEAN_UP_WAIT` seconds.
+    async def bounded() -> None:
+        try:
+            await asyncio.wait_for(clean_up, _CLEAN_UP_WAIT)
+        except asyncio.TimeoutError:
+            # the sidecar lets go of it once no call names it
+            pass
+
+    task = asyncio.ensure_future(bounded())
+    _cleaning_up.add(task)
+    task.add_done_callback(_cleaning_up.discard)
+
+    # Whoever asked waits for the clean-up. Where that wait is cancelled, the
+    # clean-up goes on without it.
+    await asyncio.shield(task)
+
+
 async def _starting_with(
     first: asyncio.Future[Any], chunks: AsyncIterator[Any]
 ) -> AsyncIterator[Any]:
@@ -1068,7 +1109,7 @@ class _Relay:
             for racing in (polling, failing):
                 if not racing.done():
                     racing.cancel()
-            await asyncio.wait({polling, failing})
+            await _shielded(asyncio.wait({polling, failing}))
             self._stop_timer()
         if polling not in done:
             if self._raised is not None:
