@@ -1442,8 +1442,11 @@ def _error_headers(ex: BaseException) -> dict[str, str]:
 def _error_body(ex: BaseException) -> bytes:
     # What LiteLLM kept of a provider's error: the provider's own bytes where
     # the error holds the response it came in, its body as read where it holds
-    # that, and otherwise its message, which on the Messages route is the
-    # provider's body as text and elsewhere is LiteLLM's account of it.
+    # that, and otherwise its message. The message is LiteLLM's account of
+    # the error, which holds the provider's, on the Messages route as on the
+    # others: LiteLLM 1.105 gives its own account there too for a model it
+    # reaches through its router. The provider's body is not dug out of that
+    # text, which would be a guess at what LiteLLM wrote around it.
     try:
         content: Any = getattr(getattr(ex, "response", None), "content", None)
     except Exception:

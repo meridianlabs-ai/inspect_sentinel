@@ -3523,6 +3523,30 @@ def _overloaded() -> Exception:
     return error
 
 
+_SLOWED = '{"type":"error","error":{"type":"rate_limit_error","message":"Slow down."}}'
+
+
+def _slowed_on_messages() -> Exception:
+    """A provider's 429 on the Messages route, as LiteLLM raises it once it has made the error its own, which it does for a model it reaches through its router."""
+    errors: Any = importlib.import_module("litellm.llms.anthropic.common_utils")
+    mapping: Any = importlib.import_module(
+        "litellm.litellm_core_utils.exception_mapping_utils"
+    )
+    try:
+        mapping.exception_type(
+            model="a-model",
+            original_exception=errors.AnthropicError(
+                status_code=429,
+                message=_SLOWED,
+                headers=httpx.Headers({"request-id": "req_3"}),
+            ),
+            custom_llm_provider="anthropic",
+        )
+    except Exception as ex:
+        return ex
+    raise AssertionError("LiteLLM raised nothing for a provider's error.")
+
+
 def _timed_out() -> Exception:
     """A provider that didn't answer in time, which gave LiteLLM no reply at all."""
     litellm: Any = importlib.import_module("litellm")
@@ -3607,6 +3631,14 @@ def _failed_after(
             id="a provider's error as the provider wrote it",
         ),
         pytest.param(
+            _MESSAGES,
+            _slowed_on_messages,
+            429,
+            {"request-id": "req_3"},
+            b"AnthropicException - " + _SLOWED.encode(),
+            id="a provider's error LiteLLM made its own on the Messages route",
+        ),
+        pytest.param(
             _CHAT,
             _timed_out,
             408,
@@ -3687,9 +3719,12 @@ def test_a_stream_whose_provider_fails_before_its_first_chunk_is_told_as_an_erro
     assert reply["headers"]["retry-after"] == "7"
 
 
-def test_a_providers_error_is_told_as_the_provider_wrote_it_on_the_messages_route(
+def test_a_providers_error_body_that_litellms_error_holds_is_told_as_the_provider_wrote_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # LiteLLM's error here holds the provider's body, as its message. Which
+    # route the call came by doesn't decide that: the error LiteLLM makes its
+    # own on the Messages route holds LiteLLM's account, and is told as text.
     passed = _result({"action": "pass"})
 
     calls, _ = _failed_after(monkeypatch, _MESSAGES, _overloaded(), passed, passed)
