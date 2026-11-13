@@ -45,6 +45,7 @@ NotJudged: TypeAlias = Literal[
     "cut_off",
     "replaced_attempt",
     "cancelled",
+    "result_under_review",
 ]
 """Why a request or its reply was not judged."""
 

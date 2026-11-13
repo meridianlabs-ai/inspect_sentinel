@@ -212,6 +212,12 @@ _NOT_KEPT = frozenset(
     }
 )
 
+_UNDER_REVIEW = Refuse(
+    503,
+    "A tool's result in this request is waiting for a person's review, which another model call of the sample asked for. The request was not judged. Sent again, it goes on once the review has ended.",
+)
+"""What a request is refused with where it holds a tool's result that another model call of its sample is paused on, for a person. The status is one a client sends the request again for by itself."""
+
 _ANOTHER_EVALS = Refuse(
     400,
     f"The request's {INSPECT_CONTEXT} header names a sample of another eval. The request was not judged.",
@@ -335,6 +341,18 @@ class _Judging:
 _JUDGING: ContextVar[_Judging | None] = ContextVar("sidecar_judging", default=None)
 
 
+@dataclass(eq=False)
+class _ResultJudging:
+    """The judging, under way now, of a tool's result that a request holds. Another request that holds the same result waits for it, and takes what it comes to."""
+
+    woken: anyio.Event
+    """Set once the judging is over, or has asked a person: a request waiting on it waits no longer for either."""
+    judging: _Judging | None
+    """The judging of the request that holds the result, where it is an eval's."""
+    asked: bool = False
+    """Whether the judging asked a person. No connection waits for a person, so a request that holds the same result is answered at once from then on."""
+
+
 @dataclass(frozen=True)
 class SampleResult:
     """What an eval's sample came to."""
@@ -453,7 +471,7 @@ class Handler:
         self._max_registration_bytes = max_registration_bytes
         # the tool results being judged now, by run, conversation and digest,
         # so that a request holding one waits for the request judging it
-        self._judging: dict[tuple[str, str, str], anyio.Event] = {}
+        self._judging: dict[tuple[str, str, str], _ResultJudging] = {}
 
     @property
     def release(self) -> Literal["whole", "early"]:
@@ -603,6 +621,8 @@ class Handler:
                     waited.held = await self._state.release(request.id)
                     waited.go = answer
                     attempt.state = "awaiting_request"
+            elif answer is _UNDER_REVIEW:
+                attempt.not_judged("result_under_review")
             elif attempt.judged is not None and attempt.judged.replaced:
                 attempt.not_judged("replaced_attempt")
             else:
@@ -1874,8 +1894,26 @@ class Handler:
             digest = _result_digest(words, call, entry)
             key = (held.run, held.conversation, digest)
             if key in self._judging:
-                while (judging := self._judging.get(key)) is not None:
-                    await judging.wait()
+                while (under_way := self._judging.get(key)) is not None:
+                    if not under_way.asked:
+                        await under_way.woken.wait()
+                        continue
+                    # The judging waited for asked a person, who may take
+                    # days, and no connection waits for a person. A result is
+                    # reviewed once, by the model call that asked.
+                    current = _JUDGING.get()
+                    reattached = (
+                        self._reattached(current) if current is not None else None
+                    )
+                    if current is not None and reattached is not None:
+                        # a try of that same model call: it follows the call
+                        current.reattached = reattached
+                        current.scope.cancel()
+                        await anyio.lowlevel.checkpoint()
+                    # Another model call of the sample: it is refused with a
+                    # status its client sends it again for, and goes on once
+                    # the review has ended and the result is judged.
+                    return _UNDER_REVIEW
                 # the judgment waited for may have ended the run
                 refusal = _ended(run, held.marks, held.sample_attempt, held.request)
                 if refusal is not None:
@@ -1907,7 +1945,9 @@ class Handler:
                 tools=sent.tools if sent is not None else None,
                 tool_choice=sent.tool_choice if sent is not None else None,
             )
-            judging = self._judging[key] = anyio.Event()
+            under_way = self._judging[key] = _ResultJudging(
+                anyio.Event(), _JUDGING.get()
+            )
             try:
                 if _ends(await self._judge(held, run, step)):
                     # not marked as judged, so a client that sends it again
@@ -1918,7 +1958,7 @@ class Handler:
                 conversation.judged.add(digest)
             finally:
                 del self._judging[key]
-                judging.set()
+                under_way.woken.set()
         return None
 
     async def _reply(
@@ -2376,6 +2416,12 @@ class Handler:
             attempt.review_tries[question.id] = operation.sent
             self._asking[question.id] = operation
             attempt.state = "awaiting_review"
+            # a request waiting on this judging of a tool's result is
+            # answered now, as this exchange is
+            for under_way in self._judging.values():
+                if under_way.judging is judging:
+                    under_way.asked = True
+                    under_way.woken.set()
             if not judging.detached:
                 # the exchange is answered "pending review" now, and no
                 # connection waits for the person

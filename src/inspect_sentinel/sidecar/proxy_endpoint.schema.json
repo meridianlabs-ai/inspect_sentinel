@@ -110,7 +110,8 @@
                 "provider_error",
                 "cut_off",
                 "replaced_attempt",
-                "cancelled"
+                "cancelled",
+                "result_under_review"
               ],
               "type": "string"
             },

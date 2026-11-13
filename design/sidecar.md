@@ -974,6 +974,10 @@ A person may take minutes or days to answer a question: they are sent to a porta
 - **Every request with that `x-irid` and the same binding is a try of the same operation.** A client that sends the request again reattaches to the operation. It is never judged a second time, and it never raises a second question. A try that was already being judged when another try asked a person reattaches too, whether its judging would ask or ends without asking, and its own result isn't given: not its decision, and not an error its judging raised, which the sidecar logs. Its judge models' usage still counts in `judging_usage`, since it was billed, and the time its judging took still counts in `judging_time`, since the client waited on it. A try that would ask a person after a later try of the same request was decided asks nobody, and is answered as a call that has ended: that later try's answer went to the client. An earlier try's decision doesn't stop it, as it may be the client's own retry after that answer was lost. Reattaching never causes a call to the provider by itself: a try is sent on only where the operation is waiting for a request ("A request sent again" below).
 - **A request with that `x-irid` and another binding is refused.** It is not judged, and it takes nothing from the operation: an approval is for the request the person was asked about, and no other.
 - **Only a call a sentinel asked a person about is kept this way.** Every other call is judged try by try, as before.
+- **A tool's result is reviewed once, by the call that asked.** The sidecar judges a tool's result once in a conversation, as a sentinel inside Inspect judges it once, when the tool runs. A second request that holds the same result while it is being judged waits for that judging, and takes what it comes to. Once the judging asks a person, the second request waits no longer, as no connection waits for a person:
+  - **A try of the same model call**, sent before the question was asked, is answered "pending review", and follows the call as any later try does.
+  - **Another model call of the sample**, such as one of two that an agent sends the same history to, is refused with a 503, a status its client sends the request again for by itself. `request_result` reads `not_judged` for it, with the `reason` `result_under_review`. It opens no question, and closing it leaves the first call's question as it was. Once the person has answered, the result is judged, and the request goes on when it is sent again.
+  - **The second call waits by its client's retries.** Inspect retries a 503 with its own backoff, which starts at 3 seconds and grows to 30 minutes, so the call can go on that much later than the answer. An eval that sets `max_retries` or `timeout` can run out of them first, and the call then fails.
 
 **Pending review.** When the sentinel asks a person, the sidecar:
 
@@ -1983,6 +1987,7 @@ For a task in the tasks folder, nothing is stored and `fixed` is true. The sampl
 | `unregistered` | The request named a task or sample the sidecar doesn't take ("How strict the sidecar is" above). |
 | `replaced_attempt` | The request or reply belongs to an attempt at the sample that a later attempt replaced, or to another attempt with the same number (section 7). |
 | `cancelled` | The eval cancelled the call with `cancel_request` before it ended, at any state after a person was first asked about it. |
+| `result_under_review` | The request holds a tool's result that another model call of the sample is paused on, for a person. It was refused with a 503 and not judged, and goes on when it is sent again after the review has ended. |
 
 `records` says whether the sidecar has records for the request:
 

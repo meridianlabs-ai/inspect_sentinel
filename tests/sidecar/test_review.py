@@ -17,7 +17,7 @@ from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
 from inspect_sentinel._host import HumanAnswer
 from inspect_sentinel._report import Decision, Escalations
-from inspect_sentinel._step import BeforeGenerate, BeforeToolCall
+from inspect_sentinel._step import AfterToolCall, BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import (
     Handler,
@@ -852,6 +852,115 @@ async def test_a_question_at_a_tools_result_is_asked_before_the_provider_is_call
         assert question["choices"] == ["approve", "terminate"]
         assert question["result"]["content"] == "Rain."
         assert (await _result(client, "irid-2"))["state"] == "awaiting_review"
+
+
+def _slow_to_ask(reached: anyio.Event, release: anyio.Event) -> Handler:
+    # a monitor that takes its time over a tool's result, before a person is
+    # asked about it
+    @protocol
+    def waits() -> Protocol:
+        async def decide(
+            context: Context, step: AfterToolCall, escalations: Escalations
+        ) -> Decision | None:
+            reached.set()
+            await release.wait()
+            return None
+
+        return decide
+
+    return Handler(sequential([waits(), human(stages=["tool_result"])]))
+
+
+def _other_call(id: str) -> Request:
+    # another model call of the sample, which holds the same tool result
+    return _from_eval(id, "irid-3", ran("Oslo", "Rain."))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("arrives", ["before the question", "after the question"])
+async def test_another_call_holding_a_result_under_review_is_refused_to_be_sent_again(
+    arrives: str,
+) -> None:
+    reached, release = anyio.Event(), anyio.Event()
+    handler = _slow_to_ask(reached, release)
+    async with _serving(handler) as client:
+        answers: dict[str, Any] = {}
+
+        async def send(name: str, sent: Request) -> None:
+            answers[name] = await handler.request(sent)
+
+        assert isinstance(await handler.request(_from_eval("x")), Pass)
+        assert isinstance(await handler.reply(reply(message(weather("Oslo")))), Pass)
+        # nothing here waits for the person: both requests are answered
+        # while the question is still open
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(send, "first", _result_request())
+                await reached.wait()
+                if arrives == "before the question":
+                    # it waits on the first call's judging of the result
+                    group.start_soon(send, "other", _other_call("z"))
+                    await anyio.sleep(0.05)
+                release.set()
+            if arrives == "after the question":
+                await send("other", _other_call("z"))
+
+        # the result is reviewed once, by the call that asked
+        assert answers["first"] is PENDING
+        refused = answers["other"]
+        # with a status a client sends the request again for by itself
+        assert isinstance(refused, Refuse) and refused is not PENDING
+        assert refused.status == 503
+        assert "waiting for a person's review" in refused.message
+        other = await _result(client, "irid-3")
+        assert (other["state"], other["reason"]) == (
+            "not_judged",
+            "result_under_review",
+        )
+        (question,) = await _pending(client)
+        assert question["request_id"] == "irid-2"
+
+        # giving up on the other call leaves the question as it was
+        await _cancel(client, "irid-3")
+        assert [q["id"] for q in await _pending(client)] == [question["id"]]
+
+        # once the person has answered, the other call's request goes on
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-2", until="awaiting_request")
+        assert isinstance(await handler.request(_other_call("z2")), Pass)
+
+
+@pytest.mark.anyio
+async def test_a_try_waiting_on_its_own_calls_result_follows_the_call_once_it_asks() -> (
+    None
+):
+    reached, release = anyio.Event(), anyio.Event()
+    handler = _slow_to_ask(reached, release)
+    async with _serving(handler) as client:
+        answers: dict[str, Any] = {}
+
+        async def send(id: str) -> None:
+            answers[id] = await handler.request(_result_request(id))
+
+        assert isinstance(await handler.request(_from_eval("x")), Pass)
+        assert isinstance(await handler.reply(reply(message(weather("Oslo")))), Pass)
+        # the client sends the request again while its first try is still
+        # judged, and neither try waits for the person
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(send, "y")
+                await reached.wait()
+                group.start_soon(send, "y2")
+                await anyio.sleep(0.05)
+                release.set()
+
+        # one model call, one question
+        assert answers == {"y": PENDING, "y2": PENDING}
+        assert (await _result(client, "irid-2"))["state"] == "awaiting_review"
+        (question,) = await _pending(client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-2", until="awaiting_request")
+        assert isinstance(await handler.request(_result_request("y3")), Pass)
 
 
 @pytest.mark.anyio
