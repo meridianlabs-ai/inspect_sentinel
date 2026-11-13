@@ -297,6 +297,8 @@ class _Operation:
     """The request, once its stage is finished, for as long as it waits to be sent on."""
     go: Pass | Replace | None = None
     """What a try that is sent on is answered with."""
+    with_provider: tuple[str, Held] | None = None
+    """The request of the try that was sent on, with the proxy's id for its exchange, from when it is sent on until its reply or its failure is handed over. The state keeps the request too, only as long as it keeps a request nothing names, and a call that is asked about is kept longer than that. So the call keeps the request itself, for a reply that comes after the state let it go."""
     reply: HeldReply | None = None
     """The provider's reply, once the call is decided with the turn going on, for the eval to get from the held-reply path."""
     failure: Failure | None = None
@@ -660,7 +662,7 @@ class Handler:
             ModifyError: If the sentinel decides `modify` of a call the sidecar can't change, and rejects none of the turn's calls.
             TimeLimitError: If the handler has a time limit and the sentinel didn't finish within it.
         """
-        held = await self._state.release(reply.id)
+        held = await self._released(reply.id)
         attempt = held.attempt if held is not None else None
         if attempt is not None:
             if attempt.settled.is_set():
@@ -780,7 +782,7 @@ class Handler:
                 operation.failure = replace(failure, reply=None)
                 attempt.state, attempt.reason = "awaiting_request", "cut_off"
             return
-        held = await self._state.release(id)
+        held = await self._released(id)
         if held is None or held.attempt is None or held.attempt.settled.is_set():
             return
         waited = self._operation_of(held.attempt)
@@ -884,8 +886,27 @@ class Handler:
         operation.sent = operation.tries
         attempt.state, attempt.reason = "awaiting_reply", None
         self._sent_on[request.id] = operation
+        operation.with_provider = (request.id, held)
         await self._state.hold(request.id, held)
         return go
+
+    async def _released(self, id: str) -> Held | None:
+        # The request an exchange's reply answers, which is no longer kept
+        # for it. The state lets a request go once nothing has named it for
+        # as long as it keeps one, while a model call a person was asked
+        # about is kept for as long as its eval asks about it. So the request
+        # of such a call's try with the provider is had from the call where
+        # the state has let it go, and only for that try: an earlier try's
+        # exchange finds nothing.
+        held = await self._state.release(id)
+        operation = self._sent_on.get(id)
+        if operation is None or operation.with_provider is None:
+            return held
+        exchange, kept = operation.with_provider
+        if exchange != id:
+            return held
+        operation.with_provider = None
+        return held if held is not None else kept
 
     def _failed(
         self,
@@ -933,7 +954,7 @@ class Handler:
         ):
             return
         operation.ended = time.monotonic()
-        operation.held = operation.go = None
+        operation.held = operation.go = operation.with_provider = None
         for exchange, (failing, _) in list(self._failing.items()):
             if failing is operation:
                 del self._failing[exchange]

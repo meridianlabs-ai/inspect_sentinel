@@ -1809,6 +1809,84 @@ async def test_a_waiting_call_its_eval_asks_about_is_kept(
 
 
 @pytest.mark.anyio
+async def test_a_reply_is_judged_when_its_call_was_kept_longer_than_the_state_keeps_a_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _clocks(monkeypatch)
+    handler = _at_results(state=MemoryState(expiry=10))
+    async with _serving(handler) as client:
+        await _waiting_for_its_request(handler, client)
+        assert isinstance(await handler.request(_result_request("y2")), Pass)
+
+        # the provider takes longer than the state keeps a request nothing
+        # names, and the eval asks about the call all the while
+        for _ in range(3):
+            now[0] += 6
+            assert (await _result(client, "irid-2"))["state"] == "awaiting_reply"
+            assert handler.sweep() == (0, 0)
+
+        # the reply is judged all the same, with the request the call kept
+        body = message({"type": "text", "text": "It rains."}, stop_reason="end_turn")
+        assert isinstance(await handler.reply(reply(body, id="y2")), Pass)
+        result = await _result(client, "irid-2", until="decided")
+        assert result["outcome"] == "proceed"
+
+
+@pytest.mark.anyio
+async def test_a_call_keeps_the_request_of_its_latest_try_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _clocks(monkeypatch)
+    handler = _at_results(state=MemoryState(expiry=10))
+    async with _serving(handler) as client:
+        await _waiting_for_its_request(handler, client)
+        # one try is sent on and cut off, and the next is sent on
+        assert isinstance(await handler.request(_result_request("y2")), Pass)
+        await handler.reply_not_judged("y2", "cut_off")
+        assert (await _result(client, "irid-2"))["state"] == "awaiting_request"
+        assert isinstance(await handler.request(_result_request("y3")), Pass)
+        for _ in range(3):
+            now[0] += 6
+            assert (await _result(client, "irid-2"))["state"] == "awaiting_reply"
+            assert handler.sweep() == (0, 0)
+
+        # a reply to the earlier try finds no request, and changes nothing
+        body = message({"type": "text", "text": "It rains."}, stop_reason="end_turn")
+        with pytest.raises(UnreadableError, match="no longer keeps"):
+            await handler.reply(reply(body, id="y2"))
+        assert (await _result(client, "irid-2"))["state"] == "awaiting_reply"
+
+        # the latest try's reply is judged
+        assert isinstance(await handler.reply(reply(body, id="y3")), Pass)
+        assert (await _result(client, "irid-2", until="decided"))[
+            "outcome"
+        ] == "proceed"
+
+
+@pytest.mark.anyio
+async def test_a_serving_handler_closes_a_waiting_call_by_itself(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _clocks(monkeypatch)
+    # the handler looks every hundredth of a second, where it would every minute
+    monkeypatch.setattr(_handler, "_SWEEP_EVERY", 0.01)
+    handler = _at_results(state=MemoryState(expiry=10))
+    async with _serving(handler) as client:
+        await _waiting_for_its_request(handler, client)
+
+        # Nothing here calls `sweep`. Asking about a call that still waits
+        # keeps it, so the time it is kept passes again before each look.
+        with anyio.fail_after(5):
+            while True:
+                now[0] += 10
+                await anyio.sleep(0.05)
+                result = await _result(client, "irid-2")
+                if result["state"] != "awaiting_request":
+                    break
+        assert (result["state"], result["reason"]) == ("not_judged", "expired")
+
+
+@pytest.mark.anyio
 async def test_a_call_whose_reply_is_still_coming_is_kept_and_one_with_no_reply_is_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
