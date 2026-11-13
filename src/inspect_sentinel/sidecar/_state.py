@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar
 
 import anyio
-from inspect_ai.model import ChatMessage, ModelUsage
+from inspect_ai.model import ChatMessage, ChatMessageAssistant, ModelUsage
 from inspect_ai.tool import ToolChoice, ToolInfo
 from inspect_ai.util import Store
 from pydantic import JsonValue
@@ -159,6 +159,9 @@ class Made:
     tool_choice: ToolChoice
     message_id: str
     """The id the reply holding the call was given, so the call's two steps share it."""
+
+    message: ChatMessageAssistant
+    """The reply holding the call as the model returned it, before any edit: the call's two steps share it."""
 
 
 @dataclass(frozen=True)

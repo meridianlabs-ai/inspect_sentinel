@@ -1802,6 +1802,7 @@ class Handler:
                 conversation=held.conversation,
                 message=assistant.text,
                 message_id=message_id,
+                assistant_message=sent.message if sent is not None else None,
                 call=call,
                 result=entry,
                 # not known: only what the model is sent crosses the wire, and
@@ -1907,6 +1908,7 @@ class Handler:
                 conversation=held.conversation,
                 message=message.text,
                 message_id=message.id,
+                assistant_message=message,
                 call=call,
                 view=self._view(call, run),
                 input=held.input,
@@ -1961,6 +1963,7 @@ class Handler:
         run: Run,
         conversation: Conversation,
         message: ChatMessageAssistant | None,
+        produced: ChatMessageAssistant | None = None,
     ) -> Pass:
         run.in_a_row.pop(held.sample_attempt, None)
         if not held.named:
@@ -1973,6 +1976,7 @@ class Handler:
                     held.offered.tools,
                     held.offered.tool_choice,
                     message.id,
+                    produced if produced is not None else message,
                 )
             while len(conversation.made) > MADE_KEPT:
                 del conversation.made[next(iter(conversation.made))]
@@ -2046,7 +2050,7 @@ class Handler:
             }
         )
         # some of the turn ran, which is progress, so it counts as a pass
-        self._passed(held, run, conversation, handed)
+        self._passed(held, run, conversation, handed, produced=message)
         return Replace(body)
 
     async def _reject(
