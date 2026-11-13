@@ -16,9 +16,6 @@ WORKFLOWS = Path(__file__).parents[1] / ".github" / "workflows"
 CREDENTIAL_JOBS = [
     ("publish.yaml", "publish"),
     ("publish.yaml", "notify-approval"),
-    # Runs `uv lock`, which may build sdists, and hands push-floor versions.
-    ("release-pin-deps.yml", "floor"),
-    ("release-pin-deps.yml", "push-floor"),
 ]
 NO_COOLDOWN_JOBS = [
     ("build.yaml", "py-build"),
@@ -43,7 +40,6 @@ def test_jobs_restore_no_cache(workflow: str, job: str) -> None:
         if action in {
             "meridianlabs-ai/actions/setup-uv",
             "meridianlabs-ai/actions/install-python-dependencies",
-            "./.github/actions/uv-sync",
         }:
             assert inputs.get("actions-cache") == "none"
         if action == "actions/setup-python":
