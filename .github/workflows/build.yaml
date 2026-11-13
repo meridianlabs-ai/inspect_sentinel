@@ -22,7 +22,7 @@ jobs:
         with:
           persist-credentials: false
       # The ruff version uv.lock pins, not the newest release.
-      - uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
+      - uses: meridianlabs-ai/actions/install-python-dependencies@57adfb7a3247f06e4f1c033f461a54e0d83d04f5 # main
         with:
           versions: locked
           python-version: "3.13"
@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
+      - uses: meridianlabs-ai/actions/install-python-dependencies@57adfb7a3247f06e4f1c033f461a54e0d83d04f5 # main
         with:
           versions: locked
           python-version: ${{ matrix.python-version }}
@@ -65,7 +65,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
+      - uses: meridianlabs-ai/actions/install-python-dependencies@57adfb7a3247f06e4f1c033f461a54e0d83d04f5 # main
         with:
           versions: locked
           python-version: ${{ matrix.python-version }}
@@ -92,7 +92,7 @@ jobs:
       # The sidecar, which the tests start, from this repository's environment.
       # No Actions cache: the guardrail's environment below has none, and both
       # calls in a job use the same setup.
-      - uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
+      - uses: meridianlabs-ai/actions/install-python-dependencies@57adfb7a3247f06e4f1c033f461a54e0d83d04f5 # main
         with:
           versions: locked
           python-version: ${{ matrix.python-version }}
@@ -102,7 +102,7 @@ jobs:
       # guardrail, the matrix LiteLLM and the test tools, with no cooldown, as
       # the Makefile has it.
       - name: Install the guardrail's environment
-        uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
+        uses: meridianlabs-ai/actions/install-python-dependencies@57adfb7a3247f06e4f1c033f461a54e0d83d04f5 # main
         with:
           versions: unlocked
           python-version: ${{ matrix.python-version }}
@@ -146,7 +146,7 @@ jobs:
       # update the file, see publish.yaml. No Actions cache, so that the
       # locked install below, which uses the same setup, matches.
       - name: Install build toolchain
-        uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
+        uses: meridianlabs-ai/actions/install-python-dependencies@57adfb7a3247f06e4f1c033f461a54e0d83d04f5 # main
         with:
           versions: hashed-requirements
           python-version: ${{ matrix.python-version }}
@@ -168,7 +168,7 @@ jobs:
           echo "guardrail=./${guardrail[0]}" >> "$GITHUB_OUTPUT"
       # The project's locked dependencies, not the project itself, then the
       # wheel with --no-deps.
-      - uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
+      - uses: meridianlabs-ai/actions/install-python-dependencies@57adfb7a3247f06e4f1c033f461a54e0d83d04f5 # main
         with:
           versions: locked
           python-version: ${{ matrix.python-version }}
@@ -183,7 +183,7 @@ jobs:
       # LiteLLM pinned, as in the litellm-guardrail job: the wheel alone would
       # take the newest release.
       - name: Install the LiteLLM guardrail
-        uses: meridianlabs-ai/actions/install-python-dependencies@6fe6acfaeb946d22dd4fb673c744a3591eab0d91 # main
+        uses: meridianlabs-ai/actions/install-python-dependencies@57adfb7a3247f06e4f1c033f461a54e0d83d04f5 # main
         with:
           versions: unlocked
           python-version: ${{ matrix.python-version }}
