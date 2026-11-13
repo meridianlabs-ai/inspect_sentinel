@@ -74,6 +74,7 @@ Each row of the results dataframe is one step at one stage:
 | `metadata.metadata` | The observation's or decision's own metadata. |
 | `metadata.depth` | How deeply nested the step's conversation is (see [Sub-agents and Timelines](#sub-agents-and-timelines)). |
 | `metadata.turns` | How the transcript's agent turns were established: `"recorded"`, `"inferred"` or `"stored"` (see [What a Replayed Step Holds](#what-a-replayed-step-holds)). |
+| `metadata.matched` | How the step was tied to the model call, message and result it was built from: `"ids"` when by ids the log records, `"heuristic"` when by call id and position or from the transcript's messages, as for older logs (see [Older Logs and Other Sources](#older-logs-and-other-sources)). |
 | `metadata.audit`, `metadata.modified`, `metadata.reports` | For a protocol, its decision's audit flag, its modified tool call, and the reports of the monitors and protocols beneath it. |
 | `metadata.human`, `metadata.human_answer` | Where the step reached `human()`, where its answer came from (see [Human Decisions in Replay](#human-decisions-in-replay)). |
 | `metadata.status` | In read mode, `"superseded"` for a protocol decision that was superseded at its step (see [Read Mode](#read-mode)). |
@@ -379,6 +380,26 @@ Some fields differ from the live step, because a log doesn't record them:
 
 Logs written by older versions of inspect_ai, and transcripts from other sources, replay too, with some limits (see [Older Logs and Other Sources](#older-logs-and-other-sources)).
 
+### How Steps Are Matched
+
+A tool step is built from several records: the tool call, the model call that proposed it, and the tool message that answered it. Recent logs record the ids that tie these together. Each tool event names the assistant message that proposed its call and the tool message that holds its result. Replay joins on those ids, and the row's `metadata.matched` is `"ids"`.
+
+Older logs don't record which message proposed a call. Replay then finds the latest model call that proposed the same call id, which is right unless call ids repeat (for example, a provider that reuses ids, or a cached response used twice). These rows have `metadata.matched` `"heuristic"`. So do rows from transcripts replayed from their messages. To check that a result doesn't rest on a heuristic match, filter on this column:
+
+``` python
+df = df[df["metadata.matched"] == "ids"]
+```
+
+### Bridged Agents
+
+Agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html) (such as Claude Code or Codex in a sandbox) run their own tools, so the log records less about their tool calls:
+
+-   A tool the bridge runs on the host for the agent (a `bridged_tools` tool) replays where the log ties the call to the model call that proposed it and to the run that answered it. Its `tool_call` step is the call as the bridge checked it, under the host tool's name. Its `tool_result` step holds the result as the bridge sent it to the agent, with two differences: an error holds the tool's error message rather than the text the bridge sent, and a single content item other than an image (rather than a list) is held as a list of one.
+
+-   A tool the agent runs itself leaves no tool event in the log, so its steps aren't replayed. Neither are those of a host call the log can't tie to its proposal, for example one run more than once. A warning names the skipped calls.
+
+The bridge's model calls replay like any other agent's. A person's decision at a skipped step still reaches the later steps of the conversation.
+
 ### Sub-agents and Timelines
 
 Each row's `metadata.depth` is how deeply nested the step's conversation is among the transcript's agents, where 1 is the outermost agent. Pass `depth` to `as_scanner()` to run only steps at most that deep, for example `depth=1` to leave out most sub-agents:
@@ -437,9 +458,23 @@ Logs written by inspect_ai before 0.3.100 don't separate the agent's work from s
 
 A transcript where an approver changed a tool call, but the log records a different call as the one that ran (as inspect_ai before 0.3.277 could), can't be replayed, since the log doesn't show which arguments ran. Scout reports an error for that transcript.
 
+### Imported Transcripts
+
+Scout imports transcripts from other agent frameworks (Claude Code, LangSmith, Logfire, Phoenix, Weave and ATIF). Recent versions of Scout keep one id per message across a transcript's model calls and its messages, and record which model calls the messages come from. Such a transcript replays from its model calls, with `metadata.turns` `"inferred"`:
+
+-   Its agent turns are inferred as for an older Inspect log (see [Older Inspect Logs](#older-inspect-logs)), and each gives a `model_input` and a `model_output` step.
+
+-   Its tool steps come from its messages. Each assistant message is matched by its id to the model call that produced it, so its tool steps have that call's input and tools, and follow that call's steps. An assistant message no model call produced has tool steps without an input, and its rows are `"heuristic"`.
+
+-   A tool call that isn't in the transcript's messages, such as a sub-agent's, has no tool steps.
+
+What a step holds otherwise depends on the source. Its tool steps have no `truncated` and no `view.context`, and its model calls hold what the importer recorded: for example, Claude Code's have no system prompt and no tools.
+
+A transcript imported by an older version of Scout replays from its messages.
+
 ### Transcripts From Messages
 
-A transcript Scout imported from another source, one with no model events, or one from a log written by inspect_ai before 0.3.100 replays from its messages, with `metadata.turns` `"inferred"`. Each assistant message becomes a model call whose input is every message before it. Each of its tool calls gives a `tool_call` step; a `tool_result` step is added only if an answering tool message follows it. The whole transcript is one conversation.
+A transcript with no model events, one Scout imported before it kept message ids (see [Imported Transcripts](#imported-transcripts)), or one from a log written by inspect_ai before 0.3.100 replays from its messages, with `metadata.turns` `"inferred"` and `metadata.matched` `"heuristic"`. Each assistant message becomes a model call whose input is every message before it. Each of its tool calls gives a `tool_call` step; a `tool_result` step is added only if an answering tool message follows it. The whole transcript is one conversation.
 
 A step from messages holds less than one from an Inspect log:
 
