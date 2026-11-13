@@ -1149,9 +1149,19 @@ Inspect reads the held reply with the code that reads any reply from the network
 - **The answer's `cancelled` says whether this `cancel_request` was what closed the operation.** It is false for a call that had already ended, one no person was asked about, and one the sidecar doesn't know. A second `cancel_request` for a call is answered false too, so false doesn't mean the operation is still open: `request_result` says where a call stands.
 - **It is not served with `--no-eval-results`**, like the two methods for questions: such a sidecar keeps no question, so it has no operation to cancel.
 
-**What ends an operation.** It ends when it is decided or not judged. Before that, it is closed, with nothing decided for it, when a later attempt at its sample begins, when the eval ends the sample, when a sentinel ends the run at another call, and when the eval cancels it with `cancel_request`, as Inspect does for a sample that is cancelled or fails while a call of it is open. Its questions close with it.
+**What ends an operation.** It ends when it is decided or not judged. Before that, it is closed, with nothing decided for it, when a later attempt at its sample begins, when the eval ends the sample, when a sentinel ends the run at another call, and when the eval cancels it with `cancel_request`, as Inspect does for a sample that is cancelled or fails while a call of it is open. Its questions close with it. The sidecar itself closes one that waited too long with nothing naming it ("An operation is not kept for ever" below).
 
 **A closed operation stays closed**, however it was closed and at whatever state. No answer, no try and no reply that comes later opens it again. A reply from a request that was already with the provider is not judged, not kept and not passed on to the client. Judging that was under way when the operation was closed is stopped. Where it has nothing left to wait for, it runs to its end, and what it comes to is dropped: the operation reads as its closing left it, no request is kept to be sent on, and no reply is kept or passed on.
+
+**An operation is not kept for ever.** A paused call keeps its records, its eval's token and its task's registration past their expiry, so each is given back in the end. The sidecar looks every minute.
+
+- **A call that waits and that nothing names is closed after `--run-expiry`**, a day by default. That is a call at `awaiting_request` or `awaiting_reply`. It reads as `not_judged`, with the `reason` `expired`: an end of its own, and not a sentinel's decision or a person's. It stays closed, as any closed operation does.
+- **What names a waiting call**: a try of it, a request for its held reply, `request_result` for it, and each part of its reply that a proxy hands over, a streamed chunk included. Another model call's requests don't name it, even one that holds the same tool result.
+- **The time runs from when the call began to wait.** A call whose question was answered after three days waits from that answer, and not from its last request.
+- **This is how long the sidecar keeps a call nothing names.** It doesn't say the client has gone. Inspect asks about a call for as long as it waits on it, so a call of a running Inspect eval is kept.
+- **A call with a question open is never closed this way**, however long the person takes. A question ends when its own time is up, with `--review-timeout`, and has no end without it. A deployment whose evals can stop part way through a review sets `--review-timeout`, or such a call is kept until the sidecar restarts.
+- **A call that has ended is kept for `--run-expiry` from its end**, for its eval to read what it came to and get its held reply. Reading it doesn't keep it longer. Once it is forgotten, a request under its `x-irid` is a new model call.
+
 
 **Where the paused judging runs.** It runs in a task of the sidecar's own, for as long as the sidecar serves. A handler that isn't serving, as one made in a test, has nowhere to run it, so it asks nobody through an eval, and its probe says `review` is false.
 
@@ -1988,6 +1998,7 @@ For a task in the tasks folder, nothing is stored and `fixed` is true. The sampl
 | `replaced_attempt` | The request or reply belongs to an attempt at the sample that a later attempt replaced, or to another attempt with the same number (section 7). |
 | `cancelled` | The eval cancelled the call with `cancel_request` before it ended, at any state after a person was first asked about it. |
 | `result_under_review` | The request holds a tool's result that another model call of the sample is paused on, for a person. It was refused with a 503 and not judged, and goes on when it is sent again after the review has ended. |
+| `expired` | A model call a person was asked about waited for its request to be sent again, or for the provider's reply, and nothing named it for `--run-expiry`. The sidecar closed it, with nothing decided. |
 
 `records` says whether the sidecar has records for the request:
 

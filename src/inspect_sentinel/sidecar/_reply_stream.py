@@ -171,6 +171,8 @@ class ReplyStream:
         """
         if self._ended:
             raise RuntimeError("The reply's input has already been ended.")
+        # a reply that is still coming keeps a model call that waits for it
+        self._handler.reply_progress(self._start.id)
         if (
             succeeded(self._start.status)
             and len(self._held) + len(data) > self._max_held_bytes

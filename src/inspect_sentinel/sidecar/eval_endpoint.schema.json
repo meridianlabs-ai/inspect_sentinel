@@ -2025,7 +2025,8 @@
                 "cut_off",
                 "replaced_attempt",
                 "cancelled",
-                "result_under_review"
+                "result_under_review",
+                "expired"
               ],
               "type": "string"
             },

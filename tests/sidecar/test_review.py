@@ -25,8 +25,10 @@ from inspect_sentinel.sidecar import (
     Refuse,
     Replace,
     Reply,
+    ReplyStart,
     Request,
     SidecarHost,
+    _handler,
     _state,
 )
 from inspect_sentinel.sidecar._eval_endpoint import (
@@ -47,6 +49,7 @@ from inspect_sentinel.sidecar._proxy_endpoint import PATH as PROXY_PATH
 from inspect_sentinel.sidecar._proxy_endpoint import proxy_app
 from inspect_sentinel.sidecar._review import UnknownQuestionError
 from inspect_sentinel.sidecar._state import MemoryState
+from inspect_sentinel.sidecar._wire import UnreadableError
 from tests.sidecar._traffic import (
     JSON,
     STREAM,
@@ -1705,6 +1708,169 @@ async def test_the_time_a_question_is_open_isnt_counted_against_the_time_limit()
 
         result = await _result(client, until="decided")
     assert result["outcome"] == "proceed"
+
+
+def _clocks(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    # the state's clock and the handler's, which the test moves on together:
+    # the event loop keeps the real one
+    now = [0.0]
+
+    class Clock:
+        @staticmethod
+        def monotonic() -> float:
+            return now[0]
+
+        @staticmethod
+        def time() -> float:
+            return time.time()
+
+    monkeypatch.setattr(_state, "time", Clock)
+    monkeypatch.setattr(_handler, "time", Clock)
+    return now
+
+
+async def _waiting_for_its_request(handler: Handler, client: httpx.AsyncClient) -> None:
+    # a call a person was asked about at a tool's result, approved, which
+    # waits for its request to be sent again
+    question = await _asked_at_result(handler, client)
+    await _answer(client, question["id"], "approve")
+    await _result(client, "irid-2", until="awaiting_request")
+
+
+@pytest.mark.anyio
+async def test_a_call_that_waits_for_its_request_and_that_nothing_names_is_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _clocks(monkeypatch)
+    handler = _at_results(state=MemoryState(expiry=10))
+    async with _serving(handler) as client:
+        await _waiting_for_its_request(handler, client)
+
+        now[0] += 9
+        assert handler.sweep() == (0, 0)
+        now[0] += 1
+        closed = handler.sweep()
+
+        # closed, with nothing decided, and it stays closed
+        assert closed == (1, 0)
+        result = await _result(client, "irid-2")
+        assert (result["state"], result["reason"]) == ("not_judged", "expired")
+        again = await handler.request(_result_request("y2"))
+        assert isinstance(again, Refuse) and "has ended" in again.message
+
+        # its record is kept from its end as long again, and then it is forgotten
+        now[0] += 9
+        assert handler.sweep() == (0, 0)
+        now[0] += 1
+        assert handler.sweep() == (0, 1)
+
+
+@pytest.mark.anyio
+async def test_a_call_begins_to_wait_when_the_person_has_answered_however_long_they_took(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _clocks(monkeypatch)
+    handler = _at_results(state=MemoryState(expiry=10))
+    async with _serving(handler) as client:
+        question = await _asked_at_result(handler, client)
+        # a question is never closed for waiting, and the person takes three days
+        now[0] += 3 * 24 * 60 * 60
+        assert handler.sweep() == (0, 0)
+        (still_open,) = await _pending(client)
+        assert still_open["id"] == question["id"]
+
+        await _answer(client, question["id"], "approve")
+        # the judging goes on to its end, and nothing has asked about the
+        # call since: a lookup would be heard of, and keep the call
+        await anyio.sleep(0.1)
+
+        # the call waits from the answer, not from its last request
+        assert handler.sweep() == (0, 0)
+        assert (await _result(client, "irid-2"))["state"] == "awaiting_request"
+        now[0] += 9
+        assert handler.sweep() == (0, 0)
+        assert isinstance(await handler.request(_result_request("y2")), Pass)
+
+
+@pytest.mark.anyio
+async def test_a_waiting_call_its_eval_asks_about_is_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _clocks(monkeypatch)
+    handler = _at_results(state=MemoryState(expiry=10))
+    async with _serving(handler) as client:
+        await _waiting_for_its_request(handler, client)
+
+        # each lookup is within the time the call is kept without one
+        for _ in range(3):
+            now[0] += 6
+            assert (await _result(client, "irid-2"))["state"] == "awaiting_request"
+            assert handler.sweep() == (0, 0)
+
+
+@pytest.mark.anyio
+async def test_a_call_whose_reply_is_still_coming_is_kept_and_one_with_no_reply_is_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _clocks(monkeypatch)
+    handler = _at_results(state=MemoryState(expiry=10))
+    async with _serving(handler) as client:
+        await _waiting_for_its_request(handler, client)
+        assert isinstance(await handler.request(_result_request("y2")), Pass)
+        body = message({"type": "text", "text": "It rains."}, stop_reason="end_turn")
+        sent_on = reply(body, id="y2")
+        stream = handler.reply_stream(
+            ReplyStart(
+                id=sent_on.id,
+                provider=sent_on.provider,
+                model=sent_on.model,
+                user=sent_on.user,
+                status=sent_on.status,
+                content_type=sent_on.content_type,
+                format=sent_on.format,
+            )
+        )
+
+        # the proxy hands over a part of the reply now and then
+        for part in (body[:10], body[10:20]):
+            now[0] += 6
+            await stream.feed(part)
+            assert handler.sweep() == (0, 0)
+        assert (await _result(client, "irid-2"))["state"] == "awaiting_reply"
+
+        # then nothing more comes, and nobody asks
+        now[0] += 10
+        assert handler.sweep() == (1, 0)
+        result = await _result(client, "irid-2")
+        assert (result["state"], result["reason"]) == ("not_judged", "expired")
+        # The reply, when it does come, is not judged or passed on, and
+        # opens nothing again: the request it answers is kept no longer.
+        with pytest.raises(UnreadableError, match="no longer keeps"):
+            await handler.reply(sent_on)
+        assert (await _result(client, "irid-2"))["reason"] == "expired"
+
+
+@pytest.mark.anyio
+async def test_an_ended_call_is_kept_from_its_end_however_often_it_is_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _clocks(monkeypatch)
+    handler = _reviewed(state=MemoryState(expiry=10))
+    async with _serving(handler) as client:
+        question = await _asked(handler, client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, until="decided")
+
+        # read again and again, which keeps its records but not the call
+        for _ in range(3):
+            now[0] += 3
+            assert (await _result(client))["state"] == "decided"
+            assert (await _held_reply(client)).status_code == 200
+            assert handler.sweep() == (0, 0)
+        now[0] += 1
+
+        assert handler.sweep() == (0, 1)
+        assert (await _held_reply(client)).status_code != 200
 
 
 def _state_clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:

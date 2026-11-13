@@ -46,13 +46,14 @@ NotJudged: TypeAlias = Literal[
     "replaced_attempt",
     "cancelled",
     "result_under_review",
+    "expired",
 ]
 """Why a request or its reply was not judged."""
 
 Stopped: TypeAlias = Literal[
-    "replaced_attempt", "sample_ended", "run_ended", "cancelled"
+    "replaced_attempt", "sample_ended", "run_ended", "cancelled", "expired"
 ]
-"""Why an attempt at a request has nobody waiting for it: a later attempt at its sample began, the eval ended its sample, a sentinel ended its run, or the eval cancelled the request while it waited for a person."""
+"""Why an attempt at a request has nobody waiting for it: a later attempt at its sample began, the eval ended its sample, a sentinel ended its run, the eval cancelled the request while it waited for a person, or the request waited to be sent on, or for its reply, for as long as the sidecar keeps a run nothing names."""
 
 Outcome: TypeAlias = Literal["proceed", "reject", "terminate"]
 """What an exchange came to."""
@@ -341,6 +342,11 @@ class State(Protocol):
     A sidecar that runs as several processes needs them to share this, and a run that outlasts a restart needs it kept. Only the in-memory implementation exists, which hands back the objects it keeps, so the handler changes them in place. A shared implementation would also need a way to write them back.
     """
 
+    @property
+    def expiry(self) -> float:
+        """How long a run is kept once nothing has named it, in seconds. The handler keeps a model call a person was asked about as long: one that waits and that nothing names, and one that has ended."""
+        ...
+
     async def run(self, key: str) -> Run:
         """The run's state, made new if none is kept. A run its eval ended is not made again: an ended run is handed back, whose `refusal` refuses every request of it."""
         ...
@@ -490,6 +496,7 @@ class MemoryState:
         Args:
             expiry: How long a run is kept once no request has named it, in seconds. A request still awaiting its reply, and what was recorded for a request, are kept as long.
         """
+        self._run_expiry = expiry
         self._runs = _Expiring[Run](expiry)
         self._held = _Expiring[Held](expiry)
         self._recorders = _Expiring[ListRecorder](expiry)
@@ -509,6 +516,10 @@ class MemoryState:
         self._tasks: dict[tuple[str, str], tuple[float, float, RegisteredTask]] = {}
         self._pinned_tasks: Counter[tuple[str, str]] = Counter()
         self._tokens = _Expiring[str](expiry)
+
+    @property
+    def expiry(self) -> float:
+        return self._run_expiry
 
     async def run(self, key: str) -> Run:
         run = self._runs.get(key)
