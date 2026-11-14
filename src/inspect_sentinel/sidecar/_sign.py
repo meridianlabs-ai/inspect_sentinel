@@ -56,6 +56,18 @@ def call_values(method: str, eval_id: str, timestamp: int) -> list[object]:
     return [method, eval_id, timestamp]
 
 
+def answer_values(
+    eval_id: str, timestamp: int, id: str, decision: str, reason: str | None
+) -> list[object]:
+    """What an `answer_question` call's `mac` signs: what every call's signs, then the question's id, the choice and the reason, `""` for none. So a `mac` copied from one answer can't send another."""
+    return [
+        *call_values("answer_question", eval_id, timestamp),
+        id,
+        decision,
+        reason if reason is not None else "",
+    ]
+
+
 def unproven(
     token: str,
     values: Sequence[object],

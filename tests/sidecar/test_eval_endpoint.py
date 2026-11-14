@@ -28,6 +28,7 @@ from inspect_sentinel.sidecar import (
 )
 from inspect_sentinel.sidecar._errors import TimeLimitError, UnauthorizedError
 from inspect_sentinel.sidecar._eval_endpoint import (
+    HELD_REPLY_PATH,
     INFO_PATH,
     PATH,
     SCHEMA_FILE,
@@ -149,14 +150,43 @@ async def _registered(client: httpx.AsyncClient, **changes: Any) -> None:
 
 @pytest.mark.anyio
 async def test_the_probe_says_which_versions_are_served() -> None:
-    async with _client(Handler(weather_rule())) as client:
+    handler = Handler(weather_rule())
+    async with handler.serving(), _client(handler) as client:
         answered = await client.get(INFO_PATH)
 
     assert answered.json() == {
         "service": "inspect_sentinel",
         "versions": [1],
         "release": "whole",
+        "review": True,
     }
+
+
+@pytest.mark.anyio
+async def test_the_probe_of_a_handler_that_isnt_serving_says_no_eval_is_asked() -> None:
+    # the judging that waits for a person runs while the handler serves, so
+    # outside that nobody is asked through an eval
+    async with _client(Handler(weather_rule())) as client:
+        answered = await client.get(INFO_PATH)
+
+    assert answered.json()["review"] is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("handler_options", "route_options"),
+    [({"eval_results": False}, {}), ({}, {"results": False})],
+)
+async def test_the_probe_says_when_an_eval_isnt_asked_for_a_person(
+    handler_options: dict[str, Any], route_options: dict[str, Any]
+) -> None:
+    # an eval that isn't sent results isn't asked to answer for a person, so
+    # it needn't look for questions
+    handler = Handler(weather_rule(), **handler_options)
+    async with handler.serving(), _client(handler, **route_options) as client:
+        answered = await client.get(INFO_PATH)
+
+    assert answered.json()["review"] is False
 
 
 @pytest.mark.anyio
@@ -1183,7 +1213,7 @@ def test_both_endpoints_share_a_port_by_default() -> None:
     served = apps(Handler(weather_rule()), _arguments())
 
     assert [(port, _paths(app)) for app, port in served] == [
-        (8900, {"/proxy/v1", "/health", INFO_PATH, PATH})
+        (8900, {"/proxy/v1", "/health", INFO_PATH, PATH, HELD_REPLY_PATH})
     ]
 
 
@@ -1196,7 +1226,7 @@ def test_the_endpoint_for_evals_can_have_a_port_and_a_token_of_its_own(
 
     assert [(port, _paths(app)) for app, port in served] == [
         (8900, {"/proxy/v1", "/health"}),
-        (8901, {"/health", INFO_PATH, PATH}),
+        (8901, {"/health", INFO_PATH, PATH, HELD_REPLY_PATH}),
     ]
 
 

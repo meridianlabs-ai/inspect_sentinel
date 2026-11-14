@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Callable, Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias
 
 import anyio
@@ -35,6 +35,9 @@ KEEPALIVE_SECONDS = 15.0
 KEEPALIVE = b": keepalive\n\n"
 """A keepalive: an SSE comment, which every provider SDK skips."""
 
+ERROR_BODY_BYTES = 1024 * 1024
+"""The largest body of a provider's error that is copied for an eval whose model call waited for a person. A larger one still goes on to the client whole, and the eval is told the error without its body."""
+
 
 @dataclass(frozen=True, kw_only=True)
 class ReplyStart:
@@ -60,6 +63,9 @@ class ReplyStart:
 
     format: Format | None = None
     """Which API the body is written in, if the proxy said. Without it, the API is worked out from `provider` and the body."""
+
+    headers: Mapping[str, str] = field(default_factory=dict[str, str])
+    """The reply's headers as the provider sent them, by lowercase name, where the proxy hands them over."""
 
 
 @dataclass(frozen=True)
@@ -165,6 +171,8 @@ class ReplyStream:
         """
         if self._ended:
             raise RuntimeError("The reply's input has already been ended.")
+        # a reply that is still coming keeps a model call that waits for it
+        self._handler.reply_progress(self._start.id)
         if (
             succeeded(self._start.status)
             and len(self._held) + len(data) > self._max_held_bytes
@@ -282,23 +290,37 @@ class ReplyStream:
         await self._out(Finished())
 
     async def _provider_error(self) -> None:
-        # A provider's error goes on unjudged, and the handler reads nothing
-        # of it: it is told at the start, and the body goes out as it comes,
-        # whatever its size.
-        answer = await self._handler.reply(self._reply(b""))
+        # A provider's error goes on unjudged: the handler is told at the
+        # start, and the body goes out as it comes, whatever its size. A copy
+        # of a body no larger than `ERROR_BODY_BYTES` is handed over once it
+        # has all come, for an eval whose model call waited for a person.
+        answer = await self._handler.reply(self._reply(b"", body_follows=True))
         if isinstance(answer, Refuse):
             await self._out(answer)
             return
+        body: bytearray | None = bytearray()
         while True:
             await self._until(lambda: bool(self._held) or self._ended or self._aborted)
             if self._held:
                 data = bytes(self._held)
                 self._held.clear()
                 self._drained.set()
+                if body is not None:
+                    body.extend(data)
+                    if len(body) > ERROR_BODY_BYTES:
+                        body = None
                 await self._out(Release(data))
             if self._aborted:
+                # the body didn't all pass, so the error isn't one the eval
+                # can be given: it failed as a reply cut off does
+                await self._handler.reply_not_judged(self._start.id, "cut_off")
                 return
             if self._ended and not self._held:
+                # always said, so that the handler knows the error is whole:
+                # without a body where there was none, or one too large to copy
+                await self._handler.error_body(
+                    self._start.id, bytes(body) if body is not None else b""
+                )
                 await self._out(Finished())
                 return
 
@@ -471,7 +493,7 @@ class ReplyStream:
                     pass
             self._last_out = anyio.current_time()
 
-    def _reply(self, body: bytes) -> Reply:
+    def _reply(self, body: bytes, *, body_follows: bool = False) -> Reply:
         start = self._start
         return Reply(
             id=start.id,
@@ -482,6 +504,8 @@ class ReplyStream:
             status=start.status,
             content_type=start.content_type,
             body=body,
+            body_follows=body_follows,
+            headers=start.headers,
         )
 
 

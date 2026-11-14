@@ -3,7 +3,7 @@ from __future__ import annotations
 import hmac
 import json
 import time
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar
@@ -19,6 +19,7 @@ from ._exchange import Refuse, Request
 from ._host import ListRecorder, ModelUsed, Record
 from ._inspect_client import Exchange
 from ._registration import RegisteredTask
+from ._review import Review
 from ._wire import Amendment, Edited, EntryDigest, Format, Offered, Turn
 
 V = TypeVar("V")
@@ -43,8 +44,16 @@ NotJudged: TypeAlias = Literal[
     "provider_error",
     "cut_off",
     "replaced_attempt",
+    "cancelled",
+    "result_under_review",
+    "expired",
 ]
 """Why a request or its reply was not judged."""
+
+Stopped: TypeAlias = Literal[
+    "replaced_attempt", "sample_ended", "run_ended", "cancelled", "expired"
+]
+"""Why an attempt at a request has nobody waiting for it: a later attempt at its sample began, the eval ended its sample, a sentinel ended its run, the eval cancelled the request while it waited for a person, or the request waited to be sent on, or for its reply, for as long as the sidecar keeps a run nothing names."""
 
 Outcome: TypeAlias = Literal["proceed", "reject", "terminate"]
 """What an exchange came to."""
@@ -68,11 +77,18 @@ class Attempt:
     eval_id: str
     """The eval the request's `x-inspect-context` named, and proved with its `mac`: the only one `request_result` answers for it."""
 
-    state: Literal["judging", "awaiting_reply", "decided", "not_judged"] = "judging"
-    """Where the attempt stands."""
+    state: Literal[
+        "judging",
+        "awaiting_review",
+        "awaiting_request",
+        "awaiting_reply",
+        "decided",
+        "not_judged",
+    ] = "judging"
+    """Where the attempt stands. `awaiting_review` and `awaiting_request` are only for a model call a sentinel asked a person about: a question is open, or the request may be sent on to the provider."""
 
     reason: NotJudged | None = None
-    """Why the attempt was not judged, when it wasn't."""
+    """Why the attempt was not judged, when it wasn't. With `awaiting_request`, why the provider's last exchange failed, if one did: `provider_error` or `cut_off`."""
 
     outcome: Outcome | None = None
     """What the attempt came to, once decided."""
@@ -94,9 +110,19 @@ class Attempt:
     settled: anyio.Event = field(default_factory=anyio.Event)
     """Set once the attempt is decided or not judged, for a `request_result` that waits."""
 
+    stopped: Stopped | None = None
+    """Why nobody waits for the attempt, once that is so. Judging that reaches a question after this asks nobody, and an attempt that is waiting on a person when it is set is stopped, with no decision."""
+
+    reviews: list[Review] = field(default_factory=list[Review])
+    """What became of each question a sentinel asked a person during the attempt, in order."""
+
+    review_tries: dict[str, int] = field(default_factory=dict[str, int])
+    """The number of the try each of `reviews` was asked at, from 1, by the question's id. A try sent again for a model call a person was asked about adds no attempt, so the attempt's place among the request's attempts doesn't give it."""
+
     def decide(self, outcome: Outcome, message: str | None = None) -> None:
-        """Mark the attempt decided."""
+        """Mark the attempt decided. A decided attempt has no `reason`: one left from an earlier state, as from a provider's failure the attempt waited after, goes."""
         self.state, self.outcome, self.message = "decided", outcome, message
+        self.reason = None
         self.settled.set()
 
     def not_judged(self, reason: NotJudged) -> None:
@@ -276,6 +302,8 @@ class Held:
     """For a run no eval names, the last entry the client sent, as its mark was taken of it, in digests, or None for a request with none, or whose last entry nothing can be added to."""
     request: Request | None = None
     """For a run no eval names, the request as the client sent it, so that a run ended meanwhile by another exchange refuses its reply when it continues the ended conversation with blocks added to its last entry."""
+    binding: str = ""
+    """For an eval's request, a digest of what the request is: what a request sent again under the same `x-irid` must match to be a try of the same model call."""
 
     @property
     def sent(self) -> int:
@@ -288,11 +316,36 @@ class Held:
         return self.marks[-1]
 
 
+@dataclass(frozen=True)
+class Pinned:
+    """What a model call that waits for a person needs kept, however long the person takes."""
+
+    eval_id: str
+    """The eval, whose secret is kept."""
+
+    task: str
+    """The eval's task, whose registration is kept."""
+
+    run: str
+    """The key of the call's run."""
+
+    request: str
+    """The eval's id for the request, whose attempts are kept."""
+
+    exchanges: tuple[str, ...]
+    """The proxy's ids for the exchanges of every attempt at the request, whose records are kept: `request_result` reads them all, those of tries before the one that asked included."""
+
+
 class State(Protocol):
     """Where the sidecar keeps runs, the requests awaiting a reply, and what was recorded for each request.
 
     A sidecar that runs as several processes needs them to share this, and a run that outlasts a restart needs it kept. Only the in-memory implementation exists, which hands back the objects it keeps, so the handler changes them in place. A shared implementation would also need a way to write them back.
     """
+
+    @property
+    def expiry(self) -> float:
+        """How long a run is kept once nothing has named it, in seconds. The handler keeps a model call a person was asked about as long: one that waits and that nothing names, and one that has ended."""
+        ...
 
     async def run(self, key: str) -> Run:
         """The run's state, made new if none is kept. A run its eval ended is not made again: an ended run is handed back, whose `refusal` refuses every request of it."""
@@ -300,6 +353,14 @@ class State(Protocol):
 
     async def hold(self, id: str, held: Held) -> None:
         """Keep a request until its reply is handed over."""
+        ...
+
+    async def pin(self, pinned: Pinned) -> None:
+        """Keep these past their expiry, until `unpin`. Each `pin` is undone by one `unpin`, so two calls that wait for a person can pin the same eval or run."""
+        ...
+
+    async def unpin(self, pinned: Pinned) -> None:
+        """Undo one `pin`. What it kept expires again, counted from now."""
         ...
 
     async def release(self, id: str) -> Held | None:
@@ -435,6 +496,7 @@ class MemoryState:
         Args:
             expiry: How long a run is kept once no request has named it, in seconds. A request still awaiting its reply, and what was recorded for a request, are kept as long.
         """
+        self._run_expiry = expiry
         self._runs = _Expiring[Run](expiry)
         self._held = _Expiring[Held](expiry)
         self._recorders = _Expiring[ListRecorder](expiry)
@@ -452,7 +514,12 @@ class MemoryState:
         # each registration has an expiry of its own, and there are few, so
         # they are swept whole
         self._tasks: dict[tuple[str, str], tuple[float, float, RegisteredTask]] = {}
+        self._pinned_tasks: Counter[tuple[str, str]] = Counter()
         self._tokens = _Expiring[str](expiry)
+
+    @property
+    def expiry(self) -> float:
+        return self._run_expiry
 
     async def run(self, key: str) -> Run:
         run = self._runs.get(key)
@@ -470,6 +537,29 @@ class MemoryState:
 
     async def release(self, id: str) -> Held | None:
         return self._held.pop(id)
+
+    async def pin(self, pinned: Pinned) -> None:
+        self._runs.pin(pinned.run)
+        self._tokens.pin(pinned.eval_id)
+        self._attempts.pin(_request_key(pinned.request, pinned.eval_id))
+        for exchange in pinned.exchanges:
+            self._recorders.pin(exchange)
+        self._pinned_tasks[(pinned.eval_id, pinned.task)] += 1
+
+    async def unpin(self, pinned: Pinned) -> None:
+        self._runs.unpin(pinned.run)
+        self._tokens.unpin(pinned.eval_id)
+        self._attempts.unpin(_request_key(pinned.request, pinned.eval_id))
+        for exchange in pinned.exchanges:
+            self._recorders.unpin(exchange)
+        task = (pinned.eval_id, pinned.task)
+        self._pinned_tasks[task] -= 1
+        if self._pinned_tasks[task] <= 0:
+            del self._pinned_tasks[task]
+            kept = self._tasks.get(task)
+            if kept is not None:
+                # it expires again, counted from now
+                self._tasks[task] = (time.monotonic(), kept[1], kept[2])
 
     async def recorder(self, id: str) -> ListRecorder:
         recorder = self._recorders.get(id)
@@ -606,7 +696,7 @@ class MemoryState:
     def _expire_tasks(self) -> None:
         now = time.monotonic()
         for key, (used, expiry, _) in list(self._tasks.items()):
-            if now - used >= expiry:
+            if now - used >= expiry and key not in self._pinned_tasks:
                 del self._tasks[key]
 
 
@@ -628,6 +718,20 @@ class _Expiring(Generic[V]):
         self._limit = limit
         self._dropped = dropped
         self._kept: OrderedDict[str, tuple[float, V]] = OrderedDict()
+        self._pinned: Counter[str] = Counter()
+
+    def pin(self, key: str) -> None:
+        # kept past its expiry until unpinned, as often as it was pinned
+        self._pinned[key] += 1
+
+    def unpin(self, key: str) -> None:
+        self._pinned[key] -= 1
+        if self._pinned[key] <= 0:
+            del self._pinned[key]
+            kept = self._kept.get(key)
+            if kept is not None:
+                # it expires again, counted from now
+                self.put(key, kept[1])
 
     def get(self, key: str) -> V | None:
         self._expire()
@@ -663,10 +767,17 @@ class _Expiring(Generic[V]):
 
     def _expire(self) -> None:
         now = time.monotonic()
-        while self._kept:
-            key, (used, _) = next(iter(self._kept.items()))
+        # each entry is looked at once at most, as a pinned one goes to the back
+        for _ in range(len(self._kept)):
+            key, (used, value) = next(iter(self._kept.items()))
             if now - used < self._expiry:
                 return
-            _, value = self._kept.pop(key)
+            if key in self._pinned:
+                # kept, and counted as used now, so that what follows it is
+                # still looked at
+                self._kept[key] = (now, value)
+                self._kept.move_to_end(key)
+                continue
+            self._kept.pop(key)
             if self._dropped is not None:
                 self._dropped(key, value)

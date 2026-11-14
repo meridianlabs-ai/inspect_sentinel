@@ -12,7 +12,13 @@ import grpc
 from .._errors import bounded, error_body, refusal_for
 from .._exchange import Answer, Pass, Refuse, Replace, Reply, Request, succeeded
 from .._handler import Handler
-from .._reply_stream import ErrorEvent, Release, ReplyStart, ReplyStream
+from .._reply_stream import (
+    ERROR_BODY_BYTES,
+    ErrorEvent,
+    Release,
+    ReplyStart,
+    ReplyStream,
+)
 from .._wire import Format
 from ._metadata import FORMAT_METADATA, INSPECT_HEADERS, PROVIDER_METADATA
 from ._proto.envoy.config.core.v3 import base_pb2 as core
@@ -162,6 +168,18 @@ class _Exchange:
         self._model = ""
         self._status = 0
         self._content_type = ""
+        # The reply's headers as the provider sent them, without pseudo-headers
+        # such as `:status`. A header sent more than once has its values
+        # joined with a comma, which HTTP reads as the same header. Nothing
+        # else is left out here.
+        self._reply_headers: dict[str, str] = {}
+        # a copy of a provider's error as it passes, or None once it is too
+        # large to keep
+        self._error_body: bytearray | None = None
+        # whether the handler waits to be told a provider's error has all
+        # arrived, and the handler being shown that error, while it is
+        self._error_follows = False
+        self._error_shown: asyncio.Future[Answer] | None = None
         self._declared_length = False
         self._request_encoding = "identity"
         self._replied = False
@@ -214,6 +232,19 @@ class _Exchange:
         """Stop the reply's stream if it hasn't ended, as when Envoy has stopped waiting. A request sent on whose reply never began is recorded as cut off."""
         if self._delivery is not None:
             self._delivery.cancel()
+        if self._error_follows:
+            # the error's body didn't all pass, so the error isn't one an
+            # eval can be given: it failed as a reply cut off does
+            self._error_follows = False
+            self._error_body = None
+            shown, self._error_shown = self._error_shown, None
+            if shown is not None and not shown.done():
+                # Envoy stopped waiting while the handler was still being
+                # shown the error. The handler is told once it has been, or
+                # it would wait for the error's body for good.
+                self._spawn(self._cut_off_once_shown(shown))
+            else:
+                await self._handler.reply_not_judged(self._id, "cut_off")
         if self._stream is not None:
             await self._stream.abort()
         elif self._forwarded and not self._replied:
@@ -246,6 +277,7 @@ class _Exchange:
                 self._trailers = self._body_ended = True
                 await self._stream.end()
                 return []
+            await self._error_passed()
             self.finished = True
             return [pb.ProcessingResponse(response_trailers=pb.TrailersResponse())]
         # request trailers are not asked for, and nothing else needs an answer
@@ -349,6 +381,11 @@ class _Exchange:
         received = _read(headers.headers)
         self._status = int(received.get(":status", "0") or 0)
         self._content_type = received.get("content-type", "")
+        self._reply_headers = {
+            name: value
+            for name, value in _read_every_value(headers.headers).items()
+            if not name.startswith(":")
+        }
         if not succeeded(self._status):
             return await self._provider_error(headers.end_of_stream)
         encoding = received.get("content-encoding", "identity").lower()
@@ -374,6 +411,7 @@ class _Exchange:
                     user=None,
                     status=self._status,
                     content_type=self._content_type,
+                    headers=self._reply_headers,
                 ),
                 max_held_bytes=self._max_body_bytes,
             )
@@ -409,16 +447,33 @@ class _Exchange:
         ]
 
     async def _provider_error(self, end_of_stream: bool) -> list[pb.ProcessingResponse]:
-        # A provider's error goes on unjudged, and the handler reads nothing
-        # of it: it is told at the headers, and the body passes through as it
-        # comes, whatever its size or encoding.
+        # A provider's error goes on unjudged: the handler is told at the
+        # headers, and the body passes through as it comes, whatever its size
+        # or encoding. A copy of a body no larger than `ERROR_BODY_BYTES` is
+        # handed over once it has all arrived from the provider, for an eval
+        # whose model call waited for a person and reads the error from the
+        # sidecar.
         self._replied = self._passing = True
-        answer = await self._judge(
-            self._handler.reply(self._reply_of(b"")), "reply", reply=True
+        # set before the handler is shown the error, so that an exchange
+        # Envoy stops while it is still being shown tells the handler the
+        # error didn't all pass (`close`)
+        self._error_follows = not end_of_stream
+        shown = asyncio.ensure_future(
+            self._handler.reply(self._reply_of(b"", body_follows=not end_of_stream))
         )
+        self._error_shown = shown
+        answer = await self._judge(shown, "reply", reply=True)
+        self._error_shown = None
         if isinstance(answer, Refuse):
+            self._error_follows = False
             return [self._refusal(answer)]
         self.finished = end_of_stream
+        # A compressed error isn't copied: the sidecar drops `content-encoding`
+        # from what it keeps of a reply, so a compressed copy couldn't be read.
+        # Its body is then left empty.
+        encoding = self._reply_headers.get("content-encoding", "identity").lower()
+        if not end_of_stream and encoding == "identity":
+            self._error_body = bytearray()
         return [
             pb.ProcessingResponse(
                 response_headers=pb.HeadersResponse(response=pb.CommonResponse())
@@ -428,6 +483,13 @@ class _Exchange:
     async def _response_body(self, body: pb.HttpBody) -> list[pb.ProcessingResponse]:
         if self._passing:
             self.finished = body.end_of_stream
+            copy = self._error_body
+            if copy is not None:
+                copy.extend(body.body)
+                if len(copy) > ERROR_BODY_BYTES:
+                    self._error_body = None
+            if body.end_of_stream:
+                await self._error_passed()
             return [_streamed(body.body, end_of_stream=body.end_of_stream)]
         if self._stream is None:
             return []
@@ -467,7 +529,24 @@ class _Exchange:
         except Exception as ex:
             await self._answer(self._refusal(self._not_judged(ex, "reply", reply=True)))
 
-    def _reply_of(self, body: bytes) -> Reply:
+    async def _cut_off_once_shown(self, shown: asyncio.Future[Answer]) -> None:
+        # what the handler is told of an error whose exchange Envoy stopped
+        # while the handler was still being shown it: that it didn't all pass
+        await asyncio.wait({shown})
+        await self._handler.reply_not_judged(self._id, "cut_off")
+
+    async def _error_passed(self) -> None:
+        # A provider's error has all arrived from the provider, as the shim
+        # is handed its last chunk to pass on. The handler is always told, so
+        # that it knows the error is whole: without a body where there was
+        # none, or one too large or compressed to copy.
+        if not self._error_follows:
+            return
+        self._error_follows = False
+        copy, self._error_body = self._error_body, None
+        await self._handler.error_body(self._id, bytes(copy) if copy else b"")
+
+    def _reply_of(self, body: bytes, *, body_follows: bool = False) -> Reply:
         return Reply(
             id=self._id,
             provider=self._provider,
@@ -477,6 +556,8 @@ class _Exchange:
             status=self._status,
             content_type=self._content_type,
             body=body,
+            body_follows=body_follows,
+            headers=self._reply_headers,
         )
 
     async def _judge(
@@ -530,13 +611,28 @@ def _streamed(body: bytes, *, end_of_stream: bool) -> pb.ProcessingResponse:
 
 
 def _read(headers: core.HeaderMap) -> dict[str, str]:
-    # Envoy sends a value as bytes in `raw_value`, or as text in `value`
+    # Envoy sends a value as bytes in `raw_value`, or as text in `value`. Of a
+    # header sent more than once, the last value is the one read.
     return {
         header.key.lower(): (
             header.raw_value.decode("latin-1") if header.raw_value else header.value
         )
         for header in headers.headers
     }
+
+
+def _read_every_value(headers: core.HeaderMap) -> dict[str, str]:
+    # Headers that are kept to be served again, so none of their values is
+    # dropped. Envoy sends a header that came more than once as an entry for
+    # each value. They are joined with a comma, in order, which HTTP gives the
+    # same meaning for every header but `set-cookie`, and the handler never
+    # keeps that one.
+    read: dict[str, str] = {}
+    for header in headers.headers:
+        name = header.key.lower()
+        value = header.raw_value.decode("latin-1") if header.raw_value else header.value
+        read[name] = f"{read[name]}, {value}" if name in read else value
+    return read
 
 
 def _header(name: str, value: str) -> core.HeaderValueOption:

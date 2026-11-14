@@ -38,6 +38,7 @@ PENDING_BYTES = 1024 * 1024
 
 _PROVIDER = "The provider whose format the body is in, such as `anthropic` or `openai`. Where `format` is given, the body is read by `format`, and this can be any name the proxy has for the provider."
 _FORMAT = "Which API the body is written in: `anthropic-messages`, `openai-chat` or `openai-responses`. A proxy that knows says, and the body is then read as that, whatever `provider` is. Without it, the API is worked out from `provider` and the body."
+REPLY_HEADERS = "The reply's headers as the provider sent them, without credentials. A proxy hook that has them hands them over, for a provider's error too. The sidecar keeps them with the reply of a model call that waited for a person, which the eval then reads as the provider's own, and with a provider's error, where they say whether the call may be tried again."
 
 
 class BeginReplyParams(BaseModel):
@@ -53,6 +54,10 @@ class BeginReplyParams(BaseModel):
     status: int = Field(description="The HTTP status of the provider's reply.")
     content_type: str = Field(
         description="The reply's content type, which says whether it is one JSON object or a stream of events."
+    )
+    headers: dict[str, str] = Field(
+        default_factory=dict[str, str],
+        description=REPLY_HEADERS,
     )
     keepalive: bool = Field(
         default=True,
@@ -225,6 +230,7 @@ class ReplyStreams:
                 user=given.user,
                 status=given.status,
                 content_type=given.content_type,
+                headers={name.lower(): value for name, value in given.headers.items()},
             ),
             max_held_bytes=self._max_body_bytes,
             max_pending_bytes=self._max_pending_bytes,

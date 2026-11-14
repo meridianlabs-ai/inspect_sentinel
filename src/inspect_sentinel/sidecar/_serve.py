@@ -160,6 +160,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="SECONDS",
         help=f"How far the timestamp of an Inspect eval's model request, or of its call to the endpoint for evals, may be from the sidecar's clock. One further is refused, so a signature copied from a log is of no use once the window has passed. {TIMESTAMP_WINDOW:g} by default.",
     )
+    parser.add_argument(
+        "--review-timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="How long a question waits for a person's answer before it expires, when the sentinel asks one during an Inspect eval, which shows the question in its approval UI. A question that expires is answered with caution: rejected if that was offered, otherwise the run is ended. The eval's prompt for it stays open until someone answers, and that answer is then not used. By default a question has no expiry, as a person may take days. No connection waits meanwhile, and the wait is not counted against --time-limit.",
+    )
 
 
 class EnvoySettings(BaseModel):
@@ -197,6 +204,7 @@ class ServerSettings(BaseModel):
     max_body_bytes: int | None = None
     run_expiry: float | None = None
     timestamp_window: float | None = None
+    review_timeout: float | None = None
     release: Literal["whole", "early"] | None = None
     keepalive: float | None = None
 
@@ -231,6 +239,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "max_body_bytes",
             "run_expiry",
             "timestamp_window",
+            "review_timeout",
             "release",
             "keepalive",
         )
@@ -361,6 +370,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         release=arguments.release,
         keepalive=arguments.keepalive or None,
         timestamp_window=arguments.timestamp_window,
+        review_timeout=arguments.review_timeout,
     )
 
 
@@ -426,7 +436,7 @@ def serve(handler: Handler, arguments: argparse.Namespace) -> None:
     ]
     shim = _envoy_shim(handler, arguments)
     try:
-        anyio.run(_serve_all, servers, shim)
+        anyio.run(_serve_all, servers, shim, handler)
     except KeyboardInterrupt:
         # a server that stops for Ctrl-C raises it again once it has stopped,
         # and stopping is what was asked, as `uvicorn.run` takes it
@@ -465,8 +475,17 @@ _SHIM_GRACE = 5.0
 
 
 async def _serve_all(
-    servers: list[uvicorn.Server], shim: Callable[[], _GrpcServer] | None = None
+    servers: list[uvicorn.Server],
+    shim: Callable[[], _GrpcServer] | None = None,
+    handler: Handler | None = None,
 ) -> None:
+    if handler is not None:
+        # the judging of a model call that waits for a person runs here,
+        # whichever server its exchange came through
+        async with handler.serving():
+            await _serve_all(servers, shim)
+        return
+
     async def until_one_stops(server: uvicorn.Server) -> None:
         await server.serve()
         # one signal stops only the server that caught it
