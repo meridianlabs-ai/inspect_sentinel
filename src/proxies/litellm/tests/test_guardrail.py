@@ -2349,18 +2349,19 @@ def test_the_sidecars_stream_is_closed_when_the_caller_goes_before_its_end(
 ) -> None:
     proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
     _without_eval_route(proxy)
-    closed = threading.Event()
+    closed, let_go = threading.Event(), threading.Event()
 
     async def held() -> AsyncIterator[bytes]:
         try:
-            # for far longer than the test waits
-            for _ in range(160):
+            # It has no end of its own: it goes on until its reader closes
+            # it, or until the test lets it go once it has looked.
+            while not let_go.is_set():
                 yield b"event: ping\ndata: {}\n\n"
                 await asyncio.sleep(0.05)
         finally:
             closed.set()
 
-    async def call(guardrail: Any) -> tuple[float, bool]:
+    async def call(guardrail: Any) -> tuple[bool, bool]:
         scope = _http_scope(spec_version)
         asked = False
         reading = asyncio.Event()
@@ -2388,17 +2389,20 @@ def test_the_sidecars_stream_is_closed_when_the_caller_goes_before_its_end(
         # the route as LiteLLM's app calls it, without the app's own layers,
         # which each have their own way with a caller that goes
         forward = proxy.app.router.routes[0].endpoint
-        began = time.monotonic()
         try:
             response = await forward(HttpRequest(scope, receive), "v1/held-reply")
             try:
                 await response(scope, receive, send)
             except Exception:
                 pass
-            await asyncio.to_thread(closed.wait, 6)
+            # The guardrail and the sidecar still serve, so the stream can
+            # only have ended by being closed. The wait only stops a hang.
+            stream_closed = await asyncio.to_thread(closed.wait, 30)
             # the session is the guardrail's for every call, and stays open
-            return time.monotonic() - began, guardrail._session.closed
+            return stream_closed, bool(guardrail._session.closed)
         finally:
+            # a stream nobody closed is let go, so that the sidecar can stop
+            let_go.set()
             await guardrail.aclose()
 
     sidecar = _sidecar_answering(
@@ -2407,10 +2411,9 @@ def test_the_sidecars_stream_is_closed_when_the_caller_goes_before_its_end(
     with _serving(sidecar) as url:
         guardrail = _make(monkeypatch, url)
         guardrail.serve_eval_routes()
-        took, session_closed = asyncio.run(call(guardrail))
+        stream_closed, session_closed = asyncio.run(call(guardrail))
 
-    # long before the 8 seconds the sidecar would have gone on writing
-    assert took < 4
+    assert stream_closed
     assert not session_closed
 
 

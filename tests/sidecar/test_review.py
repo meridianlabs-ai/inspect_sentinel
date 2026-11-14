@@ -224,6 +224,22 @@ async def _cancel(
     return cancelled
 
 
+async def _paused(
+    handler: Handler,
+    *content: dict[str, Any],
+    irid: str = "irid-1",
+    id: str = "x",
+    **sample: Any,
+) -> None:
+    # the eval's request goes on, and a person is asked about the first call
+    # in its reply, so the reply is answered "pending review"
+    assert isinstance(await handler.request(_from_eval(id, irid, **sample)), Pass)
+    answer = await handler.reply(
+        reply(message(*(content or (weather("Oslo"),))), id=id)
+    )
+    assert answer is PENDING
+
+
 async def _asked(
     handler: Handler,
     client: httpx.AsyncClient,
@@ -232,14 +248,9 @@ async def _asked(
     id: str = "x",
     **sample: Any,
 ) -> dict[str, Any]:
-    # the eval's request goes on, and a person is asked about the first call
-    # in its reply: the question, once the reply has been answered "pending
-    # review"
-    assert isinstance(await handler.request(_from_eval(id, irid, **sample)), Pass)
-    answer = await handler.reply(
-        reply(message(*(content or (weather("Oslo"),))), id=id)
-    )
-    assert answer is PENDING
+    # the question a person is asked about the first call in the reply, once
+    # the reply has been answered "pending review"
+    await _paused(handler, *content, irid=irid, id=id, **sample)
     (question,) = [q for q in await _pending(client) if q["request_id"] == irid]
     return question
 
@@ -1723,8 +1734,9 @@ async def test_a_question_that_expires_is_answered_with_caution_and_judging_goes
 ):
     handler = _reviewed(review_timeout=0.2)
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
-        assert question["closes"] - question["asked"] == pytest.approx(0.2)
+        # the question isn't listed first: on a busy machine it may have
+        # expired by then, and the test is of what follows the expiry
+        await _paused(handler)
 
         result = await _result(client, until="decided")
 
@@ -1737,10 +1749,21 @@ async def test_a_question_that_expires_is_answered_with_caution_and_judging_goes
 
 
 @pytest.mark.anyio
+async def test_a_question_that_expires_says_when() -> None:
+    # an expiry too far off to come while the question is listed
+    handler = _reviewed(review_timeout=3600)
+    async with _serving(handler) as client:
+        question = await _asked(handler, client)
+
+    assert question["closes"] - question["asked"] == pytest.approx(3600)
+
+
+@pytest.mark.anyio
 async def test_an_expired_question_where_reject_isnt_offered_ends_the_run() -> None:
     handler = _reviewed(choices=["approve", "terminate"], review_timeout=0.2)
     async with _serving(handler) as client:
-        await _asked(handler, client)
+        # not listed first, as above
+        await _paused(handler)
 
         result = await _result(client, until="decided")
 
@@ -1751,11 +1774,14 @@ async def test_an_expired_question_where_reject_isnt_offered_ends_the_run() -> N
 async def test_the_time_a_question_is_open_isnt_counted_against_the_time_limit() -> (
     None
 ):
-    handler = _reviewed(time_limit=0.3)
+    # The limit runs on the event loop's clock, which a test can't move on.
+    # So it is long enough that the sentinel's own work, a few milliseconds,
+    # stays inside it on a busy machine too.
+    handler = _reviewed(time_limit=2)
     async with _serving(handler) as client:
         question = await _asked(handler, client)
         # the person takes longer than the sentinel may
-        await anyio.sleep(0.6)
+        await anyio.sleep(2.2)
 
         await _answer(client, question["id"], "approve")
 
@@ -2070,18 +2096,35 @@ async def test_a_paused_call_keeps_the_records_of_its_earlier_tries_past_their_e
     assert (result["records"], result["outcome"]) == ("held", "proceed")
 
 
+@protocol(portable=False)
+def takes(now: list[float], seconds: float) -> Protocol:
+    """A protocol before `human()` whose own work takes time, by the test's clock."""
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        now[0] += seconds
+        return Decision.escalate("checked by a person, after a while")
+
+    return decide
+
+
 @pytest.mark.anyio
-async def test_the_time_a_person_takes_isnt_judging_time() -> None:
-    handler = _reviewed()
+async def test_the_time_a_person_takes_isnt_judging_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _clocks(monkeypatch)
+    handler = Handler(sequential([takes(now, 3), human(stages=["tool_call"])]))
     async with _serving(handler) as client:
         question = await _asked(handler, client)
-        # the person takes a while, with no connection waiting on the call
-        await anyio.sleep(0.5)
+        # the person takes ten minutes, with no connection waiting on the call
+        now[0] += 600
         await _answer(client, question["id"], "approve")
         result = await _result(client, until="decided")
 
-    # the judging counts only until the call was answered "pending review"
-    assert 0 <= result["judging_time"] < 0.5
+    # the judging counts only until the call was answered "pending review":
+    # the sentinel's three seconds, and none of the person's time
+    assert result["judging_time"] == pytest.approx(3)
 
 
 # --- who is asked, and who may answer ---
@@ -2451,9 +2494,11 @@ async def test_a_try_sent_on_whose_proxy_goes_away_lets_one_more_try_through() -
 @pytest.mark.anyio
 async def test_the_sentinels_own_time_still_counts_after_a_person_answered() -> None:
     reached, go = anyio.Event(), anyio.Event()
+    # the limit is long enough that the first question opens inside it on a
+    # busy machine too, as it runs on the event loop's clock
     handler = Handler(
         sequential([waits_at("toolu_2", reached, go), human(stages=["tool_call"])]),
-        time_limit=0.3,
+        time_limit=2,
     )
     async with _serving(handler) as client:
         first = await _asked(
