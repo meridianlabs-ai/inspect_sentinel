@@ -1268,18 +1268,12 @@ def test_an_imported_transcript_replays_from_its_events_where_it_records_message
         return steps
 
     imported = replay("claude_code", [models[-1].uuid or ""])
-    assert [(s.stage, s.matched) for s in imported] == [
-        ("model_input", "ids"),
-        ("model_output", "ids"),
-        ("tool_call", "ids"),
-        ("tool_result", "ids"),
-        ("model_input", "ids"),
-        ("model_output", "ids"),
-        ("tool_call", "ids"),
-        ("tool_result", "ids"),
-        ("model_input", "ids"),
-        ("model_output", "ids"),
-    ]
+    assert [s.stage for s in imported] == [
+        "model_input",
+        "model_output",
+        "tool_call",
+        "tool_result",
+    ] * 2 + ["model_input", "model_output"]
     # each tool step has the input of the turn that made its call, which the
     # messages alone don't give
     tool_steps = [s.step for s in imported if isinstance(s.step, BeforeToolCall)]
@@ -1291,7 +1285,6 @@ def test_an_imported_transcript_replays_from_its_events_where_it_records_message
     # the same transcript imported before Scout recorded `messages_from`
     older = replay("claude_code", None)
     assert [s.stage for s in older] == [s.stage for s in imported]
-    assert {s.matched for s in older} == {"heuristic"}
     assert all(
         s.step.input is None
         for s in older
@@ -1344,11 +1337,11 @@ def test_a_claude_code_session_replays_from_its_events(tmp_path: Path) -> None:
     steps, turns = transcript_steps(transcript, None, None)
     assert turns == "inferred"
     tools = [s for s in steps if s.stage in ("tool_call", "tool_result")]
-    assert [(s.stage, s.id, s.matched) for s in tools] == [
-        ("tool_call", "toolu_1", "ids"),
-        ("tool_result", "toolu_1", "ids"),
-        ("tool_call", "toolu_2", "ids"),
-        ("tool_result", "toolu_2", "ids"),
+    assert [(s.stage, s.id) for s in tools] == [
+        ("tool_call", "toolu_1"),
+        ("tool_result", "toolu_1"),
+        ("tool_call", "toolu_2"),
+        ("tool_result", "toolu_2"),
     ]
     # each call's result, and the model call that made it
     results = [s.step for s in tools if isinstance(s.step, AfterToolCall)]
@@ -1362,7 +1355,11 @@ def test_a_claude_code_session_replays_from_its_events(tmp_path: Path) -> None:
     # and it scans
     rows = anyio.run(as_scanner(replay_check()), transcript)
     assert isinstance(rows, list)
-    assert {r.metadata["matched"] for r in rows if r.metadata} == {"ids"}
+    assert sorted(
+        (r.metadata["stage"], r.metadata["step_id"])
+        for r in rows
+        if r.metadata and r.metadata["stage"] in ("tool_call", "tool_result")
+    ) == sorted((s.stage, s.id) for s in tools)
 
 
 def _claude_code_line(

@@ -279,11 +279,7 @@ def _result(
     report: ReplayReport, citations: Citations, cites: Cites, turns: str
 ) -> Result:
     reported = report.report
-    metadata: dict[str, Any] = {
-        "depth": report.step.depth,
-        "turns": turns,
-        "matched": report.step.matched,
-    }
+    metadata: dict[str, Any] = {"depth": report.step.depth, "turns": turns}
     if report.human is not None:
         metadata["human"] = report.human
     if report.human_answer is not None:
