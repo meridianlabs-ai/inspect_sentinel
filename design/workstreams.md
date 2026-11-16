@@ -213,7 +213,7 @@ Defined further on 2026-11-16. The reporting has to answer three questions an op
 
 What a sentinel inside Inspect still lacks for these measures:
 
-- A `SentinelEvent` has a time and no duration, so how long a monitor took has to be read from the gap to the event before it.
+- A `SentinelEvent` has a time and no duration. Monitors run at once by default, so the gaps between their events don't give how long each took. A monitor's duration can't be read from the log until the event carries one.
 - When `human()` asks a person, nothing is logged until they answer, so how long they took can't be read.
 - Nothing records that a person looked at a decision afterwards.
 

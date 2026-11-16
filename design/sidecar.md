@@ -1944,17 +1944,19 @@ None of the three is reported today. This section says how each is counted, what
 ### What is counted
 
 - **The unit is a step: a model call or a tool call, at one stage.** A model call is one request and its reply. A tool call is one call the model proposed, by its id. Each is counted at the stages the sentinel watches: `model_input`, `model_output`, `tool_call` and `tool_result`.
-- **A call that is sent again counts once.** A retried call keeps its `x-irid` ("Each agent model call", section 9), and the sidecar keeps it as one call.
+- **To the sidecar, a model call is one `x-irid`.** A request the provider's SDK sends again keeps its `x-irid`, so those tries are one call. A retry by Inspect's own retry loop is a new request with a new `x-irid`, so one generate in an eval can be several model calls at the sidecar. Inspect knows which calls belong to one generate, and says so in its own counts ([step 19](sidecar-plan.md#step-19-the-sidecars-times-and-counts-in-the-evals-log)). With [step 13](sidecar-plan.md#step-13-human-review), a call a person is asked about keeps one `x-irid` however often it is sent.
+- **Each stage of a call has its own outcome.** A stage the call reached was judged, or it was not judged, for a reason. The call's state doesn't say which stage: a request that was judged at `model_input`, whose provider then failed, ends as a call that is `not_judged`, though its request was judged.
 - **Messages are not counted.** Every request sends the conversation so far again, so one message passes the proxy many times.
 - **An agent with no eval is counted less exactly.** Its requests carry no `x-irid`, so a request its client sends again is a second model call to the sidecar. A tool result is still counted once, because a result the history sends again isn't judged again (section 3).
 
 ### Coverage is of what reached the sidecar
 
-A percentage can only describe what was seen. So the sidecar's coverage is the steps a sentinel judged, out of the steps the proxy handed it. A step that wasn't judged already has a reason: `request_result` answers `not_judged` with one ("What each answer means", section 9).
+A percentage can only describe what was seen. So the sidecar's coverage is the steps a sentinel judged, out of the steps the proxy handed it. The sidecar knows each stage's outcome as it judges. Today it tells an eval only the call's: `request_result` answers `not_judged`, with a reason, for a call whose judging didn't finish, whichever stage that happened at ("What each answer means", section 9). [Step 18](sidecar-plan.md#step-18-times-and-counts-in-the-sidecars-results) adds each stage's outcome.
 
-What never reached the sidecar is outside that count. It is reported beside the percentage, in one of three ways:
+What the sidecar holds nothing for is outside that count. It is reported beside the percentage:
 
-- **With an Inspect eval, it can be counted.** Inspect knows every model call it made. It asks the sidecar about each, and the answer `unknown` means the sidecar never saw the call. Inspect also knows which calls it answered from its cache, which never reach the proxy.
+- **With an Inspect eval, most of it can be counted.** Inspect knows every model call it sent, and asks the sidecar about each. It also knows which calls it answered from its cache, which never reach the proxy.
+- **A call the sidecar can't answer for is not verifiable, and nothing more.** `unknown` says the sidecar keeps nothing for the call: it never saw it, or it refused it before keeping anything, or it has forgotten it. `dropped` says it once held the call's records and no longer does. Neither says the call went round the sidecar, and neither says it wasn't judged. So such a call is counted as not verifiable, apart from the calls that were judged and the calls that were not.
 - **The proxy has a count of its own.** A proxy can log every request it handles, whether or not it handed the request to the sidecar. Comparing the two counts shows the requests a proxy let through without a judgment.
 - **For an agent with no eval, the rest is the operator's to secure.** The operator gives the agent no other way to reach a provider: the proxy holds the provider's key, and the network allows no direct path. That is a statement about the deployment. It is reported with the percentage, and is not part of it.
 
@@ -1962,12 +1964,13 @@ What never reached the sidecar is outside that count. It is reported beside the 
 
 | Measure | Recorded today | Missing |
 | --- | --- | --- |
-| Coverage | each call's state, the reason where it wasn't judged, and each step's records | totals for a sample or a run: steps seen, judged and not judged |
+| Coverage | each call's state and, where its judging didn't finish, the reason; the records of each step that was judged | each stage's own outcome; totals for a sample or a run: steps seen, judged and not judged |
 | Review latency, by a monitor | `judging_time` for each model call ("The methods", section 9) | a time on each record, so one monitor's or one stage's time can't be read |
 | Review latency, by a person | with [step 13](sidecar-plan.md#step-13-human-review): when each question was asked, answered and closed, in the call's record of its questions | nothing more, for a question asked through the eval |
 | Escalation rate | each step's decision and, with step 13, how each question ended | totals, and a way to add them up across evals and over time |
 
 - **A record has no time.** The sidecar notes what a monitor or protocol reported, and not when. So Inspect's sidecar client writes each record into the eval's log with the time it wrote it. That is after the call's judging ended, and, where step 13 asks a person about the call, after the person answered ([#229](https://github.com/meridianlabs-ai/inspect_sentinel/issues/229)). Until a record carries its own time, the times of a sidecar's events in an eval's log can't be used.
+- **Not every record reaches the eval's log.** Inspect's sidecar client writes the records that are inside a judgment. A call that ended not judged has no judgment, and for an attempt Inspect retried, Inspect asks only for the judge models' usage. So a record a monitor made before a provider failed is held by the sidecar, and is not in the log. A count taken from logs then misses steps that were judged. Step 19 decides whether those records are logged.
 - **Nothing is kept past a restart**, and records are kept for a limited window (section 10). An agent with no eval has no log of its own, so its measures wait for the record log that section 10 lists as not yet designed.
 - **Nothing adds up.** Every figure above is for one call or one question. A rate or a percentile needs them added up over many evals and many weeks.
 
@@ -1991,6 +1994,7 @@ What this design hasn't settled, checked or built yet, in one place. Each item n
 - how to catch a task in the tasks folder whose samples no longer match the eval that runs it, without telling a caller whether its guess at the file is right. Comparing Inspect's registration with the file doesn't work as it stands, because inspect_ai rewrites a sample's media paths and gives each chat message a new id when it loads a dataset, so an unchanged eval would not match
 - how it is recorded that a person looked at a sentinel's decision after it was made: who, when, and what they concluded (section 12)
 - an identity for an agent that outlasts a run, so that its measures can be followed from run to run (section 12)
+- a name for one generate that each of its model calls carries, so that the sidecar can count a generate Inspect retried as one (section 12)
 - whether replacing a whole request or a whole reply keeps a provider's prompt cache, and whether a changed stream may keep the provider's token counts (section 4)
 - how a shared implementation of the sidecar's state writes back what it hands out (section 10)
 - tallies kept at the task level, shared by every sample of a task, and how a sentinel asks for them (sections 7 and 10)
