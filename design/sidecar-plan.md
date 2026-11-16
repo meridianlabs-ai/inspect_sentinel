@@ -1,6 +1,6 @@
 # Implementation plan: the sidecar
 
-How [sidecar.md](sidecar.md) becomes code. Each pull request can be reviewed on its own, has its own tests, and leaves `main` importable and passing. Proposed 2026-10-14; Envoy, incremental streaming and human review added 2026-10-17; the work after step 7 reordered and renumbered, with streaming split into proxy and Inspect client phases, on 2026-10-19; TLS on the sidecar's listeners added as step 16, before Middleman, on 2026-10-20. Measuring what a sentinel did added as steps 18 to 20 on 2026-11-16.
+How [sidecar.md](sidecar.md) becomes code. Each pull request can be reviewed on its own, has its own tests, and leaves `main` importable and passing. Proposed 2026-10-14; Envoy, incremental streaming and human review added 2026-10-17; the work after step 7 reordered and renumbered, with streaming split into proxy and Inspect client phases, on 2026-10-19; TLS on the sidecar's listeners added as step 16, before Middleman, on 2026-10-20. Measuring what a sentinel did added as steps 18 to 20 on 2026-11-16, and the record log as step 21 on the same day.
 
 Earlier prototype code exists for much of this. It is reused where it fits the design in `sidecar.md`, and rewritten where it does not.
 
@@ -61,6 +61,7 @@ inspect_sentinel
 18 times and counts in results: inspect_sentinel, after 6 and 13
 19 times and counts in the eval's log: inspect_ai, after 11 and 18
 20 reading the measures from logs: inspect_sentinel, after 18 and 19
+21 the record log: inspect_sentinel, after 18
 shared state: inspect_sentinel, before more than one sidecar worker or restart continuity
 ```
 
@@ -73,6 +74,8 @@ Step 11's technical prerequisites remain 5, 6 and 7; placing it after 10 is a de
 [Shared and durable state](#follow-up-shared-and-durable-state) is delivered before the sidecar runs as more than one worker or promises that a run outlasts a restart; until then a deployment is one process. Step 14 needs nothing and can start at any time, with each upstream issue accepted first. Step 15 implements trusted run identity after registration and the Inspect client, using Envoy and LiteLLM first, without waiting for a Hawk change. Step 16 adds TLS, and client certificates, on every port the sidecar listens on, for Envoy and LiteLLM first. Step 17 is scheduled after steps 15 and 16 and waits on Hawk/METR accepting Middleman's passthrough hook. Extending Middleman to hand over chunks also needs step 10 and METR accepting that change; it does not block Envoy, LiteLLM, identity or the Inspect client work.
 
 Steps 18 to 20 let an operator report what a sentinel did: coverage, review latency and escalation rate ([sidecar.md, section 12](sidecar.md#12-measuring-what-a-sentinel-did)). They follow step 13, whose record of each question they build on, and hold up nothing else. Step 18 adds times and totals to the sidecar's results, step 19 puts them in the eval's log, and step 20 reads them from many logs.
+
+Step 21 writes what the sidecar records to a log outside the sidecar. It follows step 18, because each entry in the log holds the times and the stage outcomes that step 18 adds. It holds up nothing else. An agent with no eval has no eval log, so step 21 is what gives it a record of what a sentinel decided, and the totals that step 18 leaves out.
 
 ## Step 1: reading provider traffic
 
@@ -304,7 +307,7 @@ The sidecar records what each monitor and protocol reported, and not when. It an
 
 Not in this PR:
 
-- **Totals for an agent with no eval.** It has no sample to ask about. They wait for the record log ([sidecar.md, section 10](sidecar.md#10-operations)).
+- **Totals for an agent with no eval.** It has no sample to ask about. They wait for the record log ([step 21](#step-21-the-record-log)).
 - **Anything kept across a restart.** That is [shared and durable state](#follow-up-shared-and-durable-state).
 
 ## Step 19: the sidecar's times and counts in the eval's log
@@ -339,6 +342,30 @@ Not in this PR:
 - **A dashboard, or a store of results over time.** The table is a pandas data frame, as a Scout scan's results are, for whatever an operator already uses.
 - **A person's later review of a decision**, which nothing records yet ([sidecar.md, section 12](sidecar.md#what-the-sidecar-doesnt-measure)).
 
+## Step 21: the record log
+
+Repository: `inspect_sentinel`. Depends on: step 18.
+
+The sidecar keeps what a sentinel reported in memory, for a limited window, so that an eval can read it with `request_result`. An eval then writes it into the eval's own log. An agent with no eval has no log, so what a sentinel decided about its calls is kept nowhere. This PR adds the record log: the sidecar writes an entry to a log outside the sidecar as each thing happens ([sidecar.md, section 10](sidecar.md#10-operations)). The log is then the record. What the sidecar keeps in memory is a copy, for the endpoint for evals.
+
+- Settle the design first, in `sidecar.md`, section 10. The next seven bullets are what the design has to answer. The options and the format of an entry follow from the answers.
+- **What an entry holds.** Each record a monitor or protocol made, with its time and duration. Each stage's outcome for a call. Each question for a person, with how it ended. These come from steps 13 and 18. Each entry names its run. Where an eval made the call, the entry also names the eval, the sample and the call's `x-irid`.
+- **Whether the log says which sentinel the sidecar runs, and holds the judge models' calls.** An eval's log has both for a sentinel inside Inspect, and neither for a sidecar ([sidecar.md, section 9](sidecar.md#the-sidecars-reports-in-inspects-transcript)).
+- **Where entries are written.** The operator chooses the destination. So the sidecar writes through one interface, and each destination is an implementation of it. The first destination is chosen with the design. An entry leaves the sidecar when it is made. It doesn't wait for the call or the run to end.
+- **How the log is kept from being rewritten.** The operator secures this: the sidecar is given a way to add entries, and no way to change or delete them. The docs say how to set that up for each destination this PR supports.
+- **What happens to a call whose entry can't be written.** A turn that can't be judged is refused by default (section 10). The design says whether a turn that was judged, and can't be logged, is refused as well, and whether a deployment may choose otherwise.
+- **Whether entries are numbered**, so that a reader of the log can tell that an entry is missing.
+- **How an entry is matched to the proxy's own log.** A proxy can keep its own log of every request and reply. The record log doesn't copy that traffic. Each entry holds the proxy's id for the exchange, so that a reader can find the request and the reply in the proxy's log. LiteLLM's guardrail makes that id itself, and doesn't use LiteLLM's call id, because a caller can set LiteLLM's call id ([sidecar.md, section 1](sidecar.md#litellm)). So the design says what a reader matches on behind LiteLLM.
+- The option that names the destination, in the sidecar's configuration file, and a page in the docs.
+- Reading the record log into step 20's table, so that an agent with no eval gets the same measures as an eval. Whichever of steps 20 and 21 lands second adds this. An agent with no eval is counted less exactly, because its requests carry no `x-irid` ([sidecar.md, section 12](sidecar.md#what-is-counted)).
+- Tests: the entries for a call match what `request_result` answers for that call, with the same times; an agent with no eval has its entries in the log; a destination that can't be written to gives the behaviour the design chose; the sidecar's memory can drop a call's records and the log still holds them.
+
+Not in this PR:
+
+- **The proxy's own log of requests and replies.** It is the proxy's feature, and the operator turns it on. The docs page says to keep it, and how an entry is matched to it.
+- **Typed fields in the eval's log.** That is [#167](https://github.com/meridianlabs-ai/inspect_sentinel/issues/167).
+- **Reading the log back into the sidecar after a restart.** The log is a record. The sidecar's working state is [shared and durable state](#follow-up-shared-and-durable-state).
+
 ## Follow-up: shared and durable state
 
 Repository: `inspect_sentinel`, with deployment configuration and Inspect lifecycle handling where needed. Deliver before running more than one sidecar worker or promising that a run's state survives a restart. The initial deployment remains one process, with no promise of restart continuity.
@@ -354,6 +381,5 @@ These need design first. Each names the repositories it would touch.
 - A full policy for model calls that Inspect answers from its cache, which never reach the proxy. The initial remote-mode cache behavior must be agreed before step 11; supporting cached calls with equivalent remote judgment needs further design in `inspect_ai`, and possibly `inspect_sentinel`.
 - Tallies kept at the task level. `inspect_sentinel`.
 - A record that a person looked at a sentinel's decision after it was made: who, when, and what they concluded. `inspect_sentinel` and `inspect_ai`, and `inspect_scout` for a scanner's results.
-- The record log that can't be rewritten ([sidecar.md, section 10](sidecar.md#10-operations)), which the measures of an agent with no eval wait for. `inspect_sentinel`.
 - An identity for an agent that outlasts a run, so that its measures can be followed from run to run. `inspect_sentinel`, after step 15.
 - A name for one generate that each of its model calls carries, so that the sidecar counts a generate Inspect retried as one. `inspect_ai` and `inspect_sentinel`.
