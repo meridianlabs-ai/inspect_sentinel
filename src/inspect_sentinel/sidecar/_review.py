@@ -1,6 +1,6 @@
 """Questions a sentinel in the sidecar asks a person, held until an Inspect eval answers them.
 
-A sentinel asks a person with `human()`, through `Host.ask_human`. For a run an Inspect eval names, the sidecar keeps the question here while the step waits, the eval finds it with `pending_questions`, shows it in Inspect's approval UI, and sends the person's answer with `answer_question`.
+A sentinel asks a person with `human()`, through `Host.ask_human`. For a run an Inspect eval names, the sidecar keeps the question here while the step waits, the eval finds it with `list_pending_questions`, shows it in Inspect's approval UI, and sends the person's answer with `answer_question`.
 
 A person may take days. So no connection waits on a question: the handler answers the model call "pending review" and keeps the judging that asked, which goes on when the answer comes (`design/sidecar.md`, "A review pauses the model call, not a connection"). A question has no expiry unless the operator sets one.
 
@@ -34,7 +34,7 @@ from ._host import Stage
 logger = logging.getLogger(__name__)
 
 MAX_QUESTIONS_WAIT = 30.0
-"""The longest `pending_questions` waits for a question, in seconds."""
+"""The longest `list_pending_questions` waits for a question, in seconds."""
 
 ANSWERABLE = ("approve", "reject", "terminate")
 """The choices an answer through the endpoint for evals may pick. `modify` needs a changed call, which Inspect's approval UI can't make yet."""
@@ -173,7 +173,7 @@ class Question:
     answer: HumanAnswer | None = None
     """The eval's answer, once taken."""
 
-    answered: anyio.Event = field(default_factory=anyio.Event)
+    answer_taken: anyio.Event = field(default_factory=anyio.Event)
     """Set once the question is answered."""
 
     review: Review = field(init=False)
@@ -257,7 +257,7 @@ class Reviews:
         )
         try:
             with anyio.move_on_after(self._timeout):
-                await question.answered.wait()
+                await question.answer_taken.wait()
         except anyio.get_cancelled_exc_class():
             # an answer taken just before stays on the record, and takes no effect
             review.resolve("cancelled")
@@ -282,7 +282,7 @@ class Reviews:
             "Nobody answered before the question expired, so the sidecar answered with caution.",
         )
 
-    async def pending(
+    async def list_pending(
         self, eval_id: str, sample_uuid: str | None = None, wait: float = 0
     ) -> list[Question]:
         """The eval's unanswered questions, oldest first.
@@ -357,7 +357,7 @@ class Reviews:
         review = question.review
         review.decision, review.reason, review.answered = decision, reason, time.time()
         question.answer = HumanAnswer(decision=decision, reason=reason)
-        question.answered.set()
+        question.answer_taken.set()
         self._receipts[id] = _Receipt(eval_id, question.sample_uuid, decision, reason)
         while len(self._receipts) > _KEPT_RECEIPTS:
             self._receipts.popitem(last=False)

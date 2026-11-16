@@ -80,15 +80,15 @@ class Attempt:
     state: Literal[
         "judging",
         "awaiting_review",
-        "awaiting_request",
+        "awaiting_resend",
         "awaiting_reply",
         "decided",
         "not_judged",
     ] = "judging"
-    """Where the attempt stands. `awaiting_review` and `awaiting_request` are only for a model call a sentinel asked a person about: a question is open, or the request may be sent on to the provider."""
+    """Where the attempt stands. `awaiting_review` and `awaiting_resend` are only for a model call a sentinel asked a person about: a question is open, or the request may be sent on to the provider."""
 
     reason: NotJudged | None = None
-    """Why the attempt was not judged, when it wasn't. With `awaiting_request`, why the provider's last exchange failed, if one did: `provider_error` or `cut_off`."""
+    """Why the attempt was not judged, when it wasn't. With `awaiting_resend`, why the provider's last exchange failed, if one did: `provider_error` or `cut_off`."""
 
     outcome: Outcome | None = None
     """What the attempt came to, once decided."""

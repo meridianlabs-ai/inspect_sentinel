@@ -82,8 +82,8 @@
       "title": "AnswerQuestionResult",
       "type": "object"
     },
-    "CancelRequestParams": {
-      "description": "Parameters of `cancel_request`: a model request a sentinel asked a person about, which the eval no longer waits for.\n\nThe request is closed wherever it stands before its end, with nothing decided: its judging is stopped and its questions close, no try of it is sent on to the provider, and the reply to a try already with the provider is not judged, kept or passed on. It then reads as `not_judged`, with the reason `cancelled`, and nothing opens it again.",
+    "CancelPausedRequestParams": {
+      "description": "Parameters of `cancel_paused_request`: a model request a sentinel asked a person about, which the eval no longer waits for.\n\nThe request is closed wherever it stands before its end, with nothing decided: its judging is stopped and its questions close, no try of it is sent on to the provider, and the reply to a try already with the provider is not judged, kept or passed on. It then reads as `not_judged`, with the reason `cancelled`, and nothing opens it again.",
       "properties": {
         "eval_id": {
           "description": "The eval's id, as its requests name it.",
@@ -112,10 +112,10 @@
         "mac",
         "id"
       ],
-      "title": "CancelRequestParams",
+      "title": "CancelPausedRequestParams",
       "type": "object"
     },
-    "CancelRequestResult": {
+    "CancelPausedRequestResult": {
       "description": "Whether this call closed the request.",
       "properties": {
         "id": {
@@ -123,7 +123,7 @@
           "type": "string"
         },
         "cancelled": {
-          "description": "Whether this call was what closed the request. False for a request that had already ended, one no person was asked about, and one the sidecar doesn't know. A second `cancel_request` for a request is answered false too, so false doesn't say the request is still open: `request_result` says where it stands.",
+          "description": "Whether this call was what closed the request. False for a request that had already ended, one no person was asked about, and one the sidecar doesn't know. A second `cancel_paused_request` for a request is answered false too, so false doesn't say the request is still open: `request_result` says where it stands.",
           "title": "Cancelled",
           "type": "boolean"
         }
@@ -132,7 +132,7 @@
         "id",
         "cancelled"
       ],
-      "title": "CancelRequestResult",
+      "title": "CancelPausedRequestResult",
       "type": "object"
     },
     "ChatMessageAssistant": {
@@ -1555,8 +1555,8 @@
       "title": "Judgment",
       "type": "object"
     },
-    "PendingQuestionsParams": {
-      "description": "Parameters of `pending_questions`: the eval's questions for a person that nobody has answered yet.",
+    "ListPendingQuestionsParams": {
+      "description": "Parameters of `list_pending_questions`: the eval's questions for a person that nobody has answered yet.",
       "properties": {
         "eval_id": {
           "description": "The eval's id, as its requests name it.",
@@ -1599,10 +1599,10 @@
         "timestamp",
         "mac"
       ],
-      "title": "PendingQuestionsParams",
+      "title": "ListPendingQuestionsParams",
       "type": "object"
     },
-    "PendingQuestionsResult": {
+    "ListPendingQuestionsResult": {
       "description": "The eval's unanswered questions, oldest first.",
       "properties": {
         "questions": {
@@ -1616,7 +1616,7 @@
       "required": [
         "questions"
       ],
-      "title": "PendingQuestionsResult",
+      "title": "ListPendingQuestionsResult",
       "type": "object"
     },
     "QuestionAsked": {
@@ -1998,7 +1998,7 @@
               "enum": [
                 "judging",
                 "awaiting_review",
-                "awaiting_request",
+                "awaiting_resend",
                 "awaiting_reply",
                 "decided",
                 "not_judged"
@@ -2010,7 +2010,7 @@
             }
           ],
           "default": null,
-          "description": "Where the request stands. For a request no person was asked about, that is where its latest try stands. For one a person was asked about, it is where that one model call stands, whatever tries of it were sent since. `awaiting_review`: a question is open, and the eval answers it. `awaiting_request`: the request may be sent on to the provider, so the eval sends the same request again under the same `x-irid`.",
+          "description": "Where the request stands. For a request no person was asked about, that is where its latest try stands. For one a person was asked about, it is where that one model call stands, whatever tries of it were sent since. `awaiting_review`: a question is open, and the eval answers it. `awaiting_resend`: the request may be sent on to the provider, so the eval sends the same request again under the same `x-irid`.",
           "title": "State"
         },
         "reason": {
@@ -2035,7 +2035,7 @@
             }
           ],
           "default": null,
-          "description": "With `not_judged`, why the request was not judged. With `awaiting_request`, `provider_error` or `cut_off` where the request is there because the provider's last exchange failed, which `failure` describes. Left out where the request only waits to be sent.",
+          "description": "With `not_judged`, why the request was not judged. With `awaiting_resend`, `provider_error` or `cut_off` where the request is there because the provider's last exchange failed, which `failure` describes. Left out where the request only waits to be sent.",
           "title": "Reason"
         },
         "outcome": {
@@ -2124,7 +2124,7 @@
             }
           ],
           "default": null,
-          "description": "The provider's last failed exchange, with `awaiting_request` and a `reason`."
+          "description": "The provider's last failed exchange, with `awaiting_resend` and a `reason`."
         },
         "judging_time": {
           "anyOf": [
@@ -2168,7 +2168,7 @@
       "description": "What became of one question a sentinel asked a person while the request or its reply was judged.",
       "properties": {
         "id": {
-          "description": "The question's id, as `pending_questions` gave it.",
+          "description": "The question's id, as `list_pending_questions` gave it.",
           "title": "Id",
           "type": "string"
         },
@@ -2275,7 +2275,7 @@
             }
           ],
           "default": null,
-          "description": "Why the wait was cancelled: `replaced_attempt` when a later attempt at the sample began, `sample_ended` when the eval ended the sample, `run_ended` when a sentinel ended the run at another request, `cancelled` when the eval cancelled the request with `cancel_request`, and `stopped` otherwise, as when the sidecar shuts down.",
+          "description": "Why the wait was cancelled: `replaced_attempt` when a later attempt at the sample began, `sample_ended` when the eval ended the sample, `run_ended` when a sentinel ended the run at another request, `cancelled` when the eval cancelled the request with `cancel_paused_request`, and `stopped` otherwise, as when the sidecar shuts down.",
           "title": "Cause"
         },
         "resolved": {
@@ -2751,12 +2751,12 @@
         "$ref": "#/$defs/EndSampleResult"
       }
     },
-    "pending_questions": {
+    "list_pending_questions": {
       "params": {
-        "$ref": "#/$defs/PendingQuestionsParams"
+        "$ref": "#/$defs/ListPendingQuestionsParams"
       },
       "result": {
-        "$ref": "#/$defs/PendingQuestionsResult"
+        "$ref": "#/$defs/ListPendingQuestionsResult"
       }
     },
     "answer_question": {
@@ -2767,12 +2767,12 @@
         "$ref": "#/$defs/AnswerQuestionResult"
       }
     },
-    "cancel_request": {
+    "cancel_paused_request": {
       "params": {
-        "$ref": "#/$defs/CancelRequestParams"
+        "$ref": "#/$defs/CancelPausedRequestParams"
       },
       "result": {
-        "$ref": "#/$defs/CancelRequestResult"
+        "$ref": "#/$defs/CancelPausedRequestResult"
       }
     }
   },

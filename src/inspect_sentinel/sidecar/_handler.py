@@ -304,7 +304,7 @@ class _Operation:
     """The number of the try whose request or reply the operation holds: the one that asked, then each one sent on."""
     held: Held | None = None
     """The request, once its stage is finished, for as long as it waits to be sent on."""
-    go: Pass | Replace | None = None
+    answer_on_resend: Pass | Replace | None = None
     """What a try that is sent on is answered with."""
     with_provider: tuple[str, Held] | None = None
     """The request of the try that was sent on, with the proxy's id for its exchange, from when it is sent on until its reply or its failure is handed over. The state keeps the request too, only as long as it keeps a request nothing names, and a call that is asked about is kept longer than that. So the call keeps the request itself, for a reply that comes after the state let it go."""
@@ -314,7 +314,7 @@ class _Operation:
     """The provider's latest failed exchange, for as long as the call waits to be sent on again because of it."""
     ended: float | None = None
     """When it ended, on the monotonic clock. It is kept from then for as long as the state keeps a run nothing names, for the eval to read, and reading it doesn't keep it longer."""
-    heard: float = 0.0
+    last_heard: float = 0.0
     """When the call was last heard of, on the monotonic clock: when it was opened, when it began to wait for a request or for a reply, and since then at each try of it, each time its eval asked what became of it, and each part of its reply that a proxy handed over. A call that waits, and isn't heard of for as long as the state keeps a run nothing names, is closed."""
 
 
@@ -328,13 +328,13 @@ class _Judging:
     binding: str
     scope: anyio.CancelScope
     """Cancelled to stop the judging with nothing decided."""
-    turned: anyio.Event
+    answerable: anyio.Event
     """Set once the exchange that began the judging can be answered: the judging is over, or it has asked a person."""
     limit: anyio.CancelScope | None = None
     """The time limit's scope, which a question open for a person doesn't count against."""
-    asking: int = 0
+    questions_waiting: int = 0
     """How many questions the judging waits on now."""
-    left: float | None = None
+    time_left: float | None = None
     """How much of the time limit was left when the judging began to wait on a person."""
     detached: bool = False
     """Whether the exchange was answered "pending review", so that the judging goes on with no connection open."""
@@ -428,7 +428,7 @@ class Handler:
             release: How a streamed reply is passed on. `whole`, the default, holds every reply until the sentinel has judged it. `early` passes on the text and reasoning that come before the turn's first tool call as they arrive, holds the rest of the turn, and judges it once the turn has ended, as `whole` does. The sentinel is given the whole turn either way.
             keepalive: Under early release, the longest a client is sent nothing while a streamed reply is held, in seconds, after which it is sent a keepalive, an SSE comment that every provider SDK skips. The keepalive sends the status, so a turn refused after it is refused with an error event in the stream. None sends no keepalives.
             timestamp_window: How far, in seconds, the `timestamp` of an Inspect eval's model request or call to the endpoint for evals may be from this process's clock. One further is refused, so a `mac` copied from a log is of no use once the window has passed.
-            review_timeout: How long a question waits for a person's answer before it expires, in seconds, when a sentinel asks one during a run an Inspect eval names. The eval finds the question with `pending_questions` and answers it with `answer_question`. A question that expires is answered with caution, `reject` if offered and otherwise `terminate`, and the judging goes on from there. None, the default, is no expiry: a person may take days. The time a question is open is not counted against `time_limit`.
+            review_timeout: How long a question waits for a person's answer before it expires, in seconds, when a sentinel asks one during a run an Inspect eval names. The eval finds the question with `list_pending_questions` and answers it with `answer_question`. A question that expires is answered with caution, `reject` if offered and otherwise `terminate`, and the judging goes on from there. None, the default, is no expiry: a person may take days. The time a question is open is not counted against `time_limit`.
 
         Raises:
             ValueError: If `keepalive`, `timestamp_window` or `review_timeout` isn't a positive number of seconds.
@@ -628,18 +628,18 @@ class Handler:
                     signed.request_id, signed.sample.eval_id, attempt
                 )
             elif not isinstance(answer, Refuse):
-                waited = self._operation_of(attempt)
-                if waited is None:
+                operation = self._operation_of(attempt)
+                if operation is None:
                     attempt.state = "awaiting_reply"
                 else:
                     # The exchange was answered "pending review", so the
                     # request went nowhere. It is kept until the eval sends
                     # it again, and that try is sent on in its place.
-                    waited.held = await self._state.release(request.id)
-                    waited.go = answer
-                    attempt.state = "awaiting_request"
+                    operation.held = await self._state.release(request.id)
+                    operation.answer_on_resend = answer
+                    attempt.state = "awaiting_resend"
                     # it waits from now, however long the person took
-                    waited.heard = time.monotonic()
+                    operation.last_heard = time.monotonic()
             elif answer is _UNDER_REVIEW:
                 attempt.not_judged("result_under_review")
             elif attempt.judged is not None and attempt.judged.replaced:
@@ -710,17 +710,17 @@ class Handler:
                 # closed: the reply is not kept and not passed on, and the
                 # call reads as its closing left it.
                 return _CLOSED
-            waited = self._operation_of(attempt)
+            operation = self._operation_of(attempt)
             if not succeeded(reply.status):
-                if waited is None:
+                if operation is None:
                     attempt.not_judged("provider_error")
                 else:
-                    self._failed(waited, held, "provider_error", reply)
+                    self._failed(operation, held, "provider_error", reply)
             elif not isinstance(answer, Refuse):
-                if waited is not None:
+                if operation is not None:
                     # kept whichever stage the call waited at: the reply
                     # passed on now may never reach the eval
-                    waited.reply = _held_reply(reply, held.format, answer)
+                    operation.reply = _held_reply(reply, held.format, answer)
                 attempt.decide("proceed")
             elif held.exchange.replaced:
                 attempt.not_judged("replaced_attempt")
@@ -789,16 +789,16 @@ class Handler:
                 and operation.sent == failure.try_number
             ):
                 operation.failure = replace(failure, reply=None)
-                attempt.state, attempt.reason = "awaiting_request", "cut_off"
+                attempt.state, attempt.reason = "awaiting_resend", "cut_off"
             return
         held = await self._released(id)
         if held is None or held.attempt is None or held.attempt.settled.is_set():
             return
-        waited = self._operation_of(held.attempt)
-        if waited is not None and reason == "cut_off":
+        operation = self._operation_of(held.attempt)
+        if operation is not None and reason == "cut_off":
             # the exchange with the provider failed, so the call may be sent
             # on again
-            self._failed(waited, held, "cut_off", None)
+            self._failed(operation, held, "cut_off", None)
             return
         held.attempt.not_judged(reason)
         self._finish(held.attempt)
@@ -827,7 +827,7 @@ class Handler:
             # the call was closed, or went on, while the error passed
             return
         operation.failure = replace(failure, reply=replace(failure.reply, body=body))
-        attempt.state, attempt.reason = "awaiting_request", "provider_error"
+        attempt.state, attempt.reason = "awaiting_resend", "provider_error"
 
     def answer_question(
         self, eval_id: str, id: str, decision: str, reason: str | None
@@ -854,7 +854,7 @@ class Handler:
         ):
             attempt.state = "judging"
 
-    async def cancel_request(self, id: str, eval_id: str) -> bool:
+    async def cancel_paused_request(self, id: str, eval_id: str) -> bool:
         """Close a model call a sentinel asked a person about, which the eval no longer waits for. Nothing is decided for it.
 
         The call is closed wherever it stands before its end: its judging is stopped and its questions close, no try of it is sent on to the provider, and the reply to a request already with the provider is not judged, kept or passed on. It then reads as not judged, for the reason `cancelled`, and nothing opens it again.
@@ -884,12 +884,12 @@ class Handler:
         if binding != operation.binding:
             return _OTHER_REQUEST
         operation.tries += 1
-        operation.heard = time.monotonic()
+        operation.last_heard = time.monotonic()
         attempt = operation.attempt
         if attempt.settled.is_set():
             return _OVER
-        held, go = operation.held, operation.go
-        if attempt.state != "awaiting_request" or held is None or go is None:
+        held, go = operation.held, operation.answer_on_resend
+        if attempt.state != "awaiting_resend" or held is None or go is None:
             return PENDING
         operation.held = None
         operation.sent = operation.tries
@@ -930,7 +930,7 @@ class Handler:
         # the eval is told what failed apart from the error its own try got.
         operation.held = held
         # it waits from now, for a request or for the rest of an error
-        operation.heard = time.monotonic()
+        operation.last_heard = time.monotonic()
         if reply is not None and len(reply.body) > ERROR_BODY_BYTES:
             # An error handed over whole is kept as one that passed as it
             # came is: without a body over the bound. Part of a body may not
@@ -950,7 +950,7 @@ class Handler:
             operation.attempt.state, operation.attempt.reason = "awaiting_reply", None
             return
         operation.failure = failure
-        operation.attempt.state, operation.attempt.reason = "awaiting_request", reason
+        operation.attempt.state, operation.attempt.reason = "awaiting_resend", reason
 
     def _operation_of(self, attempt: Attempt) -> _Operation | None:
         # the model call a person was asked about that the attempt is of
@@ -968,7 +968,7 @@ class Handler:
         ):
             return
         operation.ended = time.monotonic()
-        operation.held = operation.go = operation.with_provider = None
+        operation.held = operation.answer_on_resend = operation.with_provider = None
         for exchange, (failing, _) in list(self._failing.items()):
             if failing is operation:
                 del self._failing[exchange]
@@ -1008,8 +1008,8 @@ class Handler:
                     self._forget(key)
                     forgotten += 1
             elif (
-                attempt.state in ("awaiting_request", "awaiting_reply")
-                and now - operation.heard >= expiry
+                attempt.state in ("awaiting_resend", "awaiting_reply")
+                and now - operation.last_heard >= expiry
             ):
                 logger.info(
                     "The model call %s of the eval %s waited at %s with nothing naming it for %s seconds, and is closed.",
@@ -1024,7 +1024,7 @@ class Handler:
 
     def _expire(self, operation: _Operation) -> None:
         # Close a model call that waited too long with nothing naming it, as
-        # `cancel_request` closes one, for the reason `expired`. Such a call
+        # `cancel_paused_request` closes one, for the reason `expired`. Such a call
         # has no question open, so there is none to close. Whatever of it
         # is still being judged is stopped.
         attempt = operation.attempt
@@ -1040,7 +1040,7 @@ class Handler:
         """Note that a proxy handed over part of the reply to a request, by the proxy's id for the exchange. A model call a person was asked about, whose try with that id is with the provider, is heard of, so it isn't closed for waiting while its reply is still coming."""
         operation = self._sent_on.get(id)
         if operation is not None:
-            operation.heard = time.monotonic()
+            operation.last_heard = time.monotonic()
 
     async def _exchange(
         self,
@@ -1129,12 +1129,12 @@ class Handler:
                 self._finish(attempt)
             finally:
                 self._trying.discard(judging)
-                judging.turned.set()
+                judging.answerable.set()
 
         self._trying.add(judging)
         group.start_soon(run)
         try:
-            await judging.turned.wait()
+            await judging.answerable.wait()
         except anyio.get_cancelled_exc_class():
             # The exchange's caller went away before anyone was asked, so
             # nobody waits for this judging. It is stopped, and its task
@@ -1389,7 +1389,7 @@ class Handler:
             latest = operation.attempt if operation is not None else attempts[-1]
             if operation is not None:
                 # its eval asks what became of it
-                operation.heard = time.monotonic()
+                operation.last_heard = time.monotonic()
             left = deadline - time.monotonic()
             if latest.state != "judging" or left <= 0:
                 break
@@ -1414,7 +1414,7 @@ class Handler:
         ]
         if operation is None:
             return RequestResult(latest, records, reviews, usage)
-        failed = latest.state == "awaiting_request" and latest.reason is not None
+        failed = latest.state == "awaiting_resend" and latest.reason is not None
         return RequestResult(
             latest,
             records,
@@ -1426,7 +1426,7 @@ class Handler:
     async def held_reply(self, headers: Mapping[str, str]) -> HeldReply | Refuse:
         """The reply held for a model call a person was asked about, for the eval that sends the call's request again to get it.
 
-        The request is the model call's own, sent again under the same `x-irid`, so its `x-inspect-context` is checked as any model request's is: the `timestamp` and the `mac` prove the eval, the run and the `x-irid`. Nothing else of the request is read. The reply is given once the call is decided with the turn going on, as `request_result` says, and for as long as what was held for it is still kept. `request_result` doesn't carry it. While the call waits to be sent on again because the provider failed it (`awaiting_request`, with the reason `provider_error`), the provider's error is given in the reply's place, with the `FAILED_TRY` header naming the try it is of. Nothing of the call is changed, so either can be read again, and the provider is never called.
+        The request is the model call's own, sent again under the same `x-irid`, so its `x-inspect-context` is checked as any model request's is: the `timestamp` and the `mac` prove the eval, the run and the `x-irid`. Nothing else of the request is read. The reply is given once the call is decided with the turn going on, as `request_result` says, and for as long as what was held for it is still kept. `request_result` doesn't carry it. While the call waits to be sent on again because the provider failed it (`awaiting_resend`, with the reason `provider_error`), the provider's error is given in the reply's place, with the `FAILED_TRY` header naming the try it is of. Nothing of the call is changed, so either can be read again, and the provider is never called.
 
         Args:
             headers: The request's headers, by lowercase name.
@@ -1459,11 +1459,11 @@ class Handler:
             return _NO_HELD_REPLY
 
         # a request of the call, as a try of it is
-        operation.heard = time.monotonic()
+        operation.last_heard = time.monotonic()
         attempt = operation.attempt
         failure = operation.failure
         if (
-            attempt.state == "awaiting_request"
+            attempt.state == "awaiting_resend"
             and attempt.reason == "provider_error"
             and failure is not None
             and failure.reply is not None
@@ -2477,7 +2477,7 @@ class Handler:
                         (attempt.exchange,),
                     ),
                 )
-                operation.heard = time.monotonic()
+                operation.last_heard = time.monotonic()
                 self._operations[key] = operation
                 self._by_attempt[id(attempt)] = operation
                 tries = await self._state.attempts(request_id, sample.eval_id)
@@ -2538,28 +2538,28 @@ class Handler:
                 # connection waits for the person
                 judging.detached = True
                 judging.detached_at = time.monotonic()
-                judging.turned.set()
+                judging.answerable.set()
             # the time a question is open isn't the sentinel's
             limit = judging.limit
-            if judging.asking == 0 and limit is not None:
+            if judging.questions_waiting == 0 and limit is not None:
                 if limit.deadline != math.inf:
-                    judging.left = limit.deadline - anyio.current_time()
+                    judging.time_left = limit.deadline - anyio.current_time()
                     limit.deadline = math.inf
-            judging.asking += 1
+            judging.questions_waiting += 1
             try:
                 answer = await self._reviews.ask(question)
             finally:
                 self._asking.pop(question.id, None)
-                judging.asking -= 1
-                if judging.asking == 0:
-                    if limit is not None and judging.left is not None:
-                        limit.deadline = anyio.current_time() + judging.left
-                        judging.left = None
+                judging.questions_waiting -= 1
+                if judging.questions_waiting == 0:
+                    if limit is not None and judging.time_left is not None:
+                        limit.deadline = anyio.current_time() + judging.time_left
+                        judging.time_left = None
                     if attempt.state == "awaiting_review":
                         attempt.state = "judging"
             if attempt.stopped is not None:
                 # The call was closed as its answer was taken, as by a
-                # `cancel_request` that came in the same turn. A closed call
+                # `cancel_paused_request` that came in the same turn. A closed call
                 # decides nothing, so the judging stops here, with the
                 # answer unused, as it stops before asking.
                 judging.scope.cancel()

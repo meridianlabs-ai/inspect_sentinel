@@ -2546,8 +2546,9 @@ def test_an_approved_calls_held_reply_comes_through_litellm_from_a_real_sidecar(
                     headers=key | _from_the_eval("request-1"),
                 )
                 questions = await call(
-                    "pending_questions",
-                    _by_the_eval("pending_questions") | {"sample_uuid": "sample_1"},
+                    "list_pending_questions",
+                    _by_the_eval("list_pending_questions")
+                    | {"sample_uuid": "sample_1"},
                 )
                 [question] = questions["result"]["questions"]
                 answered = await call(

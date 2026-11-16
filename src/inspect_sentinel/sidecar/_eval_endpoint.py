@@ -165,7 +165,9 @@ class RequestResultParams(EvalCall):
 class ReviewRecord(BaseModel):
     """What became of one question a sentinel asked a person while the request or its reply was judged."""
 
-    id: str = Field(description="The question's id, as `pending_questions` gave it.")
+    id: str = Field(
+        description="The question's id, as `list_pending_questions` gave it."
+    )
     try_number: int = Field(
         description="Which try of the request the question was asked at, from 1, in the order the sidecar was sent them: the try whose request or reply was being judged. A client that tries a request again sends it under the same `x-irid`."
     )
@@ -199,7 +201,7 @@ class ReviewRecord(BaseModel):
         | None
     ) = Field(
         default=None,
-        description="Why the wait was cancelled: `replaced_attempt` when a later attempt at the sample began, `sample_ended` when the eval ended the sample, `run_ended` when a sentinel ended the run at another request, `cancelled` when the eval cancelled the request with `cancel_request`, and `stopped` otherwise, as when the sidecar shuts down.",
+        description="Why the wait was cancelled: `replaced_attempt` when a later attempt at the sample began, `sample_ended` when the eval ended the sample, `run_ended` when a sentinel ended the run at another request, `cancelled` when the eval cancelled the request with `cancel_paused_request`, and `stopped` otherwise, as when the sidecar shuts down.",
     )
     resolved: float | None = Field(default=None, description="When the wait ended.")
 
@@ -243,7 +245,7 @@ class RequestResultResult(BaseModel):
         Literal[
             "judging",
             "awaiting_review",
-            "awaiting_request",
+            "awaiting_resend",
             "awaiting_reply",
             "decided",
             "not_judged",
@@ -251,11 +253,11 @@ class RequestResultResult(BaseModel):
         | None
     ) = Field(
         default=None,
-        description="Where the request stands. For a request no person was asked about, that is where its latest try stands. For one a person was asked about, it is where that one model call stands, whatever tries of it were sent since. `awaiting_review`: a question is open, and the eval answers it. `awaiting_request`: the request may be sent on to the provider, so the eval sends the same request again under the same `x-irid`.",
+        description="Where the request stands. For a request no person was asked about, that is where its latest try stands. For one a person was asked about, it is where that one model call stands, whatever tries of it were sent since. `awaiting_review`: a question is open, and the eval answers it. `awaiting_resend`: the request may be sent on to the provider, so the eval sends the same request again under the same `x-irid`.",
     )
     reason: NotJudged | None = Field(
         default=None,
-        description="With `not_judged`, why the request was not judged. With `awaiting_request`, `provider_error` or `cut_off` where the request is there because the provider's last exchange failed, which `failure` describes. Left out where the request only waits to be sent.",
+        description="With `not_judged`, why the request was not judged. With `awaiting_resend`, `provider_error` or `cut_off` where the request is there because the provider's last exchange failed, which `failure` describes. Left out where the request only waits to be sent.",
     )
     outcome: Outcome | None = Field(
         default=None, description="What the request came to, once decided."
@@ -277,7 +279,7 @@ class RequestResultResult(BaseModel):
     )
     failure: FailureRecord | None = Field(
         default=None,
-        description="The provider's last failed exchange, with `awaiting_request` and a `reason`.",
+        description="The provider's last failed exchange, with `awaiting_resend` and a `reason`.",
     )
     judging_time: float | None = Field(
         default=None,
@@ -327,8 +329,8 @@ class EndSampleResult(BaseModel):
     )
 
 
-class PendingQuestionsParams(EvalCall):
-    """Parameters of `pending_questions`: the eval's questions for a person that nobody has answered yet."""
+class ListPendingQuestionsParams(EvalCall):
+    """Parameters of `list_pending_questions`: the eval's questions for a person that nobody has answered yet."""
 
     sample_uuid: str | None = Field(
         default=None,
@@ -388,7 +390,7 @@ class QuestionAsked(BaseModel):
     )
 
 
-class PendingQuestionsResult(BaseModel):
+class ListPendingQuestionsResult(BaseModel):
     """The eval's unanswered questions, oldest first."""
 
     questions: list[QuestionAsked]
@@ -420,8 +422,8 @@ class AnswerQuestionResult(BaseModel):
     decision: Literal["approve", "reject", "terminate"]
 
 
-class CancelRequestParams(EvalCall):
-    """Parameters of `cancel_request`: a model request a sentinel asked a person about, which the eval no longer waits for.
+class CancelPausedRequestParams(EvalCall):
+    """Parameters of `cancel_paused_request`: a model request a sentinel asked a person about, which the eval no longer waits for.
 
     The request is closed wherever it stands before its end, with nothing decided: its judging is stopped and its questions close, no try of it is sent on to the provider, and the reply to a try already with the provider is not judged, kept or passed on. It then reads as `not_judged`, with the reason `cancelled`, and nothing opens it again.
     """
@@ -429,12 +431,12 @@ class CancelRequestParams(EvalCall):
     id: str = Field(description="The request's `x-irid`.")
 
 
-class CancelRequestResult(BaseModel):
+class CancelPausedRequestResult(BaseModel):
     """Whether this call closed the request."""
 
     id: str
     cancelled: bool = Field(
-        description="Whether this call was what closed the request. False for a request that had already ended, one no person was asked about, and one the sidecar doesn't know. A second `cancel_request` for a request is answered false too, so false doesn't say the request is still open: `request_result` says where it stands."
+        description="Whether this call was what closed the request. False for a request that had already ended, one no person was asked about, and one the sidecar doesn't know. A second `cancel_paused_request` for a request is answered false too, so false doesn't say the request is still open: `request_result` says where it stands."
     )
 
 
@@ -447,16 +449,18 @@ _METHODS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "request_result": (RequestResultParams, RequestResultResult),
     "sample_result": (SampleResultParams, SampleResultResult),
     "end_sample": (EndSampleParams, EndSampleResult),
-    "pending_questions": (PendingQuestionsParams, PendingQuestionsResult),
+    "list_pending_questions": (ListPendingQuestionsParams, ListPendingQuestionsResult),
     "answer_question": (AnswerQuestionParams, AnswerQuestionResult),
-    "cancel_request": (CancelRequestParams, CancelRequestResult),
+    "cancel_paused_request": (CancelPausedRequestParams, CancelPausedRequestResult),
 }
 
 _RESULTS = frozenset({"sample_result"})
 
 # asking a person through an eval, which a sidecar that sends an eval no
 # results doesn't do: it doesn't trust that eval to decide for itself
-_REVIEW = frozenset({"pending_questions", "answer_question", "cancel_request"})
+_REVIEW = frozenset(
+    {"list_pending_questions", "answer_question", "cancel_paused_request"}
+)
 
 _ERRORS: dict[int, tuple[str, str]] = {
     REGISTRATION_REFUSED: (
@@ -511,7 +515,7 @@ def eval_routes(
         handler: The handler the proxy's requests and replies are put to.
         max_body_bytes: The largest call that is read.
         token: A credential every call to the methods must present as a bearer token, when the endpoint has a port of its own. None where it shares the proxy's port and access control.
-        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited. Without results, `pending_questions`, `answer_question`, `cancel_request` and `/sentinel/v1/held-reply` aren't served either: an eval that isn't trusted with a monitor's explanation isn't trusted to answer for a person. Build the handler with `eval_results` off as well, so that it asks no question nobody can answer.
+        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited. Without results, `list_pending_questions`, `answer_question`, `cancel_paused_request` and `/sentinel/v1/held-reply` aren't served either: an eval that isn't trusted with a monitor's explanation isn't trusted to answer for a person. Build the handler with `eval_results` off as well, so that it asks no question nobody can answer.
     """
 
     async def info(http: HttpRequest) -> Response:
@@ -751,11 +755,11 @@ async def _answered(
                 else None
             ),
         )
-    if isinstance(given, CancelRequestParams):
-        return CancelRequestResult(
+    if isinstance(given, CancelPausedRequestParams):
+        return CancelPausedRequestResult(
             id=given.id,
             cancelled=(
-                await handler.cancel_request(given.id, given.eval_id)
+                await handler.cancel_paused_request(given.id, given.eval_id)
                 if holds
                 else False
             ),
@@ -783,14 +787,16 @@ async def _answered(
                 else "unknown"
             ),
         )
-    if isinstance(given, PendingQuestionsParams):
+    if isinstance(given, ListPendingQuestionsParams):
         # a sidecar that holds nothing of the eval holds no question of it
         found = (
-            await handler.reviews.pending(given.eval_id, given.sample_uuid, given.wait)
+            await handler.reviews.list_pending(
+                given.eval_id, given.sample_uuid, given.wait
+            )
             if holds
             else []
         )
-        return PendingQuestionsResult(
+        return ListPendingQuestionsResult(
             questions=[_question(question) for question in found]
         )
     raise TypeError(f"No method takes {type(given).__name__}.")

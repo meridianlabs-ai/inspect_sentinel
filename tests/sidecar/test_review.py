@@ -146,8 +146,8 @@ async def _pending(
 ) -> list[dict[str, Any]]:
     answered = await _call(
         client,
-        "pending_questions",
-        eval_call("pending_questions", eval_id, token=token) | params,
+        "list_pending_questions",
+        eval_call("list_pending_questions", eval_id, token=token) | params,
     )
     questions: list[dict[str, Any]] = answered["result"]["questions"]
     return questions
@@ -217,8 +217,8 @@ async def _cancel(
 ) -> bool:
     answered = await _call(
         client,
-        "cancel_request",
-        eval_call("cancel_request", eval_id, token=token) | {"id": irid},
+        "cancel_paused_request",
+        eval_call("cancel_paused_request", eval_id, token=token) | {"id": irid},
     )
     cancelled: bool = answered["result"]["cancelled"]
     return cancelled
@@ -842,7 +842,7 @@ async def test_a_later_try_may_change_its_cache_ttl_and_nothing_the_model_reads(
         assert await handler.request(_cached("y")) is PENDING
         (question,) = await _pending(client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
 
         # sent again once the person answered, past five minutes
         sent = await handler.request(_cached("y2", **later))
@@ -946,7 +946,7 @@ async def test_another_call_holding_a_result_under_review_is_refused_to_be_sent_
 
         # once the person has answered, the other call's request goes on
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_other_call("z2")), Pass)
 
 
@@ -979,7 +979,7 @@ async def test_a_try_waiting_on_its_own_calls_result_follows_the_call_once_it_as
         assert (await _result(client, "irid-2"))["state"] == "awaiting_review"
         (question,) = await _pending(client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y3")), Pass)
 
 
@@ -991,7 +991,7 @@ async def test_an_approved_result_waits_for_the_request_to_be_sent_again() -> No
 
         await _answer(client, question["id"], "approve")
 
-        waiting = await _result(client, "irid-2", until="awaiting_request")
+        waiting = await _result(client, "irid-2", until="awaiting_resend")
         # nothing failed: the request only waits to be sent
         assert "reason" not in waiting and "failure" not in waiting
         # the same request, under the same x-irid, is sent on, and not judged again
@@ -1016,7 +1016,7 @@ async def test_only_one_try_is_sent_on_to_the_provider() -> None:
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         answers: list[Any] = []
 
         async def send(id: str) -> None:
@@ -1038,7 +1038,7 @@ async def test_a_reply_lost_on_its_way_to_the_eval_is_read_from_the_sidecar() ->
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         body = message({"type": "text", "text": "It rains."}, stop_reason="end_turn")
         assert isinstance(await handler.reply(reply(body, id="y2")), Pass)
@@ -1057,7 +1057,7 @@ async def test_a_reply_the_sidecar_never_hears_of_lets_no_other_try_through() ->
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
         # the proxy stopped: whether the provider answered can't be told
@@ -1074,7 +1074,7 @@ async def test_a_providers_error_sends_the_call_back_to_wait_for_a_request() -> 
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
         # the provider's error goes on to the try's client, as from any call
@@ -1082,7 +1082,7 @@ async def test_a_providers_error_sends_the_call_back_to_wait_for_a_request() -> 
 
         failed = await _result(client, "irid-2")
         assert (failed["state"], failed["reason"]) == (
-            "awaiting_request",
+            "awaiting_resend",
             "provider_error",
         )
         # what failed, apart from any error the eval holds: the second try
@@ -1117,7 +1117,7 @@ async def test_a_providers_error_handed_over_whole_is_kept_without_a_body_over_t
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
         # as a hook that holds whole replies hands it over, with `judge_reply`
@@ -1128,7 +1128,7 @@ async def test_a_providers_error_handed_over_whole_is_kept_without_a_body_over_t
 
     # the eval is told the error, with what says whether to try again, and
     # none of a body that is over the bound
-    assert (failed["state"], failed["reason"]) == ("awaiting_request", "provider_error")
+    assert (failed["state"], failed["reason"]) == ("awaiting_resend", "provider_error")
     assert failed["failure"]["reply"]["status"] == 529
     assert failed["failure"]["reply"]["headers"]["retry-after"] == "7"
     assert failed["failure"]["reply"]["body"] == ""
@@ -1140,7 +1140,7 @@ async def test_a_failure_is_the_providers_whatever_error_the_eval_holds() -> Non
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         # a try sent while the provider answers gets the sidecar's own 400
         assert await handler.request(_result_request("y3")) is PENDING
@@ -1160,7 +1160,7 @@ async def test_after_a_failed_exchange_the_new_reply_is_judged_and_may_ask() -> 
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         await handler.reply(_error())
         assert isinstance(await handler.request(_result_request("y3")), Pass)
@@ -1190,13 +1190,13 @@ async def test_a_reply_cut_off_is_a_failure_without_a_reply() -> None:
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
         await handler.reply_not_judged("y2", "cut_off")
 
         failed = await _result(client, "irid-2")
-        assert (failed["state"], failed["reason"]) == ("awaiting_request", "cut_off")
+        assert (failed["state"], failed["reason"]) == ("awaiting_resend", "cut_off")
         assert failed["failure"] == {"try_number": 2}
         assert isinstance(await handler.request(_result_request("y3")), Pass)
 
@@ -1207,7 +1207,7 @@ async def test_an_errors_body_that_passed_in_parts_is_handed_over_afterwards() -
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         # a proxy that passes an error on as it comes shows it without its body
         await handler.reply(replace(_error(body=b""), body_follows=True))
@@ -1220,7 +1220,7 @@ async def test_an_errors_body_that_passed_in_parts_is_handed_over_afterwards() -
         await handler.error_body("y2", b'{"type":"overloaded"}')
 
         failed = await _result(client, "irid-2")
-    assert (failed["state"], failed["reason"]) == ("awaiting_request", "provider_error")
+    assert (failed["state"], failed["reason"]) == ("awaiting_resend", "provider_error")
     assert base64.b64decode(failed["failure"]["reply"]["body"]) == (
         b'{"type":"overloaded"}'
     )
@@ -1235,7 +1235,7 @@ async def test_an_error_whose_body_isnt_handed_over_is_kept_without_it(
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         await handler.reply(replace(_error(body=b""), body_follows=True))
 
@@ -1248,7 +1248,7 @@ async def test_an_error_whose_body_isnt_handed_over_is_kept_without_it(
 
         failed = await _result(client, "irid-2")
         got = await _held_reply(client, "irid-2")
-    assert failed["state"] == "awaiting_request"
+    assert failed["state"] == "awaiting_resend"
     if how == "no copy":
         # the provider's error, whole as far as the proxy says, without a copy
         assert failed["reason"] == "provider_error"
@@ -1272,7 +1272,7 @@ async def test_an_error_that_passes_after_its_call_was_cancelled_reopens_nothing
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         await handler.reply(replace(_error(body=b""), body_follows=True))
         assert await _cancel(client, "irid-2") is True
@@ -1290,7 +1290,7 @@ async def test_an_sdks_own_retry_is_the_same_request_whatever_its_retry_count() 
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         first = _result_request("y2")
 
         # shown to the sidecar where an operator lists it, and counted up by
@@ -1310,7 +1310,7 @@ async def test_an_sdks_own_retry_is_the_same_request_whatever_its_retry_count() 
     assert isinstance(refused, Refuse) and "not the same request" in refused.message
 
 
-# --- cancel_request closes the call wherever it stands ---
+# --- cancel_paused_request closes the call wherever it stands ---
 
 
 @pytest.mark.anyio
@@ -1383,7 +1383,7 @@ async def test_cancelling_a_call_that_waits_for_a_request_sends_nothing_on() -> 
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
 
         assert await _cancel(client, "irid-2") is True
 
@@ -1401,7 +1401,7 @@ async def test_a_reply_that_comes_after_its_call_was_cancelled_doesnt_revive_it(
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
         # the request already with the provider can't be called back
@@ -1429,7 +1429,7 @@ async def test_a_call_cancelled_as_its_answer_is_taken_stays_cancelled() -> None
         # then has nothing left to wait for, so cancelling it can't stop it,
         # and it runs to the end of the request stage.
         handler.answer_question("eval_789", question["id"], "approve", None)
-        assert await handler.cancel_request("irid-2", "eval_789") is True
+        assert await handler.cancel_paused_request("irid-2", "eval_789") is True
         await anyio.wait_all_tasks_blocked()
 
         # the call stays as cancelling it left it, and no try is sent on
@@ -1453,7 +1453,7 @@ async def test_a_call_cancelled_as_a_person_ends_the_run_leaves_the_run_going() 
         # judging next runs. An answer that ends the run has nothing left to
         # wait for, so cancelling the judging's wait can't stop it.
         handler.answer_question("eval_789", question["id"], "terminate", "Stop here.")
-        assert await handler.cancel_request("irid-1", "eval_789") is True
+        assert await handler.cancel_paused_request("irid-1", "eval_789") is True
         await anyio.wait_all_tasks_blocked()
 
         # a closed call decides nothing: the run was not ended
@@ -1472,7 +1472,7 @@ async def test_a_call_cancelled_as_its_reply_arrives_doesnt_pass_the_reply_on() 
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         answers: dict[str, Any] = {}
 
@@ -1482,7 +1482,9 @@ async def test_a_call_cancelled_as_its_reply_arrives_doesnt_pass_the_reply_on() 
             )
 
         async def the_cancel() -> None:
-            answers["cancelled"] = await handler.cancel_request("irid-2", "eval_789")
+            answers["cancelled"] = await handler.cancel_paused_request(
+                "irid-2", "eval_789"
+            )
 
         # The reply's judging is started as a task, and the eval's cancel
         # runs before that task first does. This handler judges nothing in a
@@ -1556,7 +1558,7 @@ async def test_a_failed_call_closed_with_its_sample_reads_as_decided_with_no_rea
         await _failed_at_the_provider(handler, client, _error())
         failed = await _result(client, "irid-2")
         assert (failed["state"], failed["reason"]) == (
-            "awaiting_request",
+            "awaiting_resend",
             "provider_error",
         )
 
@@ -1581,7 +1583,7 @@ async def test_a_question_keeps_the_try_it_was_asked_at_once_its_sample_has_ende
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         # the second try is sent on, and a person is asked about its reply
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         held = reply(message(weather("Bergen", "toolu_2")), id="y2")
@@ -1712,7 +1714,7 @@ async def test_a_closed_question_takes_no_answer_from_the_moment_it_closes() -> 
         # at once, before the judging that was waiting has run again
         with pytest.raises(UnknownQuestionError):
             handler.reviews.answer("eval_789", question["id"], "approve", None)
-        assert await handler.reviews.pending("eval_789") == []
+        assert await handler.reviews.list_pending("eval_789") == []
 
 
 @pytest.mark.anyio
@@ -1813,7 +1815,7 @@ async def _waiting_for_its_request(handler: Handler, client: httpx.AsyncClient) 
     # waits for its request to be sent again
     question = await _asked_at_result(handler, client)
     await _answer(client, question["id"], "approve")
-    await _result(client, "irid-2", until="awaiting_request")
+    await _result(client, "irid-2", until="awaiting_resend")
 
 
 @pytest.mark.anyio
@@ -1865,7 +1867,7 @@ async def test_a_call_begins_to_wait_when_the_person_has_answered_however_long_t
 
         # the call waits from the answer, not from its last request
         assert handler.sweep() == (0, 0)
-        assert (await _result(client, "irid-2"))["state"] == "awaiting_request"
+        assert (await _result(client, "irid-2"))["state"] == "awaiting_resend"
         now[0] += 9
         assert handler.sweep() == (0, 0)
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1883,7 +1885,7 @@ async def test_a_waiting_call_its_eval_asks_about_is_kept(
         # each lookup is within the time the call is kept without one
         for _ in range(3):
             now[0] += 6
-            assert (await _result(client, "irid-2"))["state"] == "awaiting_request"
+            assert (await _result(client, "irid-2"))["state"] == "awaiting_resend"
             assert handler.sweep() == (0, 0)
 
 
@@ -1922,7 +1924,7 @@ async def test_a_call_keeps_the_request_of_its_latest_try_only(
         # one try is sent on and cut off, and the next is sent on
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         await handler.reply_not_judged("y2", "cut_off")
-        assert (await _result(client, "irid-2"))["state"] == "awaiting_request"
+        assert (await _result(client, "irid-2"))["state"] == "awaiting_resend"
         assert isinstance(await handler.request(_result_request("y3")), Pass)
         for _ in range(3):
             now[0] += 6
@@ -1960,7 +1962,7 @@ async def test_a_serving_handler_closes_a_waiting_call_by_itself(
                 now[0] += 10
                 await anyio.sleep(0.05)
                 result = await _result(client, "irid-2")
-                if result["state"] != "awaiting_request":
+                if result["state"] != "awaiting_resend":
                     break
         assert (result["state"], result["reason"]) == ("not_judged", "expired")
 
@@ -2207,7 +2209,7 @@ async def test_a_run_no_eval_names_is_answered_with_caution_and_asks_nobody() ->
 
         assert isinstance(answer, Refuse)
         assert "No person can be asked from the sidecar yet." in answer.message
-        assert await handler.reviews.pending("eval_789") == []
+        assert await handler.reviews.list_pending("eval_789") == []
 
 
 @pytest.mark.anyio
@@ -2222,7 +2224,7 @@ async def test_an_eval_that_isnt_sent_results_is_asked_nothing() -> None:
 
         assert isinstance(answer, Refuse)
         assert "No person can be asked from the sidecar yet." in answer.message
-        assert await handler.reviews.pending("eval_789") == []
+        assert await handler.reviews.list_pending("eval_789") == []
 
 
 @pytest.mark.anyio
@@ -2241,7 +2243,7 @@ async def test_a_handler_that_isnt_serving_asks_nobody_through_an_eval() -> None
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    "method", ["pending_questions", "answer_question", "cancel_request"]
+    "method", ["list_pending_questions", "answer_question", "cancel_paused_request"]
 )
 async def test_a_sidecar_that_sends_no_results_serves_no_review_method(
     method: str,
@@ -2259,7 +2261,7 @@ async def test_a_sidecar_that_sends_no_results_serves_no_review_method(
 
 
 @pytest.mark.anyio
-async def test_pending_questions_can_be_asked_for_one_sample() -> None:
+async def test_list_pending_questions_can_be_asked_for_one_sample() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
         question = await _asked(handler, client)
@@ -2295,7 +2297,7 @@ async def test_a_host_with_its_own_way_to_ask_a_person_is_still_asked() -> None:
         answer = await handler.reply(reply(message(weather("Oslo"))))
 
         assert isinstance(answer, Pass)
-        assert await handler.reviews.pending("eval_789") == []
+        assert await handler.reviews.list_pending("eval_789") == []
 
 
 # --- what is kept of a question ---
@@ -2466,7 +2468,7 @@ async def test_a_try_sent_on_whose_proxy_goes_away_lets_one_more_try_through() -
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         # the second try is sent on, and its reply is being judged
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
@@ -2484,7 +2486,7 @@ async def test_a_try_sent_on_whose_proxy_goes_away_lets_one_more_try_through() -
         # "pending review" for good: one more try may be sent on.
         failed = await _result(client, "irid-2")
         assert (failed["state"], failed.get("reason")) == (
-            "awaiting_request",
+            "awaiting_resend",
             "cut_off",
         )
         assert failed["failure"] == {"try_number": 2}
@@ -2611,7 +2613,7 @@ async def _failed_at_the_provider(
     # answered with `error`
     question = await _asked_at_result(handler, client)
     await _answer(client, question["id"], "approve")
-    await _result(client, "irid-2", until="awaiting_request")
+    await _result(client, "irid-2", until="awaiting_resend")
     assert isinstance(await handler.request(_result_request("y2")), Pass)
     await handler.reply(error)
 
@@ -2650,7 +2652,7 @@ async def test_a_providers_error_is_served_where_the_held_reply_is() -> None:
     assert got.headers["x-should-retry"] == "false"
     # getting it changes nothing, so it can be got again
     assert (again.status_code, again.content) == (403, body)
-    assert (after["state"], after["reason"]) == ("awaiting_request", "provider_error")
+    assert (after["state"], after["reason"]) == ("awaiting_resend", "provider_error")
 
 
 @pytest.mark.anyio
@@ -2690,7 +2692,7 @@ async def test_a_reply_cut_off_has_no_error_to_serve() -> None:
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         await handler.reply_not_judged("y2", "cut_off")
 
@@ -2833,13 +2835,13 @@ async def test_asking_for_a_held_reply_never_sends_a_waiting_request_on() -> Non
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
-        await _result(client, "irid-2", until="awaiting_request")
+        await _result(client, "irid-2", until="awaiting_resend")
 
         answered = await _held_reply(client, "irid-2")
 
         _refused(answered, "has not ended")
         # the call still waits for its request, which is sent on as before
-        assert (await _result(client, "irid-2"))["state"] == "awaiting_request"
+        assert (await _result(client, "irid-2"))["state"] == "awaiting_resend"
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
 
