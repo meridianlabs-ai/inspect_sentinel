@@ -14,7 +14,7 @@ It is set in LiteLLM's config, beside `guardrail`, `mode` and `default_on`:
 
 Which requests reach the class is LiteLLM's own choice: `default_on`, or a request or key that names the guardrail.
 
-The guardrail also adds a route to LiteLLM's app, so that an Inspect eval reaches the sidecar's endpoint for evals at LiteLLM's own address. LiteLLM checks the caller's key, and the guardrail then passes everything under `/sentinel/` on to the sidecar. An eval also uses this route to fetch a reply that the sidecar held while a person decided: it sends the model call's request to `/sentinel/v1/held-reply`, and the sidecar answers with the provider's reply and its headers. A streamed reply comes back as a stream.
+The guardrail also adds a route to LiteLLM's app, so that an Inspect eval reaches the sidecar's endpoint for evals at LiteLLM's own address. LiteLLM checks the caller's key, and the guardrail then passes everything under `/sentinel/` on to the sidecar. An eval also uses this route to fetch a reply that the sidecar held while a person decided: it sends the model call's request to `/sentinel/v1/judged-reply`, and the sidecar answers with the provider's reply and its headers. A streamed reply comes back as a stream.
 """
 
 from __future__ import annotations
@@ -142,7 +142,7 @@ _UNSIZED = 1024
 # endpoint for evals. `_EVAL_PATHS` lists the paths an eval calls, and the
 # guardrail tells LiteLLM that a key for its OpenAI routes may call them.
 _EVAL_PREFIX = "/sentinel"
-_EVAL_PATHS = ("/sentinel/info", "/sentinel/v1", "/sentinel/v1/held-reply")
+_EVAL_PATHS = ("/sentinel/info", "/sentinel/v1", "/sentinel/v1/judged-reply")
 # The headers of the sidecar's answer that the guardrail never passes on to an
 # eval: those that describe a single hop, and those that each hop's server
 # writes for itself.
@@ -567,7 +567,7 @@ class LiteLLMGuardrail(CustomGuardrail):
 
         An Inspect eval knows only the base URL of the model API it calls, which here is LiteLLM's, and reaches the sidecar's endpoint for evals there. LiteLLM's own routes would otherwise answer these paths first, or forward them to a provider, so the route is put ahead of them. A key that may call LiteLLM's OpenAI routes may call these too.
 
-        The guardrail sends the sidecar the request's body, its `content-type`, and Inspect's own `x-irid` and `x-inspect-context` headers. A fetch of a held reply names its model call with those two headers. The guardrail sends no other header, so the sidecar never sees the caller's key. The guardrail returns the sidecar's answer with its status and its headers, apart from the single-hop headers, and passes an event stream on as it arrives.
+        The guardrail sends the sidecar the request's body, its `content-type`, and Inspect's own `x-irid` and `x-inspect-context` headers. A fetch of a judged reply names its model call with those two headers. The guardrail sends no other header, so the sidecar never sees the caller's key. The guardrail returns the sidecar's answer with its status and its headers, apart from the single-hop headers, and passes an event stream on as it arrives.
 
         LiteLLM's proxy calls this when it makes the guardrail. Calling it again adds nothing.
         """
@@ -624,7 +624,7 @@ class LiteLLMGuardrail(CustomGuardrail):
                     timeout=_NO_TIMEOUT,
                     auto_decompress=False,
                 )
-                # A streamed held reply is passed on as it arrives, as the
+                # A streamed judged reply is passed on as it arrives, as the
                 # provider's own stream would be. `_SidecarStreamResponse` closes the
                 # sidecar's answer when the stream ends or the caller
                 # disconnects. Any other answer is read whole here, and closed
@@ -1350,7 +1350,7 @@ async def _answer_chunks(answer: aiohttp.ClientResponse) -> AsyncIterator[bytes]
 def _with_answer_headers(
     response: Response, answer: aiohttp.ClientResponse
 ) -> Response:
-    # The caller gets the sidecar's answer with its headers. A held reply's
+    # The caller gets the sidecar's answer with its headers. A judged reply's
     # headers are the provider's own, and a provider's SDK reads them. The
     # guardrail drops the single-hop headers, and any header that the answer's
     # `connection` header names, because LiteLLM's server writes its own. That

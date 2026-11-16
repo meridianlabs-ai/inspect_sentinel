@@ -172,13 +172,13 @@ _OVER = Refuse(
     "This model call has ended. An eval gets its result with request_result.",
 )
 FAILED_TRY = "x-sentinel-failed-try"
-"""The header the sidecar adds when the held-reply path returns a provider's error. Its value is the number of the failed try. The sidecar's own refusals never carry it, so an eval can tell a provider's error from a refusal by the sidecar."""
+"""The header the sidecar adds when the judged-reply path returns a provider's error. Its value is the number of the failed try. The sidecar's own refusals never carry it, so an eval can tell a provider's error from a refusal by the sidecar."""
 
 _NO_CALL_NAMED = Refuse(
     400,
-    f"The request has no {INSPECT_CONTEXT} header, so the sidecar cannot tell which model call's held reply to return.",
+    f"The request has no {INSPECT_CONTEXT} header, so the sidecar cannot tell which model call's judged reply to return.",
 )
-_NO_HELD_REPLY = Refuse(
+_NO_JUDGED_REPLY = Refuse(
     400,
     f"This sidecar holds no reply for a model call of the eval with this {REQUEST_ID}. Either no person was asked about the call, or the sidecar no longer keeps what it held for it. An eval gets a call's state with request_result.",
 )
@@ -197,7 +197,7 @@ _SWEEP_EVERY = 60.0
 """How often, in seconds, the handler sweeps for model calls a person was asked about that have been kept for the state's expiry."""
 
 # Headers that describe how the provider's reply was transported. They are left out of
-# the held reply, because they don't apply to the copy an eval fetches.
+# the judged reply, because they don't apply to the copy an eval fetches.
 _NOT_KEPT = frozenset(
     {
         "connection",
@@ -214,7 +214,7 @@ _NOT_KEPT = frozenset(
         "transfer-encoding",
         "upgrade",
         # The provider's cookies are for the proxy's client. An eval that fetches the
-        # held reply has no use for them, and LiteLLM's guardrail drops them too.
+        # judged reply has no use for them, and LiteLLM's guardrail drops them too.
         "set-cookie",
         # the sidecar's own header, left out so that a provider can't set it
         FAILED_TRY,
@@ -255,7 +255,7 @@ class RequestResult:
 
 
 @dataclass(frozen=True)
-class HeldReply:
+class JudgedReply:
     """A provider's reply as the proxy passes it on, with the sentinel's edits applied. The sidecar holds it for the eval to fetch, because the eval's model call was paused for a person."""
 
     status: int
@@ -276,7 +276,7 @@ class Failure:
 
     try_number: int
     """The number of the try that was passed on to the provider, counted from 1."""
-    reply: HeldReply | None
+    reply: JudgedReply | None
     """The provider's error, or None for a reply that was cut off."""
     received: float = 0.0
     """When the error arrived, on the monotonic clock. A wait the provider asked for, such as `retry-after`, is counted from this time."""
@@ -308,8 +308,8 @@ class _Operation:
     """The answer the sidecar gives the proxy for the resend that is passed on to the provider: the `Pass` or `Replace` that judging the request produced."""
     with_provider: tuple[str, Held] | None = None
     """The request of the try that was passed on to the provider, with the proxy's id for that exchange. It is set from when the try is passed on until the proxy hands over its reply or its failure. The state keeps this request too, but drops it after the usual expiry, and a call a person was asked about can last longer than that. So the operation keeps its own copy, for a reply that arrives after the state has dropped the request."""
-    reply: HeldReply | None = None
-    """The provider's reply, once the call is `decided` with the outcome `proceed`. The eval fetches it from the held-reply path."""
+    reply: JudgedReply | None = None
+    """The provider's reply, once the call is `decided` with the outcome `proceed`. The eval fetches it from the judged-reply path."""
     failure: Failure | None = None
     """The provider's latest failed exchange, set while the call waits for a resend because of that failure."""
     ended: float | None = None
@@ -720,7 +720,7 @@ class Handler:
                 if operation is not None:
                     # The sidecar keeps the reply whichever stage the call was paused
                     # at, because the reply it passes on now may never reach the eval.
-                    operation.reply = _held_reply(reply, held.format, answer)
+                    operation.reply = _judged_reply(reply, held.format, answer)
                 attempt.decide("proceed")
             elif held.exchange.replaced:
                 attempt.not_judged("replaced_attempt")
@@ -937,7 +937,7 @@ class Handler:
             reply = replace(reply, body=b"")
         failure = Failure(
             operation.current_try,
-            _held_reply(reply, held.format, Pass()) if reply is not None else None,
+            _judged_reply(reply, held.format, Pass()) if reply is not None else None,
             time.monotonic(),
         )
         if reply is not None and reply.body_follows:
@@ -1422,16 +1422,16 @@ class Handler:
             failure=operation.failure if failed else None,
         )
 
-    async def held_reply(self, headers: Mapping[str, str]) -> HeldReply | Refuse:
+    async def judged_reply(self, headers: Mapping[str, str]) -> JudgedReply | Refuse:
         """Return the reply that the sidecar holds for a model call a person was asked about, to the eval that fetches it.
 
-        The eval fetches the reply by sending the model call's own request again, under the same `x-irid`, to the held-reply path. So the request's `x-inspect-context` is checked as any model request's is: the `timestamp` and the `mac` prove the eval, the run and the `x-irid`. The sidecar reads nothing else of the request. The reply is returned once the call is `decided` with the outcome `proceed`, and for as long as the sidecar still keeps it. `request_result` reports that state, and doesn't carry the reply. While the call is at `awaiting_resend` with the reason `provider_error`, the provider's error is returned instead, with the `FAILED_TRY` header set to the number of the failed try. A fetch changes nothing of the call, so the eval can fetch again, and the provider is never called.
+        The eval fetches the reply by sending the model call's own request again, under the same `x-irid`, to the judged-reply path. So the request's `x-inspect-context` is checked as any model request's is: the `timestamp` and the `mac` prove the eval, the run and the `x-irid`. The sidecar reads nothing else of the request. The reply is returned once the call is `decided` with the outcome `proceed`, and for as long as the sidecar still keeps it. `request_result` reports that state, and doesn't carry the reply. While the call is at `awaiting_resend` with the reason `provider_error`, the provider's error is returned instead, with the `FAILED_TRY` header set to the number of the failed try. A fetch changes nothing of the call, so the eval can fetch again, and the provider is never called.
 
         Args:
             headers: The request's headers, by lowercase name.
 
         Returns:
-            The held reply or the provider's error, or a refusal that says why there is nothing to return: the header is missing, unreadable or fails the check; the sidecar holds no such call for the eval; the call has not ended; or the call ended with an outcome other than `proceed`.
+            The judged reply or the provider's error, or a refusal that says why there is nothing to return: the header is missing, unreadable or fails the check; the sidecar holds no such call for the eval; the call has not ended; or the call ended with an outcome other than `proceed`.
         """
         try:
             signed = signed_sample(headers)
@@ -1448,14 +1448,14 @@ class Handler:
         eval_id = signed.sample.eval_id
         operation = self._operations.get((eval_id, signed.request_id))
         if operation is None:
-            return _NO_HELD_REPLY
+            return _NO_JUDGED_REPLY
         attempts = await self._state.attempts(signed.request_id, eval_id)
         if (
             attempts is None
             or isinstance(attempts, Dropped)
             or not any(attempt is operation.attempt for attempt in attempts)
         ):
-            return _NO_HELD_REPLY
+            return _NO_JUDGED_REPLY
 
         # a fetch counts as contact about the call, as a try does
         operation.last_heard = time.monotonic()
@@ -2751,8 +2751,8 @@ def _binding(request: Request, sample: InspectSample) -> str:
     ).hexdigest()
 
 
-def _served_error(failure: Failure) -> HeldReply:
-    # A provider's error as the held-reply path returns it, so that the eval's code for
+def _served_error(failure: Failure) -> JudgedReply:
+    # A provider's error as the judged-reply path returns it, so that the eval's code for
     # that provider reads it as the provider's own error. The `FAILED_TRY` header marks
     # it with the number of the failed try, which no refusal by the sidecar carries.
     # `x-should-retry: false` tells the eval's SDK not to resend the request by itself,
@@ -2785,14 +2785,14 @@ def _time_left(name: str, value: str, waited: float) -> str:
     return str(math.ceil(max(0.0, asked - waited * scale)))
 
 
-def _held_reply(reply: Reply, format: Format, answer: Answer) -> HeldReply:
+def _judged_reply(reply: Reply, format: Format, answer: Answer) -> JudgedReply:
     # The reply as the proxy passes it on, kept so that the eval can fetch it and read
     # it as the provider's own reply.
     headers = {
         name: value for name, value in reply.headers.items() if name not in _NOT_KEPT
     }
     headers.setdefault("content-type", reply.content_type)
-    return HeldReply(
+    return JudgedReply(
         reply.status,
         headers,
         answer.body if isinstance(answer, Replace) else reply.body,

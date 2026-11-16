@@ -2709,7 +2709,7 @@
     }
   },
   "title": "Inspect Sentinel: the endpoint for evals",
-  "description": "JSON-RPC 2.0 methods, POSTed to /sentinel/v1, with a probe at GET /sentinel/info. A POST of a paused call's model request to /sentinel/v1/held-reply is not a method: it fetches the provider's reply that the sidecar holds for that call, in the provider's format. `methods` names the definitions that a method's `params` and `result` fit. `errors` lists the codes of the method errors of the endpoint's own.",
+  "description": "JSON-RPC 2.0 methods, POSTed to /sentinel/v1, with a probe at GET /sentinel/info. A POST of a paused call's model request to /sentinel/v1/judged-reply is not a method: it fetches the provider's reply that the sidecar holds for that call, in the provider's format. `methods` names the definitions that a method's `params` and `result` fit. `errors` lists the codes of the method errors of the endpoint's own.",
   "methods": {
     "register_task": {
       "params": {

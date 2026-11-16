@@ -1960,7 +1960,7 @@ def test_eval_routes_reach_the_sidecar_through_litellm(
     paths = [getattr(route, "path", None) for route in proxy.app.router.routes]
     assert paths[0] == "/sentinel/{rest:path}"
     assert paths.count("/sentinel/{rest:path}") == 1
-    assert {"/sentinel/info", "/sentinel/v1", "/sentinel/v1/held-reply"} <= set(
+    assert {"/sentinel/info", "/sentinel/v1", "/sentinel/v1/judged-reply"} <= set(
         routes.openai_routes.value
     )
     assert (probe.status_code, probe.json()) == (201, {"answered": "/sentinel/info"})
@@ -2006,7 +2006,7 @@ def test_eval_route_answers_502_when_the_sidecar_cannot_be_reached(
         b"/sentinel/v1/%2E%2E/%2e%2e/proxy/v1",
         b"/sentinel/./v1",
         b"/sentinel//v1",
-        b"/sentinel/v1/held-reply/%2e%2e/%2e%2e/%2e%2e/proxy/v1",
+        b"/sentinel/v1/judged-reply/%2e%2e/%2e%2e/%2e%2e/proxy/v1",
     ],
 )
 def test_eval_route_passes_on_nothing_outside_sentinel(
@@ -2070,7 +2070,7 @@ def test_eval_route_passes_on_nothing_outside_sentinel(
     assert seen == []
 
 
-_HELD_REPLY = "/sentinel/v1/held-reply"
+_JUDGED_REPLY = "/sentinel/v1/judged-reply"
 _MODEL_REQUEST = json.dumps({"model": "claude", "messages": [_QUESTION]}).encode()
 
 
@@ -2095,12 +2095,12 @@ def _sidecar_answering(
     )
 
 
-def _fetch_held_reply(
+def _fetch_judged_reply(
     monkeypatch: pytest.MonkeyPatch,
     sidecar: Starlette,
     headers: dict[str, str] | None = None,
 ) -> Any:
-    """Fetch a held reply through LiteLLM's app, as an eval's provider SDK does, and return LiteLLM's answer."""
+    """Fetch a judged reply through LiteLLM's app, as an eval's provider SDK does, and return LiteLLM's answer."""
     proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
     _without_eval_route(proxy)
 
@@ -2110,7 +2110,7 @@ def _fetch_held_reply(
                 transport=httpx.ASGITransport(app=proxy.app), base_url="http://litellm"
             ) as client:
                 return await client.post(
-                    _HELD_REPLY,
+                    _JUDGED_REPLY,
                     content=_MODEL_REQUEST,
                     headers={"authorization": "Bearer sk-caller"} | (headers or {}),
                 )
@@ -2123,7 +2123,7 @@ def _fetch_held_reply(
         return asyncio.run(ask(guardrail))
 
 
-def test_a_fetch_of_a_held_reply_reaches_the_sidecar_with_inspects_headers_and_no_key(
+def test_a_fetch_of_a_judged_reply_reaches_the_sidecar_with_inspects_headers_and_no_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen: list[dict[str, Any]] = []
@@ -2133,7 +2133,7 @@ def test_a_fetch_of_a_held_reply_reaches_the_sidecar_with_inspects_headers_and_n
         "x-inspect-context": '{"version": 1, "eval_id": "eval_1"}',
     }
 
-    answered = _fetch_held_reply(
+    answered = _fetch_judged_reply(
         monkeypatch,
         _sidecar_answering(seen, lambda: JSONResponse({"type": "message"})),
         inspects
@@ -2146,7 +2146,7 @@ def test_a_fetch_of_a_held_reply_reaches_the_sidecar_with_inspects_headers_and_n
 
     assert answered.status_code == 200
     [request] = seen
-    assert (request["method"], request["path"]) == ("POST", _HELD_REPLY)
+    assert (request["method"], request["path"]) == ("POST", _JUDGED_REPLY)
     assert request["body"] == _MODEL_REQUEST
     sent = request["headers"]
     assert {name: sent.get(name) for name in inspects} == inspects
@@ -2164,7 +2164,7 @@ def test_a_fetch_of_a_held_reply_reaches_the_sidecar_with_inspects_headers_and_n
     assert "httpx" not in sent["user-agent"]
 
 
-def test_a_fetched_held_reply_keeps_its_status_its_headers_and_its_body(
+def test_a_fetched_judged_reply_keeps_its_status_its_headers_and_its_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     held = json.dumps({"type": "message", "content": []}).encode()
@@ -2181,7 +2181,7 @@ def test_a_fetched_held_reply_keeps_its_status_its_headers_and_its_body(
         response.raw_headers.extend([(b"x-twice", b"1"), (b"x-twice", b"2")])
         return response
 
-    answered = _fetch_held_reply(monkeypatch, _sidecar_answering([], answer))
+    answered = _fetch_judged_reply(monkeypatch, _sidecar_answering([], answer))
 
     assert (answered.status_code, answered.content) == (200, held)
     # The headers are the ones the sidecar wrote, with nothing added.
@@ -2202,7 +2202,7 @@ def test_an_answer_the_sidecar_compressed_reaches_the_caller_still_compressed(
     plain = b'{"type": "message"}' * 50
     packed = gzip.compress(plain)
 
-    answered = _fetch_held_reply(
+    answered = _fetch_judged_reply(
         monkeypatch,
         _sidecar_answering(
             [],
@@ -2223,7 +2223,7 @@ def test_an_answer_the_sidecar_compressed_reaches_the_caller_still_compressed(
     assert answered.content == plain
 
 
-def test_a_refused_fetch_of_a_held_reply_returns_the_sidecars_answer_unchanged(
+def test_a_refused_fetch_of_a_judged_reply_returns_the_sidecars_answer_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     refusal = {
@@ -2231,7 +2231,7 @@ def test_a_refused_fetch_of_a_held_reply_returns_the_sidecars_answer_unchanged(
         "error": {"type": "invalid_request_error", "message": "A person is asked."},
     }
 
-    answered = _fetch_held_reply(
+    answered = _fetch_judged_reply(
         monkeypatch,
         _sidecar_answering(
             [],
@@ -2253,8 +2253,8 @@ def _http_scope(spec_version: str) -> dict[str, Any]:
         "http_version": "1.1",
         "method": "POST",
         "scheme": "http",
-        "path": _HELD_REPLY,
-        "raw_path": _HELD_REPLY.encode(),
+        "path": _JUDGED_REPLY,
+        "raw_path": _JUDGED_REPLY.encode(),
         "query_string": b"",
         "root_path": "",
         "headers": [
@@ -2268,7 +2268,7 @@ def _http_scope(spec_version: str) -> dict[str, Any]:
     }
 
 
-def test_a_streamed_held_reply_reaches_the_caller_event_by_event(
+def test_a_streamed_judged_reply_reaches_the_caller_event_by_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     proxy: Any = importlib.import_module("litellm.proxy.proxy_server")
@@ -2397,7 +2397,7 @@ def test_the_sidecars_stream_is_closed_when_the_caller_disconnects_before_its_en
         # layers. Each layer handles a disconnected caller in its own way.
         forward = proxy.app.router.routes[0].endpoint
         try:
-            response = await forward(HttpRequest(scope, receive), "v1/held-reply")
+            response = await forward(HttpRequest(scope, receive), "v1/judged-reply")
             try:
                 await response(scope, receive, send)
             except Exception:
@@ -2495,7 +2495,7 @@ def _eval_call_fields(method: str, *more: Any) -> dict[str, Any]:
     }
 
 
-def test_an_eval_fetches_an_approved_calls_held_reply_through_litellm_from_a_real_sidecar(
+def test_an_eval_fetches_an_approved_calls_judged_reply_through_litellm_from_a_real_sidecar(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # The eval sends everything to LiteLLM, and the guardrail's `/sentinel/`
@@ -2553,7 +2553,7 @@ def test_an_eval_fetches_an_approved_calls_held_reply_through_litellm_from_a_rea
                         data, _USER, provider_reply
                     )
                 too_soon = await eval_client.post(
-                    "/sentinel/v1/held-reply",
+                    "/sentinel/v1/judged-reply",
                     json=_MESSAGES.body,
                     headers=key | _eval_request_headers("request-1"),
                 )
@@ -2574,12 +2574,12 @@ def test_an_eval_fetches_an_approved_calls_held_reply_through_litellm_from_a_rea
                     | {"id": "request-1", "wait": 30},
                 )
                 held = await eval_client.post(
-                    "/sentinel/v1/held-reply",
+                    "/sentinel/v1/judged-reply",
                     json=_MESSAGES.body,
                     headers=key | _eval_request_headers("request-1"),
                 )
                 unproven = await eval_client.post(
-                    "/sentinel/v1/held-reply",
+                    "/sentinel/v1/judged-reply",
                     json=_MESSAGES.body,
                     headers=key
                     | _eval_request_headers("request-1")

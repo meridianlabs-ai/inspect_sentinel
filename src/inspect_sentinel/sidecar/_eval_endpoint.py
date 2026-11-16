@@ -15,7 +15,7 @@ from starlette.routing import Route
 
 from ._errors import UnauthorizedError
 from ._exchange import Refuse
-from ._handler import MAX_RESULT_WAIT, Handler, HeldReply, RequestResult
+from ._handler import MAX_RESULT_WAIT, Handler, JudgedReply, RequestResult
 from ._http import discard_within, read_within
 from ._inspect_client import (
     JudgingUsage,
@@ -61,7 +61,7 @@ from ._state import NotJudged, Outcome
 PATH = "/sentinel/v1"
 """Where the methods are served. The `v1` is the version of the methods."""
 
-HELD_REPLY_PATH = f"{PATH}/held-reply"
+JUDGED_REPLY_PATH = f"{PATH}/judged-reply"
 """The path from which an eval fetches the provider's reply that the sidecar holds for a model call paused for a person. It is not a JSON-RPC method. The eval sends the call's own model request here, with its code for that provider, and the sidecar answers as the provider would."""
 
 INFO_PATH = "/sentinel/info"
@@ -514,17 +514,17 @@ def eval_routes(
     token: str | None = None,
     results: bool = True,
 ) -> list[Route]:
-    """The routes of the endpoint for evals: the probe at `/sentinel/info`, the methods at `/sentinel/v1`, and the fetch of a held reply at `/sentinel/v1/held-reply`.
+    """The routes of the endpoint for evals: the probe at `/sentinel/info`, the methods at `/sentinel/v1`, and the fetch of a judged reply at `/sentinel/v1/judged-reply`.
 
     An eval registers its tasks and completes each sample's registration before the sample runs, asks what became of each request and of a sample, and ends a sample once it is scored. The eval makes a token and sends it in a registration to a sidecar that holds none for the eval. Every other call proves the caller holds that token with a `timestamp` and a `mac`, so only the eval reads what was decided of its requests and samples. Every call is a JSON-RPC 2.0 request. No method clears a tally or changes the sentinel. One method can let a tool call go ahead: `answer_question`, which answers a question that the sentinel itself asked a person. For now the eval signs that answer with its own token, and the sidecar accepts it only for the eval's own runs (`design/sidecar-plan.md`, step 13). A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
 
-    `/sentinel/v1/held-reply` is not a method. An eval uses it to fetch what the sidecar holds for a model call that was paused for a person: the provider's reply, once the call is `decided` with the outcome `proceed`, or the provider's error, while the call is `awaiting_resend` because the provider failed it. To fetch it, the eval POSTs the call's own model request to this path, under the same `x-irid` and with an `x-inspect-context` signed as on any model request. The fetch is a model request, and not a method, because the eval reads the answer with its code for that provider, and that code can only send the provider's request. The sidecar reads only the headers that name and prove the call, never the body. It answers with what it holds: the provider's status, headers and body, with a stream's events from first to last. It refuses any other request with a 400 and a JSON `error`, and the eval then gets the call's state from `request_result`. A fetch changes nothing, so the eval can repeat it.
+    `/sentinel/v1/judged-reply` is not a method. An eval uses it to fetch what the sidecar holds for a model call that was paused for a person: the provider's reply, once the call is `decided` with the outcome `proceed`, or the provider's error, while the call is `awaiting_resend` because the provider failed it. To fetch it, the eval POSTs the call's own model request to this path, under the same `x-irid` and with an `x-inspect-context` signed as on any model request. The fetch is a model request, and not a method, because the eval reads the answer with its code for that provider, and that code can only send the provider's request. The sidecar reads only the headers that name and prove the call, never the body. It answers with what it holds: the provider's status, headers and body, with a stream's events from first to last. It refuses any other request with a 400 and a JSON `error`, and the eval then gets the call's state from `request_result`. A fetch changes nothing, so the eval can repeat it.
 
     Args:
         handler: The handler the proxy's requests and replies are put to.
         max_body_bytes: The largest call that is read.
         token: A credential every call to the methods must present as a bearer token, when the endpoint has a port of its own. None where it shares the proxy's port and access control.
-        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited. Without results, the sidecar doesn't serve `list_pending_questions`, `answer_question`, `cancel_paused_request` or `/sentinel/v1/held-reply` either, because an eval that isn't trusted with a monitor's explanation isn't trusted to answer for a person. Build the handler with `eval_results` off as well, so that it asks no question that nobody can answer.
+        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited. Without results, the sidecar doesn't serve `list_pending_questions`, `answer_question`, `cancel_paused_request` or `/sentinel/v1/judged-reply` either, because an eval that isn't trusted with a monitor's explanation isn't trusted to answer for a person. Build the handler with `eval_results` off as well, so that it asks no question that nobody can answer.
     """
 
     async def info(http: HttpRequest) -> Response:
@@ -582,7 +582,7 @@ def eval_routes(
             return failed(id, ex)
         return answered(id, result)
 
-    async def held_reply(http: HttpRequest) -> Response:
+    async def judged_reply(http: HttpRequest) -> Response:
         # Every refusal uses a status that a provider's SDK doesn't retry by
         # itself. So a fetch of a reply the sidecar doesn't hold fails once,
         # and the eval then gets the call's state from `request_result`.
@@ -598,11 +598,11 @@ def eval_routes(
             )
         # The headers alone decide the answer, so the sidecar refuses a
         # request before it reads any of the body.
-        held = await handler.held_reply(
+        judged = await handler.judged_reply(
             {name.lower(): value for name, value in http.headers.items()}
         )
-        if isinstance(held, Refuse):
-            return JSONResponse({"error": held.message}, status_code=held.status)
+        if isinstance(judged, Refuse):
+            return JSONResponse({"error": judged.message}, status_code=judged.status)
         # The body is the call's model request. The sidecar discards it
         # without reading what it says.
         if not await discard_within(http, max_body_bytes):
@@ -610,12 +610,12 @@ def eval_routes(
                 {"error": f"A request is at most {max_body_bytes} bytes."},
                 status_code=413,
             )
-        return _held_reply_response(held)
+        return _judged_reply_response(judged)
 
     return [
         Route(INFO_PATH, info, methods=["GET"]),
         Route(PATH, call, methods=["POST"]),
-        Route(HELD_REPLY_PATH, held_reply, methods=["POST"]),
+        Route(JUDGED_REPLY_PATH, judged_reply, methods=["POST"]),
     ]
 
 
@@ -837,19 +837,19 @@ async def _answer_question(
     return AnswerQuestionResult(id=given.id, decision=given.decision)
 
 
-def _held_reply_response(held: HeldReply) -> Response:
+def _judged_reply_response(judged: JudgedReply) -> Response:
     # The reply as the provider sent it and the proxy passed it on, for the
     # eval's code for that provider to read. The sidecar sends the body
     # whole, with a stream's events from first to last. The response gets a
     # length of its own, because the sidecar left out the reply's hop-by-hop
     # headers, such as `content-length`, when it began to hold the reply.
-    headers = dict(held.headers)
-    if held.stream and "event-stream" not in headers.get("content-type", "").lower():
+    headers = dict(judged.headers)
+    if judged.stream and "event-stream" not in headers.get("content-type", "").lower():
         headers["content-type"] = "text/event-stream"
-    return Response(content=held.body, status_code=held.status, headers=headers)
+    return Response(content=judged.body, status_code=judged.status, headers=headers)
 
 
-def _reply_record(reply: HeldReply) -> ReplyRecord:
+def _reply_record(reply: JudgedReply) -> ReplyRecord:
     return ReplyRecord(
         status=reply.status,
         headers=dict(reply.headers),
@@ -896,7 +896,7 @@ def schema() -> dict[str, Any]:
     _, definitions = models_json_schema(
         [(model, "validation") for model in models],
         title="Inspect Sentinel: the endpoint for evals",
-        description=f"JSON-RPC 2.0 methods, POSTed to {PATH}, with a probe at GET {INFO_PATH}. A POST of a paused call's model request to {HELD_REPLY_PATH} is not a method: it fetches the provider's reply that the sidecar holds for that call, in the provider's format. `methods` names the definitions that a method's `params` and `result` fit. `errors` lists the codes of the method errors of the endpoint's own.",
+        description=f"JSON-RPC 2.0 methods, POSTed to {PATH}, with a probe at GET {INFO_PATH}. A POST of a paused call's model request to {JUDGED_REPLY_PATH} is not a method: it fetches the provider's reply that the sidecar holds for that call, in the provider's format. `methods` names the definitions that a method's `params` and `result` fit. `errors` lists the codes of the method errors of the endpoint's own.",
     )
     return {
         "$schema": GenerateJsonSchema.schema_dialect,
