@@ -1424,6 +1424,7 @@ sequenceDiagram
 - **Each report is tied to its call.** Inspect asks by the `x-irid` of the model call it sent, so it knows which call and assistant message each report belongs to. A report at a tool stage names its tool call by id. Inspect writes the events with its own ids.
 - **A trimmed report says it was trimmed**, so it never looks like a monitor with nothing to say. Its `function` is empty.
 - **Each event records where it came from.** Its `metadata` holds, under `sentinel_sidecar`: the proxy's address, the endpoint's version and release mode from the probe, the call's `x-irid`, whether the report was trimmed, and the models called by role, from the judgment's `models`. Using `metadata` leaves inspect_ai's log format unchanged. `sentinel_proxy` isn't in the log either, so `inspect eval-retry` must be given it again. Typed log fields for both follow later ([#167](https://github.com/meridianlabs-ai/inspect_sentinel/issues/167)), because a log format change means regenerating the schema in inspect_ai, ts-mono and inspect_scout.
+- **An event's time is when Inspect wrote it, not when its record was made** ([#229](https://github.com/meridianlabs-ai/inspect_sentinel/issues/229)). The sidecar sends no time with a record. So every record of a step gets one time, after the call's judging ended, and after a person's answer where [step 13](sidecar-plan.md#step-13-human-review) asked one. [Step 19](sidecar-plan.md#step-19-the-sidecars-times-and-counts-in-the-evals-log) gives each event its record's own time (section 12).
 - **A role the eval set to another model gets a warning.** The sidecar takes a role's model from its own configuration, not the eval's model roles (section 8, "What holds something else in the sidecar"). If a step's monitors used a role the eval set to a different model, Inspect warns once, naming both.
 - **Three answers, never two.** The sidecar answers with what was recorded, or that records were held but are no longer kept, or that the call was never seen. Inspect logs whichever it gets, so lost records show as a gap rather than as a sentinel with nothing to say.
 - **Later work, with the sidecar's record log (section 10).** Which sentinel the sidecar runs, and its judge models' calls. Inside Inspect, both are in the log. Through a sidecar, each event names the judge models but not their calls.
@@ -1914,7 +1915,7 @@ Considered and not taken:
   Several sidecar processes need to share this state, because a run's requests and the calls to the endpoint for evals may each reach a different process. A run that outlasts a restart needs it kept. The state sits behind one interface, `State`. Its one implementation, `MemoryState`, keeps it in memory in one process and hands back the objects it keeps. Implementations that share and keep it, possibly on Valkey or S3, can follow. How such an implementation writes back what it hands out is not designed.
 
   A run's state is dropped at `end_sample`, or once no request has named the run for a day (`--run-expiry`). Records are kept for a limited window. A task Inspect registered is dropped a day after the last request that names it, or later if the registration asked; a task an admin registered is kept (section 9). Not designed: tallies kept at the task level, shared by every sample of a task (section 7).
-- **A record log that can't be rewritten**, not yet designed. Records are to leave the sidecar as they are made, to somewhere neither the sidecar nor a client can change them. What the sidecar keeps is then a copy for section 9's result methods, not the record itself.
+- **A record log that can't be rewritten**, not yet designed. Records are to leave the sidecar as they are made, to somewhere neither the sidecar nor a client can change them. What the sidecar keeps is then a copy for section 9's result methods, not the record itself. An agent with no eval needs it for the measures in section 12.
 - **A health check is answered at `GET /health` on each HTTP port**: `--port`, and `--eval-port` when set. The Envoy shim's gRPC port has none. The answer is `ok` with status 200. The route needs no credential, on the endpoint for evals too, and checks nothing. The sidecar loads its sentinel before it listens, so an answer means it is ready to judge. A sidecar whose sentinel can't load stops without listening. The route is for whatever runs the sidecar, so that a sidecar that stops answering is restarted. A proxy doesn't call it, and it is not part of what a proxy and the sidecar exchange. Health checks are left out of the access log, which would otherwise gain a line per probe.
 - **Access is the operator's to control.** The port for proxies is protected by where the sidecar listens: the operator makes it reachable by the proxy alone, over `https` unless the two run side by side. The endpoint for evals is reached by default only through the proxy, under the proxy's access control, or, as an advanced option, on a port with a token of its own (section 9). The Envoy shim's port is plain gRPC, protected the same way, so only Envoy reaches it. TLS on every port, with client certificates from the proxies, is planned in [step 16](sidecar-plan.md#step-16-tls-on-the-sidecars-listeners). Other authentication, such as a credential on what a proxy sends, may follow.
 - **`MiddlemanHook` will add two round trips to the sidecar to a model call**, one for the request and one for the reply. Their cost has not been measured.
@@ -1928,6 +1929,55 @@ Considered and not taken:
 - **The whole chain.** An Inspect task runs through a proxy and the sidecar on each provider: registering the task, a rejected call, a `terminate`, and the run's state read before scoring.
 - **Middleman's passthrough hook is to be tested in Middleman's own test suite**, which is Hawk's.
 
+## 12. Measuring what a sentinel did
+
+An operator who runs agents under a sentinel is asked how much oversight that gives. Three measures are common:
+
+| Measure | The question it answers |
+| --- | --- |
+| Coverage | What share of an agent's actions did a monitor judge? |
+| Review latency | How long after an action did a monitor judge it? Where a person was asked, how long did they take to answer? |
+| Escalation rate | How often did a sentinel stop or change an action, or ask a person about one? |
+
+None of the three is reported today. This section says how each is counted, what the sidecar already records towards it, and what is missing. The work is [steps 18 to 20](sidecar-plan.md#step-18-times-and-counts-in-the-sidecars-results) of the plan.
+
+### What is counted
+
+- **The unit is a step: a model call or a tool call, at one stage.** A model call is one request and its reply. A tool call is one call the model proposed, by its id. Each is counted at the stages the sentinel watches: `model_input`, `model_output`, `tool_call` and `tool_result`.
+- **A call that is sent again counts once.** A retried call keeps its `x-irid` ("Each agent model call", section 9), and the sidecar keeps it as one call.
+- **Messages are not counted.** Every request sends the conversation so far again, so one message passes the proxy many times.
+- **An agent with no eval is counted less exactly.** Its requests carry no `x-irid`, so a request its client sends again is a second model call to the sidecar. A tool result is still counted once, because a result the history sends again isn't judged again (section 3).
+
+### Coverage is of what reached the sidecar
+
+A percentage can only describe what was seen. So the sidecar's coverage is the steps a sentinel judged, out of the steps the proxy handed it. A step that wasn't judged already has a reason: `request_result` answers `not_judged` with one ("What each answer means", section 9).
+
+What never reached the sidecar is outside that count. It is reported beside the percentage, in one of three ways:
+
+- **With an Inspect eval, it can be counted.** Inspect knows every model call it made. It asks the sidecar about each, and the answer `unknown` means the sidecar never saw the call. Inspect also knows which calls it answered from its cache, which never reach the proxy.
+- **The proxy has a count of its own.** A proxy can log every request it handles, whether or not it handed the request to the sidecar. Comparing the two counts shows the requests a proxy let through without a judgment.
+- **For an agent with no eval, the rest is the operator's to secure.** The operator gives the agent no other way to reach a provider: the proxy holds the provider's key, and the network allows no direct path. That is a statement about the deployment. It is reported with the percentage, and is not part of it.
+
+### What is recorded today, and what is missing
+
+| Measure | Recorded today | Missing |
+| --- | --- | --- |
+| Coverage | each call's state, the reason where it wasn't judged, and each step's records | totals for a sample or a run: steps seen, judged and not judged |
+| Review latency, by a monitor | `judging_time` for each model call ("The methods", section 9) | a time on each record, so one monitor's or one stage's time can't be read |
+| Review latency, by a person | with [step 13](sidecar-plan.md#step-13-human-review): when each question was asked, answered and closed, in the call's record of its questions | nothing more, for a question asked through the eval |
+| Escalation rate | each step's decision and, with step 13, how each question ended | totals, and a way to add them up across evals and over time |
+
+- **A record has no time.** The sidecar notes what a monitor or protocol reported, and not when. So Inspect's sidecar client writes each record into the eval's log with the time it wrote it. That is after the call's judging ended, and, where step 13 asks a person about the call, after the person answered ([#229](https://github.com/meridianlabs-ai/inspect_sentinel/issues/229)). Until a record carries its own time, the times of a sidecar's events in an eval's log can't be used.
+- **Nothing is kept past a restart**, and records are kept for a limited window (section 10). An agent with no eval has no log of its own, so its measures wait for the record log that section 10 lists as not yet designed.
+- **Nothing adds up.** Every figure above is for one call or one question. A rate or a percentile needs them added up over many evals and many weeks.
+
+### What the sidecar doesn't measure
+
+- **A person who looks at a decision afterwards.** An operator may have people review what a sentinel blocked, or a sample of what it let through. Nothing records that someone did, when, or what they concluded. That needs a design of its own, and it is not the sidecar's alone: the same record is wanted for a sentinel inside Inspect, and for the results of a Scout scan.
+- **Monitoring after the fact.** A monitor run over finished transcripts, as a Scout scanner, isn't the sidecar's work. What its reporting needs is in [workstreams.md](workstreams.md#12-monitoring-the-monitors).
+- **How often a monitor is right.** That is measured by replaying the monitor over runs whose answers are known ([sentinel-development.md](sentinel-development.md)), not from live traffic.
+- **One agent across many runs.** The sidecar knows a run (section 7). An identity for an agent that outlasts a run isn't designed.
+
 ## Open questions
 
 What this design hasn't settled, checked or built yet, in one place. Each item names the section it belongs to.
@@ -1939,6 +1989,8 @@ What this design hasn't settled, checked or built yet, in one place. Each item n
 - how Inspect's sidecar client learns of a question put to a person, and how the person's answer reaches the sidecar (section 8; scheduled in [step 13](sidecar-plan.md#step-13-human-review))
 - how the eval says that a sample is new or resumed
 - how to catch a task in the tasks folder whose samples no longer match the eval that runs it, without telling a caller whether its guess at the file is right. Comparing Inspect's registration with the file doesn't work as it stands, because inspect_ai rewrites a sample's media paths and gives each chat message a new id when it loads a dataset, so an unchanged eval would not match
+- how it is recorded that a person looked at a sentinel's decision after it was made: who, when, and what they concluded (section 12)
+- an identity for an agent that outlasts a run, so that its measures can be followed from run to run (section 12)
 - whether replacing a whole request or a whole reply keeps a provider's prompt cache, and whether a changed stream may keep the provider's token counts (section 4)
 - how a shared implementation of the sidecar's state writes back what it hands out (section 10)
 - tallies kept at the task level, shared by every sample of a task, and how a sentinel asks for them (sections 7 and 10)
@@ -2018,6 +2070,7 @@ Each ask below names what the sidecar does until inspect_ai has it. Where a conv
 - **A public way to make the default rendering of a tool call.**
 - **A public way to read a model's input budget**, its context window minus inspect_ai's output reserve. `Host.score` uses it to fit the prompt to the monitor model's context window. The sidecar's `input_budget` calls the private `get_model_input_budget` in `inspect_ai.model._model_info`, and counts tokens with the public `Model.count_tokens`. Until the budget function is public, the private import lives in `sidecar/_inspect_ai.py`.
 - **A public way to read what a model call was billed.** The sidecar reports its judge models' usage to the eval as inspect_ai counts it, so that a reply from inspect_ai's cache counts nothing and a fallback model's part is priced at its own rates. inspect_ai counts it in `model_usage_context_var` in `inspect_ai.model._model`, which the sidecar binds to a dict of its own around each call (`billing` in `sidecar/_inspect_ai.py`).
+- **A completion time and a duration on a `SentinelEvent`.** inspect_ai's model, tool, sandbox and subtask events have `completed` and `working_time`. A `SentinelEvent` has one `timestamp`, so how long a monitor took can't be read from it, inside Inspect or through a sidecar. Until inspect_ai has them, a sidecar's times go in the event's `metadata`, under `sentinel_sidecar`, as its source does (section 9, "The sidecar's reports in Inspect's transcript").
 - **A label on a grader's model calls**, so that a proxy can tell them from an agent's calls, for the exemption under "Deferred".
 
 ## Deferred

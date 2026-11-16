@@ -1,6 +1,6 @@
 # Implementation plan: the sidecar
 
-How [sidecar.md](sidecar.md) becomes code. Each pull request can be reviewed on its own, has its own tests, and leaves `main` importable and passing. Proposed 2026-10-14; Envoy, incremental streaming and human review added 2026-10-17; the work after step 7 reordered and renumbered, with streaming split into proxy and Inspect client phases, on 2026-10-19; TLS on the sidecar's listeners added as step 16, before Middleman, on 2026-10-20.
+How [sidecar.md](sidecar.md) becomes code. Each pull request can be reviewed on its own, has its own tests, and leaves `main` importable and passing. Proposed 2026-10-14; Envoy, incremental streaming and human review added 2026-10-17; the work after step 7 reordered and renumbered, with streaming split into proxy and Inspect client phases, on 2026-10-19; TLS on the sidecar's listeners added as step 16, before Middleman, on 2026-10-20. Measuring what a sentinel did added as steps 18 to 20 on 2026-11-16.
 
 Earlier prototype code exists for much of this. It is reused where it fits the design in `sidecar.md`, and rewritten where it does not.
 
@@ -58,6 +58,9 @@ inspect_sentinel
 17 Middleman: inspect_sentinel and hawk, after 3 and 5; scheduled after 15 and 16
    Implementation also needs Hawk/METR accepting the passthrough hook
    Middleman streaming follows 10 and 17 and METR accepting chunk delivery
+18 times and counts in results: inspect_sentinel, after 6 and 13
+19 times and counts in the eval's log: inspect_ai, after 11 and 18
+20 reading the measures from logs: inspect_sentinel, after 18 and 19
 shared state: inspect_sentinel, before more than one sidecar worker or restart continuity
 ```
 
@@ -68,6 +71,8 @@ Step 8 comes next: the sidecar fills `step.history` from the traffic it keeps, s
 Step 11's technical prerequisites remain 5, 6 and 7; placing it after 10 is a delivery choice, so the proxy behavior and recovery contract are exercised before a client depends on them. From 7 it needs per-call rejection and `modify`, and also that a rejection Inspect puts back into its conversation is not judged as a tool result: before 7, the sidecar would judge each such rejection as a call that ran, and could end the run for a call that never ran. Step 11 establishes the Inspect client with whole-response holding. The client keeps whole-response holding, since step 12, which would have connected it to replies released early, was dropped. Step 13 follows and adds human review through the sidecar's host, Inspect's approval UI and external review consumers.
 
 [Shared and durable state](#follow-up-shared-and-durable-state) is delivered before the sidecar runs as more than one worker or promises that a run outlasts a restart; until then a deployment is one process. Step 14 needs nothing and can start at any time, with each upstream issue accepted first. Step 15 implements trusted run identity after registration and the Inspect client, using Envoy and LiteLLM first, without waiting for a Hawk change. Step 16 adds TLS, and client certificates, on every port the sidecar listens on, for Envoy and LiteLLM first. Step 17 is scheduled after steps 15 and 16 and waits on Hawk/METR accepting Middleman's passthrough hook. Extending Middleman to hand over chunks also needs step 10 and METR accepting that change; it does not block Envoy, LiteLLM, identity or the Inspect client work.
+
+Steps 18 to 20 let an operator report what a sentinel did: coverage, review latency and escalation rate ([sidecar.md, section 12](sidecar.md#12-measuring-what-a-sentinel-did)). They follow step 13, whose record of each question they build on, and hold up nothing else. Step 18 adds times and totals to the sidecar's results, step 19 puts them in the eval's log, and step 20 reads them from many logs.
 
 ## Step 1: reading provider traffic
 
@@ -282,6 +287,54 @@ Repositories: `inspect_sentinel` and `hawk`. Technical prerequisites: steps 3 an
 - In `hawk`: the passthrough hook in Middleman, which is METR's to accept; and routing `/sentinel/*` to the sidecar at the load balancer in front of Middleman.
 - A README for the hook, including the load balancer's routing.
 
+## Step 18: times and counts in the sidecar's results
+
+Repository: `inspect_sentinel`. Depends on: steps 6 and 13. This is the first of three steps towards the measures in [sidecar.md, section 12](sidecar.md#12-measuring-what-a-sentinel-did): coverage, review latency and escalation rate.
+
+The sidecar records what each monitor and protocol reported, and not when. It answers about one call at a time, and gives no totals. This PR adds both to what the endpoint for evals returns. Each addition is a new optional member, so an Inspect that doesn't know it ignores it.
+
+- Settle the definitions first, in `sidecar.md`, section 12: the unit (a model call or a tool call, at one stage), what counts as judged, and what each time is measured from. The members below follow from them.
+- Each record gains the time it was made, in seconds since the epoch as the times of step 13's questions are, and how long its monitor or protocol took.
+- `request_result` gains when the sidecar was handed the call's request, and when it was handed its reply.
+- `sample_result` gains totals for the sample, by stage: steps seen, steps judged, and steps not judged, by reason. It also gains the sample's questions for a person: how many were asked, answered, expired and cancelled.
+- With `--no-eval-results`, `sample_result` is off and records aren't sent, so neither the totals nor the records' times are. `judging_time` is still sent, as it is today.
+- The schema file, and the reference in `sidecar.md`, "The methods".
+- Tests: a record's time lies between the hand-over of its exchange and the call's decision; a record made before a person was asked is earlier than the time the question was asked; the totals of a sample with a judged call, a call that ran out of time and a call a person was asked about; a call sent again counts once.
+
+Not in this PR:
+
+- **Totals for an agent with no eval.** It has no sample to ask about. They wait for the record log ([sidecar.md, section 10](sidecar.md#10-operations)).
+- **Anything kept across a restart.** That is [shared and durable state](#follow-up-shared-and-durable-state).
+
+## Step 19: the sidecar's times and counts in the eval's log
+
+Repository: `inspect_ai`. Depends on: steps 11 and 18. Fixes [#229](https://github.com/meridianlabs-ai/inspect_sentinel/issues/229).
+
+Inspect's sidecar client writes each of the sidecar's records into the eval's log as a `SentinelEvent`, with the time Inspect wrote it. That is after the call's judging ended, and after a person's answer where step 13 asked one. This PR puts each record's own time in the log, and adds the counts that only Inspect has.
+
+- Each event carries its record's time and duration, from step 18. Where they go needs Meridian's decision before the PR. As the event's own `timestamp`, the time is true, but the event is written into the transcript later than that time. In the event's `metadata`, under `sentinel_sidecar`, nothing changes for a reader of the log, who then has to know to look there. Typed fields would follow with [#167](https://github.com/meridianlabs-ai/inspect_sentinel/issues/167).
+- A sidecar that sends no times, because it is older, leaves the events as they are today.
+- At the end of a sample, Inspect records, for each sidecar: the model calls it made, the calls the sidecar answered `unknown` for, and the calls Inspect answered from its cache. It is written as an info event, as step 13 writes a question's record. With step 18's totals, this is the sample's coverage and what lay outside it.
+- An eval with no sidecar is unchanged.
+- Tests: with a person who takes a while, an event's time is its record's and not the time of the lookup; a sidecar that sends no times; a sample's counts with a call the sidecar never saw and a call answered from the cache.
+
+## Step 20: reading the measures from logs
+
+Repository: `inspect_sentinel`. Depends on: steps 18 and 19. This is the sidecar's part of [monitoring the monitors](workstreams.md#12-monitoring-the-monitors). It serves a sentinel inside Inspect as well, since both write `SentinelEvent`s.
+
+Steps 18 and 19 put the times and counts into each eval's log. Nothing adds them up. This PR adds a reader that does, over as many logs as it is given.
+
+- A function that reads eval logs into one table, with a row for each step at each stage: the eval, sample and call it belongs to, the monitors and protocols that reported, the decision, whether it was judged and why not if it wasn't, its times, and any question for a person with how it ended.
+- A summary of that table, for a period, grouped by protocol, stage or eval: coverage; the share of steps a sentinel rejected, changed, ended the run at, or asked a person about; and the median and the 95th percentile of the time a monitor took and of the time a person took.
+- The figures follow the definitions in `sidecar.md`, section 12. The summary says what it counted: the number of steps, and how many calls never reached a sidecar.
+- A page in the docs, with one worked example.
+- Tests: logs written by a sentinel inside Inspect and by a sidecar give the same table for the same run; a sidecar's log from before step 19 is read with its times empty, not wrong.
+
+Not in this PR:
+
+- **A dashboard, or a store of results over time.** The table is a pandas data frame, as a Scout scan's results are, for whatever an operator already uses.
+- **A person's later review of a decision**, which nothing records yet ([sidecar.md, section 12](sidecar.md#what-the-sidecar-doesnt-measure)).
+
 ## Follow-up: shared and durable state
 
 Repository: `inspect_sentinel`, with deployment configuration and Inspect lifecycle handling where needed. Deliver before running more than one sidecar worker or promising that a run's state survives a restart. The initial deployment remains one process, with no promise of restart continuity.
@@ -296,3 +349,6 @@ These need design first. Each names the repositories it would touch.
 
 - A full policy for model calls that Inspect answers from its cache, which never reach the proxy. The initial remote-mode cache behavior must be agreed before step 11; supporting cached calls with equivalent remote judgment needs further design in `inspect_ai`, and possibly `inspect_sentinel`.
 - Tallies kept at the task level. `inspect_sentinel`.
+- A record that a person looked at a sentinel's decision after it was made: who, when, and what they concluded. `inspect_sentinel` and `inspect_ai`, and `inspect_scout` for a scanner's results.
+- The record log that can't be rewritten ([sidecar.md, section 10](sidecar.md#10-operations)), which the measures of an agent with no eval wait for. `inspect_sentinel`.
+- An identity for an agent that outlasts a run, so that its measures can be followed from run to run. `inspect_sentinel`, after step 15.
