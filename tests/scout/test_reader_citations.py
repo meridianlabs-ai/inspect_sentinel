@@ -151,10 +151,12 @@ def tool(
     *,
     execution_id: str | None = None,
     bridged: bool = False,
+    reported: bool = True,
     error: ToolCallError | None = None,
 ) -> ToolEvent:
     # a call with the id "shared", whose tool message is r<uuid>; `bridged`, a
-    # host call a sandbox agent bridge ran
+    # host call a sandbox agent bridge ran, which links its run to the result
+    # the scaffold reported (`message_id`) only where `reported`
     return ToolEvent(
         uuid=uuid,
         span_id=parent,
@@ -162,7 +164,7 @@ def tool(
         execution_id=execution_id,
         function="addition",
         arguments={},
-        message_id=f"r{uuid}",
+        message_id=f"r{uuid}" if reported or not bridged else None,
         metadata={"bridge": {"proposal_id": id}} if bridged else None,
         error=error,
     )
@@ -198,44 +200,145 @@ def keyed_citations(results: list[Result]) -> list[tuple[str, list[str]]]:
     ]
 
 
+# The bridged shapes below are those inspect_ai #6446 (df812940f) logs, whose
+# replay names a host run's steps as it names a native execution's: the first
+# rebuilt run of a call id, native or bridged, in log order, keeps the id, and
+# a later one has its execution id.
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("stage", ["tool_call", "tool_result"])
-async def test_each_tool_of_a_shared_handout_is_read_under_the_call_id_citing_its_run(
+async def test_each_tool_of_a_shared_handout_is_read_under_the_id_its_run_has(
     stage: Stage,
 ) -> None:
-    # one handout of "host_1" denotes two bridged tools, as inspect_ai records
-    # it: each tool's checks name that tool's execution of the handout, and
-    # the scaffold runs read_copy under the call's id, then read_file under an
-    # id of its own
+    # one handout of "host_1" denotes two bridged tools: each tool's checks
+    # name that tool's execution of the handout, and the scaffold runs
+    # read_copy under the call's id, then read_file under an id of its own
+    # (`shared_handout_run_in_reverse`). Replay builds read_copy's steps under
+    # host_1 and none for read_file's run, so read_file's checks must not join
+    # host_1's row
     events = [
         *checked("s1", "tool_call", "host_1", None, execution_id="h/host/read_file"),
         *checked("s2", "tool_call", "host_1", None, execution_id="h/copy/read_copy"),
-        tool("copy", None, "host_1", execution_id="h/copy/read_copy", bridged=True),
-        tool("file", None, "own", execution_id="h/host/read_file", bridged=True),
+        tool(
+            "copy",
+            None,
+            "host_1",
+            execution_id="h/copy/read_copy",
+            bridged=True,
+            reported=False,
+        ),
+        tool(
+            "file",
+            None,
+            "own",
+            execution_id="h/host/read_file",
+            bridged=True,
+            reported=False,
+        ),
         *checked("s3", "tool_result", "host_1", None, execution_id="h/host/read_file"),
         *checked("s4", "tool_result", "host_1", None, execution_id="h/copy/read_copy"),
     ]
 
-    # keyed as replay keys a bridged call's steps, each citing its own run
+    # each citing its own run
     assert keyed_citations(await read(stage, events)) == [
-        ("host_1", ["file"]),
+        ("h/host/read_file", ["file"]),
         ("host_1", ["copy"]),
     ]
 
 
 @pytest.mark.anyio
-async def test_a_check_of_a_bridged_tool_that_never_ran_cites_nothing() -> None:
-    # the handout's read_copy never ran; its result check must not cite the
-    # read_file run under the same id
+async def test_a_check_of_a_bridged_tool_that_never_ran_is_read_under_its_execution() -> (
+    None
+):
+    # the handout's read_copy never ran (`repeated_host_call(..., shared=True)`):
+    # replay has no step for it, so its check must neither join read_file's
+    # host_1 row nor cite read_file's run
     events = [
-        tool("file", None, "host_1", execution_id="h/host/read_file", bridged=True),
-        *checked("s1", "tool_result", "host_1", None, execution_id="h/host/read_file"),
-        *checked("s2", "tool_result", "host_1", None, execution_id="h/copy/read_copy"),
+        *checked("s1", "tool_call", "host_1", None, execution_id="h/host/read_file"),
+        *checked("s2", "tool_call", "host_1", None, execution_id="h/copy/read_copy"),
+        tool(
+            "file",
+            None,
+            "host_1",
+            execution_id="h/host/read_file",
+            bridged=True,
+            reported=False,
+        ),
+    ]
+
+    assert keyed_citations(await read("tool_call", events)) == [
+        ("host_1", ["file"]),
+        ("h/copy/read_copy", []),
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_second_handout_of_a_host_call_id_is_read_under_its_execution() -> None:
+    # the bridge hands host_1 over twice, a retry after the first run raised a
+    # ToolError (#6370's B1 host retry): replay names the second handout's
+    # steps by its execution. Once the id was handed out twice, the bridge
+    # checks a result reported under it under no execution, and which run it
+    # answers is unknown, so that check is read under its own event's id, which
+    # no replayed step has, not under host_1, the first handout's
+    events = [
+        *checked("s1", "tool_call", "host_1", None, execution_id="h1/host/addition"),
+        tool(
+            "first",
+            None,
+            "host_1",
+            execution_id="h1/host/addition",
+            bridged=True,
+            error=ToolCallError("unknown", "failed"),
+        ),
+        *checked("s2", "tool_result", "host_1", None, execution_id="h1/host/addition"),
+        *checked("s3", "tool_call", "host_1", None, execution_id="h2/host/addition"),
+        tool("second", None, "host_1", execution_id="h2/host/addition", bridged=True),
+        *checked("s4", "tool_result", "host_1", None),
+    ]
+
+    results = await read("tool_call", events) + await read("tool_result", events)
+
+    [unknown] = [e for e in events if isinstance(e, SentinelEvent)][-1:]
+    assert [str((r.metadata or {})["step_id"]) for r in results] == [
+        "host_1",
+        "h2/host/addition",
+        "host_1",
+        str(unknown.uuid),
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("host_checked", [True, False])
+async def test_a_native_call_after_a_host_call_under_its_id_is_read_under_its_execution(
+    host_checked: bool,
+) -> None:
+    # a host call ran under "shared", then a native call under the same id
+    # (`test_a_native_call_reusing_a_bridged_call_id_keeps_its_tool_steps`):
+    # replay builds the host run's steps under the id, also where no check of
+    # it was recorded, since the bridge linked its reported result, and names
+    # the native call's steps by its execution
+    host = [
+        tool("host", None, execution_id="h/host/addition", bridged=True),
+    ]
+    if host_checked:
+        host = [
+            *checked("s1", "tool_call", "shared", None, execution_id="h/host/addition"),
+            *host,
+            *checked(
+                "s2", "tool_result", "shared", None, execution_id="h/host/addition"
+            ),
+        ]
+    events = [
+        *host,
+        *checked("s3", "tool_call", "shared", None, execution_id="x1"),
+        tool("native", None, execution_id="x1"),
+        *checked("s4", "tool_result", "shared", None, execution_id="x1"),
     ]
 
     assert keyed_citations(await read("tool_result", events)) == [
-        ("host_1", ["file"]),
-        ("host_1", []),
+        *([("shared", ["host"])] if host_checked else []),
+        ("x1", ["native"]),
     ]
 
 

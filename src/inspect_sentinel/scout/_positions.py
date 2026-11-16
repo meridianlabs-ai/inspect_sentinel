@@ -40,11 +40,14 @@ class Positions:
         inputs: dict[str, str] = {}
         # the spans within a sentinel's, whose tool events are a monitor's own
         sentinel_spans: set[str] = set()
-        # each native run outside a sentinel's span, in log order: its call id,
-        # its execution id, and whether its error left it unbuilt in replay
+        # each run outside a sentinel's span, native or bridged, in log order:
+        # its call id, its execution id, and whether replay can build it
+        # without a check naming it
         runs: list[tuple[str, str | None, bool]] = []
         # the executions some check names
         checked: set[str] = set()
+        # the call ids some run records an execution under
+        self._executed: set[str] = set()
         for index, event in enumerate(events):
             if isinstance(event, SpanBeginEvent):
                 self._begins[event.id] = index
@@ -75,26 +78,33 @@ class Positions:
                     )
                     at.append(index)
                     tools.append(event)
-                if event.span_id not in sentinel_spans and not _bridged(event):
-                    unbuilt = event.error is not None and event.error.type in (
-                        "parsing",
-                        "approval",
-                    )
-                    runs.append((event.id, event.execution_id, unbuilt))
+                    self._executed.add(event.id)
+                if event.span_id not in sentinel_spans:
+                    runs.append((event.id, event.execution_id, _buildable(event)))
             elif isinstance(event, SentinelEvent):
                 if event.execution_id is not None:
                     checked.add(event.execution_id)
                 if event.stage == "model_input" and event.span_id is not None:
                     inputs.setdefault(event.span_id, event.conversation)
         self._generates = _preceded(inputs, models, self._begins, self._ends)
-        self._renamed = _renamed(runs, checked)
+        self._holders = _holders(runs, checked)
 
     def step_id(self, event: SentinelEvent) -> str:
-        # the step a check was of, as replay keys it: the call id, except for a
-        # later native execution of a call id an earlier execution's steps took
-        # (inspect_ai's `_Driver._tool_step_id`), named by its execution id
-        if event.execution_id is not None and event.execution_id in self._renamed:
+        # the step a check was of, as replay keys it (inspect_ai's
+        # `_Driver._tool_step_id` and `_host_step_id`): the call id where the
+        # check's execution is the run that holds it, else the execution id
+        if event.execution_id is not None:
+            if self._holders.get(event.step_id) == event.execution_id:
+                return event.step_id
+            # a later run of the id, a bridged tool's run under an id of its
+            # own, or an execution that never ran
             return event.execution_id
+        if event.step_id in self._executed:
+            # in a log that records executions, the bridge checks a result
+            # under an id it handed out more than once under none: which run it
+            # answers is unknown, so its key is the check's own event's id,
+            # which no replayed step has (every event such a log records has one)
+            return event.uuid or event.step_id
         return event.step_id
 
     def cite(self, event: SentinelEvent, index: int) -> Reference | None:
@@ -175,30 +185,37 @@ class Positions:
         return tools[index] if index >= 0 else None
 
 
-def _renamed(runs: list[tuple[str, str | None, bool]], checked: set[str]) -> set[str]:
-    # the executions replay names by their execution ids: each native run that
-    # replay builds steps for, after the first built under its call id, in any
-    # conversation, as step ids are unique in a sample. Replay builds a run's
-    # steps where a check names it, else where it ran: an error of type
-    # "parsing" or "approval" is of a call rejected before its step was built.
-    # A run whose steps replay skips for reasons the events don't show (one no
-    # model call proposed, one in a region that checks no tool calls) still
-    # counts as built here
+def _holders(
+    runs: list[tuple[str, str | None, bool]], checked: set[str]
+) -> dict[str, str | None]:
+    # each call id's holder, as replay names steps (inspect_ai's
+    # `_Driver._tool_step_id`, which `_host_step_id` shares): the execution of
+    # the first run of the id, native or bridged, in log order, whose steps
+    # replay builds, in any conversation, as step ids are unique in a sample;
+    # None for a run that records no execution. Replay builds a run's steps
+    # where a check names its execution, else, by what the events show, where
+    # `_buildable` says. A run whose steps replay skips for reasons the events
+    # don't show (one no model call proposed, one in a region that checks no
+    # tool calls) still counts as built here, so a later run's checks are
+    # keyed by their execution, which joins no replay row rather than the
+    # wrong one
     holders: dict[str, str | None] = {}
-    renamed: set[str] = set()
-    for call_id, execution, unbuilt in runs:
-        if unbuilt and execution not in checked:
-            continue
-        holder = holders.setdefault(call_id, execution)
-        if execution is not None and holder != execution:
-            renamed.add(execution)
-    return renamed
+    for call_id, execution, buildable in runs:
+        if buildable or execution in checked:
+            holders.setdefault(call_id, execution)
+    return holders
 
 
-def _bridged(event: ToolEvent) -> bool:
-    # a host call a sandbox agent bridge ran, which replay builds no native
-    # step for (inspect_ai's `_bridged`)
-    return event.metadata is not None and "bridge" in event.metadata
+def _buildable(event: ToolEvent) -> bool:
+    # whether replay can build a run's steps with no check naming it: a native
+    # call unless its error is of a call rejected before its step was built
+    # ("parsing" or "approval"); a sandbox agent bridge's host call
+    # (`metadata["bridge"]`, inspect_ai's `_bridged`) where the bridge linked
+    # the run to the result the scaffold reported (`message_id`,
+    # `_links_host_call`)
+    if event.metadata is not None and "bridge" in event.metadata:
+        return event.message_id is not None
+    return event.error is None or event.error.type not in ("parsing", "approval")
 
 
 def _preceded(
