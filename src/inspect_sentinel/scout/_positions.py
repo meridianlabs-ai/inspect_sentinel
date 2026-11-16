@@ -161,8 +161,9 @@ class Positions:
                 # run under an id other than the call's
                 found = runs
             elif found is not None and any(t.execution_id for t in found[1]):
-                # the runs under the id are other executions': a bridged tool
-                # of the handout that never ran
+                # the runs under the id are other executions': the check's own
+                # never ran (a bridged tool of the handout that it did not use,
+                # or a native call whose execution has no tool event)
                 return None
         if found is None:
             return None
