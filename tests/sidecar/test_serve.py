@@ -443,8 +443,8 @@ def test_ctrl_c_stops_the_sidecar_cleanly(second: str | None, tmp_path: Path) ->
                 assert serving.poll() is None and time.monotonic() < deadline
                 time.sleep(0.1)
         if second is None:
-            # a served sidecar runs the judging that waits for a person, so
-            # its probe says an eval is asked
+            # a running sidecar can ask a person through an eval, so its
+            # probe reports `review: true`
             probed = httpx.get(f"http://127.0.0.1:{free[0]}/sentinel/info", timeout=5)
             assert probed.json()["review"] is True
         if second == "--envoy-port":
@@ -507,8 +507,8 @@ def test_a_review_timeout_of_no_time_is_an_error() -> None:
 
 
 def test_a_review_timeout_without_end_is_an_error() -> None:
-    # no expiry is said by leaving the timeout out: a question tells the eval
-    # when it closes, and a time without end can't be written there
+    # For no expiry, leave the timeout out. A question tells the eval when it
+    # closes, and that time can't be infinite.
     with pytest.raises(ValueError, match="review timeout"):
         Handler(weather_rule(), review_timeout=float("inf"))
 

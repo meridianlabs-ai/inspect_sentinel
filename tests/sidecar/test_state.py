@@ -10,8 +10,9 @@ from tests.sidecar._traffic import message, reply, request, weather, weather_rul
 
 
 def _clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    # The state's own clock, which the test moves on. The state reads it
-    # whenever it is used and waits on nothing, so no real time has to pass.
+    # A clock the test controls, in place of the state's own. The state reads
+    # the clock each time it is used and never sleeps, so no real time has to
+    # pass.
     now = [0.0]
 
     class Clock:
@@ -110,7 +111,7 @@ async def test_what_is_pinned_is_kept_past_its_expiry_until_it_is_unpinned(
     await state.pin(pinned)
     now[0] += 0.2
 
-    # what the call needs is still there, and what it doesn't has gone
+    # what the pinned call needs is kept past its expiry; the other run is gone
     assert await state.existing_run("run") is run
     assert await state.existing_run("other") is None
     assert await state.run("other") is not other
@@ -120,7 +121,7 @@ async def test_what_is_pinned_is_kept_past_its_expiry_until_it_is_unpinned(
 
     await state.unpin(pinned)
 
-    # it expires again, counted from when it was unpinned
+    # once unpinned, it expires after the usual time, counted from the unpin
     assert await state.peek_run("run") is run
     now[0] += 0.2
     assert await state.peek_run("run") is None
@@ -137,7 +138,7 @@ async def test_a_pin_is_undone_by_as_many_unpins(
     second = _state.Pinned("eval_789", "philadelphia", "run", "irid-2", ("y",))
     run = await state.run("run")
 
-    # two calls of one run wait for a person, and one of them ends
+    # two calls of one run are paused for a person, and one of them ends
     await state.pin(first)
     await state.pin(second)
     await state.unpin(first)

@@ -1,15 +1,15 @@
-"""Questions a sentinel in the sidecar asks a person, held until an Inspect eval answers them.
+"""Questions that a sentinel in the sidecar asks a person, held until an Inspect eval answers them.
 
-A sentinel asks a person with `human()`, through `Host.ask_human`. For a run an Inspect eval names, the sidecar keeps the question here while the step waits, the eval finds it with `list_pending_questions`, shows it in Inspect's approval UI, and sends the person's answer with `answer_question`.
+A sentinel asks a person with `human()`, which calls `Host.ask_human`. For a run that an Inspect eval names, the sidecar holds the question here while the step waits. The eval lists the question with `list_pending_questions`, shows it in Inspect's approval UI, and sends the person's answer with `answer_question`.
 
-A person may take days. So no connection waits on a question: the handler answers the model call "pending review" and keeps the judging that asked, which goes on when the answer comes (`design/sidecar.md`, "A review pauses the model call, not a connection"). A question has no expiry unless the operator sets one.
+A person may take days to answer, so no connection waits on a question. The handler answers the model call with a "pending review" error and keeps the judging that asked the question. That judging continues when the answer arrives (`design/sidecar.md`, "A review pauses the model call, not a connection"). A question has no expiry unless the operator sets one.
 
 This first way of asking has two temporary exceptions to the sidecar's rules, both in `design/sidecar-plan.md`, step 13:
 
-- The answer comes on the eval's key, the token it signs its calls with, and is taken only for a question from one of that eval's own runs. Reviewers are to answer on credentials of their own, which the sidecar checks.
-- The question hands the eval's process the call's arguments, even where the person then rejects the call. A reviewer surface outside the eval's process is to show them instead.
+- The eval signs the answer with its own key, the token it signs every call with. The sidecar accepts an answer only for a question from one of that eval's own runs. Later, reviewers are to answer with credentials of their own, which the sidecar checks.
+- The question gives the eval's process the call's arguments, even if the person then rejects the call. Later, a reviewer surface outside the eval's process is to show the arguments instead.
 
-A question belongs to one model call. What became of it is kept in a `Review`, with the try of the call that asked, whether or not the step went on to a decision.
+A question belongs to one model call. A `Review` records what happened to the question. The handler keeps the `Review` with the try of the call that asked, whether or not the step reached a decision.
 """
 
 from __future__ import annotations
@@ -34,13 +34,13 @@ from ._host import Stage
 logger = logging.getLogger(__name__)
 
 MAX_QUESTIONS_WAIT = 30.0
-"""The longest `list_pending_questions` waits for a question, in seconds."""
+"""The longest time that `list_pending_questions` waits for a question, in seconds."""
 
 ANSWERABLE = ("approve", "reject", "terminate")
-"""The choices an answer through the endpoint for evals may pick. `modify` needs a changed call, which Inspect's approval UI can't make yet."""
+"""The choices that an answer sent through the endpoint for evals may pick. `modify` is left out because it needs a changed call, which Inspect's approval UI can't produce yet."""
 
 _KEPT_RECEIPTS = 10_000
-"""How many answers' receipts are kept, so that an answer sent again is told it was taken."""
+"""How many receipts of answers the sidecar keeps. With a receipt, the sidecar can tell an eval that sends an answer again that the answer was already accepted."""
 
 Cause: TypeAlias = Literal[
     "replaced_attempt",
@@ -53,7 +53,7 @@ Cause: TypeAlias = Literal[
 
 
 class UnknownQuestionError(Exception):
-    """No open question, and no receipt of an answer, has the id for the eval asking: it never existed, it was another eval's, it closed unanswered, or its sample has ended."""
+    """The sidecar holds no open question, and no receipt of an answer, with this id for this eval. The question never existed, belonged to another eval, closed unanswered, or its sample has ended."""
 
 
 class AnsweredError(Exception):
@@ -61,12 +61,12 @@ class AnsweredError(Exception):
 
 
 class ChoiceError(Exception):
-    """The answer picks a choice the question didn't offer, or one the endpoint for evals can't take."""
+    """The answer picks a choice that the question didn't offer, or one that the endpoint for evals doesn't accept."""
 
 
 @dataclass(frozen=True)
 class Escalated:
-    """An escalation the asking protocol was handed, as a person is shown it."""
+    """An escalation that was passed to the protocol that asked, in the form a person is shown."""
 
     name: str
     """The escalating instance's name."""
@@ -77,16 +77,16 @@ class Escalated:
 
 @dataclass
 class Review:
-    """What became of one question, kept with the HTTP try that asked it.
+    """The record of one question: when it was asked, what the eval answered, and how the wait ended. The handler keeps it with the HTTP try that asked.
 
-    It holds no arguments, view or result of the call, only the call's id. An answer is recorded when it is taken, apart from how the wait ended: a try stopped just after its answer was taken keeps the answer, which then took no effect.
+    It holds the call's id, and none of the call's arguments, view or result. The answer is recorded when the sidecar accepts it, separately from how the wait ended. So a try that is stopped just after its answer was accepted keeps the answer on its record, though the answer had no effect.
     """
 
     id: str
     """The question's id."""
 
     stage: Stage
-    """Where the step was judged."""
+    """The stage at which the step was judged."""
 
     call: str
     """The id of the call the question was about."""
@@ -95,32 +95,32 @@ class Review:
     """When it was asked, in seconds since the epoch."""
 
     decision: str | None = None
-    """What the eval's answer picked, if an answer was taken. The eval's signature shows that the eval sent it, not that a person chose it."""
+    """The choice in the eval's answer, if the sidecar accepted one. The eval's signature shows that the eval sent the answer, not that a person chose it."""
 
     reason: str | None = None
     """The reason the eval's answer gave, if any."""
 
     answered: float | None = None
-    """When the answer was taken."""
+    """When the sidecar accepted the answer, in seconds since the epoch."""
 
     resolution: Literal["answered", "timed_out", "cancelled"] | None = None
     """How the wait ended, or None while the step still waits.
 
-    - `answered`: the eval's answer was taken, and the sentinel was given it.
-    - `timed_out`: nobody answered in time, and the step was given the cautious answer.
-    - `cancelled`: the step stopped with no decision; `cause` says why.
+    - `answered`: the sidecar accepted the eval's answer and gave it to the sentinel.
+    - `timed_out`: nobody answered in time, so the sidecar gave the step the cautious answer.
+    - `cancelled`: the step stopped with no decision. `cause` says why.
     """
 
     cause: Cause | None = None
     """Why the wait was cancelled, when it was."""
 
     resolved: float | None = None
-    """When the wait ended."""
+    """When the wait ended, in seconds since the epoch."""
 
     def resolve(
         self, resolution: Literal["answered", "timed_out", "cancelled"]
     ) -> None:
-        """Mark how the wait ended, once."""
+        """Record how the wait ended. Only the first call has an effect."""
         if self.resolution is None:
             self.resolution, self.resolved = resolution, time.time()
             if resolution == "cancelled" and self.cause is None:
@@ -129,19 +129,19 @@ class Review:
 
 @dataclass
 class Question:
-    """What a sentinel asked a person, for a run an Inspect eval names. Held only while the step waits."""
+    """A question that a sentinel asked a person, for a run that an Inspect eval names. The sidecar holds it only while the step waits."""
 
     eval_id: str
-    """The eval whose run asked, the only one that may see and answer the question."""
+    """The eval whose run asked the question. Only this eval may see and answer it."""
 
     sample_uuid: str
-    """The sample the run is, as the eval names it."""
+    """The run's sample, by the uuid the eval gave it."""
 
     request_id: str
-    """The eval's id for the model request the step was found in, its `x-irid`."""
+    """The `x-irid` of the model request in which the step was found. The eval assigns it."""
 
     stage: Stage
-    """Where the step was judged: `tool_call` or `tool_result`."""
+    """The stage at which the step was judged: `tool_call` or `tool_result`."""
 
     call: ToolCall
     """The call the person decides about, as it will run."""
@@ -150,19 +150,19 @@ class Question:
     """The assistant's text alongside the call."""
 
     view: ToolCallView
-    """How the call is shown."""
+    """How the call is shown to the person."""
 
     result: ChatMessageTool | None
-    """The call's result, at `tool_result`."""
+    """The call's result, when the stage is `tool_result`."""
 
     escalations: tuple[Escalated, ...]
-    """The escalations the asking protocol was handed, in order."""
+    """The escalations that were passed to the protocol that asked, in order."""
 
     choices: tuple[str, ...]
     """What the person may pick."""
 
     closes: float | None
-    """When the question expires, in seconds since the epoch, and the step is answered with caution. None where the operator set no review timeout, so the question waits for as long as its model call does."""
+    """When the question expires, in seconds since the epoch. At that time the sidecar gives the step the cautious answer. None if the operator set no review timeout: the question then waits for as long as its model call does."""
 
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     """The question's id, which an answer names."""
@@ -171,13 +171,13 @@ class Question:
     """When it was asked, in seconds since the epoch."""
 
     answer: HumanAnswer | None = None
-    """The eval's answer, once taken."""
+    """The eval's answer, once the sidecar has accepted it."""
 
     answer_taken: anyio.Event = field(default_factory=anyio.Event)
     """Set once the question is answered."""
 
     review: Review = field(init=False)
-    """What becomes of the question, which outlives it."""
+    """The record of the question. The record is kept after the question itself is dropped."""
 
     def __post_init__(self) -> None:
         self.review = Review(self.id, self.stage, self.call.id, self.asked)
@@ -185,7 +185,7 @@ class Question:
 
 @dataclass(frozen=True)
 class _Receipt:
-    """That a question was answered, and how: all that is kept of it once its step stops waiting."""
+    """A record that a question was answered, and with what. It is all that the sidecar keeps of a question once its step stops waiting."""
 
     eval_id: str
     sample_uuid: str
@@ -194,7 +194,7 @@ class _Receipt:
 
 
 def escalated(escalations: Escalations) -> tuple[Escalated, ...]:
-    """The escalations as a person is shown them."""
+    """The escalations, in the form a person is shown."""
     return tuple(
         Escalated(reported.name, reported.report.explanation)
         for reported in escalations
@@ -202,33 +202,33 @@ def escalated(escalations: Escalations) -> tuple[Escalated, ...]:
 
 
 def cautious(choices: Sequence[str], reason: str) -> HumanAnswer:
-    """The answer for a person who didn't answer: `reject` if it was offered, otherwise `terminate`, so the step fails closed."""
+    """The answer the sidecar gives when no person answered: `reject` if the question offered it, otherwise `terminate`. Either way the step fails closed."""
     return HumanAnswer(
         decision="reject" if "reject" in choices else "terminate", reason=reason
     )
 
 
 class Reviews:
-    """The questions the sidecar holds for Inspect evals to answer. Kept in this process, as a step waits on its question here."""
+    """The questions the sidecar holds for Inspect evals to answer. They are kept in this process, because each step waits on its question here."""
 
     def __init__(self, timeout: float | None = None) -> None:
-        """Hold no questions yet.
+        """Create a store that holds no questions yet.
 
         Args:
-            timeout: How long a question waits for an answer, in seconds, before it expires and its step is answered with caution. None, the default, is no expiry.
+            timeout: How long a question waits for an answer, in seconds, before it expires and the sidecar gives its step the cautious answer. None, the default, means no expiry.
 
         Raises:
             ValueError: If `timeout` isn't a positive, finite number of seconds.
         """
-        # None is how no expiry is said: an infinite time can't be told to an
-        # eval, whose question says when it closes
+        # None means no expiry. An infinite timeout is refused, because each
+        # question tells the eval when it closes, and that time must be finite.
         if timeout is not None and not (timeout > 0 and math.isfinite(timeout)):
             raise ValueError(f"The review timeout is some seconds, not {timeout}.")
         self._timeout = timeout
         self._open: dict[str, Question] = {}
         self._receipts: OrderedDict[str, _Receipt] = OrderedDict()
-        # set and replaced whenever a question is asked, so that a
-        # `pending` that waits wakes at once
+        # Set and replaced each time a question is asked, so that a waiting
+        # `list_pending` wakes at once.
         self._asked = anyio.Event()
 
     @property
@@ -237,12 +237,12 @@ class Reviews:
         return self._timeout
 
     async def ask(self, question: Question) -> HumanAnswer:
-        """Hold the question until an eval answers it, or it expires.
+        """Hold the question until an eval answers it or it expires.
 
-        The wait is cancelled from outside, by cancelling the judging it is part of, when the question no longer has anyone to answer to: `close` takes the question away at once, and the step then comes to no decision.
+        The handler can cancel the wait by cancelling the judging that the wait is part of. It does so when nobody is left to act on an answer, for example when the sample ends. `close` removes the question at once, and the step then reaches no decision.
 
         Returns:
-            The eval's answer, or, if the question expired, the cautious one: `reject` if offered, otherwise `terminate`.
+            The eval's answer. If the question expired, the cautious answer: `reject` if offered, otherwise `terminate`.
         """
         review = question.review
         self._open[question.id] = question
@@ -259,13 +259,14 @@ class Reviews:
             with anyio.move_on_after(self._timeout):
                 await question.answer_taken.wait()
         except anyio.get_cancelled_exc_class():
-            # an answer taken just before stays on the record, and takes no effect
+            # an answer accepted just before the cancellation stays on the
+            # record, but has no effect
             review.resolve("cancelled")
             logger.info("Question %s was cancelled (%s).", question.id, review.cause)
             raise
         finally:
-            # a step that stops waiting takes its question away, so no later
-            # answer is taken for a step no longer held
+            # Remove the question when its step stops waiting, so that the
+            # sidecar accepts no later answer for a step that is gone.
             self._open.pop(question.id, None)
         if question.answer is not None:
             review.resolve("answered")
@@ -288,9 +289,9 @@ class Reviews:
         """The eval's unanswered questions, oldest first.
 
         Args:
-            eval_id: The eval asking. Another eval's questions are never shown.
-            sample_uuid: Only this sample's, if given.
-            wait: How long to wait, in seconds, while there are none, at most `MAX_QUESTIONS_WAIT`. The answer comes as soon as there is one.
+            eval_id: The eval that asks. It is never shown another eval's questions.
+            sample_uuid: If given, list only this sample's questions.
+            wait: How long to wait for a question when there are none, in seconds, at most `MAX_QUESTIONS_WAIT`. The method returns as soon as there is one.
         """
         deadline = time.monotonic() + min(max(wait, 0), MAX_QUESTIONS_WAIT)
         while True:
@@ -312,20 +313,20 @@ class Reviews:
                 await asked.wait()
 
     def answer(self, eval_id: str, id: str, decision: str, reason: str | None) -> None:
-        """Take an eval's answer to its question, once. An answer sent again, with the same choice and reason, is taken as already given.
+        """Accept an eval's answer to one of its questions. A question takes one answer. The same answer sent again, with the same choice and reason, is accepted and changes nothing.
 
-        The answer is put on the question's record before this returns, so the record holds every answer that was acknowledged, including one whose step is stopped before the answer takes effect.
+        The answer goes on the question's record before this returns. So the record holds every answer the sidecar acknowledged, including one whose step was stopped before the answer had an effect.
 
         Args:
-            eval_id: The eval answering. Another eval's question is unknown to it.
+            eval_id: The eval that answers. To it, another eval's question is unknown.
             id: The question's id.
             decision: The choice the answer picks.
             reason: The reason given, if any.
 
         Raises:
             UnknownQuestionError: If the eval has no open question with the id, and no receipt of an answer to it.
-            AnsweredError: If the question was answered already, otherwise.
-            ChoiceError: If `decision` wasn't offered, or is `modify`.
+            AnsweredError: If the question was already answered with another choice or reason.
+            ChoiceError: If the question didn't offer `decision`, or `decision` is not in `ANSWERABLE`.
         """
         receipt = self._receipts.get(id)
         if receipt is not None and receipt.eval_id == eval_id:
@@ -340,7 +341,8 @@ class Reviews:
                 f"The sidecar holds no question {id!r} for the eval {eval_id!r}. It may have closed unanswered, or its sample may have ended."
             )
         if question.answer is not None:
-            # taken already, and its receipt no longer kept: the first stands
+            # Already answered, and the receipt has since been dropped. The
+            # first answer is kept.
             if (question.answer.decision, question.answer.reason) == (decision, reason):
                 return
             raise AnsweredError(
@@ -364,7 +366,7 @@ class Reviews:
         logger.info("The eval %s answered question %s: %s.", eval_id, id, decision)
 
     def close(self, reviews: Sequence[Review], cause: Cause) -> None:
-        """Close the questions of these reviews now, as cancelled for `cause`. From here on none is listed, and an answer to one is for an unknown question, whether or not the step that waits on it has stopped waiting yet."""
+        """Close the questions of these reviews now, and record them as cancelled for `cause`. From then on `list_pending` lists none of them, and an answer to one raises `UnknownQuestionError`, even if the step that waits on it has not stopped waiting yet."""
         for review in reviews:
             self._open.pop(review.id, None)
             if review.resolution is None:
@@ -372,7 +374,7 @@ class Reviews:
                 review.resolve("cancelled")
 
     def forget_sample(self, eval_id: str, sample_uuid: str) -> None:
-        """Drop the receipts of a sample's answers, once the eval has ended the sample. An answer to one of its questions sent again after this is for an unknown question."""
+        """Drop the receipts of a sample's answers. The handler calls this once the eval has ended the sample. After it, an answer to one of the sample's questions that is sent again raises `UnknownQuestionError`."""
         for id in [
             id
             for id, receipt in self._receipts.items()

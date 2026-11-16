@@ -58,8 +58,8 @@ _REQUEST: dict[str, Any] = {
     "body": {"messages": [{"role": "user", "content": "What is the weather?"}]},
 }
 
-# a request let through, by a sidecar that holds replies whole, as one does
-# unless it is set to release them early
+# The answer to a request that is passed on. `release` is `whole` because a
+# sidecar holds each reply whole unless it is set to release replies early.
 _PASSED_ON: dict[str, Any] = {"action": "pass", "release": "whole"}
 _REFUSED: dict[str, Any] = {
     "action": "refuse",
@@ -483,7 +483,8 @@ async def test_a_providers_error_is_handed_over_whole() -> None:
             _reply(error, status=529, headers={"retry-after": "7"}),
         )
 
-    # passed on unjudged, and shown with what says whether to try again
+    # The sidecar passes the error on unjudged. The handler gets its status,
+    # its `retry-after` header and its body.
     assert answered["result"] == {"action": "pass"}
     (shown,) = handler.replies
     assert (shown.status, shown.headers, shown.body) == (
@@ -500,8 +501,8 @@ async def test_a_request_that_goes_on_is_answered_with_how_its_reply_is_released
 ) -> None:
     handler = Handler(weather_rule("reject", "Oslo"), release=release)
     turn = message(weather("Oslo", "toolu_1"), weather("Tokyo", "toolu_2"))
-    # the next request of the conversation, which holds the turn as the
-    # client was handed it, with the rejected call taken out
+    # The conversation's next request. It holds the turn as the client
+    # received it, without the rejected call.
     edited = message(weather("Tokyo", "toolu_2"))
     later = _REQUEST | {
         "id": "y",
@@ -529,13 +530,14 @@ async def test_a_request_that_goes_on_is_answered_with_how_its_reply_is_released
         reply = await _call(client, "judge_reply", _reply(turn))
         replaced = await _call(client, "judge_request", later)
 
-    # a request sent on as it is, and one sent on replaced, both say it
+    # a `pass` and a `replace` both say how the reply will be released
     assert passed["result"] == {"action": "pass", "release": release}
     assert replaced["result"]["action"] == "replace"
     assert replaced["result"]["release"] == release
     for result in (passed["result"], replaced["result"]):
         assert _fits(_SCHEMA["methods"]["judge_request"]["result"], result)
-    # a reply's answer says nothing of it: the reply is already here
+    # the answer to `judge_reply` has no `release`, because the reply has
+    # already arrived
     assert "release" not in reply["result"]
-    # and a proxy hook that reads a result as it did before the field still can
+    # `release` is optional in the schema, so a result without it is still valid
     assert _fits(_SCHEMA["methods"]["judge_request"]["result"], {"action": "pass"})

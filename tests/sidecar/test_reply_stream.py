@@ -395,18 +395,19 @@ async def test_a_provider_errors_headers_and_body_are_handed_over() -> None:
 
     outputs = await _streamed(handler.reply_stream(start), error, 10)
 
-    # the client is sent the error as it comes, and the handler is shown it
-    # at the start, with its headers, and handed its body once it has passed
+    # The error is released to the client as it arrives. The handler's `reply`
+    # gets the status and headers at the start, and `error_body` gets the body
+    # once the whole body has arrived.
     assert b"".join(o.data for o in outputs if isinstance(o, Release)) == error
     (shown,) = handler.replies
     assert (shown.status, shown.headers, shown.body) == (529, {"retry-after": "7"}, b"")
-    # shown as an error whose body is still to pass
+    # `body_follows` told the handler that the error's body was still to come
     assert shown.body_follows
     assert handler.error_bodies == [("x", error)]
 
 
 class _ToldOfAnErrorCutOff(NotingHandler):
-    """A handler that notes why it is told a reply was not judged."""
+    """A handler that records the reason given in each `reply_not_judged` call."""
 
     def __init__(self, *args: Any, **options: Any) -> None:
         super().__init__(*args, **options)
@@ -433,11 +434,11 @@ async def test_a_provider_error_aborted_before_its_end_is_told_as_cut_off() -> N
             outputs = stream.__aiter__()
             await stream.feed(part)
             assert await outputs.__anext__() == Release(part)
-            # the client goes before the rest of the error has come
+            # the client goes away before the rest of the error has arrived
             await stream.abort()
 
-    # the handler was shown the error with its body still to pass, and is
-    # told the body didn't all pass, in place of being handed it
+    # `reply` got the error with `body_follows` set. The stream then calls
+    # `reply_not_judged` with `cut_off`, and never calls `error_body`.
     (shown,) = handler.replies
     assert shown.body_follows
     assert handler.not_judged == ["cut_off"]
@@ -450,15 +451,15 @@ async def test_the_handler_is_told_an_error_has_passed_though_it_isnt_copied() -
     handler = NotingHandler(weather_rule())
     await holding(handler)
     await handler.request(asked)
-    # larger than a copy is kept of
+    # too large for the sidecar to keep a copy
     error = b"x" * (ERROR_BODY_BYTES + 1)
 
     outputs = await _streamed(
         handler.reply_stream(_start(answered, status=500)), error, 65536
     )
 
-    # the client is sent it all, and the handler is told it has passed,
-    # without a body, so that it knows the error is whole
+    # The client gets the whole error. The stream still calls `error_body`,
+    # with an empty body, so the handler knows the whole error has arrived.
     assert b"".join(o.data for o in outputs if isinstance(o, Release)) == error
     assert handler.error_bodies == [("x", b"")]
 

@@ -480,8 +480,9 @@ async def _serve_all(
     handler: Handler | None = None,
 ) -> None:
     if handler is not None:
-        # the judging of a model call that waits for a person runs here,
-        # whichever server its exchange came through
+        # The judging of a model call paused for a person runs in the handler's
+        # own tasks, which are open for as long as this block is, whichever
+        # server the call's exchange came through.
         async with handler.serving():
             await _serve_all(servers, shim)
         return

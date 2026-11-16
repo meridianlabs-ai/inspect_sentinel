@@ -191,7 +191,7 @@ def proxy_app(
 ) -> Starlette:
     """An ASGI app that answers proxies: the sidecar's endpoint for them.
 
-    Every call is a JSON-RPC 2.0 request POSTed to `/proxy/v1`. A proxy hook calls `judge_request` with each model request and `judge_reply` with the provider's reply, and each is answered with a result whose `action` is `pass`, `replace` or `refuse`. A request that goes on is also answered with `release`, how the sidecar will release its reply. A proxy hook is a package of its own, and nothing of this package runs in the proxy.
+    Every call is a JSON-RPC 2.0 request POSTed to `/proxy/v1`. A proxy hook calls `judge_request` with each model request and `judge_reply` with the provider's reply, and each is answered with a result whose `action` is `pass`, `replace` or `refuse`. The result for a request that is passed on or replaced also has `release`, which says how the sidecar will release that request's reply. A proxy hook is a package of its own, and nothing of this package runs in the proxy.
 
     A proxy hook that hands over a streamed reply as it arrives uses a reply stream instead of `judge_reply`: `begin_reply` with the reply's status and headers, `reply_chunk` with each part of its body in order, and `end_reply` once it has ended, or `abort_reply` if its caller goes. Meanwhile it calls `next_release` again and again, and sends the caller what each answer gives: bytes to send, a refusal with a status, which comes only while nothing has been sent, an error event to send once something has, or the reply's end. Every call can be sent again safely. The reply is held whole, or released as it arrives, as the handler's `release` says. A reply stream runs in the app's lifespan.
 
@@ -338,8 +338,9 @@ def _reply(given: JudgeReplyParams) -> Reply:
 
 
 def _request_result(answer: Answer, release: Literal["whole", "early"]) -> BaseModel:
-    # A request that goes on is answered with how its reply will be released,
-    # which a proxy hook that hands the reply over as it arrives goes by.
+    # The result for a request that is passed on or replaced says how the
+    # sidecar will release the reply. A proxy hook that hands a streamed reply
+    # over as it arrives needs to know that.
     if isinstance(answer, Refuse):
         return RefuseResult(status=answer.status, message=answer.message)
     if isinstance(answer, Pass):

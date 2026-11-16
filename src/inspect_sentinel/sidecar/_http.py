@@ -30,9 +30,9 @@ async def read_within(http: HttpRequest, limit: int) -> bytes | None:
 
 
 async def discard_within(http: HttpRequest, limit: int) -> bool:
-    """Read a request's body and keep none of it, giving up as soon as it is known to be larger than a limit.
+    """Read a request's body and discard it. Stop as soon as the body is known to be larger than a limit.
 
-    For a request whose body nothing reads, sent by a client that sends one anyway. The body is read to its end before the request is answered, so a proxy still sending it doesn't see the connection close under it.
+    Use it for a request whose body the sidecar doesn't need, when the client sends a body anyway. A body within the limit is read to its end before the request is answered, so that a proxy still sending the body doesn't see the connection close while it sends.
 
     Args:
         http: The request.

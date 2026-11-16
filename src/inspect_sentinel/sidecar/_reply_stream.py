@@ -36,7 +36,7 @@ KEEPALIVE = b": keepalive\n\n"
 """A keepalive: an SSE comment, which every provider SDK skips."""
 
 ERROR_BODY_BYTES = 1024 * 1024
-"""The largest body of a provider's error that is copied for an eval whose model call waited for a person. A larger one still goes on to the client whole, and the eval is told the error without its body."""
+"""The largest body of a provider's error that the sidecar copies for an eval whose model call was paused for a person. A larger body still passes to the client whole, and the eval then gets the error without its body."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -65,7 +65,7 @@ class ReplyStart:
     """Which API the body is written in, if the proxy said. Without it, the API is worked out from `provider` and the body."""
 
     headers: Mapping[str, str] = field(default_factory=dict[str, str])
-    """The reply's headers as the provider sent them, by lowercase name, where the proxy hands them over."""
+    """The reply's headers as the provider sent them, by lowercase name, if the proxy hands them over."""
 
 
 @dataclass(frozen=True)
@@ -171,7 +171,8 @@ class ReplyStream:
         """
         if self._ended:
             raise RuntimeError("The reply's input has already been ended.")
-        # a reply that is still coming keeps a model call that waits for it
+        # A reply that is still arriving keeps its paused model call from being
+        # closed for waiting too long.
         self._handler.reply_progress(self._start.id)
         if (
             succeeded(self._start.status)
@@ -290,10 +291,11 @@ class ReplyStream:
         await self._out(Finished())
 
     async def _provider_error(self) -> None:
-        # A provider's error goes on unjudged: the handler is told at the
-        # start, and the body goes out as it comes, whatever its size. A copy
-        # of a body no larger than `ERROR_BODY_BYTES` is handed over once it
-        # has all come, for an eval whose model call waited for a person.
+        # A provider's error passes to the client unjudged. This method reports
+        # the error to the handler at the start, and releases the body as it
+        # arrives, whatever its size. Once the whole body has arrived, it gives
+        # the handler a copy, if the body is no larger than `ERROR_BODY_BYTES`.
+        # The copy is for an eval whose model call was paused for a person.
         answer = await self._handler.reply(self._reply(b"", body_follows=True))
         if isinstance(answer, Refuse):
             await self._out(answer)
@@ -311,13 +313,15 @@ class ReplyStream:
                         body = None
                 await self._out(Release(data))
             if self._aborted:
-                # the body didn't all pass, so the error isn't one the eval
-                # can be given: it failed as a reply cut off does
+                # The body didn't all arrive, so there is no whole error to
+                # give the eval. The call failed as a reply that is cut off
+                # does.
                 await self._handler.reply_not_judged(self._start.id, "cut_off")
                 return
             if self._ended and not self._held:
-                # always said, so that the handler knows the error is whole:
-                # without a body where there was none, or one too large to copy
+                # Always call this, so that the handler knows the whole error
+                # has arrived. The body is empty if there was none, or if it
+                # was too large to copy.
                 await self._handler.error_body(
                     self._start.id, bytes(body) if body is not None else b""
                 )

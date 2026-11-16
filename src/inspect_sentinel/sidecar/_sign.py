@@ -59,7 +59,7 @@ def call_values(method: str, eval_id: str, timestamp: int) -> list[object]:
 def answer_values(
     eval_id: str, timestamp: int, id: str, decision: str, reason: str | None
 ) -> list[object]:
-    """What an `answer_question` call's `mac` signs: what every call's signs, then the question's id, the choice and the reason, `""` for none. So a `mac` copied from one answer can't send another."""
+    """The values that the `mac` of an `answer_question` call signs: the values every call signs, then the question's id, the choice, and the reason, or `""` if there is none. Because the `mac` covers the answer, a `mac` copied from one answer can't be used to send a different one."""
     return [
         *call_values("answer_question", eval_id, timestamp),
         id,

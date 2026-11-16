@@ -164,8 +164,8 @@ async def test_the_probe_says_which_versions_are_served() -> None:
 
 @pytest.mark.anyio
 async def test_the_probe_of_a_handler_that_isnt_serving_says_no_eval_is_asked() -> None:
-    # the judging that waits for a person runs while the handler serves, so
-    # outside that nobody is asked through an eval
+    # The judging that waits for a person runs only inside `serving()`, so a
+    # handler that isn't serving asks no person through an eval
     async with _client(Handler(weather_rule())) as client:
         answered = await client.get(INFO_PATH)
 
@@ -180,8 +180,8 @@ async def test_the_probe_of_a_handler_that_isnt_serving_says_no_eval_is_asked() 
 async def test_the_probe_says_when_an_eval_isnt_asked_for_a_person(
     handler_options: dict[str, Any], route_options: dict[str, Any]
 ) -> None:
-    # an eval that isn't sent results isn't asked to answer for a person, so
-    # it needn't look for questions
+    # A sidecar that sends an eval no results asks no person through that
+    # eval, so the probe tells the eval not to look for questions
     handler = Handler(weather_rule(), **handler_options)
     async with handler.serving(), _client(handler, **route_options) as client:
         answered = await client.get(INFO_PATH)

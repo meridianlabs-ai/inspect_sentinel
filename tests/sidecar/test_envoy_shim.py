@@ -424,8 +424,9 @@ async def test_providers_error_is_handed_over_with_its_headers_and_body() -> Non
         handler,
     )
 
-    # shown at its headers, without HTTP/2's own, and handed its body once
-    # the body has all passed on to the client
+    # The shim calls `reply` when the error's headers arrive, with no body and
+    # without HTTP/2's pseudo-headers. It calls `error_body` with the body once
+    # the whole body has arrived.
     (shown,) = handler.replies
     assert (shown.status, shown.body) == (529, b"")
     assert shown.headers == {"content-type": "application/json", "retry-after": "7"}
@@ -459,13 +460,14 @@ async def test_a_compressed_error_is_passed_on_and_not_copied() -> None:
         handler,
     )
 
-    # A copy is kept as plain bytes, so one that isn't plain is left out. The
-    # handler is still told the error has all passed, without a copy.
+    # The shim keeps no copy of a compressed body, because the sidecar couldn't
+    # read it. It still calls `error_body`, with an empty body, so the handler
+    # knows the whole error has arrived.
     assert [body for _, body in handler.error_bodies] == [b""]
 
 
 class _SlowToBeShownAnError(NotingHandler):
-    """A handler that is slow to be shown a provider's error, and notes what it is told of it, in order."""
+    """A handler whose `reply` is slow to return for a provider's error, and which records each call the shim makes to it about that error, in order."""
 
     def __init__(self, *args: Any, **options: Any) -> None:
         super().__init__(*args, **options)
@@ -516,7 +518,7 @@ async def test_an_error_envoy_stops_waiting_for_while_it_is_shown_is_told_as_cut
     )
     await answers.__anext__()
     await answers.__anext__()
-    # Envoy goes away while the handler is still being shown the error
+    # Envoy closes the stream while the handler's `reply` is still running
     await handler.shown.wait()
     await answers.aclose()
     handler.go_on.set()
@@ -524,8 +526,9 @@ async def test_an_error_envoy_stops_waiting_for_while_it_is_shown_is_told_as_cut
         while len(handler.told) < 2:
             await asyncio.sleep(0.01)
 
-    # once it has been shown the error, it is told the error didn't all pass,
-    # so it doesn't wait for the error's body for good
+    # The shim waits for `reply` to return, then calls `reply_not_judged` with
+    # `cut_off`. Without that call, the handler would wait forever for the
+    # error's body.
     assert handler.told == ["shown the error", "not judged: cut_off"]
 
 
@@ -535,8 +538,8 @@ async def test_an_error_cut_off_after_it_was_shown_is_told_as_cut_off() -> None:
     handler.go_on.set()
     await holding(handler)
 
-    # the error's body has begun to pass when Envoy's stream ends, as when the
-    # client goes away or the provider's connection is lost
+    # Envoy's stream ends after part of the error's body has arrived, as it
+    # does when the client goes away or the provider's connection is lost
     await _process(
         [
             _from_inspect(),
@@ -555,7 +558,7 @@ async def test_an_error_cut_off_after_it_was_shown_is_told_as_cut_off() -> None:
         handler,
     )
 
-    # the handler is told the error didn't all pass, and never handed a body
+    # the shim calls `reply_not_judged` with `cut_off`, and never `error_body`
     assert handler.told == ["shown the error", "not judged: cut_off"]
     assert handler.error_bodies == []
 
@@ -593,8 +596,8 @@ async def test_a_reply_header_sent_more_than_once_keeps_every_value() -> None:
         handler,
     )
 
-    # Envoy hands over an entry for each value, and they are kept as one
-    # header whose values are joined in order, as HTTP reads them
+    # Envoy sends one entry for each value of a repeated header. The shim
+    # joins the values in order into one header, as HTTP allows.
     (shown,) = handler.replies
     assert shown.headers == {
         "content-type": "application/json",

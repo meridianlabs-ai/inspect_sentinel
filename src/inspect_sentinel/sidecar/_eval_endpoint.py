@@ -62,7 +62,7 @@ PATH = "/sentinel/v1"
 """Where the methods are served. The `v1` is the version of the methods."""
 
 HELD_REPLY_PATH = f"{PATH}/held-reply"
-"""Where an eval gets the reply held for a model call a person was asked about. Not a method: the eval sends the model call's own request here, with the code that sends it to the provider, and is answered as the provider would answer."""
+"""The path from which an eval fetches the provider's reply that the sidecar holds for a model call paused for a person. It is not a JSON-RPC method. The eval sends the call's own model request here, with its code for that provider, and the sidecar answers as the provider would."""
 
 INFO_PATH = "/sentinel/info"
 """The probe, which has no version, since it is how an eval learns which versions there are."""
@@ -456,8 +456,9 @@ _METHODS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
 
 _RESULTS = frozenset({"sample_result"})
 
-# asking a person through an eval, which a sidecar that sends an eval no
-# results doesn't do: it doesn't trust that eval to decide for itself
+# The methods for asking a person through an eval. A sidecar that sends an
+# eval no results doesn't serve them, because it doesn't trust that eval to
+# answer for a person.
 _REVIEW = frozenset(
     {"list_pending_questions", "answer_question", "cancel_paused_request"}
 )
@@ -505,17 +506,17 @@ def eval_routes(
     token: str | None = None,
     results: bool = True,
 ) -> list[Route]:
-    """The routes of the endpoint for evals: the probe at `/sentinel/info`, the methods at `/sentinel/v1`, and a held reply at `/sentinel/v1/held-reply`.
+    """The routes of the endpoint for evals: the probe at `/sentinel/info`, the methods at `/sentinel/v1`, and the fetch of a held reply at `/sentinel/v1/held-reply`.
 
-    An eval registers its tasks and completes each sample's registration before the sample runs, asks what became of each request and of a sample, and ends a sample once it is scored. The eval makes a token and sends it in a registration to a sidecar that holds none for the eval. Every other call proves the caller holds that token with a `timestamp` and a `mac`, so only the eval reads what was decided of its requests and samples. Every call is a JSON-RPC 2.0 request. No method clears a tally or changes the sentinel, and one allows a call: `answer_question`, which answers a question the sentinel itself asked a person, for now on the eval's token, and only for the eval's own runs (`design/sidecar-plan.md`, step 13). A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
+    An eval registers its tasks and completes each sample's registration before the sample runs, asks what became of each request and of a sample, and ends a sample once it is scored. The eval makes a token and sends it in a registration to a sidecar that holds none for the eval. Every other call proves the caller holds that token with a `timestamp` and a `mac`, so only the eval reads what was decided of its requests and samples. Every call is a JSON-RPC 2.0 request. No method clears a tally or changes the sentinel. One method can let a tool call go ahead: `answer_question`, which answers a question that the sentinel itself asked a person. For now the eval signs that answer with its own token, and the sidecar accepts it only for the eval's own runs (`design/sidecar-plan.md`, step 13). A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
 
-    `/sentinel/v1/held-reply` is not a method. Once a model call that waited for a person is decided with the turn going on, the eval POSTs the call's own request there, under the same `x-irid` and with an `x-inspect-context` signed as any model request's is, and is answered with the reply the sidecar held: the provider's status, headers and body, a stream's events from first to last. The eval's code for that provider reads it as the provider's own. Only the headers that prove the call are read, never the body. Any other request is refused with a 400 and a JSON `error`, and the eval reads where the call stands with `request_result`. Getting the reply changes nothing, so it can be got again.
+    `/sentinel/v1/held-reply` is not a method. An eval uses it to fetch what the sidecar holds for a model call that was paused for a person: the provider's reply, once the call is `decided` with the outcome `proceed`, or the provider's error, while the call is `awaiting_resend` because the provider failed it. To fetch it, the eval POSTs the call's own model request to this path, under the same `x-irid` and with an `x-inspect-context` signed as on any model request. The fetch is a model request, and not a method, because the eval reads the answer with its code for that provider, and that code can only send the provider's request. The sidecar reads only the headers that name and prove the call, never the body. It answers with what it holds: the provider's status, headers and body, with a stream's events from first to last. It refuses any other request with a 400 and a JSON `error`, and the eval then gets the call's state from `request_result`. A fetch changes nothing, so the eval can repeat it.
 
     Args:
         handler: The handler the proxy's requests and replies are put to.
         max_body_bytes: The largest call that is read.
         token: A credential every call to the methods must present as a bearer token, when the endpoint has a port of its own. None where it shares the proxy's port and access control.
-        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited. Without results, `list_pending_questions`, `answer_question`, `cancel_paused_request` and `/sentinel/v1/held-reply` aren't served either: an eval that isn't trusted with a monitor's explanation isn't trusted to answer for a person. Build the handler with `eval_results` off as well, so that it asks no question nobody can answer.
+        results: Whether the results are sent: `sample_result`, and what each monitor and protocol recorded in `request_result`. A record holds each monitor's explanation, which tells an agent what the monitor looks for, so where an eval can't be trusted they are turned off. `request_result` is still served without them, since it is how an eval learns that a turn was refused or edited. Without results, the sidecar doesn't serve `list_pending_questions`, `answer_question`, `cancel_paused_request` or `/sentinel/v1/held-reply` either, because an eval that isn't trusted with a monitor's explanation isn't trusted to answer for a person. Build the handler with `eval_results` off as well, so that it asks no question that nobody can answer.
     """
 
     async def info(http: HttpRequest) -> Response:
@@ -524,14 +525,15 @@ def eval_routes(
                 "service": "inspect_sentinel",
                 "versions": VERSIONS,
                 "release": handler.release,
-                # whether an eval is to ask for its questions for a person:
-                # an eval asks a sidecar that doesn't say so nothing
+                # Whether this sidecar asks a person through the eval. An
+                # eval lists questions only at a sidecar that says so here.
                 "review": handler.eval_review and results,
             }
         )
 
     def unauthorized(http: HttpRequest) -> Response | None:
-        # the endpoint's own credential, where it has a port of its own
+        # the endpoint has a credential of its own only where it has a port
+        # of its own
         if token is None:
             return None
         presented = http.headers.get("authorization", "")
@@ -573,9 +575,9 @@ def eval_routes(
         return answered(id, result)
 
     async def held_reply(http: HttpRequest) -> Response:
-        # Every refusal is a status that a provider's SDK doesn't send again
-        # by itself, so an eval's request for a reply that isn't there fails
-        # once, and the eval asks `request_result` what became of the call.
+        # Every refusal uses a status that a provider's SDK doesn't retry by
+        # itself. So a fetch of a reply the sidecar doesn't hold fails once,
+        # and the eval then gets the call's state from `request_result`.
         refused = unauthorized(http)
         if refused is not None:
             return refused
@@ -586,14 +588,15 @@ def eval_routes(
                 },
                 status_code=404,
             )
-        # The headers alone decide the answer, so a request that is refused
-        # is refused before any of its body is read.
+        # The headers alone decide the answer, so the sidecar refuses a
+        # request before it reads any of the body.
         held = await handler.held_reply(
             {name.lower(): value for name, value in http.headers.items()}
         )
         if isinstance(held, Refuse):
             return JSONResponse({"error": held.message}, status_code=held.status)
-        # the body is the model call's request, which nothing here reads
+        # The body is the call's model request. The sidecar discards it
+        # without reading what it says.
         if not await discard_within(http, max_body_bytes):
             return JSONResponse(
                 {"error": f"A request is at most {max_body_bytes} bytes."},
@@ -788,7 +791,7 @@ async def _answered(
             ),
         )
     if isinstance(given, ListPendingQuestionsParams):
-        # a sidecar that holds nothing of the eval holds no question of it
+        # a sidecar that keeps no token for the eval holds no question for it
         found = (
             await handler.reviews.list_pending(
                 given.eval_id, given.sample_uuid, given.wait
@@ -828,9 +831,10 @@ async def _answer_question(
 
 def _held_reply_response(held: HeldReply) -> Response:
     # The reply as the provider sent it and the proxy passed it on, for the
-    # provider's own client code to read. Its body is sent whole, a stream's
-    # events from first to last, with a length of its own: the headers of
-    # one hop were left out when it was held.
+    # eval's code for that provider to read. The sidecar sends the body
+    # whole, with a stream's events from first to last. The response gets a
+    # length of its own, because the sidecar left out the reply's hop-by-hop
+    # headers, such as `content-length`, when it began to hold the reply.
     headers = dict(held.headers)
     if held.stream and "event-stream" not in headers.get("content-type", "").lower():
         headers["content-type"] = "text/event-stream"

@@ -173,11 +173,12 @@ class _Exchange:
         # joined with a comma, which HTTP reads as the same header. Nothing
         # else is left out here.
         self._reply_headers: dict[str, str] = {}
-        # a copy of a provider's error as it passes, or None once it is too
-        # large to keep
+        # a copy of a provider's error body, built as the body passes through,
+        # or None when the shim keeps no copy
         self._error_body: bytearray | None = None
-        # whether the handler waits to be told a provider's error has all
-        # arrived, and the handler being shown that error, while it is
+        # `_error_follows`: whether the shim still has to tell the handler
+        # that a provider's error has all arrived. `_error_shown`: the call
+        # that hands the handler that error, while the call is running.
         self._error_follows = False
         self._error_shown: asyncio.Future[Answer] | None = None
         self._declared_length = False
@@ -233,15 +234,16 @@ class _Exchange:
         if self._delivery is not None:
             self._delivery.cancel()
         if self._error_follows:
-            # the error's body didn't all pass, so the error isn't one an
-            # eval can be given: it failed as a reply cut off does
+            # The error's body didn't all arrive, so there is no whole error
+            # to give an eval. The call failed as a reply that is cut off does.
             self._error_follows = False
             self._error_body = None
             shown, self._error_shown = self._error_shown, None
             if shown is not None and not shown.done():
-                # Envoy stopped waiting while the handler was still being
-                # shown the error. The handler is told once it has been, or
-                # it would wait for the error's body for good.
+                # Envoy stopped waiting while the shim was still handing the
+                # error to the handler. Once that call returns, the shim
+                # tells the handler that the error was cut off. Otherwise the
+                # handler would wait for the error's body for ever.
                 self._spawn(self._cut_off_once_shown(shown))
             else:
                 await self._handler.reply_not_judged(self._id, "cut_off")
@@ -447,16 +449,17 @@ class _Exchange:
         ]
 
     async def _provider_error(self, end_of_stream: bool) -> list[pb.ProcessingResponse]:
-        # A provider's error goes on unjudged: the handler is told at the
-        # headers, and the body passes through as it comes, whatever its size
-        # or encoding. A copy of a body no larger than `ERROR_BODY_BYTES` is
-        # handed over once it has all arrived from the provider, for an eval
-        # whose model call waited for a person and reads the error from the
-        # sidecar.
+        # A provider's error passes to the client unjudged. The shim reports
+        # the error to the handler when the headers arrive, and passes the
+        # body through as it arrives, whatever its size or encoding. Once the
+        # whole body has arrived from the provider, the shim gives the handler
+        # a copy, if the body is no larger than `ERROR_BODY_BYTES`. The copy
+        # is for an eval whose model call was paused for a person, which
+        # fetches the error from the sidecar.
         self._replied = self._passing = True
-        # set before the handler is shown the error, so that an exchange
-        # Envoy stops while it is still being shown tells the handler the
-        # error didn't all pass (`close`)
+        # Set before the shim hands the error to the handler. If Envoy stops
+        # the exchange during that call, `close` then tells the handler that
+        # the error was cut off.
         self._error_follows = not end_of_stream
         shown = asyncio.ensure_future(
             self._handler.reply(self._reply_of(b"", body_follows=not end_of_stream))
@@ -468,9 +471,9 @@ class _Exchange:
             self._error_follows = False
             return [self._refusal(answer)]
         self.finished = end_of_stream
-        # A compressed error isn't copied: the sidecar drops `content-encoding`
-        # from what it keeps of a reply, so a compressed copy couldn't be read.
-        # Its body is then left empty.
+        # The shim doesn't copy a compressed error. The sidecar drops
+        # `content-encoding` from the headers it keeps with a reply, so nobody
+        # could read a compressed copy. The handler then gets an empty body.
         encoding = self._reply_headers.get("content-encoding", "identity").lower()
         if not end_of_stream and encoding == "identity":
             self._error_body = bytearray()
@@ -530,16 +533,18 @@ class _Exchange:
             await self._answer(self._refusal(self._not_judged(ex, "reply", reply=True)))
 
     async def _cut_off_once_shown(self, shown: asyncio.Future[Answer]) -> None:
-        # what the handler is told of an error whose exchange Envoy stopped
-        # while the handler was still being shown it: that it didn't all pass
+        # Tell the handler that an error was cut off, once the call that hands
+        # it the error has returned. Used when Envoy stopped the exchange
+        # during that call.
         await asyncio.wait({shown})
         await self._handler.reply_not_judged(self._id, "cut_off")
 
     async def _error_passed(self) -> None:
-        # A provider's error has all arrived from the provider, as the shim
-        # is handed its last chunk to pass on. The handler is always told, so
-        # that it knows the error is whole: without a body where there was
-        # none, or one too large or compressed to copy.
+        # Called when the shim gets the last chunk of a provider's error to
+        # pass on, so the whole error has arrived. The shim always tells the
+        # handler, so that the handler knows the error is whole. The body it
+        # gives is empty if there was none, or if it was too large or
+        # compressed to copy.
         if not self._error_follows:
             return
         self._error_follows = False
@@ -611,8 +616,8 @@ def _streamed(body: bytes, *, end_of_stream: bool) -> pb.ProcessingResponse:
 
 
 def _read(headers: core.HeaderMap) -> dict[str, str]:
-    # Envoy sends a value as bytes in `raw_value`, or as text in `value`. Of a
-    # header sent more than once, the last value is the one read.
+    # Envoy sends a value as bytes in `raw_value`, or as text in `value`. For
+    # a header sent more than once, this keeps the last value.
     return {
         header.key.lower(): (
             header.raw_value.decode("latin-1") if header.raw_value else header.value
@@ -622,11 +627,11 @@ def _read(headers: core.HeaderMap) -> dict[str, str]:
 
 
 def _read_every_value(headers: core.HeaderMap) -> dict[str, str]:
-    # Headers that are kept to be served again, so none of their values is
-    # dropped. Envoy sends a header that came more than once as an entry for
-    # each value. They are joined with a comma, in order, which HTTP gives the
-    # same meaning for every header but `set-cookie`, and the handler never
-    # keeps that one.
+    # Read headers that the sidecar keeps and later returns to an eval, so
+    # this drops none of their values. Envoy sends a header that arrived more
+    # than once as one entry per value. This joins the values with a comma, in
+    # order. HTTP gives that the same meaning for every header except
+    # `set-cookie`, which the handler never keeps.
     read: dict[str, str] = {}
     for header in headers.headers:
         name = header.key.lower()

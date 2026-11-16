@@ -101,8 +101,8 @@ def _client(handler: Handler, **options: Any) -> httpx.AsyncClient:
 async def _serving(
     handler: Handler, **options: Any
 ) -> AsyncGenerator[httpx.AsyncClient]:
-    # the handler serving, as a running sidecar's does, and its endpoint for
-    # evals; nothing in the block may hang
+    # A handler that is serving, as a running sidecar's is, with a client for
+    # its endpoint for evals. The block fails if it runs for over 20 seconds.
     await holding(handler)
     with anyio.fail_after(20):
         async with handler.serving(), _client(handler, **options) as client:
@@ -132,7 +132,7 @@ def _from_eval(
     then: list[dict[str, Any]] | None = None,
     **sample: Any,
 ) -> Request:
-    # a request an Inspect eval sends, signed, with its id for the request
+    # a request as an Inspect eval sends it: signed, and carrying its `x-irid`
     return replace(
         request(id, then=then or ()), headers=inspect_headers(irid=irid, **sample)
     )
@@ -162,7 +162,8 @@ def _answer_params(
     token: str = TOKEN,
     signed_decision: str | None = None,
 ) -> dict[str, Any]:
-    # an answer as Inspect signs one: the mac covers the answer itself
+    # an answer signed as Inspect signs one: the `mac` covers the decision and
+    # the reason
     at = int(time.time())
     mac = signed(
         token,
@@ -196,7 +197,8 @@ async def _answer(
 async def _result(
     client: httpx.AsyncClient, irid: str = "irid-1", *, until: str | None = None
 ) -> dict[str, Any]:
-    # what `request_result` says of the request, once its state is `until`
+    # `request_result`'s answer for the call. With `until`, this polls until the
+    # call is in that state.
     while True:
         answered = await _call(
             client,
@@ -231,8 +233,9 @@ async def _paused(
     id: str = "x",
     **sample: Any,
 ) -> None:
-    # the eval's request goes on, and a person is asked about the first call
-    # in its reply, so the reply is answered "pending review"
+    # The handler passes the eval's request on. The sentinel asks a person
+    # about the first call in the reply, so the handler answers the reply
+    # "pending review".
     assert isinstance(await handler.request(_from_eval(id, irid, **sample)), Pass)
     answer = await handler.reply(
         reply(message(*(content or (weather("Oslo"),))), id=id)
@@ -248,8 +251,8 @@ async def _asked(
     id: str = "x",
     **sample: Any,
 ) -> dict[str, Any]:
-    # the question a person is asked about the first call in the reply, once
-    # the reply has been answered "pending review"
+    # Pause a call as `_paused` does, and return the question that the sentinel
+    # asked a person about it
     await _paused(handler, *content, irid=irid, id=id, **sample)
     (question,) = [q for q in await _pending(client) if q["request_id"] == irid]
     return question
@@ -263,13 +266,14 @@ def _result_request(id: str = "y") -> Request:
 async def _asked_at_result(
     handler: Handler, client: httpx.AsyncClient
 ) -> dict[str, Any]:
-    # a call ran, and a person is asked about its result, which the eval's
-    # next request holds: the question, once that request has been answered
-    # "pending review"
+    # The eval ran a call, and its next request holds the call's result. The
+    # sentinel asks a person about that result, so the handler answers the
+    # request "pending review". Returns the question.
     assert isinstance(await handler.request(_from_eval("x")), Pass)
     first = await handler.reply(reply(message(weather("Oslo"))))
     if first is PENDING:
-        # the handler asks about the call too
+        # this handler also asks a person about the call itself, so approve that
+        # question first
         (asked,) = await _pending(client)
         await _answer(client, asked["id"], "approve")
         await _result(client, until="decided")
@@ -302,8 +306,8 @@ async def test_a_question_answers_the_model_call_pending_review_at_once() -> Non
 
         answer = await handler.reply(reply(message(weather("Oslo"))))
 
-        # no connection waits for the person: the exchange is over, with a
-        # status no provider SDK sends again by itself
+        # No connection waits for the person. The handler refuses the reply with a
+        # 400, a status that no provider SDK retries by itself.
         assert isinstance(answer, Refuse)
         assert answer.status == 400
         assert "waiting for a person's review" in answer.message
@@ -326,8 +330,8 @@ async def test_an_approved_call_is_decided_and_its_reply_is_kept_for_the_eval() 
         assert answered["result"] == {"id": question["id"], "decision": "approve"}
         result = await _result(client, until="decided")
         assert result["outcome"] == "proceed"
-        # The provider's reply is held for the eval, which gets it by sending
-        # the call's request again. `request_result` doesn't carry it.
+        # `request_result` doesn't carry the provider's reply. The sidecar holds
+        # the reply, and the eval fetches it from the held-reply path.
         assert "reply" not in result
         held = await _held_reply(client)
         assert (held.status_code, held.headers["content-type"]) == (200, JSON)
@@ -386,10 +390,11 @@ async def test_a_held_reply_has_the_providers_headers_without_those_of_one_hop()
     assert got.headers["content-type"] == JSON
     assert got.headers["request-id"] == "req_011"
     assert got.headers["anthropic-ratelimit-requests-remaining"] == "49"
-    # the headers of one hop are the sidecar's own for this answer
+    # `transfer-encoding` is a hop-by-hop header: the sidecar sets its own for
+    # this response, and drops the provider's
     assert "transfer-encoding" not in got.headers
-    # as are those the sidecar's server sends with every response, so the
-    # provider's aren't sent beside them
+    # the sidecar's server sends its own `date` and `server` with every
+    # response, so the provider's are dropped too
     assert "date" not in got.headers and "server" not in got.headers
     assert got.headers["content-length"] == str(len(got.content))
 
@@ -456,7 +461,7 @@ async def test_an_accepted_answer_is_not_the_end_while_another_call_is_judged() 
 
         await _answer(client, first["id"], "approve")
 
-        # the turn's next call raises a question of its own
+        # the sentinel asks a second question, about the turn's next call
         result = await _result(client, until="awaiting_review")
         assert "outcome" not in result
         (second,) = await _pending(client)
@@ -484,7 +489,8 @@ async def test_a_held_reply_has_the_sentinels_edits_in_it() -> None:
         result = await _result(client, until="decided")
         got = await _held_reply(client)
 
-    # the turn goes on without the rejected call, as the proxy would pass it
+    # The outcome is `proceed`. The held reply is the turn without the rejected
+    # call, which is what the proxy would have passed on.
     assert result["outcome"] == "proceed"
     assert [block["id"] for block in got.json()["content"]] == ["toolu_1"]
 
@@ -500,7 +506,7 @@ async def test_a_request_sent_again_while_a_person_decides_is_pending_too() -> N
 
         again = await handler.request(_from_eval("x2"))
 
-        # the same question, and no second one
+        # the handler answers "pending review" again, and asks no second question
         assert again is PENDING
         assert [q["id"] for q in await _pending(client)] == [question["id"]]
         assert (await _result(client))["state"] == "awaiting_review"
@@ -516,7 +522,8 @@ async def test_a_request_sent_again_once_its_call_is_decided_is_refused() -> Non
 
         again = await handler.request(_from_eval("x2"))
 
-        # the provider is not called a second time: the result is read
+        # the handler refuses the request and points the eval to `request_result`;
+        # the provider is not called a second time
         assert isinstance(again, Refuse)
         assert "has ended" in again.message and "request_result" in again.message
         assert await _result(client) == decided
@@ -542,7 +549,8 @@ async def test_another_request_under_the_same_irid_is_refused_and_inherits_nothi
 
         refused = await handler.request(other)
 
-        # an approval is for the request the person was asked about
+        # A person's approval covers only the request they were asked about, so
+        # the handler refuses a different request under the same `x-irid`.
         assert isinstance(refused, Refuse)
         assert refused is not PENDING
         assert "not the same request" in refused.message
@@ -560,7 +568,8 @@ async def test_a_try_signed_afresh_is_the_same_request() -> None:
             headers=inspect_headers(irid="irid-1", timestamp=int(time.time()) + 30),
         )
 
-        # the timestamp and mac change with each try, and aren't in the binding
+        # the timestamp and `mac` differ on every try, so they are not part of
+        # what makes two tries the same request
         assert await handler.request(later) is PENDING
 
 
@@ -570,7 +579,8 @@ async def test_a_try_that_was_already_being_judged_reattaches_when_it_would_ask(
 ):
     handler = _reviewed()
     async with _serving(handler) as client:
-        # two tries of one request reach the provider before either is asked about
+        # the handler passes two tries of one request on to the provider before
+        # the sentinel asks a person about either
         assert isinstance(await handler.request(_from_eval("x")), Pass)
         assert isinstance(await handler.request(_from_eval("x2")), Pass)
         assert await handler.reply(reply(message(weather("Oslo")))) is PENDING
@@ -591,18 +601,19 @@ async def test_a_try_that_finished_without_asking_follows_the_call_another_try_p
 ):
     handler = _reviewed()
     async with _serving(handler) as client:
-        # two tries of one request reach the provider before either is asked
-        # about, and the first one's reply asks a person
+        # The handler passes two tries of one request on to the provider. Then the
+        # first try's reply makes the sentinel ask a person.
         assert isinstance(await handler.request(_from_eval("x")), Pass)
         assert isinstance(await handler.request(_from_eval("x2")), Pass)
         assert await handler.reply(reply(message(weather("Oslo")))) is PENDING
 
-        # the second one's reply has no call to ask about
+        # the second try's reply has no tool call, so there is nothing to ask about
         text = message({"type": "text", "text": "Sunny."}, stop_reason="end_turn")
         second = await handler.reply(reply(text, id="x2"))
 
-        # It follows the paused call, as a try sent later would, and its own
-        # reply isn't given: the eval and request_result both see one call.
+        # The second try joins the paused call, as a later try would. The handler
+        # answers it "pending review" and doesn't return its reply, so the eval
+        # and `request_result` both see one call.
         assert second is PENDING
         assert (await _result(client))["state"] == "awaiting_review"
         (question,) = await _pending(client)
@@ -614,7 +625,7 @@ async def test_a_try_that_finished_without_asking_follows_the_call_another_try_p
 
 @protocol
 def bills_each_request() -> Protocol:
-    # asks its role's model about every request, and decides nothing
+    # calls its judge model on every request, and decides nothing
     async def decide(
         context: Context, step: BeforeGenerate, escalations: Escalations
     ) -> Decision | None:
@@ -625,8 +636,8 @@ def bills_each_request() -> Protocol:
 
 
 @pytest.mark.anyio
-# inspect_ai calls a model on trio only once it is set up to, as an eval does;
-# the sidecar serves on asyncio
+# asyncio only: the sidecar serves on asyncio, and inspect_ai's model calls
+# run on trio only after set-up that an eval does
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_a_try_that_reattaches_keeps_its_billed_judging() -> None:
     handler = Handler(
@@ -636,8 +647,8 @@ async def test_a_try_that_reattaches_keeps_its_billed_judging() -> None:
     async with _serving(handler) as client:
         assert isinstance(await handler.request(_from_eval("x")), Pass)
         (once,) = (await _result(client))["judging_usage"]
-        # a second try of the request is judged, and its judge model billed,
-        # before the first one's reply asks a person
+        # the handler judges a second try of the request, which bills the judge
+        # model again, before the first try's reply pauses the call
         assert isinstance(await handler.request(_from_eval("x2")), Pass)
         assert await handler.reply(reply(message(weather("Oslo")))) is PENDING
         text = message({"type": "text", "text": "Sunny."}, stop_reason="end_turn")
@@ -645,14 +656,14 @@ async def test_a_try_that_reattaches_keeps_its_billed_judging() -> None:
 
         (both,) = (await _result(client))["judging_usage"]
 
-    # the second try reattached, and what its judging was billed still counts
+    # the second try joined the paused call, and its judging usage still counts
     assert once["usage"]["total_tokens"] > 0
     assert both["usage"]["total_tokens"] == 2 * once["usage"]["total_tokens"]
 
 
 @protocol
 def takes_a_while_at_each_request() -> Protocol:
-    # slow at every request, and decides nothing
+    # takes 0.05 seconds on every request, and decides nothing
     async def decide(
         context: Context, step: BeforeGenerate, escalations: Escalations
     ) -> Decision | None:
@@ -670,8 +681,8 @@ async def test_a_try_that_reattaches_keeps_its_judging_time() -> None:
         )
     )
     async with _serving(handler) as client:
-        # two tries of one request are judged, each for a while, before the
-        # first one's reply asks a person
+        # the handler judges two tries of one request, each for 0.05 seconds,
+        # before the first try's reply pauses the call
         assert isinstance(await handler.request(_from_eval("x")), Pass)
         assert isinstance(await handler.request(_from_eval("x2")), Pass)
         assert await handler.reply(reply(message(weather("Oslo")))) is PENDING
@@ -681,8 +692,9 @@ async def test_a_try_that_reattaches_keeps_its_judging_time() -> None:
 
         both = (await _result(client))["judging_time"]
 
-    # the client waited on the second try too, so its judging still counts
-    # once it has reattached; the margin allows for a coarse clock
+    # The client waited while the second try was judged, so that time still
+    # counts after the try joins the paused call. The bounds are 0.04, not
+    # 0.05, to allow for a coarse clock.
     assert first >= 0.04
     assert both >= first + 0.04
 
@@ -693,17 +705,17 @@ async def test_a_try_whose_judging_fails_still_follows_the_call_another_try_paus
 ):
     handler = _reviewed()
     async with _serving(handler) as client:
-        # two tries of one request reach the provider, and the first one's
-        # reply asks a person
+        # The handler passes two tries of one request on to the provider. The
+        # first try's reply makes the sentinel ask a person.
         assert isinstance(await handler.request(_from_eval("x")), Pass)
         assert isinstance(await handler.request(_from_eval("x2")), Pass)
         assert await handler.reply(reply(message(weather("Oslo")))) is PENDING
 
-        # the second one's reply can't be read, so judging it fails
+        # the handler can't read the second try's reply, so judging it fails
         second = await handler.reply(reply(b"not a reply", id="x2"))
 
-        # its own result isn't given, and the error is part of that: it is
-        # answered as the paused call is
+        # The second try still joins the paused call. The handler answers it
+        # "pending review", and doesn't return the error from its own judging.
         assert second is PENDING
         assert (await _result(client))["state"] == "awaiting_review"
         (question,) = await _pending(client)
@@ -739,16 +751,19 @@ async def test_a_try_overtaken_by_a_later_one_that_was_answered_asks_nobody() ->
         assert isinstance(await handler.request(_from_eval("x")), Pass)
         assert isinstance(await handler.request(_from_eval("x2")), Pass)
         async with anyio.create_task_group() as group:
-            # the first try's reply is judged up to the point it would ask
+            # judge the first try's reply up to the point where the sentinel would
+            # ask a person
             group.start_soon(first)
             await reached.wait()
-            # the second try's reply has no call to ask about, and is answered
+            # the second try's reply has no tool call, so the handler passes it on,
+            # and the call is decided
             text = message({"type": "text", "text": "Sunny."}, stop_reason="end_turn")
             assert isinstance(await handler.reply(reply(text, id="x2")), Pass)
             decided.update(await _result(client))
             release.set()
 
-        # the first try asks nobody, and what the call came to stands
+        # The first try now asks nobody: the handler refuses it, because the call
+        # has ended. The call's result is unchanged.
         (answer,) = answers
         assert isinstance(answer, Refuse) and "has ended" in answer.message
         assert await _pending(client) == []
@@ -763,9 +778,9 @@ def _cached(
     schema: str = "Where to look.",
     result: str = "Rain.",
 ) -> Request:
-    # Anthropic's cache_control at each place the Messages API reads it, with
-    # the TTL given; and a key of the same name in the request's own data: a
-    # tool's schema, a call's input and a tool's result
+    # A request with Anthropic's `cache_control` at each place the Messages API
+    # reads it, with the TTL given. The request's own data also has keys named
+    # `cache_control`: in a tool's schema, a call's input and a tool's result.
     control: dict[str, Any] = {"type": "ephemeral"}
     if ttl is not None:
         control["ttl"] = ttl
@@ -838,20 +853,24 @@ async def test_a_later_try_may_change_its_cache_ttl_and_nothing_the_model_reads(
 ) -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        # the request holding the tool's result is asked about, and approved
+        # the sentinel asks a person about the tool result in the request, and the
+        # person approves it
         assert await handler.request(_cached("y")) is PENDING
         (question,) = await _pending(client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
 
-        # sent again once the person answered, past five minutes
+        # The eval resends the request after the person answers. A resend more
+        # than five minutes later carries a new cache TTL, as the first case does.
         sent = await handler.request(_cached("y2", **later))
 
         if same:
-            # the same request: it is sent on to the provider
+            # the handler takes it for the same request, and passes it on to the
+            # provider
             assert isinstance(sent, Pass)
         else:
-            # what the model reads changed, though under a key of that name
+            # The handler refuses it. The change is to data that the model reads,
+            # though its key is also named `cache_control`.
             assert isinstance(sent, Refuse) and sent is not PENDING
             assert "not the same request" in sent.message
 
@@ -875,8 +894,8 @@ async def test_a_question_at_a_tools_result_is_asked_before_the_provider_is_call
 
 
 def _slow_to_ask(reached: anyio.Event, release: anyio.Event) -> Handler:
-    # a monitor that takes its time over a tool's result, before a person is
-    # asked about it
+    # A handler whose monitor waits at a tool's result until the test releases
+    # it. Only then does `human()` ask a person about the result.
     @protocol
     def waits() -> Protocol:
         async def decide(
@@ -911,24 +930,24 @@ async def test_another_call_holding_a_result_under_review_is_refused_to_be_sent_
 
         assert isinstance(await handler.request(_from_eval("x")), Pass)
         assert isinstance(await handler.reply(reply(message(weather("Oslo")))), Pass)
-        # nothing here waits for the person: both requests are answered
-        # while the question is still open
+        # Neither request waits for the person. The handler answers both while
+        # the question is still open, or the block times out.
         with anyio.fail_after(5):
             async with anyio.create_task_group() as group:
                 group.start_soon(send, "first", _result_request())
                 await reached.wait()
                 if arrives == "before the question":
-                    # it waits on the first call's judging of the result
+                    # the other call waits while the first call's result is judged
                     group.start_soon(send, "other", _other_call("z"))
                     await anyio.sleep(0.05)
                 release.set()
             if arrives == "after the question":
                 await send("other", _other_call("z"))
 
-        # the result is reviewed once, by the call that asked
+        # only the first call is paused for the result: the person is asked once
         assert answers["first"] is PENDING
         refused = answers["other"]
-        # with a status a client sends the request again for by itself
+        # the other call gets a 503, a status that its client retries by itself
         assert isinstance(refused, Refuse) and refused is not PENDING
         assert refused.status == 503
         assert "waiting for a person's review" in refused.message
@@ -940,11 +959,12 @@ async def test_another_call_holding_a_result_under_review_is_refused_to_be_sent_
         (question,) = await _pending(client)
         assert question["request_id"] == "irid-2"
 
-        # giving up on the other call leaves the question as it was
+        # cancelling the other call leaves the first call's question open
         await _cancel(client, "irid-3")
         assert [q["id"] for q in await _pending(client)] == [question["id"]]
 
-        # once the person has answered, the other call's request goes on
+        # once the person has answered, the handler passes on the other call's
+        # request
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_other_call("z2")), Pass)
@@ -964,8 +984,8 @@ async def test_a_try_waiting_on_its_own_calls_result_follows_the_call_once_it_as
 
         assert isinstance(await handler.request(_from_eval("x")), Pass)
         assert isinstance(await handler.reply(reply(message(weather("Oslo")))), Pass)
-        # the client sends the request again while its first try is still
-        # judged, and neither try waits for the person
+        # The client sends the request again while the handler is still judging
+        # its first try. Neither try waits for the person.
         with anyio.fail_after(5):
             async with anyio.create_task_group() as group:
                 group.start_soon(send, "y")
@@ -992,9 +1012,11 @@ async def test_an_approved_result_waits_for_the_request_to_be_sent_again() -> No
         await _answer(client, question["id"], "approve")
 
         waiting = await _result(client, "irid-2", until="awaiting_resend")
-        # nothing failed: the request only waits to be sent
+        # nothing failed, so there is no `reason` and no `failure`: the sidecar
+        # only waits for the eval to resend the request
         assert "reason" not in waiting and "failure" not in waiting
-        # the same request, under the same x-irid, is sent on, and not judged again
+        # the eval resends the same request under the same `x-irid`, and the
+        # handler passes it on to the provider without judging it again
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         assert (await _result(client, "irid-2"))["state"] == "awaiting_reply"
         assert await _pending(client) == []
@@ -1004,7 +1026,8 @@ async def test_an_approved_result_waits_for_the_request_to_be_sent_again() -> No
         got = await _held_reply(client, "irid-2")
 
     assert (result["state"], result["outcome"]) == ("decided", "proceed")
-    # kept though the eval's own exchange brought the reply: it may be lost on the way
+    # The sidecar holds the reply though it also passed it to the eval, because
+    # the response may be lost on its way to the eval.
     assert got.content == body
     (review,) = result["reviews"]
     assert (review["stage"], review["resolution"]) == ("tool_result", "answered")
@@ -1028,7 +1051,7 @@ async def test_only_one_try_is_sent_on_to_the_provider() -> None:
 
         assert sorted(type(answer).__name__ for answer in answers) == ["Pass", "Refuse"]
         assert PENDING in answers
-        # and a try sent while the provider answers is pending as well
+        # a try sent while the provider is answering gets "pending review" too
         assert await handler.request(_result_request("y4")) is PENDING
 
 
@@ -1060,7 +1083,8 @@ async def test_a_reply_the_sidecar_never_hears_of_lets_no_other_try_through() ->
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
-        # the proxy stopped: whether the provider answered can't be told
+        # The proxy never reports a reply, so the sidecar can't know whether the
+        # provider answered. It lets no other try through.
         assert await handler.request(_result_request("y3")) is PENDING
         assert (await _result(client, "irid-2"))["state"] == "awaiting_reply"
 
@@ -1077,7 +1101,8 @@ async def test_a_providers_error_sends_the_call_back_to_wait_for_a_request() -> 
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
-        # the provider's error goes on to the try's client, as from any call
+        # the handler passes the provider's error on to the client, as it does
+        # for any call
         assert isinstance(await handler.reply(_error()), Pass)
 
         failed = await _result(client, "irid-2")
@@ -1085,8 +1110,9 @@ async def test_a_providers_error_sends_the_call_back_to_wait_for_a_request() -> 
             "awaiting_resend",
             "provider_error",
         )
-        # what failed, apart from any error the eval holds: the second try
-        # the sidecar saw, with what says whether it may be tried again
+        # `failure` describes the provider's error, whatever error the eval
+        # itself got: the try's number, and the status and headers that say
+        # whether to retry
         assert failed["failure"] == {
             "try_number": 2,
             "reply": {
@@ -1097,7 +1123,8 @@ async def test_a_providers_error_sends_the_call_back_to_wait_for_a_request() -> 
                 "stream": False,
             },
         }
-        # one more try is sent on, and nobody is asked about the result again
+        # the handler passes one more try on, and asks nobody about the result
+        # again
         assert isinstance(await handler.request(_result_request("y3")), Pass)
         assert await _pending(client) == []
         body = message({"type": "text", "text": "It rains."}, stop_reason="end_turn")
@@ -1120,14 +1147,15 @@ async def test_a_providers_error_handed_over_whole_is_kept_without_a_body_over_t
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
-        # as a hook that holds whole replies hands it over, with `judge_reply`
+        # the error arrives whole, as it does from a proxy hook that passes each
+        # whole reply to `judge_reply`
         large = b"x" * (ERROR_BODY_BYTES + 1)
         assert isinstance(await handler.reply(_error(body=large)), Pass)
 
         failed = await _result(client, "irid-2")
 
-    # the eval is told the error, with what says whether to try again, and
-    # none of a body that is over the bound
+    # `failure` gives the eval the error's status and its `retry-after` header.
+    # The body is left out, because it is larger than `ERROR_BODY_BYTES`.
     assert (failed["state"], failed["reason"]) == ("awaiting_resend", "provider_error")
     assert failed["failure"]["reply"]["status"] == 529
     assert failed["failure"]["reply"]["headers"]["retry-after"] == "7"
@@ -1142,14 +1170,17 @@ async def test_a_failure_is_the_providers_whatever_error_the_eval_holds() -> Non
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
-        # a try sent while the provider answers gets the sidecar's own 400
+        # a try sent while the provider is answering gets the sidecar's own 400,
+        # "pending review"
         assert await handler.request(_result_request("y3")) is PENDING
 
-        # and then the provider's exchange fails, with an error that may be retried
+        # then the provider fails the try that was passed on, with an error that
+        # may be retried
         await handler.reply(_error(status=529))
 
         failed = await _result(client, "irid-2")
-    # the failure is of the try that was sent on, and holds the provider's status
+    # `failure` is for the try that was passed on, and holds the provider's
+    # status
     assert failed["failure"]["try_number"] == 2
     assert failed["failure"]["reply"]["status"] == 529
 
@@ -1165,7 +1196,8 @@ async def test_after_a_failed_exchange_the_new_reply_is_judged_and_may_ask() -> 
         await handler.reply(_error())
         assert isinstance(await handler.request(_result_request("y3")), Pass)
 
-        # only the request stage is kept: the reply's own call is asked about
+        # Only the judging of the request is kept from before the failure. The new
+        # reply is judged afresh, and the sentinel asks about its tool call.
         again = await handler.reply(
             reply(message(weather("Bergen", "toolu_2")), id="y3")
         )
@@ -1177,7 +1209,7 @@ async def test_after_a_failed_exchange_the_new_reply_is_judged_and_may_ask() -> 
         result = await _result(client, "irid-2", until="decided")
 
     assert result["outcome"] == "proceed"
-    # each question with the try whose request or reply was being judged
+    # each review names the try whose request or reply was being judged
     assert [(r["stage"], r["try_number"]) for r in result["reviews"]] == [
         ("tool_result", 1),
         ("tool_call", 3),
@@ -1209,10 +1241,12 @@ async def test_an_errors_body_that_passed_in_parts_is_handed_over_afterwards() -
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
-        # a proxy that passes an error on as it comes shows it without its body
+        # a proxy that streams an error through first calls `reply` with the
+        # status and headers, and with `body_follows` set
         await handler.reply(replace(_error(body=b""), body_follows=True))
 
-        # the eval isn't told the provider failed while the error still passes
+        # while the error's body is still arriving, `request_result` reports no
+        # failure, and the held-reply path refuses a fetch
         passing = await _result(client, "irid-2")
         assert passing["state"] == "awaiting_reply" and "failure" not in passing
         _refused(await _held_reply(client, "irid-2"))
@@ -1240,25 +1274,27 @@ async def test_an_error_whose_body_isnt_handed_over_is_kept_without_it(
         await handler.reply(replace(_error(body=b""), body_follows=True))
 
         if how == "no copy":
-            # one too large or compressed to copy: the proxy says it passed
+            # the proxy kept no copy of the body, because it was too large or
+            # compressed, so it calls `error_body` with an empty body
             await handler.error_body("y2", b"")
         else:
-            # the client went before the error's body had all passed
+            # the client went away before the whole body had arrived
             await handler.reply_not_judged("y2", "cut_off")
 
         failed = await _result(client, "irid-2")
         got = await _held_reply(client, "irid-2")
     assert failed["state"] == "awaiting_resend"
     if how == "no copy":
-        # the provider's error, whole as far as the proxy says, without a copy
+        # the sidecar holds the provider's error, with its status and an empty
+        # body
         assert failed["reason"] == "provider_error"
         assert failed["failure"]["reply"]["status"] == 529
         assert failed["failure"]["reply"]["body"] == ""
         assert got.status_code == 529
     else:
-        # An error that didn't all pass isn't one to give the eval: what is
-        # missing may say whether the call may be tried again. It failed as a
-        # connection does, and there is no error to get.
+        # The sidecar doesn't give the eval an incomplete error, because the
+        # missing part may say whether to retry. The failure is `cut_off`, as for
+        # a lost connection, and there is no error to fetch.
         assert failed["reason"] == "cut_off"
         assert "reply" not in failed["failure"]
         assert got.status_code == 400 and FAILED_TRY not in got.headers
@@ -1293,13 +1329,14 @@ async def test_an_sdks_own_retry_is_the_same_request_whatever_its_retry_count() 
         await _result(client, "irid-2", until="awaiting_resend")
         first = _result_request("y2")
 
-        # shown to the sidecar where an operator lists it, and counted up by
-        # the SDK on each retry of its own
+        # The SDK raises `x-stainless-retry-count` on each retry of its own. The
+        # sidecar sees the header where an operator lists it.
         retry = replace(
             first, headers={**first.headers, "x-stainless-retry-count": "1"}
         )
         sent_on = await handler.request(retry)
-        # a header a sentinel may decide on is still part of what was approved
+        # any other header may have shaped the sentinel's decision, so a request
+        # that changes one is not the request the person approved
         other = replace(
             _result_request("y3"),
             headers={**first.headers, "x-environment": "production"},
@@ -1310,7 +1347,7 @@ async def test_an_sdks_own_retry_is_the_same_request_whatever_its_retry_count() 
     assert isinstance(refused, Refuse) and "not the same request" in refused.message
 
 
-# --- cancel_paused_request closes the call wherever it stands ---
+# --- `cancel_paused_request` closes a paused call in any state ---
 
 
 @pytest.mark.anyio
@@ -1329,17 +1366,18 @@ async def test_cancelling_a_call_a_person_is_asked_about_closes_its_question() -
         assert await _pending(client) == []
         late = await _answer(client, question["id"], "approve")
         assert late["error"]["code"] == UNKNOWN_QUESTION
-        # this call closed nothing, which doesn't say the call is still open
+        # a second cancel returns False, because it closed nothing; False doesn't
+        # mean the call is still paused
         assert await _cancel(client) is False
         assert (await _result(client))["state"] == "not_judged"
-        # and nothing opens it again
+        # and a later try can't restart the call
         again = await handler.request(_from_eval("x2"))
         assert isinstance(again, Refuse) and "has ended" in again.message
 
 
 @protocol(portable=False)
 def waits_at(call: str, reached: anyio.Event, go: anyio.Event) -> Protocol:
-    """A slow protocol before `human()`: at one call, it waits until it is let go on."""
+    """A protocol that runs before `human()` and escalates every call. At the call with the given id, it first waits until the test sets `go`."""
 
     async def decide(
         context: Context, step: BeforeToolCall, escalations: Escalations
@@ -1363,7 +1401,7 @@ async def test_cancelling_between_questions_stops_the_next_from_being_asked() ->
             handler, client, weather("Oslo"), weather("Bergen", "toolu_2")
         )
         await _answer(client, first["id"], "approve")
-        # the sentinel is at work on the turn's next call
+        # the sentinel is now judging the turn's next call
         await reached.wait()
         assert (await _result(client))["state"] == "judging"
 
@@ -1404,13 +1442,14 @@ async def test_a_reply_that_comes_after_its_call_was_cancelled_doesnt_revive_it(
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
-        # the request already with the provider can't be called back
+        # the try is already with the provider, and can't be recalled
         assert await _cancel(client, "irid-2") is True
         late = await handler.reply(
             reply(message(weather("Bergen", "toolu_2")), id="y2")
         )
 
-        # its reply is not judged, not kept and not passed on
+        # the handler refuses its reply: the reply is not judged, not kept and not
+        # passed on
         assert isinstance(late, Refuse) and "was closed" in late.message
         result = await _result(client, "irid-2")
         assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
@@ -1424,15 +1463,15 @@ async def test_a_call_cancelled_as_its_answer_is_taken_stays_cancelled() -> None
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
 
-        # The answer wakes the judging, and the call is cancelled before the
-        # judging next runs: nothing is awaited between the two. The judging
-        # then has nothing left to wait for, so cancelling it can't stop it,
-        # and it runs to the end of the request stage.
+        # The test answers the question and cancels the call with no await in
+        # between, so the cancel lands before the judging task runs again. The
+        # judging has nothing left to wait for, so the cancel can't stop it, and
+        # it runs to the end of the request stage.
         handler.answer_question("eval_789", question["id"], "approve", None)
         assert await handler.cancel_paused_request("irid-2", "eval_789") is True
         await anyio.wait_all_tasks_blocked()
 
-        # the call stays as cancelling it left it, and no try is sent on
+        # the call stays cancelled, and the handler passes no later try on
         result = await _result(client, "irid-2")
         assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
         again = await handler.request(_result_request("y2"))
@@ -1443,20 +1482,20 @@ async def test_a_call_cancelled_as_its_answer_is_taken_stays_cancelled() -> None
 
 @pytest.mark.anyio
 async def test_a_call_cancelled_as_a_person_ends_the_run_leaves_the_run_going() -> None:
-    # a sentinel that only asks, so nothing is awaited between the answer and
-    # the decision it comes to
+    # A sentinel that only asks a person, so its judging awaits nothing between
+    # taking the answer and reaching its decision.
     handler = Handler(human(stages=["tool_call"]))
     async with _serving(handler) as client:
         question = await _asked(handler, client)
 
-        # The answer wakes the judging, and the call is cancelled before the
-        # judging next runs. An answer that ends the run has nothing left to
-        # wait for, so cancelling the judging's wait can't stop it.
+        # The test answers `terminate` and cancels the call with no await in
+        # between, so the cancel lands before the judging task runs again. The
+        # judging has nothing left to wait for, so the cancel can't stop it.
         handler.answer_question("eval_789", question["id"], "terminate", "Stop here.")
         assert await handler.cancel_paused_request("irid-1", "eval_789") is True
         await anyio.wait_all_tasks_blocked()
 
-        # a closed call decides nothing: the run was not ended
+        # a cancelled call decides nothing, so the `terminate` did not end the run
         result = await _result(client)
         assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
         later = await handler.request(_from_eval(id="y", irid="irid-2"))
@@ -1464,8 +1503,9 @@ async def test_a_call_cancelled_as_a_person_ends_the_run_leaves_the_run_going() 
 
 
 @pytest.mark.anyio
-# Two tasks started together first run in the order they were started on
-# asyncio, which the sidecar serves on, and in no fixed order on trio.
+# asyncio only: it first runs two tasks started together in the order they
+# were started, and trio runs them in no fixed order. The sidecar serves on
+# asyncio.
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_a_call_cancelled_as_its_reply_arrives_doesnt_pass_the_reply_on() -> None:
     handler = _at_results()
@@ -1486,16 +1526,16 @@ async def test_a_call_cancelled_as_its_reply_arrives_doesnt_pass_the_reply_on() 
                 "irid-2", "eval_789"
             )
 
-        # The reply's judging is started as a task, and the eval's cancel
-        # runs before that task first does. This handler judges nothing in a
-        # reply, so the judging has nothing to wait for, and cancelling it
-        # can't stop it.
+        # The handler starts the reply's judging as a task, and the eval's cancel
+        # runs before that task first runs. This handler judges nothing in a
+        # reply, so the judging has nothing to wait for, and the cancel can't
+        # stop it.
         async with anyio.create_task_group() as group:
             group.start_soon(the_reply)
             group.start_soon(the_cancel)
 
-        # the judging ran to its end, and the call stays closed all the
-        # same: its reply is not kept and not passed on
+        # The judging ran to its end, and the call still stays cancelled. The
+        # handler doesn't keep its reply or pass it on.
         assert answers["cancelled"] is True
         late = answers["reply"]
         assert isinstance(late, Refuse) and "was closed" in late.message
@@ -1509,13 +1549,15 @@ async def test_cancelling_closes_only_a_call_a_person_was_asked_about() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
         await holding(handler, "eval_other", _OTHER_TOKEN)
-        # a request no person is asked about, still with the provider
+        # a call no person was asked about, whose request is still with the
+        # provider
         assert isinstance(await handler.request(_from_eval("p", "irid-7")), Pass)
         await _asked(handler, client)
 
         assert await _cancel(client, "irid-7") is False
         assert await _cancel(client, "irid-never-sent") is False
-        # another eval's call reads as unknown to it
+        # an eval can't cancel another eval's call: the sidecar treats it as
+        # unknown
         assert await _cancel(client, "irid-1", "eval_other", _OTHER_TOKEN) is False
 
         assert (await _result(client, "irid-7"))["state"] == "awaiting_reply"
@@ -1541,8 +1583,9 @@ async def test_ending_the_sample_closes_its_calls_and_their_questions() -> None:
         assert await _pending(client) == []
         late = await _answer(client, question["id"], "approve")
         assert late["error"]["code"] == UNKNOWN_QUESTION
-        # the call reads as a request of an ended run does, with nothing
-        # decided for the step that waited
+        # `request_result` reports the call as it reports any request of an ended
+        # run: `decided`, with the outcome `terminate`. The question's review is
+        # recorded as cancelled.
         result = await _result(client)
         assert (result["state"], result["outcome"]) == ("decided", "terminate")
         (review,) = result["reviews"]
@@ -1569,7 +1612,8 @@ async def test_a_failed_call_closed_with_its_sample_reads_as_decided_with_no_rea
         )
 
         result = await _result(client, "irid-2")
-    # the reason was why the call waited, and it waits no more
+    # `reason` said why the call waited for a resend, so it is dropped once the
+    # call has ended
     assert (result["state"], result["outcome"]) == ("decided", "terminate")
     assert "reason" not in result
     assert "failure" not in result
@@ -1584,7 +1628,8 @@ async def test_a_question_keeps_the_try_it_was_asked_at_once_its_sample_has_ende
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
-        # the second try is sent on, and a person is asked about its reply
+        # the handler passes the second try on, and the sentinel asks a person
+        # about its reply
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         held = reply(message(weather("Bergen", "toolu_2")), id="y2")
         assert await handler.reply(held) is PENDING
@@ -1601,8 +1646,8 @@ async def test_a_question_keeps_the_try_it_was_asked_at_once_its_sample_has_ende
         after = await _result(client, "irid-2")
     asked_at = [(review["stage"], review["try_number"]) for review in before["reviews"]]
     assert asked_at == [("tool_result", 1), ("tool_call", 2)]
-    # the sidecar no longer holds the call as one operation, and its record
-    # still says which try asked
+    # the sample has ended, and each review still names the try at which its
+    # question was asked
     assert [
         (review["stage"], review["try_number"]) for review in after["reviews"]
     ] == asked_at
@@ -1660,7 +1705,7 @@ async def test_a_run_a_sentinel_ends_closes_its_other_calls() -> None:
         await _asked(handler, client)
         assert isinstance(await handler.request(_from_eval("z", "irid-9")), Pass)
 
-        # another call of the same sample ends the run
+        # the sentinel ends the run at another call of the same sample
         ended = await handler.reply(
             reply(message(weather("Bergen", "toolu_9")), id="z")
         )
@@ -1688,7 +1733,8 @@ async def test_a_sample_ended_before_its_first_question_is_never_asked_it() -> N
 
         async with anyio.create_task_group() as group:
             group.start_soon(judge)
-            # the sample ends while the protocol before human() is still judging
+            # the eval ends the sample while the protocol before `human()` is still
+            # judging
             await reached.wait()
             assert await handler.end_sample("sample_123", "eval_789") == "ended"
             go.set()
@@ -1699,7 +1745,7 @@ async def test_a_sample_ended_before_its_first_question_is_never_asked_it() -> N
     (answer,) = answers
     assert isinstance(answer, Refuse) and answer is not PENDING
     assert not isinstance(found, str)
-    # no question was ever kept for the ended sample
+    # the sidecar never stored a question for the ended sample
     assert found.reviews == []
 
 
@@ -1711,7 +1757,8 @@ async def test_a_closed_question_takes_no_answer_from_the_moment_it_closes() -> 
 
         await handler.end_sample("sample_123", "eval_789")
 
-        # at once, before the judging that was waiting has run again
+        # the closed question refuses an answer at once, before the judging task
+        # that waited on it has run again
         with pytest.raises(UnknownQuestionError):
             handler.reviews.answer("eval_789", question["id"], "approve", None)
         assert await handler.reviews.list_pending("eval_789") == []
@@ -1722,7 +1769,8 @@ async def test_stopping_the_sidecar_stops_what_waits() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
         await _asked(handler, client)
-    # a restart loses a paused call: nothing waits once the handler stops serving
+    # a restart loses a paused call: no question is left once the handler stops
+    # serving
     assert handler.reviews._open == {}  # pyright: ignore[reportPrivateUsage]
     assert handler.eval_review is False
 
@@ -1736,14 +1784,15 @@ async def test_a_question_that_expires_is_answered_with_caution_and_judging_goes
 ):
     handler = _reviewed(review_timeout=0.2)
     async with _serving(handler) as client:
-        # the question isn't listed first: on a busy machine it may have
-        # expired by then, and the test is of what follows the expiry
+        # The test doesn't list the question first. On a busy machine it may have
+        # expired by then, and the test is about what follows the expiry.
         await _paused(handler)
 
         result = await _result(client, until="decided")
 
         assert await _pending(client) == []
-    # expiry is not cancellation: the call is decided, by the cautious answer
+    # an expired question doesn't cancel the call: the sidecar answers it with
+    # caution, here `reject`, and the call is decided
     assert result["outcome"] == "reject"
     (review,) = result["reviews"]
     assert review["resolution"] == "timed_out"
@@ -1752,7 +1801,8 @@ async def test_a_question_that_expires_is_answered_with_caution_and_judging_goes
 
 @pytest.mark.anyio
 async def test_a_question_that_expires_says_when() -> None:
-    # an expiry too far off to come while the question is listed
+    # the expiry is an hour off, so it can't arrive while the test lists the
+    # question
     handler = _reviewed(review_timeout=3600)
     async with _serving(handler) as client:
         question = await _asked(handler, client)
@@ -1764,7 +1814,7 @@ async def test_a_question_that_expires_says_when() -> None:
 async def test_an_expired_question_where_reject_isnt_offered_ends_the_run() -> None:
     handler = _reviewed(choices=["approve", "terminate"], review_timeout=0.2)
     async with _serving(handler) as client:
-        # not listed first, as above
+        # not listed first, because the question may already have expired
         await _paused(handler)
 
         result = await _result(client, until="decided")
@@ -1776,13 +1826,13 @@ async def test_an_expired_question_where_reject_isnt_offered_ends_the_run() -> N
 async def test_the_time_a_question_is_open_isnt_counted_against_the_time_limit() -> (
     None
 ):
-    # The limit runs on the event loop's clock, which a test can't move on.
-    # So it is long enough that the sentinel's own work, a few milliseconds,
-    # stays inside it on a busy machine too.
+    # The time limit runs on the event loop's clock, which a test can't move
+    # forward. So the limit is 2 seconds: long enough for the sentinel's own
+    # work, a few milliseconds, even on a busy machine.
     handler = _reviewed(time_limit=2)
     async with _serving(handler) as client:
         question = await _asked(handler, client)
-        # the person takes longer than the sentinel may
+        # the person takes longer than the sentinel's time limit
         await anyio.sleep(2.2)
 
         await _answer(client, question["id"], "approve")
@@ -1792,8 +1842,8 @@ async def test_the_time_a_question_is_open_isnt_counted_against_the_time_limit()
 
 
 def _clocks(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    # the state's clock and the handler's, which the test moves on together:
-    # the event loop keeps the real one
+    # One clock the test controls, in place of both the state's and the
+    # handler's. The event loop keeps the real clock.
     now = [0.0]
 
     class Clock:
@@ -1811,8 +1861,8 @@ def _clocks(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
 
 async def _waiting_for_its_request(handler: Handler, client: httpx.AsyncClient) -> None:
-    # a call a person was asked about at a tool's result, approved, which
-    # waits for its request to be sent again
+    # A person was asked about a tool result and approved it. The call is now
+    # at `awaiting_resend`: the sidecar waits for the eval to resend it.
     question = await _asked_at_result(handler, client)
     await _answer(client, question["id"], "approve")
     await _result(client, "irid-2", until="awaiting_resend")
@@ -1832,14 +1882,16 @@ async def test_a_call_that_waits_for_its_request_and_that_nothing_names_is_close
         now[0] += 1
         closed = handler.sweep()
 
-        # closed, with nothing decided, and it stays closed
+        # the sweep closes the call, with nothing decided, and a later try can't
+        # restart it
         assert closed == (1, 0)
         result = await _result(client, "irid-2")
         assert (result["state"], result["reason"]) == ("not_judged", "expired")
         again = await handler.request(_result_request("y2"))
         assert isinstance(again, Refuse) and "has ended" in again.message
 
-        # its record is kept from its end as long again, and then it is forgotten
+        # the sidecar keeps the ended call for the same time again, then forgets
+        # it
         now[0] += 9
         assert handler.sweep() == (0, 0)
         now[0] += 1
@@ -1854,18 +1906,20 @@ async def test_a_call_begins_to_wait_when_the_person_has_answered_however_long_t
     handler = _at_results(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
         question = await _asked_at_result(handler, client)
-        # a question is never closed for waiting, and the person takes three days
+        # the person takes three days; the sweep never closes a call whose
+        # question is open
         now[0] += 3 * 24 * 60 * 60
         assert handler.sweep() == (0, 0)
         (still_open,) = await _pending(client)
         assert still_open["id"] == question["id"]
 
         await _answer(client, question["id"], "approve")
-        # the judging goes on to its end, and nothing has asked about the
-        # call since: a lookup would be heard of, and keep the call
+        # Let the judging finish. The test makes no `request_result` call here,
+        # because each one restarts the time the call is kept.
         await anyio.sleep(0.1)
 
-        # the call waits from the answer, not from its last request
+        # the time the call is kept runs from the answer, not from its last
+        # request
         assert handler.sweep() == (0, 0)
         assert (await _result(client, "irid-2"))["state"] == "awaiting_resend"
         now[0] += 9
@@ -1882,7 +1936,8 @@ async def test_a_waiting_call_its_eval_asks_about_is_kept(
     async with _serving(handler) as client:
         await _waiting_for_its_request(handler, client)
 
-        # each lookup is within the time the call is kept without one
+        # each `request_result` call comes within the expiry and restarts it, so
+        # the sweep never closes the call
         for _ in range(3):
             now[0] += 6
             assert (await _result(client, "irid-2"))["state"] == "awaiting_resend"
@@ -1899,14 +1954,15 @@ async def test_a_reply_is_judged_when_its_call_was_kept_longer_than_the_state_ke
         await _waiting_for_its_request(handler, client)
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
-        # the provider takes longer than the state keeps a request nothing
-        # names, and the eval asks about the call all the while
+        # The provider takes longer than the state's expiry for an unused
+        # request. The eval keeps calling `request_result` meanwhile.
         for _ in range(3):
             now[0] += 6
             assert (await _result(client, "irid-2"))["state"] == "awaiting_reply"
             assert handler.sweep() == (0, 0)
 
-        # the reply is judged all the same, with the request the call kept
+        # the handler still judges the reply, using the request that the call
+        # kept
         body = message({"type": "text", "text": "It rains."}, stop_reason="end_turn")
         assert isinstance(await handler.reply(reply(body, id="y2")), Pass)
         result = await _result(client, "irid-2", until="decided")
@@ -1921,7 +1977,8 @@ async def test_a_call_keeps_the_request_of_its_latest_try_only(
     handler = _at_results(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
         await _waiting_for_its_request(handler, client)
-        # one try is sent on and cut off, and the next is sent on
+        # the handler passes one try on, its reply is cut off, and the handler
+        # passes the next try on
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         await handler.reply_not_judged("y2", "cut_off")
         assert (await _result(client, "irid-2"))["state"] == "awaiting_resend"
@@ -1931,13 +1988,14 @@ async def test_a_call_keeps_the_request_of_its_latest_try_only(
             assert (await _result(client, "irid-2"))["state"] == "awaiting_reply"
             assert handler.sweep() == (0, 0)
 
-        # a reply to the earlier try finds no request, and changes nothing
+        # the handler no longer keeps the earlier try's request, so it can't read
+        # a reply to that try, and nothing changes
         body = message({"type": "text", "text": "It rains."}, stop_reason="end_turn")
         with pytest.raises(UnreadableError, match="no longer keeps"):
             await handler.reply(reply(body, id="y2"))
         assert (await _result(client, "irid-2"))["state"] == "awaiting_reply"
 
-        # the latest try's reply is judged
+        # the handler judges the latest try's reply
         assert isinstance(await handler.reply(reply(body, id="y3")), Pass)
         assert (await _result(client, "irid-2", until="decided"))[
             "outcome"
@@ -1949,14 +2007,15 @@ async def test_a_serving_handler_closes_a_waiting_call_by_itself(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = _clocks(monkeypatch)
-    # the handler looks every hundredth of a second, where it would every minute
+    # the handler sweeps every 0.01 seconds here, not every minute
     monkeypatch.setattr(_handler, "_SWEEP_EVERY", 0.01)
     handler = _at_results(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
         await _waiting_for_its_request(handler, client)
 
-        # Nothing here calls `sweep`. Asking about a call that still waits
-        # keeps it, so the time it is kept passes again before each look.
+        # Nothing here calls `sweep`. Each `request_result` call restarts the
+        # expiry of a call that still waits, so the test moves the clock a whole
+        # expiry forward before each sweep.
         with anyio.fail_after(5):
             while True:
                 now[0] += 10
@@ -1990,20 +2049,22 @@ async def test_a_call_whose_reply_is_still_coming_is_kept_and_one_with_no_reply_
             )
         )
 
-        # the proxy hands over a part of the reply now and then
+        # the proxy feeds a part of the reply now and then, which keeps the call
         for part in (body[:10], body[10:20]):
             now[0] += 6
             await stream.feed(part)
             assert handler.sweep() == (0, 0)
         assert (await _result(client, "irid-2"))["state"] == "awaiting_reply"
 
-        # then nothing more comes, and nobody asks
+        # then no more of the reply arrives, and the eval doesn't ask about the
+        # call
         now[0] += 10
         assert handler.sweep() == (1, 0)
         result = await _result(client, "irid-2")
         assert (result["state"], result["reason"]) == ("not_judged", "expired")
-        # The reply, when it does come, is not judged or passed on, and
-        # opens nothing again: the request it answers is kept no longer.
+        # When the reply does arrive, the handler can't read it, because it no
+        # longer keeps the request. The reply is not judged or passed on, and the
+        # call stays expired.
         with pytest.raises(UnreadableError, match="no longer keeps"):
             await handler.reply(sent_on)
         assert (await _result(client, "irid-2"))["reason"] == "expired"
@@ -2020,7 +2081,8 @@ async def test_an_ended_call_is_kept_from_its_end_however_often_it_is_read(
         await _answer(client, question["id"], "approve")
         await _result(client, until="decided")
 
-        # read again and again, which keeps its records but not the call
+        # The eval reads the ended call again and again. Reading doesn't extend
+        # how long the sidecar keeps the call.
         for _ in range(3):
             now[0] += 3
             assert (await _result(client))["state"] == "decided"
@@ -2033,8 +2095,8 @@ async def test_an_ended_call_is_kept_from_its_end_however_often_it_is_read(
 
 
 def _state_clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    # the state's own clock, which the test moves on: the event loop keeps
-    # the real one
+    # A clock the test controls, in place of the state's own. The event loop
+    # keeps the real clock.
     now = [0.0]
 
     class Clock:
@@ -2047,8 +2109,8 @@ def _state_clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
 
 async def _decided_or_dropped(client: httpx.AsyncClient) -> dict[str, Any]:
-    # what `request_result` says once the call is decided, or once its
-    # records are no longer kept
+    # Poll `request_result` until the call is decided or the sidecar no longer
+    # holds its records, and return the answer
     with anyio.fail_after(10):
         while True:
             result = await _result(client)
@@ -2065,10 +2127,12 @@ async def test_a_call_that_waits_for_a_person_keeps_what_it_needs_past_its_expir
     handler = _reviewed(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
         question = await _asked(handler, client)
-        # longer than the run, the eval's token and the request's records are kept
+        # the person takes longer than the state's expiry for the run, the eval's
+        # token and the request's records
         now[0] = 100.0
 
-        # the eval's token still proves its calls, and the run is still there
+        # the sidecar still holds the eval's token, so it accepts the answer, and
+        # it still holds the run
         answered = await _answer(client, question["id"], "approve")
         assert answered["result"]["decision"] == "approve"
         result = await _decided_or_dropped(client)
@@ -2083,24 +2147,26 @@ async def test_a_paused_call_keeps_the_records_of_its_earlier_tries_past_their_e
     now = _state_clock(monkeypatch)
     handler = _reviewed(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
-        # a first try of the call, whose reply never came
+        # the call's first try, whose reply was cut off
         assert isinstance(await handler.request(_from_eval("x1")), Pass)
         await handler.reply_not_judged("x1", "cut_off")
-        # the eval tries again under the same x-irid, and a person is asked
+        # the eval tries again under the same `x-irid`, and the sentinel asks a
+        # person
         question = await _asked(handler, client, id="x2")
-        # the person takes longer than records are kept
+        # the person takes longer than the state's expiry for records
         now[0] = 100.0
 
         await _answer(client, question["id"], "approve")
         result = await _decided_or_dropped(client)
 
-    # `request_result` reads every try's records, the first's included
+    # the sidecar still holds the records of every try, the first try's
+    # included
     assert (result["records"], result["outcome"]) == ("held", "proceed")
 
 
 @protocol(portable=False)
 def takes(now: list[float], seconds: float) -> Protocol:
-    """A protocol before `human()` whose own work takes time, by the test's clock."""
+    """A protocol that runs before `human()`. It moves the test's clock forward by `seconds`, then escalates."""
 
     async def decide(
         context: Context, step: BeforeToolCall, escalations: Escalations
@@ -2119,13 +2185,13 @@ async def test_the_time_a_person_takes_isnt_judging_time(
     handler = Handler(sequential([takes(now, 3), human(stages=["tool_call"])]))
     async with _serving(handler) as client:
         question = await _asked(handler, client)
-        # the person takes ten minutes, with no connection waiting on the call
+        # the person takes ten minutes, and no connection waits meanwhile
         now[0] += 600
         await _answer(client, question["id"], "approve")
         result = await _result(client, until="decided")
 
-    # the judging counts only until the call was answered "pending review":
-    # the sentinel's three seconds, and none of the person's time
+    # `judging_time` stops when the handler answers "pending review". It holds
+    # the sentinel's three seconds and none of the person's ten minutes.
     assert result["judging_time"] == pytest.approx(3)
 
 
@@ -2149,7 +2215,7 @@ async def test_another_eval_neither_sees_nor_answers_the_question() -> None:
         )
 
         assert intruding["error"]["code"] == UNKNOWN_QUESTION
-        # the question is still the eval's to answer
+        # the eval that owns the question can still answer it
         await _answer(client, question["id"], "reject", "No.")
         assert (await _result(client, until="decided"))["outcome"] == "reject"
 
@@ -2160,7 +2226,7 @@ async def test_an_answer_is_refused_unless_its_mac_covers_the_choice_sent() -> N
     async with _serving(handler) as client:
         question = await _asked(handler, client)
 
-        # signed as a rejection, sent as an approval
+        # the `mac` signs a rejection, but the answer sent is an approval
         tampered = await _call(
             client,
             "answer_question",
@@ -2214,8 +2280,9 @@ async def test_a_run_no_eval_names_is_answered_with_caution_and_asks_nobody() ->
 
 @pytest.mark.anyio
 async def test_an_eval_that_isnt_sent_results_is_asked_nothing() -> None:
-    # an eval the deployment doesn't trust with results doesn't answer for a
-    # person either: the step fails closed, as for a run no eval names
+    # A sidecar that sends an eval no results doesn't ask a person through that
+    # eval either. The step fails closed, as it does for a run that no eval
+    # names.
     handler = _reviewed(eval_results=False)
     async with _serving(handler):
         await handler.request(_from_eval())
@@ -2229,7 +2296,8 @@ async def test_an_eval_that_isnt_sent_results_is_asked_nothing() -> None:
 
 @pytest.mark.anyio
 async def test_a_handler_that_isnt_serving_asks_nobody_through_an_eval() -> None:
-    # the judging that waits for a person has nowhere to run
+    # outside `serving()`, the judging that waits for a person has no task
+    # group to run in
     handler = await holding(_reviewed())
     assert handler.eval_review is False
     await handler.request(_from_eval())
@@ -2282,7 +2350,7 @@ async def test_a_sidecar_holding_nothing_of_the_eval_holds_no_question() -> None
 
 
 class _Approves(SidecarHost):
-    """A host with a way of its own to ask a person."""
+    """A host that asks a person its own way: its `ask_human` approves every call."""
 
     async def ask_human(self, step: Any, escalations: Any, choices: Any) -> HumanAnswer:
         return HumanAnswer(decision="approve", reason="The deployment's own reviewer.")
@@ -2300,7 +2368,7 @@ async def test_a_host_with_its_own_way_to_ask_a_person_is_still_asked() -> None:
         assert await handler.reviews.list_pending("eval_789") == []
 
 
-# --- what is kept of a question ---
+# --- what the sidecar keeps of a question ---
 
 
 @pytest.mark.anyio
@@ -2325,9 +2393,9 @@ async def test_request_result_says_what_became_of_each_question() -> None:
         "answered",
     )
     assert review["asked"] <= review["answered"] <= review["resolved"]
-    # the record holds the call's id, and nothing of what it was called with
+    # the review holds the call's id, and none of the call's arguments
     assert "Oslo" not in json.dumps(review)
-    # the step that asked names its question
+    # the step that asked lists the question's id in its `reviews`
     (step,) = [s for s in result["judgment"]["steps"] if s["stage"] == "tool_call"]
     assert step["reviews"] == [question["id"]]
 
@@ -2340,8 +2408,8 @@ async def test_only_a_receipt_is_kept_of_an_answered_question() -> None:
         await _answer(client, question["id"], "approve", "Looks fine.")
         await _result(client, until="decided")
 
-        # no question is held once its step stops waiting, and what is kept
-        # of the answer holds nothing of the call
+        # The sidecar drops a question once its step stops waiting. It keeps a
+        # receipt of the answer, which holds nothing of the call.
         assert handler.reviews._open == {}  # pyright: ignore[reportPrivateUsage]
         (receipt,) = handler.reviews._receipts.values()  # pyright: ignore[reportPrivateUsage]
     assert vars(receipt) == {
@@ -2380,8 +2448,8 @@ async def test_an_answer_taken_isnt_replaced_once_its_question_closes() -> None:
         await _answer(client, question["id"], "approve", "Fine.")
         await reached.wait()
 
-        # the sample ends while the turn's next call is judged, which drops
-        # the answer's receipt
+        # the eval ends the sample while the sentinel is judging the turn's next
+        # call, and the sidecar drops the answer's receipt
         await handler.end_sample("sample_123", "eval_789")
 
         with pytest.raises(UnknownQuestionError):
@@ -2389,14 +2457,16 @@ async def test_an_answer_taken_isnt_replaced_once_its_question_closes() -> None:
         go.set()
         found = await handler.request_result("irid-1", "eval_789")
 
-    # the answer that was acknowledged is the one on the record
+    # the review records the answer that the sidecar accepted, not the later
+    # one
     assert not isinstance(found, str)
     ((_, review),) = found.reviews
     assert (review.decision, review.reason) == ("approve", "Fine.")
 
 
 def test_a_replaced_reply_is_what_is_held() -> None:
-    # the body the proxy passes on in the reply's place
+    # where the sentinel replaced the reply, the sidecar holds the body that
+    # the proxy would pass on, not the provider's
     from inspect_sentinel.sidecar._handler import (
         _held_reply,  # pyright: ignore[reportPrivateUsage]
     )
@@ -2422,12 +2492,14 @@ async def test_judging_whose_proxy_goes_away_before_anyone_is_asked_asks_nobody(
         async with anyio.create_task_group() as group:
             group.start_soon(handler.reply, reply(message(weather("Oslo"))))
             await reached.wait()
-            # the proxy's own caller goes away, and its call with it
+            # the proxy's caller goes away, which cancels the proxy's call to the
+            # handler
             group.cancel_scope.cancel()
         go.set()
         await anyio.sleep(0.1)
 
-        # nobody waits for the judging, so it didn't go on to ask a person
+        # the judging was cancelled with the proxy's call, so the sentinel asked
+        # no person
         assert await _pending(client) == []
 
 
@@ -2445,11 +2517,13 @@ async def test_a_try_whose_proxy_goes_away_while_it_is_judged_reads_as_cut_off()
         async with anyio.create_task_group() as group:
             group.start_soon(handler.reply, reply(message(weather("Oslo"))))
             await reached.wait()
-            # the proxy's own caller goes away, and its call with it
+            # the proxy's caller goes away, which cancels the proxy's call to the
+            # handler
             group.cancel_scope.cancel()
         await anyio.wait_all_tasks_blocked()
 
-        # the judging was stopped, and the try doesn't read as still judged
+        # the judging stopped, and `request_result` doesn't report the try as
+        # still being judged
         result = await _result(client)
     assert (result["state"], result.get("reason")) == ("not_judged", "cut_off")
 
@@ -2469,7 +2543,7 @@ async def test_a_try_sent_on_whose_proxy_goes_away_lets_one_more_try_through() -
         question = await _asked_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
-        # the second try is sent on, and its reply is being judged
+        # the handler passes the second try on, and then starts judging its reply
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
         async with anyio.create_task_group() as group:
@@ -2477,13 +2551,14 @@ async def test_a_try_sent_on_whose_proxy_goes_away_lets_one_more_try_through() -
                 handler.reply, reply(message(weather("Bergen", "toolu_2")), id="y2")
             )
             await reached.wait()
-            # the proxy's own caller goes away before anyone is asked
+            # the proxy's caller goes away before the sentinel asks a person
             group.cancel_scope.cancel()
         await anyio.wait_all_tasks_blocked()
 
-        # The reply is lost with the caller, as one cut off is. The call is
-        # not left being judged, where every later try would be answered
-        # "pending review" for good: one more try may be sent on.
+        # The reply is lost with the caller, as a reply that was cut off is. The
+        # call doesn't stay in `judging`, where every later try would get
+        # "pending review" forever. It goes to `awaiting_resend`, so the eval can
+        # resend once more.
         failed = await _result(client, "irid-2")
         assert (failed["state"], failed.get("reason")) == (
             "awaiting_resend",
@@ -2496,8 +2571,8 @@ async def test_a_try_sent_on_whose_proxy_goes_away_lets_one_more_try_through() -
 @pytest.mark.anyio
 async def test_the_sentinels_own_time_still_counts_after_a_person_answered() -> None:
     reached, go = anyio.Event(), anyio.Event()
-    # the limit is long enough that the first question opens inside it on a
-    # busy machine too, as it runs on the event loop's clock
+    # The time limit runs on the event loop's clock. It is 2 seconds, long
+    # enough for the first question to be asked even on a busy machine.
     handler = Handler(
         sequential([waits_at("toolu_2", reached, go), human(stages=["tool_call"])]),
         time_limit=2,
@@ -2508,7 +2583,8 @@ async def test_the_sentinels_own_time_still_counts_after_a_person_answered() -> 
         )
         await _answer(client, first["id"], "approve")
 
-        # the sentinel never finishes the turn's next call
+        # the sentinel never finishes judging the turn's next call, so the time
+        # limit ends the judging
         result = await _result(client, until="not_judged")
 
     assert result["reason"] == "time_limit"
@@ -2558,7 +2634,8 @@ async def test_a_proxy_is_told_to_refuse_a_call_that_waits_for_a_person() -> Non
                 },
             )
 
-        # a refusal in a status no provider SDK sends again by itself
+        # the sidecar's answer has the proxy refuse with a 400, a status that no
+        # provider SDK retries by itself
         assert passed == {"action": "pass", "release": "whole"}
         assert refused["action"] == "refuse" and refused["status"] == 400
         assert "waiting for a person's review" in refused["message"]
@@ -2567,13 +2644,14 @@ async def test_a_proxy_is_told_to_refuse_a_call_that_waits_for_a_person() -> Non
         await _result(client, until="decided")
         got = await _held_reply(client)
 
-    # and the eval gets the reply the proxy handed over, headers and all
+    # the eval fetches the reply that the proxy passed to the sidecar, with
+    # its headers
     assert (got.headers["request-id"], got.headers["content-type"]) == ("req_011", JSON)
 
 
-# --- the held reply, which the eval gets by sending the call's request again ---
+# --- the held reply, which the eval fetches from the held-reply path ---
 
-# what a provider's SDK doesn't send again by itself
+# the statuses that no provider SDK retries by itself
 _NOT_SENT_AGAIN = {400, 401, 404, 413}
 
 
@@ -2584,8 +2662,8 @@ async def _held_reply(
     body: bytes = b'{"model": "claude-test"}',
     **signing: Any,
 ) -> httpx.Response:
-    # the model call's own request, sent again under its `x-irid`, as the
-    # eval's code for the provider sends it
+    # Fetch what the sidecar holds for a call, as the eval does: a POST of the
+    # call's own request to the held-reply path, under the call's `x-irid`
     return await client.post(
         HELD_REPLY_PATH, headers=inspect_headers(irid=irid, **signing), content=body
     )
@@ -2598,7 +2676,8 @@ def _refused(answered: httpx.Response, *said: str) -> None:
 
 
 async def _approved(handler: Handler, client: httpx.AsyncClient, held: Reply) -> None:
-    # a person approves the call in `held`, and the call is decided
+    # The sentinel asks a person about the call in the reply `held`. The
+    # person approves, and the call is decided.
     assert isinstance(await handler.request(_from_eval()), Pass)
     assert await handler.reply(held) is PENDING
     (question,) = await _pending(client)
@@ -2609,8 +2688,8 @@ async def _approved(handler: Handler, client: httpx.AsyncClient, held: Reply) ->
 async def _failed_at_the_provider(
     handler: Handler, client: httpx.AsyncClient, error: Reply
 ) -> None:
-    # a person approved the call, its request was sent on, and the provider
-    # answered with `error`
+    # A person approves a tool result, the eval resends the request, the
+    # handler passes it on, and the provider answers with `error`
     question = await _asked_at_result(handler, client)
     await _answer(client, question["id"], "approve")
     await _result(client, "irid-2", until="awaiting_resend")
@@ -2631,7 +2710,8 @@ async def test_a_providers_error_is_served_where_the_held_reply_is() -> None:
                 headers={
                     "content-type": JSON,
                     "request-id": "req_403",
-                    # a provider can't set the sidecar's own header
+                    # a provider can't set the sidecar's two headers: the sidecar
+                    # overwrites them
                     FAILED_TRY: "99",
                     "x-should-retry": "true",
                 },
@@ -2642,15 +2722,16 @@ async def test_a_providers_error_is_served_where_the_held_reply_is() -> None:
         again = await _held_reply(client, "irid-2")
         after = await _result(client, "irid-2")
 
-    # the provider's own status, headers and body, for the eval's code for
-    # that provider to raise as the provider's error
+    # The fetch returns the provider's own status, headers and body, so the
+    # eval's code for that provider raises it as the provider's error.
     assert (got.status_code, got.content) == (403, body)
     assert got.headers["request-id"] == "req_403"
-    # marked with the try it is of, as `request_result` numbers it
+    # the sidecar's header names the failed try, by the number that
+    # `request_result` gives it
     assert got.headers[FAILED_TRY] == str(after["failure"]["try_number"]) == "2"
-    # the eval's SDK isn't to send the request again by itself
+    # this header stops the eval's SDK from retrying the fetch by itself
     assert got.headers["x-should-retry"] == "false"
-    # getting it changes nothing, so it can be got again
+    # a fetch changes nothing, so a second fetch returns the same error
     assert (again.status_code, again.content) == (403, body)
     assert (after["state"], after["reason"]) == ("awaiting_resend", "provider_error")
 
@@ -2663,7 +2744,7 @@ async def test_no_refusal_of_the_held_reply_path_is_marked_as_a_providers_error(
     async with _serving(handler) as client:
         await _asked(handler, client)
 
-        # a person still decides: the sidecar's own 400
+        # the person hasn't answered yet, so the fetch gets the sidecar's own 400
         refused = await _held_reply(client)
         unknown = await _held_reply(client, "irid-none")
 
@@ -2698,7 +2779,8 @@ async def test_a_reply_cut_off_has_no_error_to_serve() -> None:
 
         got = await _held_reply(client, "irid-2")
 
-    # nothing came from the provider, so the eval sends the request again
+    # the provider's reply was cut off, so there is no error to fetch, and the
+    # sidecar refuses the fetch
     assert got.status_code == 400 and FAILED_TRY not in got.headers
 
 
@@ -2719,7 +2801,8 @@ async def test_a_wait_the_provider_asked_for_is_counted_from_when_the_error_came
 
         got = await _held_reply(client, "irid-2")
 
-    # never longer than the provider asked, and less by the time since
+    # the wait is what the provider asked for, less the time since the error
+    # arrived
     assert 0 <= int(got.headers["retry-after"]) <= 30
 
 
@@ -2728,9 +2811,10 @@ def test_what_is_left_of_a_wait_is_what_the_provider_asked_less_the_time_since()
 ):
     assert _time_left("retry-after", "30", 12.4) == "18"
     assert _time_left("retry-after-ms", "1500", 1.0) == "500"
-    # a wait that has passed is none
+    # a wait that has already passed becomes 0
     assert _time_left("retry-after", "5", 60.0) == "0"
-    # a date says when, whatever the time since, and no other header is a wait
+    # a date is left as it is, because it names a time and not a wait; so is
+    # any header other than the two `retry-after` ones
     date = "Wed, 21 Oct 2026 07:28:00 GMT"
     assert _time_left("retry-after", date, 12.4) == date
     assert _time_left("x-ratelimit-reset-requests", "30", 12.4) == "30"
@@ -2759,7 +2843,8 @@ async def test_the_held_reply_is_answered_as_the_provider_answered() -> None:
 
     assert answered.status_code == 200
     assert answered.content == body
-    # the provider's headers, and a length that is the body's own
+    # the provider's headers, with `content-length` set to the body's real
+    # length and `transfer-encoding` dropped
     assert dict(answered.headers) == {
         "content-type": JSON,
         "request-id": "req_011",
@@ -2794,7 +2879,8 @@ async def test_the_held_reply_can_be_got_again_and_getting_it_changes_nothing() 
 
         assert first.content == second.content == body
         assert await _result(client) == decided
-        # and a try sent to the provider's route is still refused
+        # a try sent as an ordinary model request is still refused, because the
+        # call has ended
         again = await handler.request(_from_eval("x2"))
         assert isinstance(again, Refuse) and "has ended" in again.message
 
@@ -2808,7 +2894,8 @@ async def test_nothing_of_the_request_but_its_proof_is_read_for_the_held_reply()
     async with _serving(handler) as client:
         await _approved(handler, client, reply(body))
 
-        # another body than the call's request had, and no body at all
+        # a fetch with a different body from the call's request, and one with no
+        # body
         other = await _held_reply(client, body=b'{"model": "another"}')
         none = await _held_reply(client, body=b"")
 
@@ -2824,7 +2911,7 @@ async def test_a_call_a_person_still_decides_has_no_held_reply_yet() -> None:
         answered = await _held_reply(client)
 
         _refused(answered, "has not ended", "request_result")
-        # the question is still open, and still the eval's to answer
+        # the question is still open, and the eval can still answer it
         assert [q["id"] for q in await _pending(client)] == [question["id"]]
         assert (await _result(client))["state"] == "awaiting_review"
 
@@ -2840,7 +2927,8 @@ async def test_asking_for_a_held_reply_never_sends_a_waiting_request_on() -> Non
         answered = await _held_reply(client, "irid-2")
 
         _refused(answered, "has not ended")
-        # the call still waits for its request, which is sent on as before
+        # the call still waits for the resend, and the handler passes the resend
+        # on
         assert (await _result(client, "irid-2"))["state"] == "awaiting_resend"
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
@@ -2872,7 +2960,8 @@ async def test_a_cancelled_call_has_no_held_reply() -> None:
 
 @pytest.mark.anyio
 async def test_a_call_nobody_was_asked_about_has_no_held_reply() -> None:
-    # its reply went to the eval with its own exchange, and none was held
+    # the handler passed the reply to the eval in the original exchange, so
+    # the sidecar holds no reply for the call
     handler = Handler(human(stages=["tool_result"]))
     async with _serving(handler) as client:
         assert isinstance(await handler.request(_from_eval()), Pass)
@@ -2909,8 +2998,8 @@ async def test_another_eval_cant_get_the_held_reply() -> None:
         await holding(handler, "eval_other", _OTHER_TOKEN)
         await _approved(handler, client, reply(message(weather("Oslo"))))
 
-        # the call's `x-irid`, signed by another eval for a sample of its own,
-        # and for the sample the call is of
+        # Another eval signs a fetch under the call's `x-irid`: once for a sample
+        # of its own, and once for the call's sample.
         own_sample = await _held_reply(
             client,
             eval_id="eval_other",
@@ -2941,8 +3030,8 @@ async def test_a_held_reply_is_given_only_to_a_request_that_proves_its_call() ->
             HELD_REPLY_PATH,
             headers={"x-inspect-context": signed_for_it["x-inspect-context"]},
         )
-        # a mac made for another request of the sample, and one made with
-        # another key, and one made too long ago
+        # three bad `mac`s: one made for another request of the sample, one made
+        # with another key, and one made too long ago
         another_irid = await client.post(
             HELD_REPLY_PATH,
             headers=inspect_headers(irid="irid-2") | {"x-irid": "irid-1"},
@@ -3007,8 +3096,9 @@ async def test_a_request_for_a_held_reply_is_refused_on_its_headers_before_its_b
     async with _serving(handler) as client:
         await _approved(handler, client, reply(message(weather("Oslo"))))
 
-        # larger than the endpoint reads, and signed with another token: it
-        # is refused for its header, and none of its body is read to say so
+        # The body is larger than the endpoint reads, and the request is signed
+        # with another token. The endpoint refuses it on its headers with a 400,
+        # not a 413, so it never read the body.
         answered = await _held_reply(
             client, body=b" " * (1024 * 1024 + 1), token="not-the-evals-token"
         )

@@ -492,7 +492,7 @@ async def test_a_replys_headers_are_handed_over_as_it_begins() -> None:
             await _call(client, "end_reply", id="x")
             await _collect(client)
 
-    # by lowercase name, with the reply once it is judged
+    # the handler gets the headers with the reply, under lowercase names
     (shown,) = handler.replies
     assert shown.headers == {"request-id": "req_011", "retry-after": "7"}
 
@@ -503,8 +503,9 @@ async def test_a_replys_headers_are_handed_over_as_it_begins() -> None:
 async def test_a_reply_stream_begun_and_aborted_with_nothing_fed_is_recorded_as_cut_off(
     release: Literal["whole", "early"], content_type: str
 ) -> None:
-    # how a proxy hook says that no reply will come, as when its caller went
-    # away before the provider answered
+    # A proxy hook begins a reply stream and aborts it with nothing fed, to
+    # say that no reply will come. That happens when its caller goes away
+    # before the provider answers.
     handler = await holding(Handler(weather_rule(), release=release))
     await handler.request(request(sample="sample_123"))
 
@@ -529,9 +530,9 @@ async def test_a_reply_stream_begun_and_aborted_with_nothing_fed_is_recorded_as_
 async def test_an_error_handed_over_whole_is_kept_as_the_error_though_its_reply_stream_is_then_aborted(
     release: Literal["whole", "early"],
 ) -> None:
-    # A proxy hook that began a reply stream before the provider's first
-    # chunk, so that keepalives could flow, and whose provider then failed:
-    # it hands the error over with `judge_reply`, and ends the stream after.
+    # A proxy hook begins a reply stream before the provider's first chunk, so
+    # that keepalives can flow. The provider then fails. The hook passes the
+    # error to `judge_reply`, and aborts the stream afterwards.
     handler = NotingHandler(weather_rule(), release=release)
     await holding(handler)
     await handler.request(request(sample="sample_123"))
@@ -549,7 +550,7 @@ async def test_an_error_handed_over_whole_is_kept_as_the_error_though_its_reply_
             )
             assert answered["result"] == {"action": "pass"}
             assert "result" in await _call(client, "abort_reply", id="x")
-            # the aborted stream has nothing left to record as cut off
+            # give the aborted stream time to run: it must not record a cut-off
             await anyio.wait_all_tasks_blocked()
 
     (shown,) = handler.replies

@@ -53,7 +53,7 @@ NotJudged: TypeAlias = Literal[
 Stopped: TypeAlias = Literal[
     "replaced_attempt", "sample_ended", "run_ended", "cancelled", "expired"
 ]
-"""Why an attempt at a request has nobody waiting for it: a later attempt at its sample began, the eval ended its sample, a sentinel ended its run, the eval cancelled the request while it waited for a person, or the request waited to be sent on, or for its reply, for as long as the sidecar keeps a run nothing names."""
+"""Why nobody waits for an attempt at a request any longer: a later attempt at its sample began, the eval ended its sample, a sentinel ended its run, the eval cancelled the request while it was paused for a person, or the request expired. A request expires when it has waited to be resent, or waited for its reply, for as long as the sidecar keeps a run that no request names."""
 
 Outcome: TypeAlias = Literal["proceed", "reject", "terminate"]
 """What an exchange came to."""
@@ -85,10 +85,10 @@ class Attempt:
         "decided",
         "not_judged",
     ] = "judging"
-    """Where the attempt stands. `awaiting_review` and `awaiting_resend` are only for a model call a sentinel asked a person about: a question is open, or the request may be sent on to the provider."""
+    """The attempt's state. `awaiting_review` and `awaiting_resend` occur only for a model call that a sentinel asked a person about. `awaiting_review`: a question is open. `awaiting_resend`: the provider still has to be called, and it is called when the eval resends the request."""
 
     reason: NotJudged | None = None
-    """Why the attempt was not judged, when it wasn't. With `awaiting_resend`, why the provider's last exchange failed, if one did: `provider_error` or `cut_off`."""
+    """Why the attempt was not judged, when it wasn't. With `awaiting_resend`, it says why the last exchange with the provider failed, if one did: `provider_error` or `cut_off`."""
 
     outcome: Outcome | None = None
     """What the attempt came to, once decided."""
@@ -111,16 +111,16 @@ class Attempt:
     """Set once the attempt is decided or not judged, for a `request_result` that waits."""
 
     stopped: Stopped | None = None
-    """Why nobody waits for the attempt, once that is so. Judging that reaches a question after this asks nobody, and an attempt that is waiting on a person when it is set is stopped, with no decision."""
+    """Why nobody waits for the attempt any longer, once that is the case. After it is set, judging that reaches a question asks nobody. An attempt that is waiting on a person when it is set is stopped with no decision."""
 
     reviews: list[Review] = field(default_factory=list[Review])
-    """What became of each question a sentinel asked a person during the attempt, in order."""
+    """The record of each question that a sentinel asked a person during the attempt, in the order asked."""
 
     review_tries: dict[str, int] = field(default_factory=dict[str, int])
-    """The number of the try each of `reviews` was asked at, from 1, by the question's id. A try sent again for a model call a person was asked about adds no attempt, so the attempt's place among the request's attempts doesn't give it."""
+    """For each of `reviews`, by the question's id: the number of the try at which the question was asked, counted from 1. A later try of a paused model call reuses this attempt and adds none, so the try number can't be worked out from the attempt's position among the request's attempts."""
 
     def decide(self, outcome: Outcome, message: str | None = None) -> None:
-        """Mark the attempt decided. A decided attempt has no `reason`: one left from an earlier state, as from a provider's failure the attempt waited after, goes."""
+        """Mark the attempt decided. A decided attempt has no `reason`, so this clears one left by an earlier state, such as a provider failure that the attempt waited after."""
         self.state, self.outcome, self.message = "decided", outcome, message
         self.reason = None
         self.settled.set()
@@ -303,7 +303,7 @@ class Held:
     request: Request | None = None
     """For a run no eval names, the request as the client sent it, so that a run ended meanwhile by another exchange refuses its reply when it continues the ended conversation with blocks added to its last entry."""
     binding: str = ""
-    """For an eval's request, a digest of what the request is: what a request sent again under the same `x-irid` must match to be a try of the same model call."""
+    """For an eval's request, a digest that identifies the request. A request sent again under the same `x-irid` must have the same digest to count as a try of the same model call."""
 
     @property
     def sent(self) -> int:
@@ -318,10 +318,10 @@ class Held:
 
 @dataclass(frozen=True)
 class Pinned:
-    """What a model call that waits for a person needs kept, however long the person takes."""
+    """The state that the sidecar must keep for a model call paused for a person, for however long the person takes."""
 
     eval_id: str
-    """The eval, whose secret is kept."""
+    """The eval, whose token is kept."""
 
     task: str
     """The eval's task, whose registration is kept."""
@@ -330,10 +330,10 @@ class Pinned:
     """The key of the call's run."""
 
     request: str
-    """The eval's id for the request, whose attempts are kept."""
+    """The request's `x-irid`. The request's attempts are kept."""
 
     exchanges: tuple[str, ...]
-    """The proxy's ids for the exchanges of every attempt at the request, whose records are kept: `request_result` reads them all, those of tries before the one that asked included."""
+    """The proxy's ids for the exchanges of every attempt at the request. Their records are kept, because `request_result` reads them all, including those of tries before the one that asked the person."""
 
 
 class State(Protocol):
@@ -344,7 +344,7 @@ class State(Protocol):
 
     @property
     def expiry(self) -> float:
-        """How long a run is kept once nothing has named it, in seconds. The handler keeps a model call a person was asked about as long: one that waits and that nothing names, and one that has ended."""
+        """How long a run is kept once nothing has named it, in seconds. The handler keeps a model call paused for a person for the same time, both while the call waits and no request names it, and after the call has ended."""
         ...
 
     async def run(self, key: str) -> Run:
@@ -356,11 +356,11 @@ class State(Protocol):
         ...
 
     async def pin(self, pinned: Pinned) -> None:
-        """Keep these past their expiry, until `unpin`. Each `pin` is undone by one `unpin`, so two calls that wait for a person can pin the same eval or run."""
+        """Keep what `pinned` names past its expiry, until `unpin`. One `unpin` undoes one `pin`, so two paused calls can pin the same eval or run."""
         ...
 
     async def unpin(self, pinned: Pinned) -> None:
-        """Undo one `pin`. What it kept expires again, counted from now."""
+        """Undo one `pin`. Once nothing pins an entry, its expiry is counted again from now."""
         ...
 
     async def release(self, id: str) -> Held | None:
@@ -558,7 +558,7 @@ class MemoryState:
             del self._pinned_tasks[task]
             kept = self._tasks.get(task)
             if kept is not None:
-                # it expires again, counted from now
+                # no longer pinned, so its expiry is counted again from now
                 self._tasks[task] = (time.monotonic(), kept[1], kept[2])
 
     async def recorder(self, id: str) -> ListRecorder:
@@ -721,7 +721,8 @@ class _Expiring(Generic[V]):
         self._pinned: Counter[str] = Counter()
 
     def pin(self, key: str) -> None:
-        # kept past its expiry until unpinned, as often as it was pinned
+        # A pinned entry is kept past its expiry. It stays pinned until it has
+        # been unpinned as many times as it was pinned.
         self._pinned[key] += 1
 
     def unpin(self, key: str) -> None:
@@ -730,7 +731,7 @@ class _Expiring(Generic[V]):
             del self._pinned[key]
             kept = self._kept.get(key)
             if kept is not None:
-                # it expires again, counted from now
+                # no longer pinned, so its expiry is counted again from now
                 self.put(key, kept[1])
 
     def get(self, key: str) -> V | None:
@@ -767,14 +768,15 @@ class _Expiring(Generic[V]):
 
     def _expire(self) -> None:
         now = time.monotonic()
-        # each entry is looked at once at most, as a pinned one goes to the back
+        # The loop looks at each entry at most once, because a pinned entry is
+        # moved to the back.
         for _ in range(len(self._kept)):
             key, (used, value) = next(iter(self._kept.items()))
             if now - used < self._expiry:
                 return
             if key in self._pinned:
-                # kept, and counted as used now, so that what follows it is
-                # still looked at
+                # A pinned entry is kept. It is marked as used now and moved
+                # to the back, so that the loop goes on to the entries after it.
                 self._kept[key] = (now, value)
                 self._kept.move_to_end(key)
                 continue
