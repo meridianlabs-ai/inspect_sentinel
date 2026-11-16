@@ -1,0 +1,15 @@
+sentinel:
+  # the secrets_guard rule: `secrets_rules` is the package in rule/, which
+  # sidecar/Dockerfile installs, and inspect_ai finds by its entry point
+  name: secrets_rules/secrets_guard
+server:
+  # inside the stack, where only Envoy reaches the sidecar
+  host: 0.0.0.0
+  # the endpoints for proxies and for evals; Envoy sends /sentinel/ here
+  port: 8900
+  envoy:
+    # the Envoy shim, which Envoy's ext_proc filter calls over gRPC
+    port: 8902
+  # a status Inspect retries by itself, so the model is told of a rejected
+  # tool call and tries again. A run the rule ends is always refused with 400.
+  reject_status: 503

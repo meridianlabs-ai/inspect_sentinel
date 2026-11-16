@@ -1,0 +1,16 @@
+# The example's rule, as a package the sidecar's image installs. inspect_ai
+# finds its monitors and protocols through the entry point, by the name
+# secrets_rules/<name>.
+[project]
+name = "secrets-rules"
+version = "0.1.0"
+description = "The secrets_guard_litellm example's rule: credentials stay out of the agent's hands."
+requires-python = ">=3.11"
+dependencies = ["inspect_sentinel"]
+
+[project.entry-points.inspect_ai]
+secrets_rules = "secrets_rules"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
